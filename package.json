@@ -1,0 +1,22 @@
+{
+  "name": "tex-selection-translator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Microsoft Edge extension for translating selected LaTeX prose in Overleaf.",
+  "type": "module",
+  "scripts": {
+    "dev": "wxt -b edge",
+    "prepare": "wxt prepare",
+    "build:edge": "wxt build -b edge",
+    "zip:edge": "wxt zip -b edge",
+    "typecheck": "wxt prepare && tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.30",
+    "typescript": "^5.9.3",
+    "vitest": "^3.2.4",
+    "wxt": "^0.20.27"
+  }
+}

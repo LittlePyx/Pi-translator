@@ -1,0 +1,10 @@
+node_modules/
+.output/
+.wxt/
+coverage/
+*.zip
+.env
+.env.*
+!.env.example
+web-ext.config.ts
+*.log
