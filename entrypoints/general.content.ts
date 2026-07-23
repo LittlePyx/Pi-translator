@@ -1,7 +1,7 @@
 import { startSelectionTranslator } from '../core/content/selection-translator';
 
 export default defineContentScript({
-  matches: ['https://www.overleaf.com/project/*'],
+  registration: 'runtime',
   runAt: 'document_idle',
-  main: (ctx) => startSelectionTranslator(ctx, 'overleaf'),
+  main: (ctx) => startSelectionTranslator(ctx, 'general'),
 });

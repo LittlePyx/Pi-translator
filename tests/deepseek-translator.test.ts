@@ -89,4 +89,29 @@ describe('DeepSeek translator', () => {
       ),
     ).rejects.toMatchObject({ code: 'PROVIDER_ERROR' } satisfies Partial<TranslationError>);
   });
+
+  it('returns a normalized model list', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn().mockResolvedValue(
+        new Response(
+          JSON.stringify({
+            data: [
+              { id: 'deepseek-v4-pro' },
+              { id: 'deepseek-v4-flash' },
+              { id: 'deepseek-v4-pro' },
+            ],
+          }),
+          { status: 200, headers: { 'Content-Type': 'application/json' } },
+        ),
+      ),
+    );
+    const translator = new DeepSeekTranslator();
+    await expect(
+      translator.listModels(
+        { apiKey: 'test-key' },
+        new AbortController().signal,
+      ),
+    ).resolves.toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+  });
 });

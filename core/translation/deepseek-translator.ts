@@ -126,6 +126,19 @@ export class DeepSeekTranslator implements Translator {
     credentials: ProviderCredentials,
     signal: AbortSignal,
   ): Promise<void> {
+    const ids = await this.listModels(credentials, signal);
+    if (ids.length && !ids.includes(options.model)) {
+      throw new TranslationError(
+        'PROVIDER_ERROR',
+        `The configured model ${options.model} is not available for this API Key.`,
+      );
+    }
+  }
+
+  async listModels(
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+  ): Promise<string[]> {
     const value = (await fetchJson(
       '/models',
       {
@@ -135,14 +148,13 @@ export class DeepSeekTranslator implements Translator {
       signal,
     )) as ModelListResponse;
 
-    const ids = value.data
-      ?.map((model) => model.id)
-      .filter((id): id is string => typeof id === 'string');
-    if (ids?.length && !ids.includes(options.model)) {
-      throw new TranslationError(
-        'PROVIDER_ERROR',
-        `The configured model ${options.model} is not available for this API Key.`,
-      );
-    }
+    return [
+      ...new Set(
+        value.data
+          ?.map((model) => model.id)
+          .filter((id): id is string => typeof id === 'string' && Boolean(id.trim())) ??
+          [],
+      ),
+    ].sort();
   }
 }

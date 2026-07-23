@@ -1,0 +1,14 @@
+{
+  "extensionName": {
+    "message": "Pi Translator"
+  },
+  "extensionDescription": {
+    "message": "在 Overleaf 和普通网页中翻译选中文本，支持 DeepSeek、学术术语表与 LaTeX 结构保护。"
+  },
+  "actionTitle": {
+    "message": "Pi Translator 快速控制"
+  },
+  "commandDescription": {
+    "message": "翻译选中文本；没有选区时打开 Pi Translator 设置"
+  }
+}

@@ -1,10 +1,23 @@
 import { DEFAULT_SETTINGS, type ApiKeyStorageMode, type ExtensionSettings } from './schema';
+import { normalizeGlossaryEntries } from '../translation/glossary';
+import type { GlossaryEntry } from '../translation/types';
 
 const SETTINGS_KEY = 'extensionSettings';
 const API_KEY_KEY = 'deepseekApiKey';
 
 function isSettings(value: unknown): value is Partial<ExtensionSettings> {
   return Boolean(value && typeof value === 'object');
+}
+
+function isGlossaryEntry(value: unknown): value is GlossaryEntry {
+  return Boolean(
+    value &&
+      typeof value === 'object' &&
+      'source' in value &&
+      typeof value.source === 'string' &&
+      'target' in value &&
+      typeof value.target === 'string',
+  );
 }
 
 export async function getSettings(): Promise<ExtensionSettings> {
@@ -17,8 +30,14 @@ export async function getSettings(): Promise<ExtensionSettings> {
   return {
     ...DEFAULT_SETTINGS,
     ...value,
-    schemaVersion: 1,
+    schemaVersion: 3,
     provider: 'deepseek',
+    siteAllowlist: Array.isArray(value.siteAllowlist)
+      ? value.siteAllowlist.filter((entry): entry is string => typeof entry === 'string')
+      : [],
+    academicGlossary: Array.isArray(value.academicGlossary)
+      ? normalizeGlossaryEntries(value.academicGlossary.filter(isGlossaryEntry))
+      : [],
   };
 }
 
@@ -26,7 +45,7 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   await browser.storage.local.set({
     [SETTINGS_KEY]: {
       ...settings,
-      schemaVersion: 1,
+      schemaVersion: 3,
       provider: 'deepseek',
     },
   });

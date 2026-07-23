@@ -1,4 +1,10 @@
 export type TranslationStyle = 'academic' | 'general' | 'literal';
+export type TranslationContentMode = 'auto' | 'plain' | 'latex';
+
+export interface GlossaryEntry {
+  source: string;
+  target: string;
+}
 
 export interface TranslateRequest {
   requestId: string;
@@ -7,6 +13,7 @@ export interface TranslateRequest {
   targetLanguage: string;
   sourceLanguage: 'auto' | string;
   style: TranslationStyle;
+  contentMode: TranslationContentMode;
 }
 
 export type TranslationWarningCode =
@@ -38,6 +45,7 @@ export interface TranslationOptions {
   sourceLanguage: 'auto' | string;
   targetLanguage: string;
   style: TranslationStyle;
+  glossary?: GlossaryEntry[];
 }
 
 export interface PreparedTranslationInput {
@@ -62,4 +70,9 @@ export interface Translator {
     credentials: ProviderCredentials,
     signal: AbortSignal,
   ): Promise<void>;
+
+  listModels(
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+  ): Promise<string[]>;
 }
