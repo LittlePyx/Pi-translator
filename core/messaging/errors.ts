@@ -2,7 +2,10 @@ export type TranslationErrorCode =
   | 'EMPTY_SELECTION'
   | 'SELECTION_TOO_LONG'
   | 'NO_API_KEY'
+  | 'API_PERMISSION_REQUIRED'
   | 'AUTH_FAILED'
+  | 'PAYMENT_REQUIRED'
+  | 'MODEL_NOT_FOUND'
   | 'RATE_LIMITED'
   | 'REQUEST_TIMEOUT'
   | 'NETWORK_ERROR'
@@ -20,6 +23,8 @@ export class TranslationError extends Error {
     message: string,
     public readonly retryable = false,
     options?: ErrorOptions,
+    public readonly retryAfterMs?: number,
+    public readonly httpStatus?: number,
   ) {
     super(message, options);
     this.name = 'TranslationError';
@@ -38,7 +43,7 @@ export function toTranslationError(error: unknown): TranslationError {
   if (error instanceof TypeError) {
     return new TranslationError(
       'NETWORK_ERROR',
-      'Unable to connect to DeepSeek. Check your network connection.',
+      'Unable to connect to the configured API. Check the endpoint and network connection.',
       true,
       { cause: error },
     );

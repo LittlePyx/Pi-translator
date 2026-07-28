@@ -3,14 +3,17 @@ import type { TranslationErrorCode } from './errors';
 const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   EMPTY_SELECTION: '请先选中需要翻译的文本。',
   SELECTION_TOO_LONG: '选中的文本过长，请缩小选择范围。',
-  NO_API_KEY: '请先在扩展设置页填写 DeepSeek API Key。',
-  AUTH_FAILED: 'DeepSeek API Key 无效或没有访问权限。',
-  RATE_LIMITED: 'DeepSeek 请求过于频繁，请稍后再试。',
-  REQUEST_TIMEOUT: 'DeepSeek 响应超时，请检查网络后重试。',
-  NETWORK_ERROR: '无法连接 DeepSeek，请检查网络、代理或防火墙设置。',
-  PROVIDER_ERROR: 'DeepSeek 拒绝了本次请求，请确认所选模型仍可用。',
-  EMPTY_RESPONSE: 'DeepSeek 返回了空结果，请重试。',
-  INVALID_RESPONSE: 'DeepSeek 返回格式异常，请重试或切换模型。',
+  NO_API_KEY: '请先在扩展设置页填写 API Key。',
+  API_PERMISSION_REQUIRED: '尚未授权访问当前 API 域名，请打开扩展设置并重新保存或测试连接。',
+  AUTH_FAILED: 'API Key 无效，或当前账号没有访问权限。',
+  PAYMENT_REQUIRED: 'API 账户余额或额度不足，请在服务商后台检查用量。',
+  MODEL_NOT_FOUND: '当前模型不存在，或 API Key 没有使用该模型的权限。',
+  RATE_LIMITED: 'API 请求过于频繁，请稍后再试。',
+  REQUEST_TIMEOUT: 'API 响应超时，请检查接口地址和网络后重试。',
+  NETWORK_ERROR: '无法连接所配置的 API，请检查接口地址、网络、代理或权限。',
+  PROVIDER_ERROR: 'API 拒绝了本次请求，请确认接口地址和模型名称可用。',
+  EMPTY_RESPONSE: 'API 返回了空结果，请重试。',
+  INVALID_RESPONSE: 'API 返回格式异常，请重试或切换模型。',
   LATEX_VALIDATION_FAILED: '模型没有完整保留 LaTeX 结构，结果已被拦截。',
   UNSUPPORTED_PAGE: '当前页面禁止扩展注入，请在普通网页或 Overleaf 项目页使用。',
   REQUEST_ABORTED: '翻译请求已取消。',
@@ -21,7 +24,20 @@ export function translationErrorMessage(
   code: TranslationErrorCode,
   fallback?: string,
 ): string {
-  return ERROR_MESSAGES[code] ?? fallback ?? ERROR_MESSAGES.UNKNOWN_ERROR;
+  const base = ERROR_MESSAGES[code] ?? fallback ?? ERROR_MESSAGES.UNKNOWN_ERROR;
+  if (
+    fallback &&
+    (code === 'PROVIDER_ERROR' ||
+      code === 'INVALID_RESPONSE' ||
+      code === 'AUTH_FAILED' ||
+      code === 'PAYMENT_REQUIRED' ||
+      code === 'MODEL_NOT_FOUND' ||
+      code === 'RATE_LIMITED') &&
+    fallback !== base
+  ) {
+    return `${base}\n接口详情：${fallback}`;
+  }
+  return base;
 }
 
 export function runtimeConnectionErrorMessage(error: unknown): string {

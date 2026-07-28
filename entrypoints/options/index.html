@@ -7,13 +7,71 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
+    <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-title">
+      <div class="onboarding-shell">
+        <header class="onboarding-header">
+          <img src="/brand/pi_logo.png" alt="" />
+          <div>
+            <span>首次设置</span>
+            <h2 id="onboarding-title">三步开始使用 Pi Translator</h2>
+          </div>
+        </header>
+        <div class="onboarding-progress" aria-label="设置进度">
+          <span data-onboarding-dot="1">1</span>
+          <i></i>
+          <span data-onboarding-dot="2">2</span>
+          <i></i>
+          <span data-onboarding-dot="3">3</span>
+        </div>
+        <section class="onboarding-step" data-onboarding-step="1">
+          <h3>选择翻译接口</h3>
+          <p>预设只会填写接口地址和建议模型，API Key 由你自己提供。</p>
+          <label>
+            <span>接口类型</span>
+            <select id="onboarding-preset"></select>
+          </label>
+        </section>
+        <section class="onboarding-step" data-onboarding-step="2" hidden>
+          <h3>连接你的 API</h3>
+          <label>
+            <span>API Base URL</span>
+            <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" />
+          </label>
+          <label>
+            <span>API Key</span>
+            <input id="onboarding-api-key" type="password" autocomplete="off" placeholder="只保存在浏览器扩展存储中" />
+          </label>
+          <label class="check-row compact-check">
+            <input id="onboarding-persist-key" type="checkbox" />
+            <span>在本机持久保存 Key；不勾选则仅保留到本次浏览器会话结束</span>
+          </label>
+          <small id="onboarding-key-hint"></small>
+        </section>
+        <section class="onboarding-step" data-onboarding-step="3" hidden>
+          <h3>确认模型</h3>
+          <p>已经尝试读取当前 Key 可用的模型；也可以直接填写接口支持的模型名称。</p>
+          <label>
+            <span>模型名称</span>
+            <input id="onboarding-model" type="text" list="onboarding-model-list" spellcheck="false" />
+            <datalist id="onboarding-model-list"></datalist>
+          </label>
+        </section>
+        <p id="onboarding-status" class="status" role="status" aria-live="polite"></p>
+        <footer class="onboarding-actions">
+          <button id="onboarding-skip" class="text-button" type="button">稍后手动设置</button>
+          <span></span>
+          <button id="onboarding-back" type="button" hidden>上一步</button>
+          <button id="onboarding-next" class="primary" type="button">下一步</button>
+        </footer>
+      </div>
+    </dialog>
     <main class="shell">
       <header class="hero">
         <div class="brand-row">
           <span class="brand-mark" aria-hidden="true">
             <img src="/brand/pi_logo.png" alt="" />
           </span>
-            <p class="eyebrow">Microsoft Edge 扩展 · v0.4.0</p>
+            <p class="eyebrow">Microsoft Edge 扩展 · v0.7.1</p>
           <span class="team-credit">
             <span>Developed by</span>
             <img src="/brand/team_logo.png" alt="P&I Lab" />
@@ -30,11 +88,42 @@
 
       <section class="card notice">
         <h2>数据说明</h2>
-        <p>只有你主动触发翻译的选中文本和已配置的相关术语约束会发送到 DeepSeek API。本扩展默认不保存翻译历史，也不会把 API Key 暴露给网页。</p>
+        <p>只有你主动触发或在固定侧栏中选中的文本会发送到所配置的 API；可选上下文默认关闭。最近结果与缓存只保留在当前会话，主动收藏才会长期保存在本机；API Key 不会暴露给网页。</p>
       </section>
 
       <form id="settings-form" class="card">
-        <h2>DeepSeek API</h2>
+        <div class="section-heading">
+          <div>
+            <span class="section-kicker">连接</span>
+            <h2>翻译 API</h2>
+          </div>
+          <span class="protocol-badge">OpenAI 兼容协议</span>
+        </div>
+        <div class="profile-bar">
+          <label>
+            <span>API 配置</span>
+            <select id="api-profile"></select>
+          </label>
+          <button id="add-profile" class="small-button" type="button">新增</button>
+          <button id="delete-profile" class="small-button danger-text" type="button">删除</button>
+        </div>
+        <label>
+          <span>配置名称</span>
+          <input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" />
+        </label>
+        <label>
+          <span>快速填写接口</span>
+          <select id="api-preset">
+            <option value="custom">自定义</option>
+          </select>
+          <small>仅填写接口地址和建议模型，API Key 仍由你自己提供。</small>
+        </label>
+        <label>
+          <span>API Base URL</span>
+          <input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" />
+          <small>填写服务根地址，扩展会调用 <code>/chat/completions</code> 和 <code>/models</code>。</small>
+        </label>
+        <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
         <label>
           <span>API Key</span>
           <input id="api-key" type="password" autocomplete="off" placeholder="输入新的 API Key" />
@@ -47,19 +136,14 @@
         </label>
         <p class="hint">默认仅保存在当前浏览器会话。持久保存更方便，但不代表操作系统级加密。</p>
 
-        <div class="grid">
-          <div class="field-block">
-            <div class="field-heading">
-              <label for="model-preset">模型</label>
-              <button id="refresh-models" class="text-button" type="button">读取可用模型</button>
-            </div>
-            <select id="model-preset"></select>
-            <small>使用当前输入或已保存的 API Key 从 DeepSeek 获取模型列表。</small>
+        <div class="field-block">
+          <div class="field-heading">
+            <label for="model">模型名称</label>
+            <button id="refresh-models" class="text-button" type="button">读取可用模型</button>
           </div>
-          <label id="custom-model-field" hidden>
-            <span>自定义模型名称</span>
-            <input id="custom-model" type="text" spellcheck="false" placeholder="例如 provider-model-name" />
-          </label>
+          <input id="model" type="text" list="model-list" spellcheck="false" placeholder="例如 model-name" />
+          <datalist id="model-list"></datalist>
+          <small>可直接填写，也可以读取当前 API Key 可用的模型后选择。</small>
         </div>
 
         <h2>翻译偏好</h2>
@@ -108,8 +192,61 @@
         <label>
           <span>固定术语翻译</span>
           <textarea id="academic-glossary" rows="7" spellcheck="false" placeholder="每行一条，例如：&#10;large language model = 大语言模型&#10;knowledge distillation = 知识蒸馏"></textarea>
-          <small>最多 100 条。术语仅保存在本机，并会随待翻译文本一起作为一致性约束发送给 DeepSeek。</small>
+          <small>最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small>
         </label>
+
+        <h2>结果与记录</h2>
+        <div class="preference-panel">
+          <label class="check-row preference-row">
+            <input id="remember-history" type="checkbox" />
+            <span><strong>记住最近翻译</strong><small>仅限当前标签页和当前浏览器会话；数量可在“更多结果设置”中调整。</small></span>
+          </label>
+          <label class="check-row preference-row">
+            <input id="alignment-default" type="checkbox" />
+            <span><strong>默认打开逐句对照</strong><small>翻译卡片中仍可随时切换为完整译文。</small></span>
+          </label>
+        </div>
+        <details class="advanced-panel">
+          <summary>更多结果设置</summary>
+          <div class="advanced-grid">
+            <label>
+              <span>最近翻译数量</span>
+              <select id="history-limit">
+                <option value="5">5 条</option>
+                <option value="10">10 条</option>
+                <option value="20">20 条</option>
+              </select>
+            </label>
+            <label>
+              <span>固定侧栏位置</span>
+              <select id="sidebar-side">
+                <option value="right">页面右侧</option>
+                <option value="left">页面左侧</option>
+              </select>
+            </label>
+            <label class="check-row compact-check">
+              <input id="session-cache" type="checkbox" />
+              <span>重复选区使用会话缓存，减少等待和 API 消耗</span>
+            </label>
+            <label>
+              <span>上下文辅助</span>
+              <select id="context-mode">
+                <option value="off">关闭（最少发送）</option>
+                <option value="sentence">使用所在句子</option>
+                <option value="paragraph">使用所在段落</option>
+              </select>
+              <small>上下文只用于消歧，不会作为译文展示；最多发送 2,000 个字符。</small>
+            </label>
+            <label class="check-row compact-check">
+              <input id="enable-streaming" type="checkbox" />
+              <span>接口支持时流式显示普通文本译文</span>
+            </label>
+            <label class="check-row compact-check">
+              <input id="protect-sensitive-fields" type="checkbox" />
+              <span>连续翻译时跳过密码、验证码和支付字段</span>
+            </label>
+          </div>
+        </details>
 
         <h2>页面范围</h2>
         <label>
@@ -146,15 +283,30 @@
         <div class="actions">
           <button class="primary" type="submit">保存设置</button>
           <button id="test-connection" type="button">测试连接</button>
+          <button id="diagnose-api" type="button">兼容性诊断</button>
           <button id="clear-key" class="danger" type="button">清除 API Key</button>
         </div>
         <p id="status" class="status" role="status" aria-live="polite"></p>
+        <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
       </form>
 
       <section class="card compact">
         <h2>使用方式</h2>
         <p>普通网页的推荐模式不会持续读取页面：选中文本后使用右键菜单或按 <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd>，扩展只临时获得当前页面权限。</p>
         <button id="open-shortcuts" type="button">打开快捷键设置</button>
+      </section>
+
+      <section class="card compact support-tools">
+        <h2>配置迁移与故障排查</h2>
+        <p>配置文件不包含 API Key。诊断报告不包含选区、译文、页面地址、术语表或网站名称，只有你点击按钮后才会复制到剪贴板。</p>
+        <div class="support-actions">
+          <button id="restart-onboarding" type="button">重新运行首次设置</button>
+          <button id="export-settings" type="button">导出配置</button>
+          <button id="import-settings" type="button">导入配置</button>
+          <input id="import-settings-file" type="file" accept="application/json,.json" hidden />
+          <button id="copy-diagnostic-report" type="button">复制诊断报告</button>
+        </div>
+        <p id="support-status" class="status" role="status" aria-live="polite"></p>
       </section>
     </main>
     <script type="module" src="./main.ts"></script>

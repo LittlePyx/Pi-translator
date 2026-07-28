@@ -1,6 +1,6 @@
 {
   "name": "tex-selection-translator",
-  "version": "0.4.0",
+  "version": "0.7.1",
   "private": true,
   "description": "Microsoft Edge extension for translating selected text on Overleaf and ordinary web pages.",
   "type": "module",
@@ -11,7 +11,9 @@
     "zip:edge": "wxt zip -b edge",
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "npm run build:edge && playwright test",
+    "test:e2e": "npm run build:edge && playwright test tests/e2e/selection-overlay.spec.ts",
+    "test:marketing": "npm run build:edge && playwright test tests/e2e/marketing-screenshots.spec.ts",
+    "check:secrets": "node tools/check-secrets.mjs",
     "test:watch": "vitest"
   },
   "devDependencies": {

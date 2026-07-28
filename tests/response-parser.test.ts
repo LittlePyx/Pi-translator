@@ -12,12 +12,15 @@ describe('DeepSeek response parsing', () => {
         translation: '翻译结果',
         detectedLanguage: 'en',
         warnings: [],
+        segments: [{ id: 'S1', translation: '第一句' }],
       }),
     );
     expect(result).toEqual({
       translatedText: '翻译结果',
       detectedLanguage: 'en',
       warnings: [],
+      alignedSegments: [{ id: 'S1', translatedText: '第一句' }],
+      structuredResponse: true,
     });
   });
 
@@ -35,9 +38,13 @@ describe('DeepSeek response parsing', () => {
     expect(content).toContain('translation');
   });
 
-  it('rejects empty and malformed content', () => {
+  it('falls back to plain text but rejects empty structured translations', () => {
     expect(() => parseDeepSeekEnvelope({ choices: [] })).toThrow(TranslationError);
-    expect(() => parseStructuredTranslation('not-json')).toThrow(TranslationError);
+    expect(parseStructuredTranslation('plain translated text')).toEqual({
+      translatedText: 'plain translated text',
+      warnings: [],
+      structuredResponse: false,
+    });
     expect(() => parseStructuredTranslation('{"translation":""}')).toThrow(
       TranslationError,
     );

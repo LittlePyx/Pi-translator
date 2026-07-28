@@ -50,8 +50,8 @@ describe('DeepSeek translator', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.model).toBe('deepseek-v4-flash');
-    expect(body.thinking).toEqual({ type: 'disabled' });
-    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.thinking).toBeUndefined();
+    expect(body.response_format).toBeUndefined();
   });
 
   it('maps an authentication failure', async () => {
@@ -113,5 +113,70 @@ describe('DeepSeek translator', () => {
         new AbortController().signal,
       ),
     ).resolves.toEqual(['deepseek-v4-flash', 'deepseek-v4-pro']);
+  });
+
+  it('retries a rate-limited request and then succeeds', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(
+        new Response('{"error":{"message":"slow down"}}', {
+          status: 429,
+          headers: { 'Retry-After': '0' },
+        }),
+      )
+      .mockResolvedValueOnce(
+        new Response(JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            translation: '成功',
+            warnings: [],
+            segments: [],
+          }) } }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } }),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+    const translator = new DeepSeekTranslator();
+    await expect(translator.translate(
+      { text: 'Success', placeholderTokens: [] },
+      options,
+      { apiKey: 'test-key' },
+      new AbortController().signal,
+    )).resolves.toMatchObject({ translatedText: '成功' });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('emits clean partial translations from an SSE response', async () => {
+    const encoder = new TextEncoder();
+    const deltas = [
+      '{"translation":"你',
+      '好","detectedLanguage":"en","warnings":[],"segments":[]}',
+    ];
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (const content of deltas) {
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`,
+          ));
+        }
+        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+        controller.close();
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(
+      new Response(stream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }),
+    ));
+    const partials: string[] = [];
+    const translator = new DeepSeekTranslator();
+    const result = await translator.translate(
+      { text: 'Hello', placeholderTokens: [] },
+      options,
+      { apiKey: 'test-key' },
+      new AbortController().signal,
+      { onPartialText: (value) => partials.push(value) },
+    );
+    expect(partials).toContain('你');
+    expect(partials.at(-1)).toBe('你好');
+    expect(result.translatedText).toBe('你好');
   });
 });

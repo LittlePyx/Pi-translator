@@ -1,4 +1,6 @@
 import type { SelectionSnapshot, SelectionSource, ViewportRect } from './types';
+import type { ContextMode } from '../settings/schema';
+import { isSensitiveTextControl, selectionContext } from './selection-context';
 
 function createRequestId(): string {
   return crypto.randomUUID();
@@ -29,6 +31,7 @@ function createSnapshot(
   sourceText: string,
   source: SelectionSource,
   rect?: ViewportRect,
+  metadata?: Pick<SelectionSnapshot, 'contextText' | 'sensitiveField'>,
 ): SelectionSnapshot | undefined {
   const normalizedText = sourceText.trim();
   if (!normalizedText) {
@@ -42,6 +45,8 @@ function createSnapshot(
     pageUrl: location.href,
     capturedAt: Date.now(),
     selectionHash: hashText(normalizedText),
+    ...(metadata?.contextText ? { contextText: metadata.contextText } : {}),
+    ...(metadata?.sensitiveField ? { sensitiveField: true } : {}),
     ...(rect ? { rect } : {}),
   };
 }
@@ -65,10 +70,11 @@ function captureTextControl(): SelectionSnapshot | undefined {
     active.value.slice(start, end),
     'text-control',
     toViewportRect(active.getBoundingClientRect()),
+    { sensitiveField: isSensitiveTextControl(active) },
   );
 }
 
-function captureWindowSelection(): SelectionSnapshot | undefined {
+function captureWindowSelection(contextMode: ContextMode): SelectionSnapshot | undefined {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
     return undefined;
@@ -88,11 +94,18 @@ function captureWindowSelection(): SelectionSnapshot | undefined {
     ? 'contenteditable'
     : 'window-selection';
 
-  return createSnapshot(selection.toString(), source, toViewportRect(rect));
+  const selectedText = selection.toString();
+  const contextText = selectionContext(anchorElement, selectedText, contextMode);
+  return createSnapshot(selectedText, source, toViewportRect(rect), {
+    ...(contextText ? { contextText } : {}),
+    sensitiveField: Boolean(
+      anchorElement?.closest('[data-private="true"],[data-sensitive="true"],input[type="password"]'),
+    ),
+  });
 }
 
-export function captureSelectionSnapshot(): SelectionSnapshot | undefined {
-  return captureTextControl() ?? captureWindowSelection();
+export function captureSelectionSnapshot(contextMode: ContextMode = 'off'): SelectionSnapshot | undefined {
+  return captureTextControl() ?? captureWindowSelection(contextMode);
 }
 
 export function createContextMenuSnapshot(

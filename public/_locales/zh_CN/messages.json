@@ -3,7 +3,7 @@
     "message": "Pi Translator"
   },
   "extensionDescription": {
-    "message": "在 Overleaf 和普通网页中翻译选中文本，支持 DeepSeek、学术术语表与 LaTeX 结构保护。"
+    "message": "在 Overleaf 和普通网页中翻译选中文本，支持连续侧栏、流式翻译、上下文辅助与本地收藏。"
   },
   "actionTitle": {
     "message": "Pi Translator 快速控制"

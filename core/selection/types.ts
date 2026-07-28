@@ -20,7 +20,9 @@ export interface SelectionSnapshot {
   pageUrl: string;
   capturedAt: number;
   selectionHash: string;
+  contextText?: string;
+  sensitiveField?: boolean;
   rect?: ViewportRect;
 }
 
-export const MAX_SELECTION_LENGTH = 8_000;
+export const MAX_SELECTION_LENGTH = 32_000;

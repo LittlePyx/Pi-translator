@@ -2,6 +2,8 @@ import type {
   PublicSettings,
   PublicSettingsResponse,
   RuntimeMessage,
+  TranslationFavoritesResponse,
+  TranslationHistoryResponse,
   TranslateRuntimeResponse,
 } from '../messaging/messages';
 import {
@@ -29,6 +31,15 @@ const DEFAULT_PUBLIC_SETTINGS: PublicSettings = {
   generalPageMode: 'on-demand',
   siteAllowlist: [],
   pausedSiteHosts: [],
+  sentenceAlignmentDefault: false,
+  historyLimit: 5,
+  sidebarSide: 'right',
+  sidebarWidth: 390,
+  contextMode: 'off',
+  enableStreaming: true,
+  protectSensitiveFields: true,
+  activeApiProfileId: 'default',
+  apiProfiles: [{ id: 'default', name: '默认接口', model: '' }],
 };
 
 function shouldShowFloatingButton(
@@ -54,6 +65,10 @@ export async function startSelectionTranslator(
   let activeSelection: SelectionSnapshot | undefined;
   let inFlightRequestId: string | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
+  let lastAutoSelectionHash: string | undefined;
+  let temporaryTargetLanguage = settings.targetLanguage;
+  let temporaryStyle = settings.style;
 
   function cancelActiveTranslation(): void {
     const requestId = inFlightRequestId;
@@ -73,9 +88,89 @@ export async function startSelectionTranslator(
       if (latestSelection) void translate(latestSelection);
     },
     onRetry: () => {
-      if (activeSelection) void translate(activeSelection);
+      if (activeSelection) void translate(activeSelection, true);
+    },
+    onTranslateText: (text) => {
+      const basis = activeSelection ?? latestSelection;
+      if (!basis) return;
+      const requestId = crypto.randomUUID();
+      void translate({
+        ...basis,
+        requestId,
+        sourceText: text,
+        normalizedText: text.trim(),
+        capturedAt: Date.now(),
+        selectionHash: `${requestId}:${text.length}`,
+      }, true);
     },
     onOpenSettings: () => void browser.runtime.openOptionsPage(),
+    onClearHistory: async () => {
+      await browser.runtime.sendMessage({
+        type: 'CLEAR_TRANSLATION_HISTORY',
+      } satisfies RuntimeMessage);
+    },
+    onDeleteHistory: async (historyId) => {
+      const response = (await browser.runtime.sendMessage({
+        type: 'DELETE_TRANSLATION_HISTORY',
+        payload: { historyId },
+      } satisfies RuntimeMessage)) as TranslationHistoryResponse;
+      return response.ok ? response.data.history : [];
+    },
+    onPinHistory: async (historyId, pinned) => {
+      const response = (await browser.runtime.sendMessage({
+        type: 'PIN_TRANSLATION_HISTORY',
+        payload: { historyId, pinned },
+      } satisfies RuntimeMessage)) as TranslationHistoryResponse;
+      return response.ok ? response.data.history : [];
+    },
+    onSaveFavorite: async (result) => {
+      const response = (await browser.runtime.sendMessage({
+        type: 'ADD_TRANSLATION_FAVORITE',
+        payload: { result },
+      } satisfies RuntimeMessage)) as TranslationFavoritesResponse;
+      return response.ok ? response.data.favorites : [];
+    },
+    onGetFavorites: async (query) => {
+      const response = (await browser.runtime.sendMessage({
+        type: 'GET_TRANSLATION_FAVORITES',
+        ...(query ? { payload: { query } } : {}),
+      } satisfies RuntimeMessage)) as TranslationFavoritesResponse;
+      return response.ok ? response.data.favorites : [];
+    },
+    onDeleteFavorite: async (favoriteId) => {
+      const response = (await browser.runtime.sendMessage({
+        type: 'DELETE_TRANSLATION_FAVORITE',
+        payload: { favoriteId },
+      } satisfies RuntimeMessage)) as TranslationFavoritesResponse;
+      return response.ok ? response.data.favorites : [];
+    },
+    onPauseSite: async () => {
+      await browser.runtime.sendMessage({
+        type: 'PAUSE_CURRENT_SITE',
+        payload: { pageUrl: location.href },
+      } satisfies RuntimeMessage);
+    },
+    onSidebarChange: (active) => {
+      if (active) {
+        lastAutoSelectionHash = activeSelection?.selectionHash;
+        scheduleRefresh();
+        return;
+      }
+      if (!active) {
+        lastAutoSelectionHash = undefined;
+        if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      }
+    },
+    onSidebarWidthChange: (width) => {
+      void browser.runtime.sendMessage({
+        type: 'SET_SIDEBAR_WIDTH',
+        payload: { width },
+      } satisfies RuntimeMessage);
+    },
+    onPreferencesChange: (preferences) => {
+      temporaryTargetLanguage = preferences.targetLanguage;
+      temporaryStyle = preferences.style;
+    },
     onDismiss: cancelActiveTranslation,
   });
 
@@ -83,7 +178,17 @@ export async function startSelectionTranslator(
     const response = (await browser.runtime.sendMessage({
       type: 'GET_PUBLIC_SETTINGS',
     } satisfies RuntimeMessage)) as PublicSettingsResponse;
-    if (response.ok) settings = response.data;
+    if (response.ok) {
+      settings = response.data;
+      temporaryTargetLanguage = settings.targetLanguage;
+      temporaryStyle = settings.style;
+      overlay.setPreferences({
+        targetLanguage: temporaryTargetLanguage,
+        style: temporaryStyle,
+        sidebarSide: settings.sidebarSide,
+        sidebarWidth: settings.sidebarWidth,
+      });
+    }
   } catch {
     // Defaults keep the content UI usable while the service worker restarts.
   }
@@ -93,17 +198,43 @@ export async function startSelectionTranslator(
   }
 
   function refreshSelection(): void {
+    if (overlay.ownsCurrentSelection()) return;
+    const snapshot = captureSelectionSnapshot(settings.contextMode);
+    latestSelection = snapshot;
+    if (overlay.isSidebarActive()) {
+      overlay.hideTrigger();
+      if (
+        !snapshot ||
+        (surface === 'general' &&
+          settings.hideFloatingButtonForTargetLanguage &&
+          isLikelyTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)) ||
+        snapshot.selectionHash === lastAutoSelectionHash
+      ) {
+        return;
+      }
+      if (settings.protectSensitiveFields && snapshot.sensitiveField) {
+        lastAutoSelectionHash = snapshot.selectionHash;
+        overlay.showSensitiveNotice(selectionRect(snapshot));
+        return;
+      }
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = setTimeout(() => {
+        const current = captureSelectionSnapshot(settings.contextMode);
+        if (!current || current.selectionHash !== snapshot.selectionHash) return;
+        lastAutoSelectionHash = snapshot.selectionHash;
+        void translate(snapshot);
+      }, 220);
+      return;
+    }
     if (!shouldShowFloatingButton(settings, surface)) {
       overlay.hideTrigger();
       return;
     }
-    const snapshot = captureSelectionSnapshot();
-    latestSelection = snapshot;
     if (
       surface === 'general' &&
       settings.hideFloatingButtonForTargetLanguage &&
       snapshot &&
-      isLikelyTargetLanguage(snapshot.normalizedText, settings.targetLanguage)
+      isLikelyTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)
     ) {
       overlay.hideTrigger();
       return;
@@ -128,7 +259,14 @@ export async function startSelectionTranslator(
     refreshTimer = setTimeout(refreshSelection, 60);
   }
 
-  async function translate(snapshot: SelectionSnapshot): Promise<void> {
+  async function translate(snapshot: SelectionSnapshot, bypassCache = false): Promise<void> {
+    if (inFlightRequestId && inFlightRequestId !== snapshot.requestId) {
+      const previousRequestId = inFlightRequestId;
+      void browser.runtime.sendMessage({
+        type: 'CANCEL_TRANSLATION',
+        payload: { requestId: previousRequestId },
+      } satisfies RuntimeMessage).catch(() => undefined);
+    }
     const isRetry = activeSelection?.requestId === snapshot.requestId;
     if (!isRetry) overlay.resetCardPosition();
     activeSelection = snapshot;
@@ -141,17 +279,24 @@ export async function startSelectionTranslator(
           requestId: snapshot.requestId,
           text: snapshot.normalizedText,
           pageUrl: snapshot.pageUrl,
-          targetLanguage: settings.targetLanguage,
+          targetLanguage: temporaryTargetLanguage,
           sourceLanguage: settings.sourceLanguage,
-          style: settings.style,
+          style: temporaryStyle,
           contentMode: settings.contentMode,
+          ...(snapshot.contextText ? { contextText: snapshot.contextText } : {}),
+          ...(bypassCache ? { bypassCache: true } : {}),
         },
       } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
 
       if (activeSelection?.requestId !== snapshot.requestId) return;
       inFlightRequestId = undefined;
       if (response.ok) {
-        overlay.showResult(response.data, selectionRect(snapshot));
+        overlay.showResult(
+          response.data.result,
+          selectionRect(snapshot),
+          response.data.history,
+          settings.sentenceAlignmentDefault,
+        );
         return;
       }
       const message = translationErrorMessage(
@@ -162,7 +307,11 @@ export async function startSelectionTranslator(
         {
           message,
           showSettings:
-            response.error.code === 'NO_API_KEY' || response.error.code === 'AUTH_FAILED',
+            response.error.code === 'NO_API_KEY' ||
+            response.error.code === 'AUTH_FAILED' ||
+            response.error.code === 'PAYMENT_REQUIRED' ||
+            response.error.code === 'MODEL_NOT_FOUND' ||
+            response.error.code === 'API_PERMISSION_REQUIRED',
         },
         selectionRect(snapshot),
       );
@@ -182,13 +331,36 @@ export async function startSelectionTranslator(
   const messageListener = (message: unknown): void => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     const typed = message as RuntimeMessage;
+    if (typed.type === 'TRANSLATION_PROGRESS') {
+      if (typed.payload.requestId === inFlightRequestId) {
+        overlay.showProgress(
+          typed.payload.partialText,
+          typed.payload.completedChunks,
+          typed.payload.totalChunks,
+        );
+      }
+      return;
+    }
     if (typed.type === 'PUBLIC_SETTINGS_UPDATED') {
       settings = typed.payload;
+      temporaryTargetLanguage = settings.targetLanguage;
+      temporaryStyle = settings.style;
+      overlay.setPreferences({
+        targetLanguage: temporaryTargetLanguage,
+        style: temporaryStyle,
+        sidebarSide: settings.sidebarSide,
+        sidebarWidth: settings.sidebarWidth,
+      });
+      refreshSelection();
+      return;
+    }
+    if (typed.type === 'OPEN_SIDEBAR') {
+      overlay.openSidebar();
       refreshSelection();
       return;
     }
     if (typed.type === 'TRIGGER_TRANSLATE') {
-      const snapshot = captureSelectionSnapshot();
+      const snapshot = captureSelectionSnapshot(settings.contextMode);
       if (snapshot) {
         latestSelection = snapshot;
         void translate(snapshot);
@@ -199,7 +371,7 @@ export async function startSelectionTranslator(
       }
     }
     if (typed.type === 'CONTEXT_MENU_TRANSLATE') {
-      const current = captureSelectionSnapshot();
+      const current = captureSelectionSnapshot(settings.contextMode);
       const snapshot = {
         ...typed.payload,
         ...(current?.rect ? { rect: current.rect } : {}),
@@ -218,6 +390,7 @@ export async function startSelectionTranslator(
 
   ctx.onInvalidated(() => {
     if (refreshTimer) clearTimeout(refreshTimer);
+    if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
     document.removeEventListener('selectionchange', scheduleRefresh);
     document.removeEventListener('mouseup', scheduleRefresh, true);
     document.removeEventListener('keyup', scheduleRefresh, true);

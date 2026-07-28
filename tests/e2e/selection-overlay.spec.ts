@@ -58,6 +58,20 @@ test.beforeAll(async () => {
   }
   extensionId = new URL(serviceWorker.url()).host;
 
+  // Edge opens the options page once after a fresh extension install. Let that
+  // navigation finish before creating the fixture tab so it cannot interrupt
+  // the first test navigation.
+  await expect
+    .poll(
+      () =>
+        context.pages().some((tab) =>
+          tab.url().startsWith('edge://extensions/?options='),
+        ),
+      { timeout: 5_000 },
+    )
+    .toBe(true);
+  await Promise.all(context.pages().map((tab) => tab.close()));
+
   page = await context.newPage();
   await page.route(OVERLEAF_FIXTURE_URL, async (route) => {
     await route.fulfill({
@@ -66,6 +80,7 @@ test.beforeAll(async () => {
         <html>
           <body style="font: 18px sans-serif; padding: 80px">
             <p id="source">A consistent academic translation improves the readability of research papers.</p>
+            <input id="payment" type="text" autocomplete="cc-number" value="4111 1111 1111 1111" />
             <button id="blank" type="button">Clear selection</button>
           </body>
         </html>`,
@@ -136,5 +151,55 @@ test('updates the target language from the quick popup', async () => {
   const reopened = await context.newPage();
   await reopened.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(reopened.locator('#target-language')).toHaveValue('en');
+  await reopened.close();
+});
+
+test('pins continuous translation to a collapsible sidebar', async () => {
+  await selectSourceText();
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  await overlay.getByTitle('固定到连续翻译侧栏').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await overlay.getByTitle('收起侧栏').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+  await overlay.getByTitle('展开 Pi Translator 连续翻译侧栏').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+});
+
+test('skips sensitive form fields during continuous translation', async () => {
+  const overlay = page.locator('#tex-selection-translator-root');
+  await page.locator('#payment').evaluate((element) => {
+    const input = element as HTMLInputElement;
+    input.focus();
+    input.setSelectionRange(0, input.value.length);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.notice')).toContainText('已跳过敏感输入区域');
+});
+
+test('keeps advanced options collapsed until requested', async () => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  const onboarding = options.locator('#onboarding-dialog');
+  await expect(onboarding).toBeVisible();
+  await expect(options.locator('#onboarding-title')).toContainText('Pi Translator');
+  await options.locator('#onboarding-skip').click();
+  await expect(onboarding).not.toBeVisible();
+  const advanced = options.locator('details.advanced-panel');
+  await expect(advanced).not.toHaveAttribute('open', '');
+  await advanced.locator('summary').click();
+  await expect(options.locator('#context-mode')).toBeVisible();
+  await expect(options.locator('#enable-streaming')).toBeVisible();
+  await expect(options.locator('#protect-sensitive-fields')).toBeVisible();
+  await options.close();
+
+  const reopened = await context.newPage();
+  await reopened.goto(`chrome-extension://${extensionId}/options.html`);
+  await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
+  await reopened.locator('#restart-onboarding').click();
+  await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
   await reopened.close();
 });

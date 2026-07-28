@@ -14,6 +14,8 @@ export interface TranslateRequest {
   sourceLanguage: 'auto' | string;
   style: TranslationStyle;
   contentMode: TranslationContentMode;
+  contextText?: string;
+  bypassCache?: boolean;
 }
 
 export type TranslationWarningCode =
@@ -32,12 +34,45 @@ export interface TranslateResult {
   translatedText: string;
   detectedLanguage?: string;
   warnings: TranslationWarning[];
+  alignedSegments?: TranslationSegment[];
+  sourceHost?: string;
+  targetLanguage?: string;
+  style?: TranslationStyle;
+  completedAt?: number;
+  cached?: boolean;
+  latencyMs?: number;
+  contextUsed?: boolean;
+  chunkCount?: number;
+}
+
+export interface TranslationSegment {
+  id: string;
+  originalText: string;
+  translatedText: string;
+}
+
+export interface TranslationHistoryEntry extends TranslateResult {
+  historyId: string;
+  createdAt: number;
+  pinned?: boolean;
+}
+
+export interface TranslationFavorite extends TranslateResult {
+  favoriteId: string;
+  createdAt: number;
 }
 
 export interface ProviderTranslationResult {
   translatedText: string;
   detectedLanguage?: string;
   warnings: string[];
+  alignedSegments?: ProviderTranslationSegment[];
+  structuredResponse?: boolean;
+}
+
+export interface ProviderTranslationSegment {
+  id: string;
+  translatedText: string;
 }
 
 export interface TranslationOptions {
@@ -51,10 +86,17 @@ export interface TranslationOptions {
 export interface PreparedTranslationInput {
   text: string;
   placeholderTokens: string[];
+  segments?: Array<{ id: string; text: string }>;
+  contextText?: string;
+}
+
+export interface TranslationCallbacks {
+  onPartialText?: (text: string) => void;
 }
 
 export interface ProviderCredentials {
   apiKey: string;
+  apiBaseUrl: string;
 }
 
 export interface Translator {
@@ -63,6 +105,7 @@ export interface Translator {
     options: TranslationOptions,
     credentials: ProviderCredentials,
     signal: AbortSignal,
+    callbacks?: TranslationCallbacks,
   ): Promise<ProviderTranslationResult>;
 
   testConnection(

@@ -17,10 +17,7 @@ export default defineConfig({
       128: 'brand/pi_logo.png',
     },
     permissions: ['storage', 'contextMenus', 'activeTab', 'scripting'],
-    host_permissions: [
-      'https://api.deepseek.com/*',
-      'https://www.overleaf.com/*',
-    ],
+    host_permissions: ['https://www.overleaf.com/*'],
     optional_host_permissions: ['http://*/*', 'https://*/*'],
     web_accessible_resources: [
       {

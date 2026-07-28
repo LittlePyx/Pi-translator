@@ -68,8 +68,8 @@ interface BalancedGroup {
   contentEnd: number;
 }
 
-function createNamespace(source: string): string {
-  let namespace = 'TEX';
+function createNamespace(source: string, requestedNamespace = 'TEX'): string {
+  let namespace = requestedNamespace.replace(/[^A-Z0-9_]/gi, '').toUpperCase() || 'TEX';
   while (source.includes(`⟦${namespace}_`)) {
     namespace += 'X';
   }
@@ -333,10 +333,10 @@ function scanRange(state: ScanState, start: number, end: number): string {
   return output;
 }
 
-export function protectLatex(sourceText: string): ProtectedLatex {
+export function protectLatex(sourceText: string, namespace?: string): ProtectedLatex {
   const state: ScanState = {
     source: sourceText,
-    namespace: createNamespace(sourceText),
+    namespace: createNamespace(sourceText, namespace),
     fragments: [],
     warnings: [],
   };

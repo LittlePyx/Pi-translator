@@ -27,6 +27,11 @@
         </select>
       </label>
 
+      <label id="api-profile-field" hidden>
+        <span>翻译接口</span>
+        <select id="api-profile"></select>
+      </label>
+
       <section class="site-control">
         <div>
           <span>当前网站</span>
@@ -40,6 +45,7 @@
       </section>
 
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <button id="open-sidebar" class="primary-action" type="button">打开连续翻译侧栏</button>
       <button id="open-settings" type="button">打开完整设置</button>
     </main>
     <script type="module" src="./main.ts"></script>

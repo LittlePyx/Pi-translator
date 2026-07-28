@@ -3,10 +3,23 @@ import type { GlossaryEntry, TranslationStyle } from '../translation/types';
 export type ApiKeyStorageMode = 'session' | 'local';
 export type GeneralPageMode = 'off' | 'on-demand' | 'allowlist' | 'all-sites';
 export type ContentMode = 'auto' | 'plain' | 'latex';
+export type HistoryLimit = 5 | 10 | 20;
+export type SidebarSide = 'left' | 'right';
+export type ContextMode = 'off' | 'sentence' | 'paragraph';
 
-export interface ExtensionSettingsV3 {
-  schemaVersion: 3;
-  provider: 'deepseek';
+export interface ApiProfile {
+  id: string;
+  name: string;
+  apiBaseUrl: string;
+  model: string;
+}
+
+export interface ExtensionSettingsV7 {
+  schemaVersion: 7;
+  provider: 'openai-compatible';
+  apiProfiles: ApiProfile[];
+  activeApiProfileId: string;
+  apiBaseUrl: string;
   model: string;
   sourceLanguage: 'auto' | string;
   targetLanguage: string;
@@ -19,18 +32,34 @@ export interface ExtensionSettingsV3 {
   siteAllowlist: string[];
   enableContextMenu: boolean;
   academicGlossary: GlossaryEntry[];
+  rememberRecentTranslations: boolean;
+  enableSessionCache: boolean;
+  historyLimit: HistoryLimit;
+  sentenceAlignmentDefault: boolean;
+  sidebarSide: SidebarSide;
+  sidebarWidth: number;
+  contextMode: ContextMode;
+  enableStreaming: boolean;
+  protectSensitiveFields: boolean;
+  onboardingCompleted: boolean;
 }
 
-export type ExtensionSettings = ExtensionSettingsV3;
+export type ExtensionSettings = ExtensionSettingsV7;
 
-export const DEEPSEEK_MODEL_PRESETS = [
-  { value: 'deepseek-v4-flash', label: 'DeepSeek V4 Flash' },
-  { value: 'deepseek-v4-pro', label: 'DeepSeek V4 Pro' },
-] as const;
+export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com';
+export const DEFAULT_API_PROFILE: ApiProfile = {
+  id: 'default',
+  name: '默认接口',
+  apiBaseUrl: DEFAULT_API_BASE_URL,
+  model: 'deepseek-v4-flash',
+};
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
-  schemaVersion: 3,
-  provider: 'deepseek',
+  schemaVersion: 7,
+  provider: 'openai-compatible',
+  apiProfiles: [DEFAULT_API_PROFILE],
+  activeApiProfileId: DEFAULT_API_PROFILE.id,
+  apiBaseUrl: DEFAULT_API_BASE_URL,
   model: 'deepseek-v4-flash',
   sourceLanguage: 'auto',
   targetLanguage: 'zh-CN',
@@ -43,4 +72,14 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   siteAllowlist: [],
   enableContextMenu: true,
   academicGlossary: [],
+  rememberRecentTranslations: true,
+  enableSessionCache: true,
+  historyLimit: 5,
+  sentenceAlignmentDefault: false,
+  sidebarSide: 'right',
+  sidebarWidth: 390,
+  contextMode: 'off',
+  enableStreaming: true,
+  protectSensitiveFields: true,
+  onboardingCompleted: false,
 };

@@ -90,15 +90,24 @@ select {
 
 button {
   width: 100%;
-  border: 1px solid #4f46e5;
+  border: 1px solid #cbd5e1;
   border-radius: 10px;
   padding: 9px 12px;
-  color: #fff;
-  background: linear-gradient(135deg, #4f46e5, #6d5ce8);
+  color: #334155;
+  background: #fff;
   cursor: pointer;
   font: inherit;
   font-weight: 680;
 }
+
+.primary-action {
+  border-color: #4f46e5;
+  color: #fff;
+  background: linear-gradient(135deg, #4f46e5, #6d5ce8);
+}
+
+.primary-action:hover { background: linear-gradient(135deg, #4338ca, #5b4bd6); }
+#open-settings { margin-top: 8px; }
 
 button:hover { filter: brightness(1.06); }
 button:focus-visible, select:focus-visible, input:focus-visible {
@@ -121,4 +130,6 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   header small, .site-control > div, .site-control p { color: #93a1b6; }
   .site-control strong, .switch-row { color: #e2e8f0; }
   select { border-color: #465269; color: #eef2f7; background: #182131; }
+  button { border-color: #465269; color: #e2e8f0; background: #202938; }
+  .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
 }
