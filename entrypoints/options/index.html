@@ -66,248 +66,157 @@
       </div>
     </dialog>
     <main class="shell">
-      <header class="hero">
+      <header class="hero hero-compact">
         <div class="brand-row">
-          <span class="brand-mark" aria-hidden="true">
-            <img src="/brand/pi_logo.png" alt="" />
-          </span>
-            <p class="eyebrow">Microsoft Edge 扩展 · v0.7.1</p>
-          <span class="team-credit">
-            <span>Developed by</span>
-            <img src="/brand/team_logo.png" alt="P&I Lab" />
-          </span>
+          <span class="brand-mark" aria-hidden="true"><img src="/brand/pi_logo.png" alt="" /></span>
+          <div class="hero-title">
+            <p class="eyebrow">Microsoft Edge 扩展 · v0.7.2</p>
+            <h1>Pi Translator</h1>
+          </div>
+          <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab" /></span>
         </div>
-        <h1>Pi Translator</h1>
-        <p class="intro">在 Overleaf 和普通网页中翻译选中文本，并按需保护 LaTeX 结构。</p>
-        <div class="hero-meta">
-          <span>有选区：快捷翻译</span>
-          <span>无选区：打开设置</span>
-          <span><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></span>
+        <div class="hero-bottom">
+          <p class="intro">翻译 Overleaf 和普通网页中的选中文本，并按需保护 LaTeX 结构。</p>
+          <span class="shortcut-chip"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></span>
         </div>
       </header>
 
-      <section class="card notice">
-        <h2>数据说明</h2>
-        <p>只有你主动触发或在固定侧栏中选中的文本会发送到所配置的 API；可选上下文默认关闭。最近结果与缓存只保留在当前会话，主动收藏才会长期保存在本机；API Key 不会暴露给网页。</p>
+      <section class="privacy-strip" aria-label="数据说明">
+        <span class="privacy-icon">i</span>
+        <p>只发送你主动触发的选区；API Key 不会暴露给网页，历史与缓存默认仅保留在当前会话。</p>
       </section>
 
-      <form id="settings-form" class="card">
-        <div class="section-heading">
-          <div>
-            <span class="section-kicker">连接</span>
-            <h2>翻译 API</h2>
+      <div class="settings-workspace">
+        <aside class="settings-nav" aria-label="设置分区">
+          <div class="connection-overview">
+            <span>当前连接</span>
+            <strong id="nav-profile-name">默认接口</strong>
+            <small id="nav-key-status">正在检查 Key…</small>
           </div>
-          <span class="protocol-badge">OpenAI 兼容协议</span>
-        </div>
-        <div class="profile-bar">
-          <label>
-            <span>API 配置</span>
-            <select id="api-profile"></select>
-          </label>
-          <button id="add-profile" class="small-button" type="button">新增</button>
-          <button id="delete-profile" class="small-button danger-text" type="button">删除</button>
-        </div>
-        <label>
-          <span>配置名称</span>
-          <input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" />
-        </label>
-        <label>
-          <span>快速填写接口</span>
-          <select id="api-preset">
-            <option value="custom">自定义</option>
-          </select>
-          <small>仅填写接口地址和建议模型，API Key 仍由你自己提供。</small>
-        </label>
-        <label>
-          <span>API Base URL</span>
-          <input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" />
-          <small>填写服务根地址，扩展会调用 <code>/chat/completions</code> 和 <code>/models</code>。</small>
-        </label>
-        <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
-        <label>
-          <span>API Key</span>
-          <input id="api-key" type="password" autocomplete="off" placeholder="输入新的 API Key" />
-          <small id="api-key-state">尚未配置</small>
-        </label>
-
-        <label class="check-row">
-          <input id="persist-key" type="checkbox" />
-          <span>在本机持久保存 API Key</span>
-        </label>
-        <p class="hint">默认仅保存在当前浏览器会话。持久保存更方便，但不代表操作系统级加密。</p>
-
-        <div class="field-block">
-          <div class="field-heading">
-            <label for="model">模型名称</label>
-            <button id="refresh-models" class="text-button" type="button">读取可用模型</button>
+          <div class="settings-nav-list" role="tablist" aria-orientation="vertical">
+            <button class="settings-nav-item active" type="button" role="tab" aria-selected="true" data-settings-target="connection"><span>01</span>连接 API</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="translation"><span>02</span>翻译偏好</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="results"><span>03</span>结果与侧栏</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="pages"><span>04</span>页面范围</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="support"><span>05</span>支持与迁移</button>
           </div>
-          <input id="model" type="text" list="model-list" spellcheck="false" placeholder="例如 model-name" />
-          <datalist id="model-list"></datalist>
-          <small>可直接填写，也可以读取当前 API Key 可用的模型后选择。</small>
-        </div>
+        </aside>
 
-        <h2>翻译偏好</h2>
-        <div class="grid">
-          <label>
-            <span>源语言</span>
-            <select id="source-language">
-              <option value="auto">自动识别</option>
-              <option value="en">English</option>
-              <option value="zh-CN">简体中文</option>
-              <option value="ja">日本語</option>
-              <option value="de">Deutsch</option>
-              <option value="fr">Français</option>
-            </select>
-          </label>
-          <label>
-            <span>目标语言</span>
-            <select id="target-language">
-              <option value="zh-CN">简体中文</option>
-              <option value="en">English</option>
-              <option value="ja">日本語</option>
-              <option value="de">Deutsch</option>
-              <option value="fr">Français</option>
-            </select>
-          </label>
-          <label>
-            <span>翻译风格</span>
-            <select id="style">
-              <option value="academic">学术</option>
-              <option value="general">通用</option>
-              <option value="literal">直译</option>
-            </select>
-          </label>
-          <label>
-            <span>内容模式</span>
-            <select id="content-mode">
-              <option value="auto">自动判断</option>
-              <option value="plain">纯文本</option>
-              <option value="latex">LaTeX</option>
-            </select>
-          </label>
-        </div>
-        <p class="field-help">“自动判断”会在 Overleaf 中启用 LaTeX 保护，在普通网页检测到公式或命令时自动保护。</p>
+        <form id="settings-form" class="settings-content">
+          <section id="settings-connection" class="card settings-section active" role="tabpanel" data-settings-section="connection">
+            <div class="section-heading">
+              <div><span class="section-kicker">连接</span><h2>翻译 API</h2></div>
+              <span class="protocol-badge">OpenAI 兼容协议</span>
+            </div>
+            <p class="section-intro">选择接口并配置当前模型。读取模型、测试和诊断只会访问当前 API 域名。</p>
+            <div class="profile-bar">
+              <label><span>API 配置</span><select id="api-profile"></select></label>
+              <button id="add-profile" class="small-button" type="button">新增</button>
+              <button id="delete-profile" class="small-button danger-text" type="button">删除</button>
+            </div>
+            <div class="grid">
+              <label><span>配置名称</span><input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" /></label>
+              <label><span>快速填写接口</span><select id="api-preset"><option value="custom">自定义</option></select><small>只填写地址与建议模型。</small></label>
+            </div>
+            <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" /><small>扩展会调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
+            <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
+            <div class="key-field-row">
+              <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="输入新的 API Key" /><small id="api-key-state">尚未配置</small></label>
+              <button id="clear-key" class="danger subtle-danger" type="button">清除 Key</button>
+            </div>
+            <label class="check-row"><input id="persist-key" type="checkbox" /><span>在本机持久保存 API Key</span></label>
+            <p class="hint">默认仅保存在当前浏览器会话。持久保存更方便，但不代表操作系统级加密。</p>
+            <div class="field-block">
+              <div class="field-heading"><label for="model">模型名称</label><button id="refresh-models" class="text-button" type="button">读取可用模型</button></div>
+              <input id="model" type="text" list="model-list" spellcheck="false" placeholder="例如 model-name" />
+              <datalist id="model-list"></datalist>
+              <small>可直接填写，也可以读取当前 Key 可用的模型后选择。</small>
+            </div>
+            <div class="section-actions">
+              <button id="test-connection" type="button">测试连接</button>
+              <button id="diagnose-api" type="button">兼容性诊断</button>
+            </div>
+            <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
+          </section>
 
-        <h2>学术术语表</h2>
-        <label>
-          <span>固定术语翻译</span>
-          <textarea id="academic-glossary" rows="7" spellcheck="false" placeholder="每行一条，例如：&#10;large language model = 大语言模型&#10;knowledge distillation = 知识蒸馏"></textarea>
-          <small>最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small>
-        </label>
+          <section id="settings-translation" class="card settings-section" role="tabpanel" data-settings-section="translation" hidden>
+            <div class="section-heading"><div><span class="section-kicker">翻译</span><h2>语言与内容偏好</h2></div></div>
+            <p class="section-intro">这些设置会应用到浮动卡片和连续翻译侧栏。</p>
+            <div class="grid">
+              <label><span>源语言</span><select id="source-language"><option value="auto">自动识别</option><option value="en">English</option><option value="zh-CN">简体中文</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
+              <label><span>目标语言</span><select id="target-language"><option value="zh-CN">简体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
+              <label><span>翻译风格</span><select id="style"><option value="academic">学术</option><option value="general">通用</option><option value="literal">直译</option></select></label>
+              <label><span>内容模式</span><select id="content-mode"><option value="auto">自动判断</option><option value="plain">纯文本</option><option value="latex">LaTeX</option></select></label>
+            </div>
+            <p class="field-help">“自动判断”会在 Overleaf 中启用 LaTeX 保护，在普通网页检测到公式或命令时自动保护。</p>
+            <details class="disclosure-panel">
+              <summary><span><strong>术语与翻译约束</strong><small>可选；用于保持术语一致</small></span></summary>
+              <div class="disclosure-content">
+                <label><span>固定术语翻译</span><textarea id="academic-glossary" rows="7" spellcheck="false" placeholder="每行一条，例如：&#10;large language model = 大语言模型&#10;knowledge distillation = 知识蒸馏"></textarea><small>最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small></label>
+              </div>
+            </details>
+          </section>
 
-        <h2>结果与记录</h2>
-        <div class="preference-panel">
-          <label class="check-row preference-row">
-            <input id="remember-history" type="checkbox" />
-            <span><strong>记住最近翻译</strong><small>仅限当前标签页和当前浏览器会话；数量可在“更多结果设置”中调整。</small></span>
-          </label>
-          <label class="check-row preference-row">
-            <input id="alignment-default" type="checkbox" />
-            <span><strong>默认打开逐句对照</strong><small>翻译卡片中仍可随时切换为完整译文。</small></span>
-          </label>
-        </div>
-        <details class="advanced-panel">
-          <summary>更多结果设置</summary>
-          <div class="advanced-grid">
-            <label>
-              <span>最近翻译数量</span>
-              <select id="history-limit">
-                <option value="5">5 条</option>
-                <option value="10">10 条</option>
-                <option value="20">20 条</option>
-              </select>
-            </label>
-            <label>
-              <span>固定侧栏位置</span>
-              <select id="sidebar-side">
-                <option value="right">页面右侧</option>
-                <option value="left">页面左侧</option>
-              </select>
-            </label>
-            <label class="check-row compact-check">
-              <input id="session-cache" type="checkbox" />
-              <span>重复选区使用会话缓存，减少等待和 API 消耗</span>
-            </label>
-            <label>
-              <span>上下文辅助</span>
-              <select id="context-mode">
-                <option value="off">关闭（最少发送）</option>
-                <option value="sentence">使用所在句子</option>
-                <option value="paragraph">使用所在段落</option>
-              </select>
-              <small>上下文只用于消歧，不会作为译文展示；最多发送 2,000 个字符。</small>
-            </label>
-            <label class="check-row compact-check">
-              <input id="enable-streaming" type="checkbox" />
-              <span>接口支持时流式显示普通文本译文</span>
-            </label>
-            <label class="check-row compact-check">
-              <input id="protect-sensitive-fields" type="checkbox" />
-              <span>连续翻译时跳过密码、验证码和支付字段</span>
-            </label>
+          <section id="settings-results" class="card settings-section" role="tabpanel" data-settings-section="results" hidden>
+            <div class="section-heading"><div><span class="section-kicker">体验</span><h2>结果与连续侧栏</h2></div></div>
+            <p class="section-intro">常用选项保持可见，缓存、上下文和侧栏细节按需展开。</p>
+            <div class="preference-panel">
+              <label class="check-row preference-row"><input id="remember-history" type="checkbox" /><span><strong>记住最近翻译</strong><small>仅限当前标签页和浏览器会话。</small></span></label>
+              <label class="check-row preference-row"><input id="alignment-default" type="checkbox" /><span><strong>默认打开逐句对照</strong><small>仍可在翻译卡片中即时切换。</small></span></label>
+            </div>
+            <details class="advanced-panel">
+              <summary><span><strong>更多结果设置</strong><small>历史数量、侧栏、上下文与流式显示</small></span></summary>
+              <div class="advanced-grid">
+                <label><span>最近翻译数量</span><select id="history-limit"><option value="5">5 条</option><option value="10">10 条</option><option value="20">20 条</option></select></label>
+                <label><span>固定侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
+                <label class="check-row compact-check"><input id="session-cache" type="checkbox" /><span>重复选区使用会话缓存，减少等待和 API 消耗</span></label>
+                <label><span>上下文辅助</span><select id="context-mode"><option value="off">关闭（最少发送）</option><option value="sentence">使用所在句子</option><option value="paragraph">使用所在段落</option></select><small>上下文只用于消歧；最多发送 2,000 个字符。</small></label>
+                <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示普通文本译文</span></label>
+                <label class="check-row compact-check"><input id="protect-sensitive-fields" type="checkbox" /><span>连续翻译时跳过密码、验证码和支付字段</span></label>
+              </div>
+            </details>
+          </section>
+
+          <section id="settings-pages" class="card settings-section" role="tabpanel" data-settings-section="pages" hidden>
+            <div class="section-heading"><div><span class="section-kicker">范围</span><h2>网页访问与触发方式</h2></div></div>
+            <p class="section-intro">默认按需访问普通网页，只有你明确选择时才申请长期网站权限。</p>
+            <label><span>普通网页支持</span><select id="general-page-mode"><option value="off">仅 Overleaf</option><option value="on-demand">普通网页按需翻译（推荐）</option><option value="allowlist">在指定网站显示划词按钮</option><option value="all-sites">在所有网站显示划词按钮</option></select></label>
+            <p id="page-mode-help" class="field-help"></p>
+            <label id="site-allowlist-field" hidden><span>指定网站</span><textarea id="site-allowlist" rows="5" spellcheck="false" placeholder="每行一个域名，例如：&#10;arxiv.org&#10;wikipedia.org"></textarea><small>保存时浏览器会请求这些网站的访问权限。子域名会一并包含。</small></label>
+            <div class="toggle-stack">
+              <label class="check-row preference-row"><input id="floating-button" type="checkbox" /><span><strong>Overleaf 浮动按钮</strong><small>选中文字后显示 Pi Translator 图标。</small></span></label>
+              <label class="check-row preference-row"><input id="hide-target-language-trigger" type="checkbox" /><span><strong>智能隐藏重复翻译</strong><small>选区已是目标语言时隐藏普通网页浮动按钮。</small></span></label>
+              <label class="check-row preference-row"><input id="context-menu" type="checkbox" /><span><strong>右键翻译菜单</strong><small>仅在存在文本选区时显示。</small></span></label>
+            </div>
+            <div class="inline-guide"><strong>快捷方式</strong><p>选中文本后使用右键菜单或按 <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd>。</p><button id="open-shortcuts" type="button">管理快捷键</button></div>
+          </section>
+
+          <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>
+            <div class="section-heading"><div><span class="section-kicker">维护</span><h2>支持与配置迁移</h2></div></div>
+            <p class="section-intro">这些低频工具不会影响日常翻译；需要时再展开使用。</p>
+            <details class="support-disclosure">
+              <summary><span><strong>配置迁移与故障排查</strong><small>导入、导出、诊断报告与首次向导</small></span></summary>
+              <div class="support-content">
+                <p>配置文件不包含 API Key。诊断报告不包含选区、译文、页面地址、术语表或网站名称。</p>
+                <div class="support-actions">
+                  <button id="restart-onboarding" type="button">重新运行首次设置</button>
+                  <button id="export-settings" type="button">导出配置</button>
+                  <button id="import-settings" type="button">导入配置</button>
+                  <input id="import-settings-file" type="file" accept="application/json,.json" hidden />
+                  <button id="copy-diagnostic-report" type="button">复制诊断报告</button>
+                </div>
+                <p id="support-status" class="status" role="status" aria-live="polite"></p>
+              </div>
+            </details>
+            <div class="privacy-summary"><strong>本地优先</strong><p>无广告、分析或遥测；翻译请求直接发送到你选择的 API。</p></div>
+          </section>
+
+          <div class="save-dock">
+            <div class="save-feedback"><strong id="save-state">所有设置已保存</strong><p id="status" class="status" role="status" aria-live="polite"></p></div>
+            <button class="primary save-button" type="submit">保存设置</button>
           </div>
-        </details>
-
-        <h2>页面范围</h2>
-        <label>
-          <span>普通网页支持</span>
-          <select id="general-page-mode">
-            <option value="off">仅 Overleaf</option>
-            <option value="on-demand">普通网页按需翻译（推荐）</option>
-            <option value="allowlist">在指定网站显示划词按钮</option>
-            <option value="all-sites">在所有网站显示划词按钮</option>
-          </select>
-        </label>
-        <p id="page-mode-help" class="field-help"></p>
-
-        <label id="site-allowlist-field" hidden>
-          <span>指定网站</span>
-          <textarea id="site-allowlist" rows="5" spellcheck="false" placeholder="每行一个域名，例如：&#10;arxiv.org&#10;wikipedia.org"></textarea>
-          <small>保存时浏览器会请求这些网站的访问权限。子域名会一并包含。</small>
-        </label>
-
-        <label class="check-row">
-          <input id="floating-button" type="checkbox" />
-          <span>在 Overleaf 选中文字后显示浮动翻译按钮</span>
-        </label>
-        <label class="check-row">
-          <input id="hide-target-language-trigger" type="checkbox" />
-          <span>普通网页选区已是目标语言时隐藏浮动按钮</span>
-        </label>
-        <p class="hint">只在语言特征足够明确时隐藏；短文本、混合文本仍会显示。右键菜单和快捷键始终可用。</p>
-        <label class="check-row">
-          <input id="context-menu" type="checkbox" />
-          <span>显示右键翻译菜单</span>
-        </label>
-
-        <div class="actions">
-          <button class="primary" type="submit">保存设置</button>
-          <button id="test-connection" type="button">测试连接</button>
-          <button id="diagnose-api" type="button">兼容性诊断</button>
-          <button id="clear-key" class="danger" type="button">清除 API Key</button>
-        </div>
-        <p id="status" class="status" role="status" aria-live="polite"></p>
-        <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
-      </form>
-
-      <section class="card compact">
-        <h2>使用方式</h2>
-        <p>普通网页的推荐模式不会持续读取页面：选中文本后使用右键菜单或按 <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd>，扩展只临时获得当前页面权限。</p>
-        <button id="open-shortcuts" type="button">打开快捷键设置</button>
-      </section>
-
-      <section class="card compact support-tools">
-        <h2>配置迁移与故障排查</h2>
-        <p>配置文件不包含 API Key。诊断报告不包含选区、译文、页面地址、术语表或网站名称，只有你点击按钮后才会复制到剪贴板。</p>
-        <div class="support-actions">
-          <button id="restart-onboarding" type="button">重新运行首次设置</button>
-          <button id="export-settings" type="button">导出配置</button>
-          <button id="import-settings" type="button">导入配置</button>
-          <input id="import-settings-file" type="file" accept="application/json,.json" hidden />
-          <button id="copy-diagnostic-report" type="button">复制诊断报告</button>
-        </div>
-        <p id="support-status" class="status" role="status" aria-live="polite"></p>
-      </section>
+        </form>
+      </div>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>

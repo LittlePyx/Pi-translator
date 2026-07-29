@@ -28,6 +28,7 @@ Pi Translator 是由 P&I Lab 开发的 Microsoft Edge Manifest V3 扩展，用�
 - 连续翻译默认跳过密码、验证码和支付字段，并可从侧栏更多菜单暂停当前网站。
 - 提供 DeepSeek、OpenRouter 和本机 Ollama 接口预设，同时保留完全自定义配置。
 - 新安装时通过三步向导选择接口、授权 API 域名并读取可用模型；设置页可随时重新运行向导。
+- 完整设置页使用分区导航、按需展开和固定保存栏，在桌面与小屏幕上都只显示当前任务所需内容。
 - 可导出和导入不含 API Key 的安全配置文件；导入后会清除旧 Key，避免误发给新接口。
 - 可复制本地诊断报告用于排查问题；报告不包含 API Key、选区、译文、页面地址、术语或网站名称。
 - 逐句对照支持联动高亮、单句复制和单句重新翻译。
@@ -73,7 +74,7 @@ npm run zip:edge
 
 GitHub Actions 会在每次提交和拉取请求中自动执行密钥扫描、类型检查、单元测试、真实 Edge 端到端测试、构建与打包。宣传截图生成使用独立的 `npm run test:marketing`，不会混入功能回归测试。
 
-详细设计见 [Edge MVP 设计文档](docs/edge-translation-extension-design.md)、[v0.5 历史记录、逐句对照与兼容 API 设计](docs/v0.5-history-alignment-api-design.md)、[v0.6 连续翻译侧栏与稳定性设计](docs/v0.6-continuous-sidebar-design.md)、[v0.7 稳定性、上下文与收藏设计](docs/v0.7-stability-context-favorites-design.md) 和 [v0.7.1 首次向导、支持工具与 CI 设计](docs/v0.7.1-onboarding-support-ci-design.md)。
+详细设计见 [Edge MVP 设计文档](docs/edge-translation-extension-design.md)、[v0.5 历史记录、逐句对照与兼容 API 设计](docs/v0.5-history-alignment-api-design.md)、[v0.6 连续翻译侧栏与稳定性设计](docs/v0.6-continuous-sidebar-design.md)、[v0.7 稳定性、上下文与收藏设计](docs/v0.7-stability-context-favorites-design.md)、[v0.7.1 首次向导、支持工具与 CI 设计](docs/v0.7.1-onboarding-support-ci-design.md) 和 [v0.7.2 设置中心设计](docs/v0.7.2-settings-center-design.md)。
 
 ## 隐私与密钥
 

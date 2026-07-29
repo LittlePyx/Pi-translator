@@ -1,6 +1,6 @@
 {
   "name": "tex-selection-translator",
-  "version": "0.7.1",
+  "version": "0.7.2",
   "private": true,
   "description": "Microsoft Edge extension for translating selected text on Overleaf and ordinary web pages.",
   "type": "module",

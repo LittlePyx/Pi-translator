@@ -1,12 +1,12 @@
 # Pi Translator：Microsoft Edge Add-ons 提交材料
 
-> 适用版本：0.7.1
+> 适用版本：0.7.2
 >
 > 更新日期：2026-07-29
 
 ## 1. 上传文件
 
-- 扩展包：`.output/tex-selection-translator-0.7.1-edge.zip`
+- 扩展包：`.output/tex-selection-translator-0.7.2-edge.zip`
 - 商店 Logo：`store-assets/logo-300.png`
 - 小型宣传图：`store-assets/small-promo-440x280.png`
 - 大型宣传图：`store-assets/large-promo-1400x560.png`

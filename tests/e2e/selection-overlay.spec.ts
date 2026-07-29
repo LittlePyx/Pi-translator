@@ -188,17 +188,27 @@ test('keeps advanced options collapsed until requested', async () => {
   await expect(options.locator('#onboarding-title')).toContainText('Pi Translator');
   await options.locator('#onboarding-skip').click();
   await expect(onboarding).not.toBeVisible();
+  await expect(options.locator('[data-settings-section="connection"]')).toBeVisible();
+  await expect(options.locator('[data-settings-section="results"]')).not.toBeVisible();
+  await options.locator('[data-settings-target="results"]').click();
+  await expect(options.locator('[data-settings-section="results"]')).toBeVisible();
   const advanced = options.locator('details.advanced-panel');
   await expect(advanced).not.toHaveAttribute('open', '');
   await advanced.locator('summary').click();
   await expect(options.locator('#context-mode')).toBeVisible();
   await expect(options.locator('#enable-streaming')).toBeVisible();
   await expect(options.locator('#protect-sensitive-fields')).toBeVisible();
+  await options.locator('#alignment-default').check();
+  await expect(options.locator('#save-state')).toContainText('未保存');
   await options.close();
 
   const reopened = await context.newPage();
   await reopened.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
+  await reopened.locator('[data-settings-target="support"]').click();
+  const support = reopened.locator('details.support-disclosure');
+  await expect(support).not.toHaveAttribute('open', '');
+  await support.locator('summary').click();
   await reopened.locator('#restart-onboarding').click();
   await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
   await reopened.close();
