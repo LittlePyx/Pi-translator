@@ -37,6 +37,25 @@ describe('translation prompts', () => {
     ]);
   });
 
+  it('lists every protected LaTeX token explicitly', () => {
+    const input = {
+      text: 'Use ⟦TEX_0001⟧.',
+      placeholderTokens: ['⟦TEX_0001⟧', '⟦SEG_0001⟧'],
+      strictPlaceholderPreservation: true,
+    };
+    const prompt = buildSystemPrompt({
+      model: 'test-model',
+      sourceLanguage: 'auto',
+      targetLanguage: 'zh-CN',
+      style: 'academic',
+    }, input);
+    const userData = JSON.parse(buildUserPrompt(input)) as Record<string, unknown>;
+
+    expect(prompt).toContain(JSON.stringify(input.placeholderTokens));
+    expect(prompt).toContain('previous response failed LaTeX validation');
+    expect(userData.requiredPlaceholderTokens).toEqual(input.placeholderTokens);
+  });
+
   it('adds optional reference context without changing the selected text', () => {
     const prompt = JSON.parse(buildUserPrompt({
       text: 'It is stable.',

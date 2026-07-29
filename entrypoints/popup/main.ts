@@ -93,8 +93,11 @@ pauseSite.addEventListener('change', () => {
 });
 
 openSettings.addEventListener('click', () => {
-  void browser.runtime.openOptionsPage();
-  window.close();
+  void browser.runtime.sendMessage({
+    type: 'OPEN_OPTIONS_PAGE',
+  } satisfies RuntimeMessage)
+    .then(() => window.close())
+    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', true));
 });
 
 openSidebar.addEventListener('click', () => {

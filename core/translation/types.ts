@@ -88,6 +88,7 @@ export interface PreparedTranslationInput {
   placeholderTokens: string[];
   segments?: Array<{ id: string; text: string }>;
   contextText?: string;
+  strictPlaceholderPreservation?: boolean;
 }
 
 export interface TranslationCallbacks {

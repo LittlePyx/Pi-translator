@@ -103,7 +103,11 @@ export async function startSelectionTranslator(
         selectionHash: `${requestId}:${text.length}`,
       }, true);
     },
-    onOpenSettings: () => void browser.runtime.openOptionsPage(),
+    onOpenSettings: () => {
+      void browser.runtime.sendMessage({
+        type: 'OPEN_OPTIONS_PAGE',
+      } satisfies RuntimeMessage);
+    },
     onClearHistory: async () => {
       await browser.runtime.sendMessage({
         type: 'CLEAR_TRANSLATION_HISTORY',
@@ -367,7 +371,9 @@ export async function startSelectionTranslator(
       } else {
         cancelActiveTranslation();
         overlay.hide();
-        void browser.runtime.openOptionsPage();
+        void browser.runtime.sendMessage({
+          type: 'OPEN_OPTIONS_PAGE',
+        } satisfies RuntimeMessage);
       }
     }
     if (typed.type === 'CONTEXT_MENU_TRANSLATE') {

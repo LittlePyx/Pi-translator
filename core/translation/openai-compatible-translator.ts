@@ -278,10 +278,10 @@ export class OpenAiCompatibleTranslator implements Translator {
     const body = (stream: boolean) => JSON.stringify({
       model: options.model,
       messages: [
-        { role: 'system', content: buildSystemPrompt(options) },
+        { role: 'system', content: buildSystemPrompt(options, input) },
         { role: 'user', content: buildUserPrompt(input) },
       ],
-      temperature: 0.2,
+      temperature: input.placeholderTokens.length ? 0 : 0.2,
       max_tokens: 8192,
       stream,
     });

@@ -50,6 +50,11 @@ describe('DeepSeek translator', () => {
     expect((init.headers as Record<string, string>).Authorization).toBe('Bearer test-key');
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.model).toBe('deepseek-v4-flash');
+    expect(body.temperature).toBe(0);
+    const messages = body.messages as Array<{ role: string; content: string }>;
+    expect(JSON.parse(messages[1]!.content).requiredPlaceholderTokens).toEqual([
+      '⟦TEX_0001⟧',
+    ]);
     expect(body.thinking).toBeUndefined();
     expect(body.response_format).toBeUndefined();
   });

@@ -52,18 +52,9 @@ test.beforeAll(async () => {
   if (!serviceWorker) serviceWorker = await context.waitForEvent('serviceworker');
   extensionId = new URL(serviceWorker.url()).host;
 
-  await expect
-    .poll(
-      () =>
-        context.pages().some((tab) =>
-          tab.url().startsWith('edge://extensions/?options='),
-        ),
-      { timeout: 5_000 },
-    )
-    .toBe(true);
-  await Promise.all(context.pages().map((tab) => tab.close()));
-
-  const setup = await context.newPage();
+  const bootstrapPages = context.pages();
+  const setup = bootstrapPages[0] ?? await context.newPage();
+  await Promise.all(bootstrapPages.slice(1).map((tab) => tab.close()));
   await setup.goto(`chrome-extension://${extensionId}/options.html`);
   await setup.evaluate(async () => {
     await chrome.storage.local.set({
@@ -100,8 +91,6 @@ test.beforeAll(async () => {
     });
     await chrome.storage.session.set({ apiKey: 'marketing-demo-key' });
   });
-  await setup.close();
-
   await context.route('https://www.overleaf.com/pi-translator-api/**', async (route) => {
     if (route.request().url().endsWith('/chat/completions')) {
       await route.fulfill({
@@ -116,7 +105,7 @@ test.beforeAll(async () => {
                   warnings: [],
                   segments: [
                     {
-                      id: 'S1',
+                      id: 'C1S1',
                       translation: '一致的学术翻译能够提升研究论文的可读性。',
                     },
                   ],
@@ -135,6 +124,7 @@ test.beforeAll(async () => {
   });
 
   page = await context.newPage();
+  await setup.close();
   await page.route(FIXTURE_URL, async (route) => {
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
@@ -226,6 +216,14 @@ test('captures the real translation overlay', async () => {
   await overlay.locator('.trigger').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  const viewSwitch = overlay.locator('.view-switch');
+  await expect(viewSwitch).toBeVisible();
+  const switchBox = await viewSwitch.boundingBox();
+  expect(switchBox?.width).toBeLessThan(75);
+  expect(switchBox?.height).toBeLessThan(24);
+  const copyBox = await overlay.locator('.copy-action').boundingBox();
+  expect(copyBox?.width).toBeLessThan(50);
+  expect(copyBox?.height).toBeLessThan(28);
   await page.screenshot({
     path: path.join(SCREENSHOT_DIRECTORY, 'product-translation-1280x800.png'),
   });
@@ -234,7 +232,7 @@ test('captures the real translation overlay', async () => {
 test('captures the real settings page', async () => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
-  await expect(options.locator('#api-key-state')).toContainText('已配置');
+  await expect(options.locator('#api-key-state')).toContainText('已保存 Key');
   await options.screenshot({
     path: path.join(SCREENSHOT_DIRECTORY, 'product-settings-1280x800.png'),
   });

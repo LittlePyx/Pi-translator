@@ -50,6 +50,7 @@ export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
+  | { type: 'OPEN_OPTIONS_PAGE' }
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
@@ -128,6 +129,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'TRANSLATE_SELECTION' ||
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
+    type === 'OPEN_OPTIONS_PAGE' ||
     type === 'OPEN_SIDEBAR' ||
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||

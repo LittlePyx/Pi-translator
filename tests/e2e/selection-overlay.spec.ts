@@ -13,6 +13,18 @@ let page: Page;
 let userDataDirectory: string;
 let extensionId: string;
 
+interface TestChromeStorageArea {
+  get(key: string): Promise<Record<string, Record<string, unknown>>>;
+  set(values: Record<string, unknown>): Promise<void>;
+}
+
+interface TestChromeApi {
+  storage: {
+    local: TestChromeStorageArea;
+    session: Pick<TestChromeStorageArea, 'set'>;
+  };
+}
+
 async function selectSourceText(): Promise<void> {
   await page.evaluate(() => {
     window.getSelection()?.removeAllRanges();
@@ -58,21 +70,64 @@ test.beforeAll(async () => {
   }
   extensionId = new URL(serviceWorker.url()).host;
 
-  // Edge opens the options page once after a fresh extension install. Let that
-  // navigation finish before creating the fixture tab so it cannot interrupt
-  // the first test navigation.
-  await expect
-    .poll(
-      () =>
-        context.pages().some((tab) =>
-          tab.url().startsWith('edge://extensions/?options='),
-        ),
-      { timeout: 5_000 },
-    )
-    .toBe(true);
-  await Promise.all(context.pages().map((tab) => tab.close()));
-
+  const bootstrapPages = context.pages();
+  const bootstrapPage = bootstrapPages[0] ?? await context.newPage();
+  await bootstrapPage.goto(`chrome-extension://${extensionId}/options.html`);
+  const onboarding = bootstrapPage.locator('#onboarding-dialog');
+  if (await onboarding.isVisible()) {
+    await bootstrapPage.locator('#onboarding-skip').click();
+  }
+  await bootstrapPage.evaluate(async () => {
+    const extensionChrome = (
+      globalThis as typeof globalThis & { chrome: TestChromeApi }
+    ).chrome;
+    const stored = await extensionChrome.storage.local.get('extensionSettings');
+    await extensionChrome.storage.local.set({
+      extensionSettings: {
+        ...(stored.extensionSettings ?? {}),
+        apiProfiles: [{
+          id: 'default',
+          name: 'E2E API',
+          apiBaseUrl: 'https://www.overleaf.com/pi-translator-e2e-api',
+          model: 'e2e-model',
+        }],
+        activeApiProfileId: 'default',
+        apiBaseUrl: 'https://www.overleaf.com/pi-translator-e2e-api',
+        model: 'e2e-model',
+        onboardingCompleted: true,
+      },
+    });
+    await extensionChrome.storage.session.set({
+      apiKeysByProfile: { default: 'e2e-key' },
+    });
+  });
+  await Promise.all(
+    context.pages()
+      .filter((tab) => tab !== bootstrapPage)
+      .map((tab) => tab.close()),
+  );
   page = await context.newPage();
+  await bootstrapPage.close();
+  await context.route('https://www.overleaf.com/pi-translator-e2e-api/**', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{
+          message: {
+            content: JSON.stringify({
+              translation: '一致的学术翻译能够提升研究论文的可读性。',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [{
+                id: 'C1S1',
+                translation: '一致的学术翻译能够提升研究论文的可读性。',
+              }],
+            }),
+          },
+        }],
+      }),
+    });
+  });
   await page.route(OVERLEAF_FIXTURE_URL, async (route) => {
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
@@ -154,6 +209,47 @@ test('updates the target language from the quick popup', async () => {
   await reopened.close();
 });
 
+test('opens the full settings page in a browser tab', async () => {
+  const popup = await context.newPage();
+  await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  const openSettings = popup.locator('#open-settings');
+  await expect(openSettings).toBeVisible();
+
+  const settingsPagePromise = context.waitForEvent('page');
+  await openSettings.click();
+  const settingsPage = await settingsPagePromise;
+  await settingsPage.waitForLoadState('domcontentloaded');
+  const settingsUrl = new URL(settingsPage.url());
+  expect(settingsUrl.protocol).toBe('chrome-extension:');
+  expect(settingsUrl.host).toBe(extensionId);
+  expect(settingsUrl.pathname).toBe('/options.html');
+
+  await settingsPage.close();
+  if (!popup.isClosed()) await popup.close();
+});
+
+test('opens the full settings page from the translation card menu', async () => {
+  await selectSourceText();
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  await overlay.locator('details.more > summary').click();
+
+  const settingsPagePromise = context.waitForEvent('page');
+  await overlay.getByRole('button', { name: '打开完整设置' }).click();
+  const settingsPage = await settingsPagePromise;
+  await settingsPage.waitForLoadState('domcontentloaded');
+  const settingsUrl = new URL(settingsPage.url());
+  expect(settingsUrl.protocol).toBe('chrome-extension:');
+  expect(settingsUrl.host).toBe(extensionId);
+  expect(settingsUrl.pathname).toBe('/options.html');
+  await settingsPage.close();
+  await page.keyboard.press('Escape');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  await clearBrowserSelection();
+});
+
 test('pins continuous translation to a collapsible sidebar', async () => {
   await selectSourceText();
   const overlay = page.locator('#tex-selection-translator-root');
@@ -184,9 +280,6 @@ test('keeps advanced options collapsed until requested', async () => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   const onboarding = options.locator('#onboarding-dialog');
-  await expect(onboarding).toBeVisible();
-  await expect(options.locator('#onboarding-title')).toContainText('Pi Translator');
-  await options.locator('#onboarding-skip').click();
   await expect(onboarding).not.toBeVisible();
   await expect(options.locator('[data-settings-section="connection"]')).toBeVisible();
   await expect(options.locator('[data-settings-section="results"]')).not.toBeVisible();

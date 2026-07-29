@@ -32,6 +32,7 @@ import {
 } from '../core/settings/site-access';
 import { getPausedSiteHosts, setSitePaused } from '../core/settings/site-pause';
 import { shouldProtectLatex } from '../core/translation/content-mode';
+import { translateWithLatexRetry } from '../core/translation/latex-safe-translation';
 import { OpenAiCompatibleTranslator } from '../core/translation/openai-compatible-translator';
 import {
   addTranslationHistory,
@@ -296,17 +297,43 @@ async function translate(
       const prefix = translatedChunks.length ? `${translatedChunks.join('\n\n')}\n\n` : '';
       let lastPartial = '';
       let lastProgressAt = 0;
-      const providerResult = await translator.translate(
-        {
-          text: protectedLatex?.protectedText ?? chunk,
-          placeholderTokens:
-            protectedLatex?.fragments.map((fragment) => fragment.token) ?? [],
-          segments: preparedSegments.map((segment) => ({
-            id: segment.source.id,
-            text: segment.protected?.protectedText ?? segment.source.text,
-          })),
-          ...(request.contextText ? { contextText: request.contextText } : {}),
-        },
+      const callbacks = settings.enableStreaming && !protect
+        ? {
+            onPartialText: (partialText: string) => {
+              if (!partialText || partialText === lastPartial) return;
+              const now = performance.now();
+              if (now - lastProgressAt < 80) return;
+              lastPartial = partialText;
+              lastProgressAt = now;
+              void browser.tabs.sendMessage(tabId, {
+                type: 'TRANSLATION_PROGRESS',
+                payload: {
+                  requestId: request.requestId,
+                  partialText: `${prefix}${partialText}`,
+                  completedChunks: chunkIndex,
+                  totalChunks: chunks.length,
+                },
+              } satisfies RuntimeMessage).catch(() => undefined);
+            },
+          }
+        : undefined;
+      const preparedInput = {
+        text: protectedLatex?.protectedText ?? chunk,
+        placeholderTokens: [
+          ...(protectedLatex?.fragments.map((fragment) => fragment.token) ?? []),
+          ...preparedSegments.flatMap(
+            (segment) => segment.protected?.fragments.map((fragment) => fragment.token) ?? [],
+          ),
+        ],
+        segments: preparedSegments.map((segment) => ({
+          id: segment.source.id,
+          text: segment.protected?.protectedText ?? segment.source.text,
+        })),
+        ...(request.contextText ? { contextText: request.contextText } : {}),
+      };
+      const { providerResult, restored } = await translateWithLatexRetry(
+        translator,
+        preparedInput,
         {
           model: settings.model,
           sourceLanguage: request.sourceLanguage,
@@ -316,26 +343,8 @@ async function translate(
         },
         { apiKey, apiBaseUrl: settings.apiBaseUrl },
         controller.signal,
-        settings.enableStreaming && !protect
-          ? {
-              onPartialText: (partialText) => {
-                if (!partialText || partialText === lastPartial) return;
-                const now = performance.now();
-                if (now - lastProgressAt < 80) return;
-                lastPartial = partialText;
-                lastProgressAt = now;
-                void browser.tabs.sendMessage(tabId, {
-                  type: 'TRANSLATION_PROGRESS',
-                  payload: {
-                    requestId: request.requestId,
-                    partialText: `${prefix}${partialText}`,
-                    completedChunks: chunkIndex,
-                    totalChunks: chunks.length,
-                  },
-                } satisfies RuntimeMessage).catch(() => undefined);
-              },
-            }
-          : undefined,
+        protectedLatex,
+        callbacks,
       );
       const current = activeRequests.get(tabId);
       if (current?.requestId !== request.requestId) {
@@ -343,9 +352,6 @@ async function translate(
       }
 
       detectedLanguage ??= providerResult.detectedLanguage;
-      const restored = protectedLatex
-        ? restoreLatex(providerResult.translatedText, protectedLatex)
-        : { text: providerResult.translatedText, warnings: [] };
       translatedChunks.push(restored.text);
       warnings.push(...restored.warnings);
       if (providerResult.alignedSegments?.length === preparedSegments.length) {
@@ -667,6 +673,16 @@ export default defineBackground(() => {
       if (message.type === 'GET_LOCAL_DIAGNOSTIC_REPORT') {
         return localDiagnosticReport()
           .then((report) => ({ ok: true as const, data: { report } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'OPEN_OPTIONS_PAGE') {
+        return browser.tabs
+          .create({
+            url: browser.runtime.getURL('/options.html'),
+            active: true,
+          })
+          .then(() => ({ ok: true as const, data: { opened: true } }))
           .catch((error: unknown) => errorResponse(error));
       }
 
