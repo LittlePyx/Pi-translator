@@ -16,9 +16,12 @@ export default defineConfig({
       48: 'brand/pi_logo.png',
       128: 'brand/pi_logo.png',
     },
-    permissions: ['storage', 'contextMenus', 'activeTab', 'scripting'],
+    permissions: ['storage', 'contextMenus', 'activeTab', 'scripting', 'sidePanel'],
+    side_panel: {
+      default_path: 'sidepanel.html',
+    },
     host_permissions: ['https://www.overleaf.com/*'],
-    optional_host_permissions: ['http://*/*', 'https://*/*'],
+    optional_host_permissions: ['http://*/*', 'https://*/*', 'file:///*'],
     web_accessible_resources: [
       {
         resources: ['brand/pi_logo.png'],

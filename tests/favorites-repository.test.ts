@@ -39,4 +39,15 @@ describe('translation favorites', () => {
     await expect(getTranslationFavorites('example.org')).resolves.toHaveLength(1);
     await expect(deleteTranslationFavorite(first[0]!.favoriteId)).resolves.toEqual([]);
   });
+
+  it('never persists embedded image data as a favorite', async () => {
+    await expect(addTranslationFavorite({
+      requestId: 'malicious-image-result',
+      originalText: 'data:image/png;base64,private-image',
+      translatedText: '译文',
+      warnings: [],
+      targetLanguage: 'zh-CN',
+    })).rejects.toMatchObject({ code: 'INVALID_RESPONSE' });
+    expect(JSON.stringify(storage)).not.toContain('data:image/');
+  });
 });

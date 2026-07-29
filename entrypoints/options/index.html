@@ -29,7 +29,9 @@
           <p>预设只会填写接口地址和建议模型，API Key 由你自己提供。</p>
           <label>
             <span>接口类型</span>
-            <select id="onboarding-preset"></select>
+            <select id="onboarding-preset">
+              <option value="custom">自定义 OpenAI 兼容 API</option>
+            </select>
           </label>
         </section>
         <section class="onboarding-step" data-onboarding-step="2" hidden>
@@ -71,7 +73,7 @@
         <div class="brand-row">
           <span class="brand-mark" aria-hidden="true"><img src="/brand/pi_logo.png" alt="" /></span>
           <div class="hero-title">
-            <p class="eyebrow">Microsoft Edge 扩展 · v0.7.2</p>
+            <p class="eyebrow">Microsoft Edge 扩展 · v0.8.0</p>
             <h1>Pi Translator</h1>
           </div>
           <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab" /></span>
@@ -117,7 +119,7 @@
             </div>
             <div class="grid">
               <label><span>配置名称</span><input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" /></label>
-              <label><span>快速填写接口</span><select id="api-preset"><option value="custom">自定义</option></select><small>只填写地址与建议模型。</small></label>
+              <label><span>快速填写接口</span><select id="api-preset"><option value="custom">自定义 OpenAI 兼容 API</option></select><small>只填写地址与建议模型。</small></label>
             </div>
             <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" /><small>扩展会调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
             <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
@@ -156,6 +158,20 @@
                 <label><span>固定术语翻译</span><textarea id="academic-glossary" rows="7" spellcheck="false" placeholder="每行一条，例如：&#10;large language model = 大语言模型&#10;knowledge distillation = 知识蒸馏"></textarea><small>最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small></label>
               </div>
             </details>
+            <details class="disclosure-panel">
+              <summary><span><strong>PDF 图像区域翻译</strong><small>可选；用于扫描版或文字不清晰的 PDF</small></span></summary>
+              <div class="disclosure-content">
+                <div class="grid">
+                  <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可与日常文字翻译使用不同的 API Key。</small></label>
+                  <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>
+                </div>
+                <p class="field-help">只在你确认框选后发送局部图片，不会上传完整 PDF；截图不会写入历史、缓存或诊断记录。</p>
+                <div class="vision-test-row">
+                  <button id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
+                  <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 16×16 测试图，不含文档内容。</span>
+                </div>
+              </div>
+            </details>
           </section>
 
           <section id="settings-results" class="card settings-section" role="tabpanel" data-settings-section="results" hidden>
@@ -172,7 +188,7 @@
                 <label><span>固定侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
                 <label class="check-row compact-check"><input id="session-cache" type="checkbox" /><span>重复选区使用会话缓存，减少等待和 API 消耗</span></label>
                 <label><span>上下文辅助</span><select id="context-mode"><option value="off">关闭（最少发送）</option><option value="sentence">使用所在句子</option><option value="paragraph">使用所在段落</option></select><small>上下文只用于消歧；最多发送 2,000 个字符。</small></label>
-                <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示普通文本译文</span></label>
+                <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示译文；LaTeX 最终仍会完整校验</span></label>
                 <label class="check-row compact-check"><input id="protect-sensitive-fields" type="checkbox" /><span>连续翻译时跳过密码、验证码和支付字段</span></label>
               </div>
             </details>

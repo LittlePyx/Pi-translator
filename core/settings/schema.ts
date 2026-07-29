@@ -14,11 +14,13 @@ export interface ApiProfile {
   model: string;
 }
 
-export interface ExtensionSettingsV7 {
-  schemaVersion: 7;
+export interface ExtensionSettingsV8 {
+  schemaVersion: 8;
   provider: 'openai-compatible';
   apiProfiles: ApiProfile[];
   activeApiProfileId: string;
+  visionApiProfileId: string;
+  visionModel: string;
   apiBaseUrl: string;
   model: string;
   sourceLanguage: 'auto' | string;
@@ -44,7 +46,7 @@ export interface ExtensionSettingsV7 {
   onboardingCompleted: boolean;
 }
 
-export type ExtensionSettings = ExtensionSettingsV7;
+export type ExtensionSettings = ExtensionSettingsV8;
 
 export const DEFAULT_API_BASE_URL = 'https://api.deepseek.com';
 export const DEFAULT_API_PROFILE: ApiProfile = {
@@ -55,10 +57,12 @@ export const DEFAULT_API_PROFILE: ApiProfile = {
 };
 
 export const DEFAULT_SETTINGS: ExtensionSettings = {
-  schemaVersion: 7,
+  schemaVersion: 8,
   provider: 'openai-compatible',
   apiProfiles: [DEFAULT_API_PROFILE],
   activeApiProfileId: DEFAULT_API_PROFILE.id,
+  visionApiProfileId: '',
+  visionModel: 'qwen3.7-plus',
   apiBaseUrl: DEFAULT_API_BASE_URL,
   model: 'deepseek-v4-flash',
   sourceLanguage: 'auto',

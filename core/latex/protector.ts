@@ -404,3 +404,22 @@ export function restoreLatex(
 
   return { text: restored, warnings: protectedLatex.warnings };
 }
+
+/**
+ * Produces a display-only streaming preview. Complete known placeholders are
+ * restored, while an incomplete or provider-mutated placeholder is hidden.
+ * The final result still goes through strict restoreLatex validation.
+ */
+export function restoreLatexPreview(
+  partialText: string,
+  protectedLatex: ProtectedLatex,
+): string {
+  let preview = partialText;
+  const lastOpen = preview.lastIndexOf('⟦');
+  const lastClose = preview.lastIndexOf('⟧');
+  if (lastOpen > lastClose) preview = preview.slice(0, lastOpen);
+  for (const fragment of protectedLatex.fragments) {
+    preview = preview.replaceAll(fragment.token, fragment.raw);
+  }
+  return preview.replace(/⟦[^⟧]*⟧/g, '');
+}

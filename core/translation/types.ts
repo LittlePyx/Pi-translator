@@ -10,12 +10,25 @@ export interface TranslateRequest {
   requestId: string;
   text: string;
   pageUrl: string;
+  sourceLabel?: string;
   targetLanguage: string;
   sourceLanguage: 'auto' | string;
   style: TranslationStyle;
   contentMode: TranslationContentMode;
   contextText?: string;
   bypassCache?: boolean;
+}
+
+export interface TranslateImageRegionRequest {
+  requestId: string;
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  pageUrl: string;
+  sourceLabel?: string;
+  targetLanguage: string;
+  sourceLanguage: 'auto' | string;
+  style: TranslationStyle;
 }
 
 export type TranslationWarningCode =
@@ -43,6 +56,27 @@ export interface TranslateResult {
   latencyMs?: number;
   contextUsed?: boolean;
   chunkCount?: number;
+  sourceKind?: 'text' | 'image-region';
+  uncertainSpans?: string[];
+}
+
+export interface ProviderImageTranslationResult {
+  recognizedText: string;
+  translatedText: string;
+  uncertainSpans: string[];
+}
+
+export interface ImageTranslationInput {
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+}
+
+export interface ImageTranslationOptions {
+  model: string;
+  sourceLanguage: 'auto' | string;
+  targetLanguage: string;
+  style: TranslationStyle;
 }
 
 export interface TranslationSegment {
@@ -101,6 +135,20 @@ export interface ProviderCredentials {
 }
 
 export interface Translator {
+  translateImageRegion(
+    input: ImageTranslationInput,
+    options: ImageTranslationOptions,
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+    callbacks?: TranslationCallbacks,
+  ): Promise<ProviderImageTranslationResult>;
+
+  testVisionCapability(
+    options: Pick<ImageTranslationOptions, 'model'>,
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+  ): Promise<void>;
+
   translate(
     input: PreparedTranslationInput,
     options: TranslationOptions,

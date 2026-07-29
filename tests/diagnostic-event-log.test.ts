@@ -23,16 +23,17 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe('local diagnostic event log', () => {
   it('stores only a bounded error summary and never the sensitive message', async () => {
-    const sensitiveMessage = 'Selected unpublished paper text and sk-private-value';
+    const sensitiveMessage =
+      'Selected unpublished paper text, data:image/png;base64,private-crop, and sk-private-value';
     await recordLocalDiagnosticError(
-      'translate',
+      'translate-image-region',
       new TranslationError('AUTH_FAILED', sensitiveMessage, false, undefined, undefined, 401),
     );
 
     const events = await getLocalDiagnosticEvents();
     expect(events).toEqual([
       expect.objectContaining({
-        operation: 'translate',
+        operation: 'translate-image-region',
         code: 'AUTH_FAILED',
         retryable: false,
         httpStatus: 401,
@@ -40,6 +41,7 @@ describe('local diagnostic event log', () => {
     ]);
     expect(JSON.stringify(sessionStorage)).not.toContain(sensitiveMessage);
     expect(JSON.stringify(sessionStorage)).not.toContain('sk-private-value');
+    expect(JSON.stringify(sessionStorage)).not.toContain('data:image/');
   });
 
   it('keeps only the latest twenty events', async () => {

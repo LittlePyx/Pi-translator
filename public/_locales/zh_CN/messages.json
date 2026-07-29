@@ -3,7 +3,7 @@
     "message": "Pi Translator"
   },
   "extensionDescription": {
-    "message": "在 Overleaf 和普通网页中翻译选中文本，支持连续侧栏、流式翻译、上下文辅助与本地收藏。"
+    "message": "在 Overleaf、PDF 和普通网页中翻译选中文本，支持连续侧栏、流式翻译与 LaTeX 保护。"
   },
   "actionTitle": {
     "message": "Pi Translator 快速控制"

@@ -1,4 +1,5 @@
 import type { TranslateResult, TranslationFavorite } from './types';
+import { assertSafeFavoriteText } from './image-output-safety';
 
 const FAVORITES_KEY = 'translationFavorites';
 export const MAX_TRANSLATION_FAVORITES = 100;
@@ -39,6 +40,7 @@ export async function getTranslationFavorites(query = ''): Promise<TranslationFa
 export async function addTranslationFavorite(
   result: TranslateResult,
 ): Promise<TranslationFavorite[]> {
+  assertSafeFavoriteText(result);
   const favorites = await readFavorites();
   const duplicate = favorites.find(
     (item) =>

@@ -22,6 +22,9 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
     0,
     settings.apiProfiles.findIndex((profile) => profile.id === settings.activeApiProfileId),
   );
+  const visionApiProfileIndex = settings.apiProfiles.findIndex(
+    (profile) => profile.id === settings.visionApiProfileId,
+  );
   return JSON.stringify({
     format: CONFIG_FORMAT,
     version: CONFIG_VERSION,
@@ -34,6 +37,8 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
         model,
       })),
       activeApiProfileIndex,
+      visionApiProfileIndex,
+      visionModel: settings.visionModel,
       sourceLanguage: settings.sourceLanguage,
       targetLanguage: settings.targetLanguage,
       style: settings.style,
@@ -93,6 +98,12 @@ export function importSettingsConfiguration(
     ? Math.round(source.activeApiProfileIndex)
     : 0;
   const active = apiProfiles[Math.min(apiProfiles.length - 1, Math.max(0, requestedIndex))]!;
+  const requestedVisionIndex = typeof source.visionApiProfileIndex === 'number'
+    ? Math.round(source.visionApiProfileIndex)
+    : -1;
+  const visionProfile = requestedVisionIndex >= 0
+    ? apiProfiles[Math.min(apiProfiles.length - 1, requestedVisionIndex)]
+    : undefined;
   const historyLimit = source.historyLimit === 10 || source.historyLimit === 20 ? source.historyLimit : 5;
   const sidebarWidth = typeof source.sidebarWidth === 'number' && Number.isFinite(source.sidebarWidth)
     ? Math.min(640, Math.max(320, Math.round(source.sidebarWidth)))
@@ -108,10 +119,15 @@ export function importSettingsConfiguration(
     : [];
   return {
     ...current,
-    schemaVersion: 7,
+    schemaVersion: 8,
     provider: 'openai-compatible',
     apiProfiles,
     activeApiProfileId: active.id,
+    visionApiProfileId: visionProfile?.id ?? '',
+    visionModel:
+      typeof source.visionModel === 'string' && source.visionModel.trim()
+        ? source.visionModel.trim()
+        : current.visionModel,
     apiBaseUrl: active.apiBaseUrl,
     model: active.model,
     apiKeyStorage: 'session',

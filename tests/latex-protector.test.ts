@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { protectLatex, restoreLatex } from '../core/latex/protector';
+import {
+  protectLatex,
+  restoreLatex,
+  restoreLatexPreview,
+} from '../core/latex/protector';
 import { TranslationError } from '../core/messaging/errors';
 
 describe('LaTeX protection', () => {
@@ -55,5 +59,20 @@ describe('LaTeX protection', () => {
     expect(() => restoreLatex(`${token!}${token!}`, protectedLatex)).toThrow(
       TranslationError,
     );
+  });
+
+  it('restores only complete placeholders in a streaming preview', () => {
+    const protectedLatex = protectLatex('Value $x$ is stable.', 'FULL1');
+    const token = protectedLatex.fragments[0]?.token;
+    expect(token).toBeDefined();
+    expect(
+      restoreLatexPreview(`数值 ${token!} 保持`, protectedLatex),
+    ).toBe('数值 $x$ 保持');
+    expect(
+      restoreLatexPreview('数值 ⟦FULL1_00', protectedLatex),
+    ).toBe('数值 ');
+    expect(
+      restoreLatexPreview('数值 ⟦MUTATED_0001⟧ 保持', protectedLatex),
+    ).toBe('数值  保持');
   });
 });

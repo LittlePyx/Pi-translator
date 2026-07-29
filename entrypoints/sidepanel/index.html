@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pi Translator - PDF 翻译</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="app-header">
+        <div class="brand">
+          <img src="/brand/pi_logo.png" alt="" />
+          <div>
+            <strong>Pi Translator</strong>
+            <span>PDF 划词翻译</span>
+          </div>
+        </div>
+        <button id="open-settings" class="text-action" type="button">设置</button>
+      </header>
+
+      <section id="empty-state" class="empty-state">
+        <div class="empty-mark">π</div>
+        <h1>在 PDF 中选择文字</h1>
+        <p>选中文字后右键，选择“使用 Pi Translator 翻译选中文本”。译文会流式显示在这里。</p>
+      </section>
+
+      <section id="session" hidden>
+        <div class="document-line">
+          <span>当前 PDF</span>
+          <strong id="source-label"></strong>
+        </div>
+
+        <aside class="reader-hint">
+          <div>
+            <strong>需要浮动按钮或更顺畅的跨行选择？</strong>
+            <p id="reader-hint-text">可按需改用 Pi PDF 阅读器，不会自动替换当前页面。</p>
+          </div>
+          <button id="open-pi-reader" type="button">用 Pi 打开</button>
+        </aside>
+
+        <section class="content-section source-section">
+          <h2>原文</h2>
+          <p id="source-text"></p>
+        </section>
+
+        <section class="content-section result-section">
+          <div class="section-heading">
+            <h2>译文</h2>
+            <span id="translation-state" aria-live="polite"></span>
+          </div>
+          <div id="progress-track" class="progress-track" hidden><i></i></div>
+          <p id="translation-text" class="translation-text"></p>
+          <div id="error-actions" class="error-actions" hidden>
+            <button id="retry" type="button">重试</button>
+            <button id="error-settings" class="secondary" type="button">检查设置</button>
+          </div>
+        </section>
+
+        <footer>
+          <button id="copy" class="copy-action" type="button" disabled>复制译文</button>
+          <span id="status" role="status" aria-live="polite"></span>
+        </footer>
+      </section>
+    </main>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

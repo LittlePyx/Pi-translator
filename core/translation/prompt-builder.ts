@@ -20,6 +20,7 @@ export function buildSystemPrompt(
     'Do not add explanations, Markdown, introductions, or conclusions.',
     'If referenceContext is present, use it only to disambiguate the selected text. Do not translate, quote, summarize, or otherwise include the context in the answer.',
     'Return valid JSON only, with these fields: translation (string), detectedLanguage (string), warnings (string array), segments (array).',
+    'Return translation as the first JSON field so the translated text can be streamed immediately.',
     'When the user provides segments, return one segments item for every input segment as {id, translation}. Keep every id unchanged. Translate all segments in one shared context.',
   ];
   if (input?.placeholderTokens.length) {

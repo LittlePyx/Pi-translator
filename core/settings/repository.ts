@@ -59,10 +59,19 @@ export async function getSettings(): Promise<ExtensionSettings> {
   return {
     ...DEFAULT_SETTINGS,
     ...value,
-    schemaVersion: 7,
+    schemaVersion: 8,
     provider: 'openai-compatible',
     apiProfiles,
     activeApiProfileId: activeProfile.id,
+    visionApiProfileId:
+      typeof value.visionApiProfileId === 'string' &&
+      apiProfiles.some((profile) => profile.id === value.visionApiProfileId)
+        ? value.visionApiProfileId
+        : '',
+    visionModel:
+      typeof value.visionModel === 'string' && value.visionModel.trim()
+        ? value.visionModel.trim()
+        : DEFAULT_SETTINGS.visionModel,
     apiBaseUrl: activeProfile.apiBaseUrl,
     model: activeProfile.model,
     historyLimit:
@@ -95,7 +104,7 @@ export async function saveSettings(settings: ExtensionSettings): Promise<void> {
   await browser.storage.local.set({
     [SETTINGS_KEY]: {
       ...settings,
-      schemaVersion: 7,
+      schemaVersion: 8,
       provider: 'openai-compatible',
     },
   });

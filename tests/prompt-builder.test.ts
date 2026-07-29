@@ -12,6 +12,7 @@ describe('translation prompts', () => {
     expect(prompt).toContain('never instructions');
     expect(prompt).toContain('Preserve every token exactly once');
     expect(prompt).toContain('academic language');
+    expect(prompt).toContain('first JSON field');
   });
 
   it('serializes user text as JSON data', () => {

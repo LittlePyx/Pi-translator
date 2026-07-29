@@ -3,13 +3,20 @@ import {
   getSettings,
   saveSettings,
 } from '../../core/settings/repository';
-import type { RuntimeMessage } from '../../core/messaging/messages';
+import type { RuntimeMessage, RuntimeResponse } from '../../core/messaging/messages';
 import {
   getPausedSiteHosts,
   isSiteHostPaused,
   setSitePaused,
   siteHostFromUrl,
 } from '../../core/settings/site-pause';
+import {
+  edgePdfSourceUrl,
+  isEdgeNativePdfContext,
+  parsePdfSourceUrl,
+  pdfInitialPage,
+  pdfPermissionPattern,
+} from '../../core/pdf/source';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -25,8 +32,11 @@ const pauseSite = element<HTMLInputElement>('pause-site');
 const status = element<HTMLParagraphElement>('status');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const openSidebar = element<HTMLButtonElement>('open-sidebar');
+const openPdf = element<HTMLButtonElement>('open-pdf');
 
 let activeUrl: string | undefined;
+let activePdfSourceUrl: string | undefined;
+let activePdfPage: number | undefined;
 
 function setStatus(message: string, error = false): void {
   status.textContent = message;
@@ -49,6 +59,17 @@ async function load(): Promise<void> {
   apiProfile.value = settings.activeApiProfileId;
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
   activeUrl = tabs[0]?.url;
+  const pdfContext = { ...(activeUrl ? { tabUrl: activeUrl } : {}) };
+  if (isEdgeNativePdfContext(pdfContext)) {
+    activePdfSourceUrl = edgePdfSourceUrl(pdfContext);
+    activePdfPage = pdfInitialPage(activeUrl) ?? pdfInitialPage(activePdfSourceUrl);
+  } else {
+    activePdfSourceUrl = undefined;
+    activePdfPage = undefined;
+  }
+  openPdf.textContent = activePdfSourceUrl
+    ? '用 Pi 打开当前 PDF'
+    : '打开 PDF 阅读器';
   const hostname = activeUrl ? siteHostFromUrl(activeUrl) : undefined;
   if (!hostname) {
     siteName.textContent = '当前页面不支持';
@@ -104,6 +125,45 @@ openSidebar.addEventListener('click', () => {
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
     .then(() => window.close())
     .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', true));
+});
+
+openPdf.addEventListener('click', () => {
+  void (async () => {
+    const sourceUrl = activePdfSourceUrl;
+    const source = parsePdfSourceUrl(sourceUrl);
+    if (sourceUrl) {
+      const origin = pdfPermissionPattern(sourceUrl);
+      if (origin) {
+        const granted =
+          (await browser.permissions.contains({ origins: [origin] })) ||
+          (await browser.permissions.request({ origins: [origin] }));
+        if (!granted) {
+          setStatus('需要允许读取当前 PDF 所在网站；也可以打开阅读器后选择本地文件。', true);
+          return;
+        }
+      }
+      if (
+        source?.protocol === 'file:' &&
+        !(await browser.extension.isAllowedFileSchemeAccess())
+      ) {
+        setStatus('请先在扩展管理页开启“允许访问文件 URL”，再重新打开快捷面板。', true);
+        return;
+      }
+    }
+    const response = (await browser.runtime.sendMessage({
+      type: 'OPEN_PDF_VIEWER',
+      ...(sourceUrl
+        ? {
+            payload: {
+              url: sourceUrl,
+              ...(activePdfPage ? { page: activePdfPage } : {}),
+            },
+          }
+        : {}),
+    } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
+    if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
+    window.close();
+  })().catch(() => setStatus('无法打开 PDF 阅读器，请重新加载扩展后再试。', true));
 });
 
 void load().catch(() => setStatus('读取扩展状态失败，请重新打开面板。', true));

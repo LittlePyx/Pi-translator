@@ -3,7 +3,15 @@ import { toTranslationError, type TranslationErrorCode } from '../messaging/erro
 const DIAGNOSTIC_EVENTS_KEY = 'localDiagnosticEvents';
 const MAX_DIAGNOSTIC_EVENTS = 20;
 
-export type DiagnosticOperation = 'translate' | 'test-connection' | 'list-models' | 'api-diagnosis';
+export type DiagnosticOperation =
+  | 'translate'
+  | 'translate-image-region'
+  | 'test-connection'
+  | 'test-vision-capability'
+  | 'list-models'
+  | 'api-diagnosis'
+  | 'open-pdf-side-panel'
+  | 'translate-context-menu-selection';
 
 export interface LocalDiagnosticEvent {
   occurredAt: string;

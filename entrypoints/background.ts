@@ -1,4 +1,4 @@
-import { protectLatex, restoreLatex } from '../core/latex/protector';
+import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/protector';
 import {
   getLocalDiagnosticEvents,
   recordLocalDiagnosticError,
@@ -7,8 +7,10 @@ import { toTranslationError, TranslationError } from '../core/messaging/errors';
 import {
   isRuntimeMessage,
   type ConnectionTestResponse,
+  type VisionCapabilityTestResponse,
   type ApiDiagnosticResponse,
   type ModelListResponse,
+  type PdfSidePanelSession,
   type PublicSettings,
   type PublicSettingsResponse,
   type RuntimeMessage,
@@ -50,12 +52,22 @@ import {
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
 import {
+  edgePdfSourceUrl,
+  isEdgeNativePdfContext,
+  parsePdfSourceUrl,
+  pdfDocumentIdentity,
+  pdfFilename,
+  pdfInitialPage,
+  shouldOpenEdgePdfSidePanelImmediately,
+} from '../core/pdf/source';
+import {
   addTranslationFavorite,
   deleteTranslationFavorite,
   getTranslationFavorites,
 } from '../core/translation/favorites-repository';
 import type {
   TranslateRequest,
+  TranslateImageRegionRequest,
   TranslateResult,
   TranslationSegment,
 } from '../core/translation/types';
@@ -64,8 +76,10 @@ const CONTEXT_MENU_ID = 'translate-selection-with-pi-translator';
 const LEGACY_CONTEXT_MENU_ID = 'translate-selection-with-deepseek';
 const GENERAL_CONTENT_SCRIPT_ID = 'pi-translator-general-pages';
 const GENERAL_CONTENT_SCRIPT_FILE = '/content-scripts/general.js';
+const PDF_SIDE_PANEL_PATH = 'sidepanel.html';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
+const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 
 function toPublicSettings(
   settings: Awaited<ReturnType<typeof getSettings>>,
@@ -104,6 +118,295 @@ function errorResponse<T = never>(error: unknown): RuntimeResponse<T> {
       retryable: normalized.retryable,
     },
   };
+}
+
+type TranslationProgressPayload = Extract<
+  RuntimeMessage,
+  { type: 'TRANSLATION_PROGRESS' }
+>['payload'];
+type TranslationProgressTarget = 'tab' | 'runtime';
+
+function pdfSourceLabel(sourceUrl: string | undefined): string {
+  if (!sourceUrl) return 'Edge PDF';
+  const remoteName = pdfFilename(sourceUrl, '');
+  if (remoteName) return remoteName;
+  try {
+    const url = new URL(sourceUrl);
+    const name = url.pathname.split('/').filter(Boolean).at(-1);
+    return name ? decodeURIComponent(name) : url.hostname || '本地 PDF';
+  } catch {
+    return 'Edge PDF';
+  }
+}
+
+function pdfPageFromContext(
+  urls: { tabUrl?: string; pageUrl?: string; frameUrl?: string },
+  sourceUrl?: string,
+): number | undefined {
+  for (const value of [urls.pageUrl, urls.frameUrl, urls.tabUrl, sourceUrl]) {
+    const page = pdfInitialPage(value);
+    if (page) return page;
+  }
+  return undefined;
+}
+
+function publishPdfSidePanelSession(session: PdfSidePanelSession): void {
+  pdfSidePanelSessions.set(session.tabId, session);
+  void browser.runtime.sendMessage({
+    type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+    payload: session,
+  } satisfies RuntimeMessage).catch(() => undefined);
+}
+
+function publishTranslationProgress(
+  tabId: number,
+  payload: TranslationProgressPayload,
+  target: TranslationProgressTarget = 'tab',
+): void {
+  const message = {
+    type: 'TRANSLATION_PROGRESS',
+    payload,
+  } satisfies RuntimeMessage;
+  if (target === 'runtime') {
+    void browser.runtime.sendMessage(message).catch(() => undefined);
+  } else {
+    void browser.tabs.sendMessage(tabId, message).catch(() => undefined);
+  }
+
+  const session = pdfSidePanelSessions.get(tabId);
+  if (session?.requestId !== payload.requestId) return;
+  publishPdfSidePanelSession({
+    ...session,
+    ...(payload.partialText ? { partialText: payload.partialText } : {}),
+    completedChunks: payload.completedChunks,
+    totalChunks: payload.totalChunks,
+  });
+}
+
+function progressTargetForSender(senderUrl: string | undefined): TranslationProgressTarget {
+  const pdfUrl = browser.runtime.getURL('/pdf.html');
+  return senderUrl?.startsWith(pdfUrl) ? 'runtime' : 'tab';
+}
+
+async function beginPdfSidePanelTranslation(tabId: number): Promise<void> {
+  const session = pdfSidePanelSessions.get(tabId);
+  if (!session) return;
+  const settings = await getSettings();
+  const response = await translate({
+    requestId: session.requestId,
+    text: session.sourceText,
+    pageUrl: session.pageUrl,
+    sourceLabel: session.sourceLabel,
+    targetLanguage: settings.targetLanguage,
+    sourceLanguage: settings.sourceLanguage,
+    style: settings.style,
+    contentMode: settings.contentMode,
+  }, tabId);
+  const current = pdfSidePanelSessions.get(tabId);
+  if (current?.requestId !== session.requestId) return;
+  if (response.ok) {
+    publishPdfSidePanelSession({
+      ...current,
+      status: 'complete',
+      result: response.data.result,
+      partialText: response.data.result.translatedText,
+      completedChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
+      totalChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
+    });
+    return;
+  }
+  publishPdfSidePanelSession({
+    ...current,
+    status: 'error',
+    error: response.error,
+  });
+}
+
+function startPdfSidePanelTranslation(
+  tabId: number,
+  sourceText: string,
+  sourceUrl: string | undefined,
+  pageNumber?: number,
+): void {
+  const session: PdfSidePanelSession = {
+    tabId,
+    requestId: crypto.randomUUID(),
+    sourceText: sourceText.trim(),
+    pageUrl: sourceUrl ?? '',
+    ...(pageNumber ? { pageNumber } : {}),
+    sourceLabel: pdfSourceLabel(sourceUrl),
+    status: 'translating',
+    startedAt: Date.now(),
+    completedChunks: 0,
+    totalChunks: 1,
+  };
+  publishPdfSidePanelSession(session);
+  void beginPdfSidePanelTranslation(tabId);
+}
+
+function showPdfSidePanelSelectionError(
+  tabId: number,
+  sourceUrl: string | undefined,
+  pageNumber?: number,
+): void {
+  publishPdfSidePanelSession({
+    tabId,
+    requestId: crypto.randomUUID(),
+    sourceText: '',
+    pageUrl: sourceUrl ?? '',
+    ...(pageNumber ? { pageNumber } : {}),
+    sourceLabel: pdfSourceLabel(sourceUrl),
+    status: 'error',
+    startedAt: Date.now(),
+    error: {
+      code: 'EMPTY_SELECTION',
+      message: 'Edge 没有把 PDF 选区文字传递给扩展，请重新选择文字后再试，或使用 Pi PDF 阅读器。',
+      retryable: false,
+    },
+  });
+}
+
+function getNativeChromeApi(): {
+  sidePanel?: typeof browser.sidePanel;
+  tabs?: typeof browser.tabs;
+} | undefined {
+  return (globalThis as typeof globalThis & {
+    chrome?: {
+      sidePanel?: typeof browser.sidePanel;
+      tabs?: typeof browser.tabs;
+    };
+  }).chrome;
+}
+
+function getSidePanelApi(): typeof browser.sidePanel | undefined {
+  const nativeChrome = getNativeChromeApi();
+  return nativeChrome?.sidePanel ?? browser.sidePanel;
+}
+
+async function setPdfSidePanelEnabled(tabId: number, enabled: boolean): Promise<void> {
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi) return;
+  await sidePanelApi.setOptions({
+    tabId,
+    enabled,
+    ...(enabled ? { path: PDF_SIDE_PANEL_PATH } : {}),
+  });
+}
+
+async function isolatePdfSidePanelToTab(tabId: number): Promise<void> {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.flatMap((tab) => {
+    if (tab.id === undefined) return [];
+    const enabled = tab.id === tabId || pdfSidePanelSessions.has(tab.id);
+    return [setPdfSidePanelEnabled(tab.id, enabled).catch(() => undefined)];
+  }));
+}
+
+async function initializePdfSidePanelIsolation(): Promise<void> {
+  const tabs = await browser.tabs.query({});
+  await Promise.all(tabs.flatMap((tab) =>
+    tab.id === undefined
+      ? []
+      : [setPdfSidePanelEnabled(tab.id, false).catch(() => undefined)],
+  ));
+}
+
+function openPdfTranslationSidePanel(
+  tab: { id: number; windowId: number },
+  sourceText: string | undefined,
+  sourceUrl: string | undefined,
+  pageNumber?: number,
+): void {
+  if (sourceText?.trim()) {
+    startPdfSidePanelTranslation(tab.id, sourceText, sourceUrl, pageNumber);
+  } else {
+    showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
+  }
+
+  // Prefer the native Chrome namespace here. Edge exposes both namespaces,
+  // but sidePanel is defined and documented on chrome.sidePanel.
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi) {
+    void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
+    void browser.action.setTitle({
+      tabId: tab.id,
+      title: '当前 Edge 版本未提供侧边栏接口',
+    });
+    return;
+  }
+  void isolatePdfSidePanelToTab(tab.id);
+  // Issue setOptions and open back-to-back. Awaiting between them can consume
+  // Chromium's short-lived context-menu user gesture.
+  void sidePanelApi.setOptions({
+    tabId: tab.id,
+    path: PDF_SIDE_PANEL_PATH,
+    enabled: true,
+  }).catch((error: unknown) => {
+    void recordLocalDiagnosticError('open-pdf-side-panel', error);
+  });
+  void sidePanelApi.open({ tabId: tab.id }).then(
+    () => {
+      void browser.action.setBadgeText({ tabId: tab.id, text: '' });
+      void browser.action.setTitle({ tabId: tab.id, title: 'Pi Translator' });
+    },
+    (error: unknown) => {
+      void recordLocalDiagnosticError('open-pdf-side-panel', error);
+      void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
+      void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
+      void browser.action.setTitle({
+        tabId: tab.id,
+        title: 'PDF 侧边栏打开失败，请在扩展管理页重新加载 Pi Translator',
+      });
+    },
+  );
+}
+
+async function closePdfSidePanelAfterOpeningViewer(
+  tab: { id?: number | undefined; windowId: number },
+): Promise<void> {
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi) return;
+
+  // Pi PDF already has its own compact translation card, so the extension
+  // side panel is deliberately unavailable on this one tab.
+  if (tab.id !== undefined) {
+    await sidePanelApi.setOptions({ tabId: tab.id, enabled: false }).catch(
+      () => undefined,
+    );
+  }
+
+  if (typeof sidePanelApi.close === 'function') {
+    try {
+      await sidePanelApi.close({ windowId: tab.windowId });
+      return;
+    } catch {
+      // Older Edge builds can expose the method before fully supporting it.
+      // The tab-specific disable below keeps the Pi PDF page uncluttered.
+    }
+  }
+}
+
+function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ started: true }>> {
+  const session = pdfSidePanelSessions.get(tabId);
+  if (!session) {
+    return Promise.resolve(errorResponse(
+      new TranslationError('EMPTY_SELECTION', '请先在 PDF 中选择文字并使用右键翻译。'),
+    ));
+  }
+  const nextSession: PdfSidePanelSession = {
+    ...session,
+    requestId: crypto.randomUUID(),
+    status: 'translating',
+    startedAt: Date.now(),
+    completedChunks: 0,
+    totalChunks: 1,
+  };
+  delete nextSession.partialText;
+  delete nextSession.result;
+  delete nextSession.error;
+  publishPdfSidePanelSession(nextSession);
+  void beginPdfSidePanelTranslation(tabId);
+  return Promise.resolve({ ok: true, data: { started: true } });
 }
 
 async function localDiagnosticReport(): Promise<string> {
@@ -159,10 +462,6 @@ async function synchronizeContextMenu(): Promise<void> {
     id: CONTEXT_MENU_ID,
     title: '使用 Pi Translator 翻译选中文本',
     contexts: ['selection'],
-    documentUrlPatterns:
-      settings.generalPageMode === 'off'
-        ? ['https://www.overleaf.com/*']
-        : ['http://*/*', 'https://*/*'],
   });
 }
 
@@ -230,6 +529,7 @@ async function broadcastPublicSettings(): Promise<void> {
 async function translate(
   request: TranslateRequest,
   tabId: number,
+  progressTarget: TranslationProgressTarget = 'tab',
 ): Promise<TranslateRuntimeResponse> {
   const text = request.text.trim();
   if (!text) {
@@ -297,23 +597,23 @@ async function translate(
       const prefix = translatedChunks.length ? `${translatedChunks.join('\n\n')}\n\n` : '';
       let lastPartial = '';
       let lastProgressAt = 0;
-      const callbacks = settings.enableStreaming && !protect
+      const callbacks = settings.enableStreaming
         ? {
             onPartialText: (partialText: string) => {
-              if (!partialText || partialText === lastPartial) return;
+              const visiblePartial = protectedLatex
+                ? restoreLatexPreview(partialText, protectedLatex)
+                : partialText;
+              if (!visiblePartial || visiblePartial === lastPartial) return;
               const now = performance.now();
               if (now - lastProgressAt < 80) return;
-              lastPartial = partialText;
+              lastPartial = visiblePartial;
               lastProgressAt = now;
-              void browser.tabs.sendMessage(tabId, {
-                type: 'TRANSLATION_PROGRESS',
-                payload: {
-                  requestId: request.requestId,
-                  partialText: `${prefix}${partialText}`,
-                  completedChunks: chunkIndex,
-                  totalChunks: chunks.length,
-                },
-              } satisfies RuntimeMessage).catch(() => undefined);
+              publishTranslationProgress(tabId, {
+                requestId: request.requestId,
+                partialText: `${prefix}${visiblePartial}`,
+                completedChunks: chunkIndex,
+                totalChunks: chunks.length,
+              }, progressTarget);
             },
           }
         : undefined;
@@ -375,20 +675,19 @@ async function translate(
           alignmentComplete = false;
         }
       } else alignmentComplete = false;
-      await browser.tabs.sendMessage(tabId, {
-        type: 'TRANSLATION_PROGRESS',
-        payload: {
-          requestId: request.requestId,
-          completedChunks: chunkIndex + 1,
-          totalChunks: chunks.length,
-        },
-      } satisfies RuntimeMessage).catch(() => undefined);
+      publishTranslationProgress(tabId, {
+        requestId: request.requestId,
+        completedChunks: chunkIndex + 1,
+        totalChunks: chunks.length,
+      }, progressTarget);
     }
-    let sourceHost: string | undefined;
-    try {
-      sourceHost = new URL(request.pageUrl).hostname;
-    } catch {
-      sourceHost = undefined;
+    let sourceHost = request.sourceLabel?.trim().slice(0, 120) || undefined;
+    if (!sourceHost) {
+      try {
+        sourceHost = new URL(request.pageUrl).hostname;
+      } catch {
+        sourceHost = undefined;
+      }
     }
     const result: TranslateResult = {
       requestId: request.requestId,
@@ -426,6 +725,151 @@ async function translate(
   }
 }
 
+function validateImageRegionRequest(request: TranslateImageRegionRequest): void {
+  const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(
+    request.imageDataUrl,
+  );
+  if (!match) {
+    throw new TranslationError(
+      'IMAGE_REGION_INVALID',
+      'Only Base64 PNG, JPEG, or WebP image regions are supported.',
+    );
+  }
+  const encoded = match[2] ?? '';
+  const estimatedBytes = Math.floor((encoded.length * 3) / 4) - (encoded.endsWith('==') ? 2 : encoded.endsWith('=') ? 1 : 0);
+  if (estimatedBytes <= 0 || estimatedBytes > 3 * 1024 * 1024) {
+    throw new TranslationError('IMAGE_REGION_INVALID', 'The selected image exceeds the 3 MB limit.');
+  }
+  if (
+    !Number.isFinite(request.imageWidth) ||
+    !Number.isFinite(request.imageHeight) ||
+    request.imageWidth < 11 ||
+    request.imageHeight < 11 ||
+    request.imageWidth > 8192 ||
+    request.imageHeight > 8192 ||
+    Math.max(
+      request.imageWidth / request.imageHeight,
+      request.imageHeight / request.imageWidth,
+    ) > 200
+  ) {
+    throw new TranslationError('IMAGE_REGION_INVALID', 'The selected image dimensions are invalid.');
+  }
+}
+
+async function translateImageRegion(
+  request: TranslateImageRegionRequest,
+  tabId: number,
+  progressTarget: TranslationProgressTarget,
+): Promise<TranslateRuntimeResponse> {
+  try {
+    validateImageRegionRequest(request);
+    const previous = activeRequests.get(tabId);
+    if (previous?.requestId !== request.requestId) previous?.controller.abort();
+    const settings = await getSettings();
+    const profile = settings.apiProfiles.find(
+      (candidate) => candidate.id === settings.visionApiProfileId,
+    );
+    if (!profile || !settings.visionModel.trim()) {
+      throw new TranslationError(
+        'VISION_NOT_CONFIGURED',
+        'Select a vision API profile and model in extension settings.',
+      );
+    }
+    const apiKey = await getApiKey(profile.id);
+    if (!apiKey) {
+      throw new TranslationError('NO_API_KEY', `Configure an API Key for ${profile.name} first.`);
+    }
+    const apiPermission = apiOriginPattern(profile.apiBaseUrl);
+    if (!(await browser.permissions.contains({ origins: [apiPermission] }))) {
+      throw new TranslationError(
+        'API_PERMISSION_REQUIRED',
+        `Permission for ${apiPermission} is required.`,
+      );
+    }
+    const controller = new AbortController();
+    activeRequests.set(tabId, { requestId: request.requestId, controller });
+    const startedAt = performance.now();
+    let lastPartial = '';
+    let lastProgressAt = 0;
+    const providerResult = await translator.translateImageRegion(
+      {
+        imageDataUrl: request.imageDataUrl,
+        imageWidth: request.imageWidth,
+        imageHeight: request.imageHeight,
+      },
+      {
+        model: settings.visionModel,
+        sourceLanguage: request.sourceLanguage,
+        targetLanguage: request.targetLanguage,
+        style: request.style,
+      },
+      { apiKey, apiBaseUrl: profile.apiBaseUrl },
+      controller.signal,
+      settings.enableStreaming
+        ? {
+            onPartialText: (partialText) => {
+              if (!partialText || partialText === lastPartial) return;
+              const now = performance.now();
+              if (now - lastProgressAt < 80) return;
+              lastPartial = partialText;
+              lastProgressAt = now;
+              publishTranslationProgress(tabId, {
+                requestId: request.requestId,
+                partialText,
+                completedChunks: 0,
+                totalChunks: 1,
+              }, progressTarget);
+            },
+          }
+        : undefined,
+    );
+    if (activeRequests.get(tabId)?.requestId !== request.requestId) {
+      throw new TranslationError('REQUEST_ABORTED', 'The request was replaced.');
+    }
+    let sourceHost = request.sourceLabel?.trim().slice(0, 120) || undefined;
+    if (!sourceHost) {
+      try {
+        sourceHost = new URL(request.pageUrl).hostname;
+      } catch {
+        sourceHost = undefined;
+      }
+    }
+    const result: TranslateResult = {
+      requestId: request.requestId,
+      originalText: providerResult.recognizedText,
+      translatedText: providerResult.translatedText,
+      warnings: [],
+      ...(providerResult.uncertainSpans.length
+        ? { uncertainSpans: providerResult.uncertainSpans }
+        : {}),
+      ...(sourceHost ? { sourceHost } : {}),
+      sourceKind: 'image-region',
+      targetLanguage: request.targetLanguage,
+      style: request.style,
+      completedAt: Date.now(),
+      cached: false,
+      latencyMs: Math.round(performance.now() - startedAt),
+      contextUsed: false,
+      chunkCount: 1,
+    };
+    publishTranslationProgress(tabId, {
+      requestId: request.requestId,
+      completedChunks: 1,
+      totalChunks: 1,
+    }, progressTarget);
+    const history = settings.rememberRecentTranslations
+      ? await addTranslationHistory(tabId, result, settings.historyLimit)
+      : [];
+    return { ok: true, data: { result, history } };
+  } catch (error) {
+    await recordLocalDiagnosticError('translate-image-region', error);
+    return errorResponse(error);
+  } finally {
+    const current = activeRequests.get(tabId);
+    if (current?.requestId === request.requestId) activeRequests.delete(tabId);
+  }
+}
+
 async function testConnection(
   apiKeyOverride: string | undefined,
   apiBaseUrl: string,
@@ -449,6 +893,49 @@ async function testConnection(
   } catch (error) {
     await recordLocalDiagnosticError('test-connection', error);
     return errorResponse<{ connected: true }>(error);
+  }
+}
+
+async function testVisionCapability(
+  apiKeyOverride: string | undefined,
+  apiBaseUrl: string,
+  model: string,
+  profileId?: string,
+): Promise<VisionCapabilityTestResponse> {
+  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
+  if (!apiKey) {
+    return errorResponse(
+      new TranslationError('NO_API_KEY', 'Configure an API Key first.'),
+    );
+  }
+  const originPattern = apiOriginPattern(apiBaseUrl);
+  if (!(await browser.permissions.contains({ origins: [originPattern] }))) {
+    return errorResponse(
+      new TranslationError(
+        'API_PERMISSION_REQUIRED',
+        `Permission for ${originPattern} is required.`,
+      ),
+    );
+  }
+
+  const controller = new AbortController();
+  try {
+    const startedAt = performance.now();
+    await translator.testVisionCapability(
+      { model },
+      { apiKey, apiBaseUrl },
+      controller.signal,
+    );
+    return {
+      ok: true,
+      data: {
+        supported: true,
+        latencyMs: Math.round(performance.now() - startedAt),
+      },
+    };
+  } catch (error) {
+    await recordLocalDiagnosticError('test-vision-capability', error);
+    return errorResponse(error);
   }
 }
 
@@ -588,9 +1075,33 @@ async function sendToSelectionContentScript(
   await browser.tabs.sendMessage(tab.id, message);
 }
 
+async function sendContextMenuTranslationToWebPage(
+  tab: { id?: number | undefined; url?: string | undefined },
+  snapshot: ReturnType<typeof createContextMenuSnapshot>,
+): Promise<void> {
+  if (tab.id === undefined || !tab.url) return;
+  if (isOverleafProjectUrl(tab.url)) {
+    await browser.tabs.sendMessage(tab.id, {
+      type: 'CONTEXT_MENU_TRANSLATE',
+      payload: snapshot,
+    } satisfies RuntimeMessage);
+    return;
+  }
+  if (!isInjectableWebUrl(tab.url)) return;
+  await browser.scripting.executeScript({
+    target: { tabId: tab.id },
+    files: [GENERAL_CONTENT_SCRIPT_FILE],
+  });
+  await browser.tabs.sendMessage(tab.id, {
+    type: 'CONTEXT_MENU_TRANSLATE',
+    payload: snapshot,
+  } satisfies RuntimeMessage);
+}
+
 export default defineBackground(() => {
   void restrictSensitiveStorageAccess();
   void synchronizeContextMenu();
+  void initializePdfSidePanelIsolation();
   scheduleGeneralPageAccessSync();
 
   browser.runtime.onInstalled.addListener((details) => {
@@ -603,6 +1114,7 @@ export default defineBackground(() => {
 
   browser.runtime.onStartup.addListener(() => {
     void synchronizeContextMenu();
+    void initializePdfSidePanelIsolation();
     scheduleGeneralPageAccessSync();
   });
 
@@ -629,18 +1141,107 @@ export default defineBackground(() => {
   });
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
-    if (
-      info.menuItemId !== CONTEXT_MENU_ID ||
-      !info.selectionText ||
-      tab?.id === undefined
-    ) {
-      return;
+    if (info.menuItemId !== CONTEXT_MENU_ID) return;
+
+    const eventContextUrls = {
+      ...(tab?.url ? { tabUrl: tab.url } : {}),
+      ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
+      ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
+    };
+    if (shouldOpenEdgePdfSidePanelImmediately(
+      eventContextUrls,
+      tab?.id,
+      tab?.windowId,
+    )) {
+      const nativeChrome = getNativeChromeApi();
+      if (nativeChrome?.tabs && nativeChrome.sidePanel) {
+        nativeChrome.tabs.query(
+          { active: true, lastFocusedWindow: true },
+          ([resolvedTab]) => {
+            if (
+              resolvedTab?.id === undefined ||
+              resolvedTab.id < 0 ||
+              resolvedTab.windowId < 0
+            ) {
+              return;
+            }
+            const contextUrls = {
+              ...(resolvedTab.url ? { tabUrl: resolvedTab.url } : {}),
+              ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
+              ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
+            };
+            const sourceUrl = edgePdfSourceUrl(contextUrls);
+            openPdfTranslationSidePanel(
+              { id: resolvedTab.id, windowId: resolvedTab.windowId },
+              info.selectionText,
+              sourceUrl,
+              pdfPageFromContext(contextUrls, sourceUrl),
+            );
+          },
+        );
+        return;
+      }
     }
-    const snapshot = createContextMenuSnapshot(info.selectionText, tab.url ?? '');
-    void sendToSelectionContentScript(tab, {
-      type: 'CONTEXT_MENU_TRANSLATE',
-      payload: snapshot,
-    }).catch(() => undefined);
+
+    void (async () => {
+      // Edge reports tabId/windowId as -1 when a context-menu click originates
+      // from its built-in PDF viewer. Resolve the real browser tab before
+      // opening the side panel or sending a content-script message.
+      let resolvedTab = tab;
+      if (
+        resolvedTab?.id === undefined ||
+        resolvedTab.id < 0 ||
+        resolvedTab.windowId < 0
+      ) {
+        [resolvedTab] = await browser.tabs.query({
+          active: true,
+          lastFocusedWindow: true,
+        });
+      }
+      if (
+        resolvedTab?.id === undefined ||
+        resolvedTab.id < 0 ||
+        resolvedTab.windowId < 0
+      ) {
+        throw new Error('Unable to resolve the active Edge tab for this selection.');
+      }
+
+      const contextUrls = {
+        ...(resolvedTab.url ? { tabUrl: resolvedTab.url } : {}),
+        ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
+        ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
+      };
+      const activeTab = { id: resolvedTab.id, windowId: resolvedTab.windowId };
+      const sourceUrl = edgePdfSourceUrl(contextUrls);
+      const pageNumber = pdfPageFromContext(contextUrls, sourceUrl);
+      if (
+        isEdgeNativePdfContext(contextUrls) ||
+        !resolvedTab.url ||
+        !isInjectableWebUrl(resolvedTab.url)
+      ) {
+        openPdfTranslationSidePanel(activeTab, info.selectionText, sourceUrl, pageNumber);
+        return;
+      }
+      if (!info.selectionText) {
+        openPdfTranslationSidePanel(activeTab, undefined, sourceUrl, pageNumber);
+        return;
+      }
+      const snapshot = createContextMenuSnapshot(info.selectionText, resolvedTab.url);
+      await sendContextMenuTranslationToWebPage(resolvedTab, snapshot).catch((error: unknown) => {
+        // Some PDF endpoints keep their original HTTPS URL instead of exposing
+        // the internal viewer URL. Failed injection is therefore treated as a
+        // protected-document fallback and rendered in the native side panel.
+        console.warn('Falling back to the side panel for a protected selection.', error);
+        openPdfTranslationSidePanel(
+          activeTab,
+          info.selectionText,
+          resolvedTab.url,
+          pageNumber,
+        );
+      });
+    })().catch((error: unknown) => {
+      void recordLocalDiagnosticError('translate-context-menu-selection', error);
+    });
   });
 
   browser.commands.onCommand.addListener((command, tab) => {
@@ -655,6 +1256,35 @@ export default defineBackground(() => {
     activeRequests.delete(tabId);
     void clearTranslationHistory(tabId);
     void clearTranslationCache(tabId);
+    pdfSidePanelSessions.delete(tabId);
+  });
+
+  browser.tabs.onCreated.addListener((tab) => {
+    if (tab.id === undefined) return;
+    void setPdfSidePanelEnabled(tab.id, false).catch(() => undefined);
+  });
+
+  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+    if (!changeInfo.url) return;
+    const session = pdfSidePanelSessions.get(tabId);
+    if (session) {
+      const previousSource = pdfDocumentIdentity(session.pageUrl);
+      const nextSourceUrl = edgePdfSourceUrl({ tabUrl: changeInfo.url }) ?? changeInfo.url;
+      const nextSource = pdfDocumentIdentity(nextSourceUrl);
+      if (
+        previousSource &&
+        nextSource &&
+        previousSource === nextSource
+      ) {
+        const pageNumber = pdfInitialPage(changeInfo.url) ?? pdfInitialPage(nextSourceUrl);
+        if (pageNumber && pageNumber !== session.pageNumber) {
+          publishPdfSidePanelSession({ ...session, pageNumber });
+        }
+        return;
+      }
+      pdfSidePanelSessions.delete(tabId);
+    }
+    void setPdfSidePanelEnabled(tabId, false).catch(() => undefined);
   });
 
   browser.runtime.onMessage.addListener(
@@ -684,6 +1314,41 @@ export default defineBackground(() => {
           })
           .then(() => ({ ok: true as const, data: { opened: true } }))
           .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'OPEN_PDF_VIEWER') {
+        const source = parsePdfSourceUrl(message.payload?.url)?.href;
+        const requestedPage = message.payload?.page;
+        const page = Number.isSafeInteger(requestedPage) && (requestedPage ?? 0) > 0
+          ? requestedPage
+          : pdfInitialPage(source);
+        const viewerUrl = new URL(browser.runtime.getURL('/pdf.html'));
+        if (source) viewerUrl.searchParams.set('url', source);
+        if (page) viewerUrl.searchParams.set('page', String(page));
+        return browser.tabs
+          .create({ url: viewerUrl.href, active: true })
+          .then(async (tab) => {
+            await closePdfSidePanelAfterOpeningViewer(tab);
+            return { ok: true as const, data: { opened: true } };
+          })
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'GET_PDF_SIDE_PANEL_SESSION') {
+        return Promise.resolve({
+          ok: true as const,
+          data: {
+            session: pdfSidePanelSessions.get(message.payload.tabId) ?? null,
+          },
+        });
+      }
+
+      if (message.type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION') {
+        return retryPdfSidePanelTranslation(message.payload.tabId);
+      }
+
+      if (message.type === 'PDF_SIDE_PANEL_SESSION_UPDATED') {
+        return undefined;
       }
 
       if (message.type === 'OPEN_SIDEBAR') {
@@ -733,11 +1398,36 @@ export default defineBackground(() => {
             ),
           );
         }
-        return translate(message.payload, tabId);
+        return translate(message.payload, tabId, progressTargetForSender(sender.url));
+      }
+
+      if (message.type === 'TRANSLATE_IMAGE_REGION') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(
+            errorResponse(
+              new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
+            ),
+          );
+        }
+        return translateImageRegion(
+          message.payload,
+          tabId,
+          progressTargetForSender(sender.url),
+        );
       }
 
       if (message.type === 'TEST_API_CONNECTION') {
         return testConnection(
+          message.payload.apiKey,
+          message.payload.apiBaseUrl,
+          message.payload.model,
+          message.payload.profileId,
+        );
+      }
+
+      if (message.type === 'TEST_VISION_CAPABILITY') {
+        return testVisionCapability(
           message.payload.apiKey,
           message.payload.apiBaseUrl,
           message.payload.model,

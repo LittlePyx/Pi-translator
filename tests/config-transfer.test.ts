@@ -18,6 +18,8 @@ function configuredSettings(): ExtensionSettings {
       },
     ],
     activeApiProfileId: 'private-profile-id',
+    visionApiProfileId: 'private-profile-id',
+    visionModel: 'example-vision-model',
     apiBaseUrl: 'https://api.example.com/v1',
     model: 'example-model',
     siteAllowlist: ['docs.example.org'],
@@ -35,6 +37,7 @@ describe('safe settings transfer', () => {
     expect(exported).not.toMatch(/"apiKey"\s*:/i);
     expect(exported).toContain('docs.example.org');
     expect(exported).toContain('attention');
+    expect(exported).toContain('example-vision-model');
   });
 
   it('ignores injected key fields, regenerates ids, and requires keys to be re-entered', () => {
@@ -48,6 +51,8 @@ describe('safe settings transfer', () => {
 
     expect(imported.apiProfiles[0]?.id).not.toBe('injected-id');
     expect(imported.apiProfiles[0]).not.toHaveProperty('apiKey');
+    expect(imported.visionApiProfileId).toBe(imported.apiProfiles[0]?.id);
+    expect(imported.visionModel).toBe('example-vision-model');
     expect(imported.apiKeyStorage).toBe('session');
     expect(imported.onboardingCompleted).toBe(true);
   });

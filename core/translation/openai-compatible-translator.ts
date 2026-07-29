@@ -2,8 +2,15 @@ import { TranslationError, toTranslationError } from '../messaging/errors';
 import { apiEndpoint } from '../settings/api-access';
 import { buildSystemPrompt, buildUserPrompt } from './prompt-builder';
 import { parseCompatibleApiEnvelope, parseStructuredTranslation } from './response-parser';
+import {
+  assertSafeImageTranslationResult,
+  assertSafeImageTranslationText,
+} from './image-output-safety';
 import type {
   PreparedTranslationInput,
+  ImageTranslationInput,
+  ImageTranslationOptions,
+  ProviderImageTranslationResult,
   ProviderCredentials,
   ProviderTranslationResult,
   TranslationCallbacks,
@@ -14,6 +21,10 @@ import type {
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_REQUEST_ATTEMPTS = 3;
 const RETRY_BASE_DELAY_MS = 650;
+// A tiny 16 x 16 locally bundled PNG. It is sent only when the user presses
+// “test vision capability” and contains no user or document data.
+export const VISION_CAPABILITY_TEST_IMAGE_DATA_URL =
+  'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAJElEQVR42mP4jwMwMDCgYJzqRg2gggHoCsnAQ96A0XQwCAwAALi5rW+TlQcjAAAAAElFTkSuQmCC';
 
 interface ModelListResponse {
   data?: Array<{ id?: string }>;
@@ -37,11 +48,52 @@ function createTimedSignal(parent: AbortSignal): { signal: AbortSignal; dispose:
   };
 }
 
-function mapHttpError(
+export function mapHttpError(
   status: number,
   retryAfter: string | null,
   providerMessage?: string,
 ): TranslationError {
+  if (
+    (status === 400 || status === 402 || status === 403) &&
+    /arrear|insufficient.{0,24}(?:balance|credit)|billing.{0,24}(?:balance|credit|overdue|payment required)|account.{0,24}(?:overdue|in arrears)|余额|欠费/i.test(
+      providerMessage ?? '',
+    )
+  ) {
+    return new TranslationError(
+      'PAYMENT_REQUIRED',
+      providerMessage ?? 'The API account has insufficient credit.',
+      false,
+      undefined,
+      undefined,
+      status,
+    );
+  }
+  if (
+    (status === 400 || status === 422) &&
+    /image.{0,20}(?:too large|max(?:imum)? bytes|length|width|height|ratio|decode|format)|data-uri|base64/i.test(providerMessage ?? '')
+  ) {
+    return new TranslationError(
+      'IMAGE_REGION_INVALID',
+      providerMessage ?? 'The selected image does not meet the provider requirements.',
+      false,
+      undefined,
+      undefined,
+      status,
+    );
+  }
+  if (
+    (status === 400 || status === 422) &&
+    /does not support.{0,40}(?:image|vision|multimodal)|(?:image_url|vision|multimodal).{0,40}(?:unsupported|not support|invalid)|not an? (?:vision|multimodal) model/i.test(providerMessage ?? '')
+  ) {
+    return new TranslationError(
+      'VISION_MODEL_UNSUPPORTED',
+      providerMessage ?? 'The configured model does not support image input.',
+      false,
+      undefined,
+      undefined,
+      status,
+    );
+  }
   if (status === 401 || status === 403) {
     return new TranslationError(
       'AUTH_FAILED',
@@ -140,7 +192,7 @@ function abortableDelay(milliseconds: number, signal: AbortSignal): Promise<void
   });
 }
 
-async function requestWithRetry<T>(
+export async function requestWithRetry<T>(
   url: string,
   init: RequestInit,
   parentSignal: AbortSignal,
@@ -182,7 +234,7 @@ async function requestWithRetry<T>(
   throw lastError ?? new TranslationError('UNKNOWN_ERROR', 'The API request failed.');
 }
 
-async function fetchJson(
+export async function fetchJson(
   url: string,
   init: RequestInit,
   parentSignal: AbortSignal,
@@ -226,7 +278,7 @@ export function extractPartialTranslation(content: string): string | undefined {
   return output || undefined;
 }
 
-async function streamedChatContent(
+export async function streamedChatContent(
   response: Response,
   onPartialText: (text: string) => void,
 ): Promise<string> {
@@ -267,6 +319,131 @@ async function streamedChatContent(
 }
 
 export class OpenAiCompatibleTranslator implements Translator {
+  async testVisionCapability(
+    options: Pick<ImageTranslationOptions, 'model'>,
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const qwenEndpoint = /(?:dashscope|maas\.aliyuncs\.com)/i.test(credentials.apiBaseUrl);
+    const envelope = await fetchJson(
+      apiEndpoint(credentials.apiBaseUrl, 'chat/completions'),
+      {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${credentials.apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: options.model,
+          messages: [{
+            role: 'user',
+            content: [
+              {
+                type: 'image_url',
+                image_url: { url: VISION_CAPABILITY_TEST_IMAGE_DATA_URL },
+              },
+              {
+                type: 'text',
+                text: 'This is a low-cost image-input capability check. Reply only with OK.',
+              },
+            ],
+          }],
+          temperature: 0,
+          max_tokens: 8,
+          stream: false,
+          ...(qwenEndpoint ? { enable_thinking: false } : {}),
+        }),
+      },
+      signal,
+    );
+    if (!parseCompatibleApiEnvelope(envelope).trim()) {
+      throw new TranslationError('EMPTY_RESPONSE', 'The vision API returned an empty response.', true);
+    }
+  }
+
+  async translateImageRegion(
+    input: ImageTranslationInput,
+    options: ImageTranslationOptions,
+    credentials: ProviderCredentials,
+    signal: AbortSignal,
+    callbacks?: TranslationCallbacks,
+  ): Promise<ProviderImageTranslationResult> {
+    const url = apiEndpoint(credentials.apiBaseUrl, 'chat/completions');
+    const qwenEndpoint = /(?:dashscope|maas\.aliyuncs\.com)/i.test(credentials.apiBaseUrl);
+    const prompt = [
+      `识别框选图片中的原文，并翻译为${options.targetLanguage}。`,
+      options.sourceLanguage === 'auto'
+        ? '自动判断原文语言。'
+        : `原文语言应为 ${options.sourceLanguage}。`,
+      options.style === 'academic'
+        ? '使用准确、简洁的学术表达，保持术语一致。'
+        : options.style === 'literal'
+          ? '尽量逐字忠实翻译，不擅自改写。'
+          : '使用自然、清晰的通用表达。',
+      '公式、变量、单位和 LaTeX 片段必须原样保留。',
+      '模糊或无法确认的字符不得猜测，请在对应位置写成 [无法辨认]。',
+      '只返回 JSON 对象，字段顺序固定为：{"translation":"译文","recognizedText":"识别出的原文","uncertainSpans":["无法确认的片段"]}。',
+    ].join('\n');
+    const body = (stream: boolean) => JSON.stringify({
+      model: options.model,
+      messages: [{
+        role: 'user',
+        content: [
+          { type: 'image_url', image_url: { url: input.imageDataUrl } },
+          { type: 'text', text: prompt },
+        ],
+      }],
+      response_format: { type: 'json_object' },
+      temperature: 0,
+      max_tokens: 4096,
+      stream,
+      ...(stream ? { stream_options: { include_usage: true } } : {}),
+      ...(qwenEndpoint ? { enable_thinking: false } : {}),
+    });
+    const request = (stream: boolean): RequestInit => ({
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${credentials.apiKey}`,
+        'Content-Type': 'application/json',
+        ...(stream ? { Accept: 'text/event-stream' } : {}),
+      },
+      body: body(stream),
+    });
+    let content: string;
+    if (callbacks?.onPartialText) {
+      try {
+        content = await requestWithRetry(
+          url,
+          request(true),
+          signal,
+          (response) => streamedChatContent(response, (partialText) => {
+            assertSafeImageTranslationText(partialText, input.imageDataUrl);
+            callbacks.onPartialText!(partialText);
+          }),
+        );
+        const result = parseImageTranslation(content);
+        assertSafeImageTranslationResult(result, input.imageDataUrl);
+        return result;
+      } catch (error) {
+        const normalized = toTranslationError(error);
+        if (signal.aborted || ![400, 404, 405, 415, 422].includes(normalized.httpStatus ?? 0)) {
+          throw normalized;
+        }
+        if (
+          normalized.code === 'VISION_MODEL_UNSUPPORTED' ||
+          normalized.code === 'IMAGE_REGION_INVALID' ||
+          normalized.code === 'MODEL_NOT_FOUND'
+        ) {
+          throw normalized;
+        }
+      }
+    }
+    const envelope = await fetchJson(url, request(false), signal);
+    const result = parseImageTranslation(parseCompatibleApiEnvelope(envelope));
+    assertSafeImageTranslationResult(result, input.imageDataUrl);
+    return result;
+  }
+
   async translate(
     input: PreparedTranslationInput,
     options: TranslationOptions,
@@ -341,4 +518,41 @@ export class OpenAiCompatibleTranslator implements Translator {
         .filter((id): id is string => typeof id === 'string' && Boolean(id.trim())) ?? [],
     )].sort();
   }
+}
+
+export function parseImageTranslation(content: string): ProviderImageTranslationResult {
+  const normalized = content
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/, '')
+    .trim();
+  let value: unknown;
+  try {
+    value = JSON.parse(normalized);
+  } catch (error) {
+    throw new TranslationError('INVALID_RESPONSE', 'The vision API returned invalid JSON.', true, {
+      cause: error,
+    });
+  }
+  if (!value || typeof value !== 'object') {
+    throw new TranslationError('INVALID_RESPONSE', 'The vision API returned an invalid object.', true);
+  }
+  const record = value as Record<string, unknown>;
+  const translatedText = typeof record.translation === 'string' ? record.translation.trim() : '';
+  const recognizedText = typeof record.recognizedText === 'string' ? record.recognizedText.trim() : '';
+  if (!translatedText || !recognizedText) {
+    throw new TranslationError(
+      'INVALID_RESPONSE',
+      'The vision API response is missing translation or recognizedText.',
+      true,
+    );
+  }
+  const uncertainSpans = Array.isArray(record.uncertainSpans)
+    ? record.uncertainSpans
+        .filter((item): item is string => typeof item === 'string')
+        .map((item) => item.trim())
+        .filter(Boolean)
+        .slice(0, 20)
+    : [];
+  return { recognizedText, translatedText, uncertainSpans };
 }

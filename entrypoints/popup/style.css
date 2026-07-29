@@ -107,7 +107,7 @@ button {
 }
 
 .primary-action:hover { background: linear-gradient(135deg, #4338ca, #5b4bd6); }
-#open-settings { margin-top: 8px; }
+#open-pdf, #open-settings { margin-top: 8px; }
 
 button:hover { filter: brightness(1.06); }
 button:focus-visible, select:focus-visible, input:focus-visible {

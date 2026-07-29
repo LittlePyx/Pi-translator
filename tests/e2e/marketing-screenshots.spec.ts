@@ -2,6 +2,7 @@ import { expect, test, chromium, type BrowserContext, type Page } from '@playwri
 import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { deflateSync } from 'node:zlib';
 
 declare const chrome: typeof browser;
 
@@ -14,6 +15,69 @@ let context: BrowserContext;
 let page: Page;
 let userDataDirectory: string;
 let extensionId: string;
+
+function createScannedPaperPdf(): Buffer {
+  const width = 306;
+  const height = 396;
+  const pixels = Buffer.alloc(width * height * 3, 247);
+  const fill = (left: number, top: number, boxWidth: number, boxHeight: number, value: number) => {
+    for (let y = top; y < Math.min(height, top + boxHeight); y += 1) {
+      for (let x = left; x < Math.min(width, left + boxWidth); x += 1) {
+        const offset = (y * width + x) * 3;
+        pixels[offset] = value;
+        pixels[offset + 1] = value;
+        pixels[offset + 2] = value;
+      }
+    }
+  };
+  fill(68, 34, 170, 5, 44);
+  fill(95, 47, 116, 3, 105);
+  fill(137, 75, 32, 4, 48);
+  for (let line = 0; line < 9; line += 1) {
+    fill(42, 92 + line * 9, line % 3 === 2 ? 198 : 222, 2, 80 + (line % 2) * 22);
+  }
+  fill(42, 194, 74, 4, 48);
+  for (let line = 0; line < 13; line += 1) {
+    fill(42, 211 + line * 9, line % 4 === 3 ? 176 : 222, 2, 84 + (line % 2) * 18);
+  }
+  const compressed = deflateSync(pixels);
+  const pageContent = Buffer.from('q\n612 0 0 792 0 0 cm\n/Scan Do\nQ');
+  const objects = [
+    Buffer.from('<< /Type /Catalog /Pages 2 0 R >>'),
+    Buffer.from('<< /Type /Pages /Kids [3 0 R] /Count 1 >>'),
+    Buffer.from('<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /XObject << /Scan 4 0 R >> >> /Contents 5 0 R >>'),
+    Buffer.concat([
+      Buffer.from(`<< /Type /XObject /Subtype /Image /Width ${width} /Height ${height} /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /FlateDecode /Length ${compressed.length} >>\nstream\n`),
+      compressed,
+      Buffer.from('\nendstream'),
+    ]),
+    Buffer.concat([
+      Buffer.from(`<< /Length ${pageContent.length} >>\nstream\n`),
+      pageContent,
+      Buffer.from('\nendstream'),
+    ]),
+  ];
+  const chunks = [Buffer.from('%PDF-1.4\n')];
+  const offsets = [0];
+  let length = chunks[0]!.length;
+  objects.forEach((object, index) => {
+    offsets.push(length);
+    const serialized = Buffer.concat([
+      Buffer.from(`${index + 1} 0 obj\n`),
+      object,
+      Buffer.from('\nendobj\n'),
+    ]);
+    chunks.push(serialized);
+    length += serialized.length;
+  });
+  chunks.push(Buffer.from(
+    `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n${offsets
+      .slice(1)
+      .map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`)
+      .join('')}trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${length}\n%%EOF`,
+  ));
+  return Buffer.concat(chunks);
+}
 
 async function selectSourceText(): Promise<void> {
   await page.evaluate(() => {
@@ -59,7 +123,7 @@ test.beforeAll(async () => {
   await setup.evaluate(async () => {
     await chrome.storage.local.set({
       extensionSettings: {
-        schemaVersion: 7,
+        schemaVersion: 8,
         provider: 'openai-compatible',
         apiBaseUrl: 'https://www.overleaf.com/pi-translator-api',
         model: 'marketing-demo-model',
@@ -254,4 +318,33 @@ test('captures the real quick panel', async () => {
     path: path.join(SCREENSHOT_DIRECTORY, 'product-quick-panel-420x560.png'),
   });
   await popup.close();
+});
+
+test('captures scanned PDF region translation', async () => {
+  const pdf = await context.newPage();
+  await pdf.setViewportSize({ width: 1280, height: 800 });
+  await pdf.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await pdf.locator('#file-input').setInputFiles({
+    name: 'scanned-research-paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: createScannedPaperPdf(),
+  });
+  const pageElement = pdf.locator('.pdf-page').first();
+  await expect(pageElement).toHaveAttribute('data-rendered', 'ready');
+  await expect(pageElement).toHaveAttribute('data-has-text', 'false');
+  await expect(pdf.locator('#notice')).toHaveClass(/transient/);
+  await expect(pdf.locator('#notice')).toContainText('扫描版 PDF');
+  await pdf.locator('#region-translate').click();
+  const box = await pageElement.boundingBox();
+  expect(box).not.toBeNull();
+  if (!box) return;
+  await pdf.mouse.move(box.x + 105, box.y + 160);
+  await pdf.mouse.down();
+  await pdf.mouse.move(box.x + Math.min(650, box.width - 40), box.y + 390, { steps: 10 });
+  await pdf.mouse.up();
+  await expect(pageElement.locator('.region-confirm')).toBeVisible();
+  await pdf.screenshot({
+    path: path.join(SCREENSHOT_DIRECTORY, 'product-pdf-region-1280x800.png'),
+  });
+  await pdf.close();
 });

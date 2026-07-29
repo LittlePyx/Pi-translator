@@ -1,0 +1,54 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Pi PDF - Pi Translator</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <header class="toolbar">
+      <div class="brand" aria-label="Pi Translator PDF 阅读器">
+        <img src="/brand/pi_logo.png" alt="" />
+        <span><strong>Pi PDF</strong><small id="document-name">未打开文档</small></span>
+      </div>
+      <div class="document-actions">
+        <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
+        <button id="choose-file" class="primary" type="button">打开 PDF</button>
+        <span id="page-count" class="page-count" hidden></span>
+      </div>
+      <button
+        id="region-translate"
+        class="region-action"
+        type="button"
+        aria-pressed="false"
+        title="框选图片或扫描文字进行翻译"
+        disabled
+      >框选翻译</button>
+      <div class="zoom-controls" aria-label="缩放控制">
+        <button id="zoom-out" type="button" title="缩小" disabled>−</button>
+        <output id="zoom-value">125%</output>
+        <button id="zoom-in" type="button" title="放大" disabled>＋</button>
+      </div>
+      <button id="open-settings" class="quiet" type="button">设置</button>
+    </header>
+
+    <main id="document-stage" class="document-stage">
+      <section id="empty-state" class="empty-state">
+        <img src="/brand/pi_logo.png" alt="" />
+        <h1>打开一份 PDF 开始阅读</h1>
+        <p>选择文字或拖选段落后，使用旁边的小 Pi 按钮翻译。</p>
+        <button id="empty-open" class="primary" type="button">选择本地 PDF</button>
+        <small>文件仅在当前浏览器标签页中读取，不会上传给扩展服务器。</small>
+      </section>
+      <div id="loading" class="loading" hidden role="status" aria-live="polite">
+        <span class="spinner" aria-hidden="true"></span>
+        <strong id="loading-text">正在打开 PDF…</strong>
+      </div>
+      <section id="notice" class="notice" hidden role="status"></section>
+      <div id="pdf-viewer" class="pdf-viewer" hidden></div>
+    </main>
+
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

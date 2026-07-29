@@ -19,7 +19,26 @@ interface ContentScriptRuntimeContext {
   onInvalidated(callback: () => void): unknown;
 }
 
-type TranslationSurface = 'overleaf' | 'general';
+type TranslationSurface = 'overleaf' | 'general' | 'pdf';
+
+interface SelectionTranslatorOptions {
+  pageUrl?: () => string;
+  sourceLabel?: () => string | undefined;
+  allowSitePause?: boolean;
+}
+
+export interface ImageRegionTranslationCapture {
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  rect: ViewportRect;
+  pageUrl: string;
+  sourceLabel?: string;
+}
+
+export interface SelectionTranslatorController {
+  translateImageRegion(capture: ImageRegionTranslationCapture): Promise<void>;
+}
 
 const DEFAULT_PUBLIC_SETTINGS: PublicSettings = {
   sourceLanguage: 'auto',
@@ -46,6 +65,7 @@ function shouldShowFloatingButton(
   settings: PublicSettings,
   surface: TranslationSurface,
 ): boolean {
+  if (surface === 'pdf') return true;
   if (settings.pausedSiteHosts.includes(location.hostname.toLowerCase())) {
     return false;
   }
@@ -59,10 +79,12 @@ function shouldShowFloatingButton(
 export async function startSelectionTranslator(
   ctx: ContentScriptRuntimeContext,
   surface: TranslationSurface,
-): Promise<void> {
+  options: SelectionTranslatorOptions = {},
+): Promise<SelectionTranslatorController> {
   let settings = DEFAULT_PUBLIC_SETTINGS;
   let latestSelection: SelectionSnapshot | undefined;
   let activeSelection: SelectionSnapshot | undefined;
+  let activeImageRegion: ImageRegionTranslationCapture | undefined;
   let inFlightRequestId: string | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
@@ -74,6 +96,7 @@ export async function startSelectionTranslator(
     const requestId = inFlightRequestId;
     activeSelection = undefined;
     inFlightRequestId = undefined;
+    activeImageRegion = undefined;
     if (!requestId) return;
     void browser.runtime
       .sendMessage({
@@ -88,7 +111,8 @@ export async function startSelectionTranslator(
       if (latestSelection) void translate(latestSelection);
     },
     onRetry: () => {
-      if (activeSelection) void translate(activeSelection, true);
+      if (activeImageRegion) void translateImageRegion(activeImageRegion, true);
+      else if (activeSelection) void translate(activeSelection, true);
     },
     onTranslateText: (text) => {
       const basis = activeSelection ?? latestSelection;
@@ -148,12 +172,16 @@ export async function startSelectionTranslator(
       } satisfies RuntimeMessage)) as TranslationFavoritesResponse;
       return response.ok ? response.data.favorites : [];
     },
-    onPauseSite: async () => {
-      await browser.runtime.sendMessage({
-        type: 'PAUSE_CURRENT_SITE',
-        payload: { pageUrl: location.href },
-      } satisfies RuntimeMessage);
-    },
+    ...(options.allowSitePause === false
+      ? {}
+      : {
+          onPauseSite: async () => {
+            await browser.runtime.sendMessage({
+              type: 'PAUSE_CURRENT_SITE',
+              payload: { pageUrl: location.href },
+            } satisfies RuntimeMessage);
+          },
+        }),
     onSidebarChange: (active) => {
       if (active) {
         lastAutoSelectionHash = activeSelection?.selectionHash;
@@ -273,16 +301,19 @@ export async function startSelectionTranslator(
     }
     const isRetry = activeSelection?.requestId === snapshot.requestId;
     if (!isRetry) overlay.resetCardPosition();
+    activeImageRegion = undefined;
     activeSelection = snapshot;
     inFlightRequestId = snapshot.requestId;
     overlay.showLoading(selectionRect(snapshot));
+    const sourceLabel = options.sourceLabel?.();
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'TRANSLATE_SELECTION',
         payload: {
           requestId: snapshot.requestId,
           text: snapshot.normalizedText,
-          pageUrl: snapshot.pageUrl,
+          pageUrl: options.pageUrl?.() ?? snapshot.pageUrl,
+          ...(sourceLabel ? { sourceLabel } : {}),
           targetLanguage: temporaryTargetLanguage,
           sourceLanguage: settings.sourceLanguage,
           style: temporaryStyle,
@@ -328,6 +359,73 @@ export async function startSelectionTranslator(
           showSettings: false,
         },
         selectionRect(snapshot),
+      );
+    }
+  }
+
+  async function translateImageRegion(
+    capture: ImageRegionTranslationCapture,
+    isRetry = false,
+  ): Promise<void> {
+    const requestId = crypto.randomUUID();
+    if (inFlightRequestId) {
+      const previousRequestId = inFlightRequestId;
+      void browser.runtime.sendMessage({
+        type: 'CANCEL_TRANSLATION',
+        payload: { requestId: previousRequestId },
+      } satisfies RuntimeMessage).catch(() => undefined);
+    }
+    if (!isRetry) overlay.resetCardPosition();
+    activeSelection = undefined;
+    activeImageRegion = capture;
+    inFlightRequestId = requestId;
+    overlay.showLoading(capture.rect);
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: 'TRANSLATE_IMAGE_REGION',
+        payload: {
+          requestId,
+          imageDataUrl: capture.imageDataUrl,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          pageUrl: capture.pageUrl,
+          ...(capture.sourceLabel ? { sourceLabel: capture.sourceLabel } : {}),
+          targetLanguage: temporaryTargetLanguage,
+          sourceLanguage: settings.sourceLanguage,
+          style: temporaryStyle,
+        },
+      } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
+      if (inFlightRequestId !== requestId) return;
+      inFlightRequestId = undefined;
+      if (response.ok) {
+        overlay.showResult(
+          response.data.result,
+          capture.rect,
+          response.data.history,
+          false,
+        );
+        return;
+      }
+      overlay.showError(
+        {
+          message: translationErrorMessage(response.error.code, response.error.message),
+          showSettings:
+            response.error.code === 'NO_API_KEY' ||
+            response.error.code === 'AUTH_FAILED' ||
+            response.error.code === 'PAYMENT_REQUIRED' ||
+            response.error.code === 'MODEL_NOT_FOUND' ||
+            response.error.code === 'API_PERMISSION_REQUIRED' ||
+            response.error.code === 'VISION_NOT_CONFIGURED' ||
+            response.error.code === 'VISION_MODEL_UNSUPPORTED',
+        },
+        capture.rect,
+      );
+    } catch (error) {
+      if (inFlightRequestId !== requestId) return;
+      inFlightRequestId = undefined;
+      overlay.showError(
+        { message: runtimeConnectionErrorMessage(error), showSettings: false },
+        capture.rect,
       );
     }
   }
@@ -404,5 +502,10 @@ export async function startSelectionTranslator(
     window.removeEventListener('scroll', scheduleRefresh, true);
     browser.runtime.onMessage.removeListener(messageListener);
     overlay.destroy();
+    activeImageRegion = undefined;
   });
+
+  return {
+    translateImageRegion: (capture) => translateImageRegion(capture),
+  };
 }
