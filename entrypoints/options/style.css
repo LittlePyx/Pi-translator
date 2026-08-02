@@ -415,6 +415,7 @@ code {
 }
 
 .compact-check { grid-column: 1 / -1; }
+.advanced-grid > label.disabled { opacity: .48; }
 
 .diagnostic-report {
   margin-top: 12px;

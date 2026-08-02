@@ -1,4 +1,5 @@
 import type {
+  LatexMathMlResponse,
   PdfSidePanelSession,
   RuntimeMessage,
   RuntimeResponse,
@@ -9,6 +10,15 @@ import {
   pdfInitialPage,
   pdfPermissionPattern,
 } from '../../core/pdf/source';
+import {
+  createLatestRequestGate,
+  isSamePdfSidePanelSession,
+} from '../../core/pdf/sidepanel-session';
+import { getSettings } from '../../core/settings/repository';
+import {
+  containsRenderableLatex,
+  splitLatexDisplaySegments,
+} from '../../core/translation/latex-display';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -22,6 +32,7 @@ const sourceLabel = element<HTMLElement>('source-label');
 const sourceText = element<HTMLElement>('source-text');
 const translationState = element<HTMLElement>('translation-state');
 const translationText = element<HTMLElement>('translation-text');
+const formulaView = element<HTMLButtonElement>('formula-view');
 const progressTrack = element<HTMLElement>('progress-track');
 const errorActions = element<HTMLElement>('error-actions');
 const retry = element<HTMLButtonElement>('retry');
@@ -33,7 +44,37 @@ const openSettings = element<HTMLButtonElement>('open-settings');
 const errorSettings = element<HTMLButtonElement>('error-settings');
 
 let activeTabId: number | undefined;
+let activeWindowId: number | undefined;
 let currentSession: PdfSidePanelSession | undefined;
+let autoRenderLatex = true;
+let formulaRenderOverride: boolean | undefined;
+const sessionLoadGate = createLatestRequestGate();
+
+function renderTranslationText(text: string, renderLatex: boolean): void {
+  translationText.replaceChildren();
+  if (!renderLatex) {
+    translationText.textContent = text;
+    return;
+  }
+  for (const segment of splitLatexDisplaySegments(text)) {
+    if (segment.kind === 'text') {
+      translationText.append(document.createTextNode(segment.text));
+      continue;
+    }
+    const math = document.createElement(segment.displayMode ? 'div' : 'span');
+    math.className = `pi-math ${segment.displayMode ? 'pi-math-display' : 'pi-math-inline'}`;
+    math.textContent = segment.raw;
+    translationText.append(math);
+    void browser.runtime.sendMessage({
+      type: 'RENDER_LATEX_MATHML',
+      payload: { tex: segment.tex, displayMode: segment.displayMode },
+    } satisfies RuntimeMessage).then((response: LatexMathMlResponse) => {
+      if (response.ok && response.data.html && math.isConnected) {
+        math.innerHTML = response.data.html;
+      }
+    }).catch(() => undefined);
+  }
+}
 
 function setStatus(message: string): void {
   status.textContent = message;
@@ -44,6 +85,7 @@ function setStatus(message: string): void {
 }
 
 function render(session: PdfSidePanelSession | null | undefined): void {
+  if (session?.requestId !== currentSession?.requestId) formulaRenderOverride = undefined;
   currentSession = session ?? undefined;
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
@@ -69,6 +111,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   translationText.classList.toggle('error', session.status === 'error');
 
   if (isTranslating) {
+    formulaView.hidden = true;
     const total = session.totalChunks ?? 1;
     const completed = session.completedChunks ?? 0;
     translationState.textContent = total > 1
@@ -79,9 +122,15 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   }
 
   if (session.status === 'error' && session.error) {
+    formulaView.hidden = true;
     translationState.textContent = '翻译失败';
+    const exactPdfMessage = [
+      'EMPTY_SELECTION',
+      'REQUEST_ABORTED',
+      'UNSUPPORTED_PAGE',
+    ].includes(session.error.code);
     translationText.textContent =
-      session.error.code === 'EMPTY_SELECTION' && session.error.message
+      exactPdfMessage && session.error.message
         ? session.error.message
         : translationErrorMessage(session.error.code, session.error.message);
     return;
@@ -92,21 +141,53 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     : session.result?.latencyMs
       ? `${(session.result.latencyMs / 1000).toFixed(1)} 秒`
       : '已完成';
-  translationText.textContent = session.result?.translatedText ?? session.partialText ?? '';
+  const translatedText = session.result?.translatedText ?? session.partialText ?? '';
+  const hasLatex = containsRenderableLatex(translatedText);
+  const renderLatex = formulaRenderOverride ?? autoRenderLatex;
+  formulaView.hidden = !hasLatex;
+  formulaView.textContent = renderLatex ? '源码' : '公式';
+  formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
+  formulaView.setAttribute('aria-pressed', String(renderLatex));
+  renderTranslationText(translatedText, hasLatex && renderLatex);
 }
 
-async function loadActiveSession(): Promise<void> {
-  const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
-  activeTabId = tab?.id;
-  if (activeTabId === undefined) {
+async function loadActiveSession(
+  activated?: { tabId: number; windowId: number },
+): Promise<void> {
+  const isCurrentLoad = sessionLoadGate.begin();
+  let requestedTabId: number | undefined;
+  if (activated) {
+    requestedTabId = activated.tabId;
+    activeWindowId = activated.windowId;
+  } else {
+    const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
+    if (!isCurrentLoad()) return;
+    requestedTabId = tab?.id;
+    activeWindowId = tab?.windowId;
+  }
+  activeTabId = requestedTabId;
+  if (requestedTabId === undefined) {
     render(undefined);
     return;
   }
   const response = (await browser.runtime.sendMessage({
     type: 'GET_PDF_SIDE_PANEL_SESSION',
-    payload: { tabId: activeTabId },
+    payload: { tabId: requestedTabId },
   } satisfies RuntimeMessage)) as RuntimeResponse<{ session: PdfSidePanelSession | null }>;
-  render(response.ok ? response.data.session : undefined);
+  if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
+  if (!response.ok) {
+    render(undefined);
+    setStatus(translationErrorMessage(response.error.code, response.error.message));
+    return;
+  }
+  render(response.data.session);
+}
+
+function activeSession(): PdfSidePanelSession | undefined {
+  if (currentSession?.tabId === activeTabId) return currentSession;
+  setStatus('当前标签页已切换，正在刷新 PDF 会话');
+  void loadActiveSession().catch(() => setStatus('无法读取当前 PDF 会话'));
+  return undefined;
 }
 
 function openFullSettings(): void {
@@ -115,13 +196,26 @@ function openFullSettings(): void {
 
 openSettings.addEventListener('click', openFullSettings);
 errorSettings.addEventListener('click', openFullSettings);
+formulaView.addEventListener('click', () => {
+  if (!currentSession?.result?.translatedText) return;
+  const rendered = formulaRenderOverride ?? autoRenderLatex;
+  formulaRenderOverride = !rendered;
+  render(currentSession);
+});
 
 retry.addEventListener('click', () => {
-  if (activeTabId === undefined) return;
-  void browser.runtime.sendMessage({
-    type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION',
-    payload: { tabId: activeTabId },
-  } satisfies RuntimeMessage);
+  const session = activeSession();
+  if (!session) return;
+  void (async () => {
+    const response = (await browser.runtime.sendMessage({
+      type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: session.tabId },
+    } satisfies RuntimeMessage)) as RuntimeResponse<{ started: true }>;
+    if (currentSession?.tabId !== session.tabId || activeTabId !== session.tabId) return;
+    if (!response.ok) {
+      setStatus(translationErrorMessage(response.error.code, response.error.message));
+    }
+  })().catch(() => setStatus('无法重新开始 PDF 翻译'));
 });
 
 copy.addEventListener('click', () => {
@@ -134,10 +228,19 @@ copy.addEventListener('click', () => {
 
 openPiReader.addEventListener('click', () => {
   void (async () => {
-    const source = parsePdfSourceUrl(currentSession?.pageUrl);
+    const session = activeSession();
+    if (!session) return;
+    const source = parsePdfSourceUrl(session.pageUrl);
     const sourceUrl = source?.href;
-    const pageNumber = currentSession?.pageNumber ?? pdfInitialPage(sourceUrl);
+    const pageNumber = session.pageNumber ?? pdfInitialPage(sourceUrl);
     if (sourceUrl) {
+      if (
+        source?.protocol === 'file:' &&
+        !(await browser.extension.isAllowedFileSchemeAccess())
+      ) {
+        setStatus('请先在扩展管理页开启“允许访问文件 URL”，再重新尝试');
+        return;
+      }
       const origin = pdfPermissionPattern(sourceUrl);
       if (origin) {
         const granted =
@@ -148,13 +251,13 @@ openPiReader.addEventListener('click', () => {
           return;
         }
       }
-      if (
-        source?.protocol === 'file:' &&
-        !(await browser.extension.isAllowedFileSchemeAccess())
-      ) {
-        setStatus('请先在扩展管理页开启“允许访问文件 URL”');
-        return;
-      }
+    }
+    if (
+      activeTabId !== session.tabId ||
+      !isSamePdfSidePanelSession(currentSession, session)
+    ) {
+      setStatus('标签页已切换，请在当前 PDF 中重新操作');
+      return;
     }
     const response = (await browser.runtime.sendMessage({
       type: 'OPEN_PDF_VIEWER',
@@ -169,7 +272,9 @@ openPiReader.addEventListener('click', () => {
     } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
     if (!sourceUrl) setStatus('请在 Pi 阅读器中选择本地 PDF');
-  })().catch(() => setStatus('无法打开 Pi PDF 阅读器'));
+  })().catch((error: unknown) => setStatus(
+    error instanceof Error ? error.message : '无法打开 Pi PDF 阅读器',
+  ));
 });
 
 browser.runtime.onMessage.addListener((message: unknown) => {
@@ -183,8 +288,28 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   }
 });
 
-browser.tabs.onActivated.addListener(() => {
-  void loadActiveSession();
+browser.tabs.onActivated.addListener((activated) => {
+  if (activeWindowId !== undefined && activated.windowId !== activeWindowId) return;
+  sessionLoadGate.invalidate();
+  activeTabId = activated.tabId;
+  render(undefined);
+  void loadActiveSession(activated).catch(() => setStatus('无法读取当前 PDF 会话'));
 });
 
-void loadActiveSession().catch(() => render(undefined));
+browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName !== 'local' || !changes.extensionSettings) return;
+  void getSettings().then((settings) => {
+    autoRenderLatex = settings.autoRenderLatex;
+    formulaRenderOverride = undefined;
+    render(currentSession);
+  });
+});
+
+void getSettings().then((settings) => {
+  autoRenderLatex = settings.autoRenderLatex;
+  render(currentSession);
+});
+void loadActiveSession().catch(() => {
+  render(undefined);
+  setStatus('无法读取当前 PDF 会话，请重新加载扩展后重试');
+});

@@ -80,6 +80,19 @@ export function parseStructuredTranslation(content: string): ProviderTranslation
         return [{ id: segment.id, translatedText: segment.translation }];
       })
     : undefined;
+  const termCandidates = Array.isArray(record.termCandidates)
+    ? record.termCandidates.flatMap((item) => {
+        if (!item || typeof item !== 'object') return [];
+        const term = item as Record<string, unknown>;
+        if (typeof term.source !== 'string' || typeof term.target !== 'string') return [];
+        const source = term.source.trim().replace(/\s+/gu, ' ').slice(0, 120);
+        const target = term.target.trim().replace(/\s+/gu, ' ').slice(0, 120);
+        if (!source || !target || source.toLocaleLowerCase() === target.toLocaleLowerCase()) {
+          return [];
+        }
+        return [{ source, target }];
+      }).slice(0, 3)
+    : undefined;
 
   return {
     translatedText: record.translation,
@@ -87,6 +100,7 @@ export function parseStructuredTranslation(content: string): ProviderTranslation
     warnings,
     structuredResponse: true,
     ...(alignedSegments?.length ? { alignedSegments } : {}),
+    ...(termCandidates?.length ? { termCandidates } : {}),
   };
 }
 

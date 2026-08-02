@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
-    <header class="toolbar">
+    <header id="pdf-toolbar" class="toolbar">
       <div class="brand" aria-label="Pi Translator PDF 阅读器">
         <img src="/brand/pi_logo.png" alt="" />
         <span><strong>Pi PDF</strong><small id="document-name">未打开文档</small></span>
@@ -15,20 +15,34 @@
       <div class="document-actions">
         <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
         <button id="choose-file" class="primary" type="button">打开 PDF</button>
-        <span id="page-count" class="page-count" hidden></span>
+        <label id="page-jump" class="page-jump" title="跳转到页码" hidden>
+          <input id="page-number" type="number" min="1" value="1" inputmode="numeric" aria-label="当前页码" />
+          <span aria-hidden="true">/</span>
+          <output id="page-count" aria-label="总页数">0</output>
+        </label>
       </div>
-      <button
-        id="region-translate"
-        class="region-action"
-        type="button"
-        aria-pressed="false"
-        title="框选图片或扫描文字进行翻译"
-        disabled
-      >框选翻译</button>
+      <div class="region-tools">
+        <button
+          id="region-translate"
+          class="region-action"
+          type="button"
+          aria-pressed="false"
+          title="框选图片或扫描文字进行翻译"
+          disabled
+        >框选翻译</button>
+        <button id="region-queue" class="queue-action" type="button" aria-expanded="false" hidden>
+          队列 <span id="region-queue-count">0</span>
+        </button>
+        <section id="region-queue-panel" class="queue-panel" aria-label="框选翻译队列" hidden>
+          <header><strong>翻译队列</strong><small>最多 3 项</small></header>
+          <div id="region-queue-list" class="queue-list"></div>
+        </section>
+      </div>
       <div class="zoom-controls" aria-label="缩放控制">
         <button id="zoom-out" type="button" title="缩小" disabled>−</button>
         <output id="zoom-value">125%</output>
         <button id="zoom-in" type="button" title="放大" disabled>＋</button>
+        <button id="fit-width" type="button" title="适合宽度" aria-label="适合宽度" disabled>↔</button>
       </div>
       <button id="open-settings" class="quiet" type="button">设置</button>
     </header>

@@ -1,6 +1,7 @@
 import { normalizeGlossaryEntries } from '../translation/glossary';
 import { normalizeApiBaseUrl } from './api-access';
 import { normalizeSiteAllowlist } from './site-access';
+import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
 import type { ApiProfile, ExtensionSettings } from './schema';
 
 const CONFIG_FORMAT = 'pi-translator-settings';
@@ -53,11 +54,14 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
       enableSessionCache: settings.enableSessionCache,
       historyLimit: settings.historyLimit,
       sentenceAlignmentDefault: settings.sentenceAlignmentDefault,
+      autoRenderLatex: settings.autoRenderLatex,
       sidebarSide: settings.sidebarSide,
       sidebarWidth: settings.sidebarWidth,
       contextMode: settings.contextMode,
       enableStreaming: settings.enableStreaming,
       protectSensitiveFields: settings.protectSensitiveFields,
+      pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
+      pdfRegionShortcutKey: settings.pdfRegionShortcutKey,
     },
   }, null, 2);
 }
@@ -147,11 +151,14 @@ export function importSettingsConfiguration(
     enableSessionCache: source.enableSessionCache !== false,
     historyLimit,
     sentenceAlignmentDefault: source.sentenceAlignmentDefault === true,
+    autoRenderLatex: source.autoRenderLatex !== false,
     sidebarSide: source.sidebarSide === 'left' ? 'left' : 'right',
     sidebarWidth,
     contextMode: oneOf(source.contextMode, ['off', 'sentence', 'paragraph'] as const, 'off'),
     enableStreaming: source.enableStreaming !== false,
     protectSensitiveFields: source.protectSensitiveFields !== false,
+    pdfKeyboardShortcutsEnabled: source.pdfKeyboardShortcutsEnabled !== false,
+    pdfRegionShortcutKey: normalizePdfRegionShortcutKey(source.pdfRegionShortcutKey),
     onboardingCompleted: true,
   };
 }

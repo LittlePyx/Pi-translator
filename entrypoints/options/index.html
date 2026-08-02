@@ -162,13 +162,13 @@
               <summary><span><strong>PDF 图像区域翻译</strong><small>可选；用于扫描版或文字不清晰的 PDF</small></span></summary>
               <div class="disclosure-content">
                 <div class="grid">
-                  <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可与日常文字翻译使用不同的 API Key。</small></label>
+                  <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>留空时，保存设置会自动检测当前 API；支持图片输入便会自动启用。也可手动选择不同配置。</small></label>
                   <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>
                 </div>
                 <p class="field-help">只在你确认框选后发送局部图片，不会上传完整 PDF；截图不会写入历史、缓存或诊断记录。</p>
                 <div class="vision-test-row">
                   <button id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
-                  <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 16×16 测试图，不含文档内容。</span>
+                  <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 130×58 高对比字符测试图，不含文档内容。</span>
                 </div>
               </div>
             </details>
@@ -180,6 +180,7 @@
             <div class="preference-panel">
               <label class="check-row preference-row"><input id="remember-history" type="checkbox" /><span><strong>记住最近翻译</strong><small>仅限当前标签页和浏览器会话。</small></span></label>
               <label class="check-row preference-row"><input id="alignment-default" type="checkbox" /><span><strong>默认打开逐句对照</strong><small>仍可在翻译卡片中即时切换。</small></span></label>
+              <label class="check-row preference-row"><input id="auto-render-latex" type="checkbox" /><span><strong>自动渲染 LaTeX 公式</strong><small>复制时仍保留可编辑的 LaTeX 源码；公式结果中可临时切换。</small></span></label>
             </div>
             <details class="advanced-panel">
               <summary><span><strong>更多结果设置</strong><small>历史数量、侧栏、上下文与流式显示</small></span></summary>
@@ -190,6 +191,8 @@
                 <label><span>上下文辅助</span><select id="context-mode"><option value="off">关闭（最少发送）</option><option value="sentence">使用所在句子</option><option value="paragraph">使用所在段落</option></select><small>上下文只用于消歧；最多发送 2,000 个字符。</small></label>
                 <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示译文；LaTeX 最终仍会完整校验</span></label>
                 <label class="check-row compact-check"><input id="protect-sensitive-fields" type="checkbox" /><span>连续翻译时跳过密码、验证码和支付字段</span></label>
+                <label class="check-row compact-check"><input id="pdf-keyboard-shortcuts" type="checkbox" /><span>在 Pi PDF 阅读区启用单键框选</span></label>
+                <label id="pdf-region-shortcut-field"><span>Pi PDF 框选键</span><input id="pdf-region-shortcut-key" type="text" maxlength="1" inputmode="text" autocomplete="off" spellcheck="false" aria-describedby="pdf-region-shortcut-help" /><small id="pdf-region-shortcut-help">按此键框选一次；Shift + 此键切换连续框选。输入框中不会触发。</small></label>
               </div>
             </details>
           </section>

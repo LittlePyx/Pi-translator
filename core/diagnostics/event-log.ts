@@ -5,12 +5,15 @@ const MAX_DIAGNOSTIC_EVENTS = 20;
 
 export type DiagnosticOperation =
   | 'translate'
+  | 'translate-finalization'
   | 'translate-image-region'
+  | 'translate-image-region-finalization'
   | 'test-connection'
   | 'test-vision-capability'
   | 'list-models'
   | 'api-diagnosis'
   | 'open-pdf-side-panel'
+  | 'resolve-pdf-context-tab'
   | 'translate-context-menu-selection';
 
 export interface LocalDiagnosticEvent {

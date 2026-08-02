@@ -8,10 +8,17 @@ import type {
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
-  TranslationFavorite,
   TranslationHistoryEntry,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
+import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
+import type { PdfSourceLocation } from '../translation/types';
+
+export interface DocumentMemoryLocator {
+  pageUrl: string;
+  sourceLabel?: string;
+  sourceLocation?: PdfSourceLocation;
+}
 
 export interface PublicSettings {
   sourceLanguage: 'auto' | string;
@@ -24,12 +31,15 @@ export interface PublicSettings {
   siteAllowlist: string[];
   pausedSiteHosts: string[];
   sentenceAlignmentDefault: boolean;
+  autoRenderLatex: boolean;
   historyLimit: HistoryLimit;
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
   enableStreaming: boolean;
   protectSensitiveFields: boolean;
+  pdfKeyboardShortcutsEnabled: boolean;
+  pdfRegionShortcutKey: string;
   activeApiProfileId: string;
   apiProfiles: Array<{ id: string; name: string; model: string }>;
 }
@@ -70,6 +80,7 @@ export interface PdfSidePanelSession {
 export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
+  | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
   | { type: 'OPEN_OPTIONS_PAGE' }
@@ -80,6 +91,16 @@ export type RuntimeMessage =
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
+  | { type: 'GET_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
+  | { type: 'CONFIRM_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { candidateId: string } }
+  | {
+      type: 'UPSERT_DOCUMENT_TERM';
+      payload: DocumentMemoryLocator & { term: { id?: string; source: string; target: string } };
+    }
+  | { type: 'REMOVE_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { termId: string } }
+  | { type: 'DISMISS_DOCUMENT_TERM_CANDIDATE'; payload: DocumentMemoryLocator & { candidateId: string } }
+  | { type: 'CLEAR_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
+  | { type: 'RENDER_LATEX_MATHML'; payload: { tex: string; displayMode: boolean } }
   | {
       type: 'TRANSLATION_PROGRESS';
       payload: {
@@ -87,6 +108,7 @@ export type RuntimeMessage =
         partialText?: string;
         completedChunks: number;
         totalChunks: number;
+        result?: TranslateResult;
       };
     }
   | { type: 'CONTEXT_MENU_TRANSLATE'; payload: SelectionSnapshot }
@@ -108,16 +130,6 @@ export type RuntimeMessage =
       type: 'DIAGNOSE_API';
       payload: { apiKey?: string; apiBaseUrl: string; model: string; profileId?: string };
     }
-  | { type: 'GET_TRANSLATION_HISTORY' }
-  | { type: 'CLEAR_TRANSLATION_HISTORY' }
-  | { type: 'DELETE_TRANSLATION_HISTORY'; payload: { historyId: string } }
-  | {
-      type: 'PIN_TRANSLATION_HISTORY';
-      payload: { historyId: string; pinned: boolean };
-    }
-  | { type: 'GET_TRANSLATION_FAVORITES'; payload?: { query?: string } }
-  | { type: 'ADD_TRANSLATION_FAVORITE'; payload: { result: TranslateResult } }
-  | { type: 'DELETE_TRANSLATION_FAVORITE'; payload: { favoriteId: string } }
   | { type: 'GET_LOCAL_DIAGNOSTIC_REPORT' };
 
 export type RuntimeResponse<T> =
@@ -145,13 +157,9 @@ export type VisionCapabilityTestResponse = RuntimeResponse<{
 export type ModelListResponse = RuntimeResponse<{ models: string[] }>;
 export type ApiDiagnosticResponse = RuntimeResponse<ApiDiagnosticReport>;
 export type PublicSettingsResponse = RuntimeResponse<PublicSettings>;
-export type TranslationHistoryResponse = RuntimeResponse<{
-  history: TranslationHistoryEntry[];
-}>;
-export type TranslationFavoritesResponse = RuntimeResponse<{
-  favorites: TranslationFavorite[];
-}>;
 export type LocalDiagnosticReportResponse = RuntimeResponse<{ report: string }>;
+export type DocumentMemoryResponse = RuntimeResponse<{ memory: DocumentMemorySnapshot }>;
+export type LatexMathMlResponse = RuntimeResponse<{ html?: string }>;
 
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
@@ -162,6 +170,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   return (
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
+    type === 'CAPTURE_VISIBLE_TAB' ||
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
     type === 'OPEN_OPTIONS_PAGE' ||
@@ -172,6 +181,13 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'OPEN_SIDEBAR' ||
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||
+    type === 'GET_DOCUMENT_MEMORY' ||
+    type === 'CONFIRM_DOCUMENT_TERM' ||
+    type === 'UPSERT_DOCUMENT_TERM' ||
+    type === 'REMOVE_DOCUMENT_TERM' ||
+    type === 'DISMISS_DOCUMENT_TERM_CANDIDATE' ||
+    type === 'CLEAR_DOCUMENT_MEMORY' ||
+    type === 'RENDER_LATEX_MATHML' ||
     type === 'TRANSLATION_PROGRESS' ||
     type === 'CONTEXT_MENU_TRANSLATE' ||
     type === 'GET_PUBLIC_SETTINGS' ||
@@ -180,13 +196,6 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'TEST_VISION_CAPABILITY' ||
     type === 'LIST_API_MODELS' ||
     type === 'DIAGNOSE_API' ||
-    type === 'GET_TRANSLATION_HISTORY' ||
-    type === 'CLEAR_TRANSLATION_HISTORY' ||
-    type === 'DELETE_TRANSLATION_HISTORY' ||
-    type === 'PIN_TRANSLATION_HISTORY' ||
-    type === 'GET_TRANSLATION_FAVORITES' ||
-    type === 'ADD_TRANSLATION_FAVORITE' ||
-    type === 'DELETE_TRANSLATION_FAVORITE' ||
     type === 'GET_LOCAL_DIAGNOSTIC_REPORT'
   );
 }

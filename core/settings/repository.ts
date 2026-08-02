@@ -7,11 +7,13 @@ import {
 } from './schema';
 import { normalizeGlossaryEntries } from '../translation/glossary';
 import type { GlossaryEntry } from '../translation/types';
+import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
 
 const SETTINGS_KEY = 'extensionSettings';
 const API_KEY_KEY = 'apiKey';
 const LEGACY_API_KEY_KEY = 'deepseekApiKey';
-const API_KEYS_KEY = 'apiKeysByProfile';
+export const API_KEYS_STORAGE_KEY = 'apiKeysByProfile';
+const API_KEYS_KEY = API_KEYS_STORAGE_KEY;
 
 function isSettings(value: unknown): value is Partial<ExtensionSettings> {
   return Boolean(value && typeof value === 'object');
@@ -85,8 +87,11 @@ export async function getSettings(): Promise<ExtensionSettings> {
       value.contextMode === 'sentence' || value.contextMode === 'paragraph'
         ? value.contextMode
         : 'off',
+    autoRenderLatex: value.autoRenderLatex !== false,
     enableStreaming: value.enableStreaming !== false,
     protectSensitiveFields: value.protectSensitiveFields !== false,
+    pdfKeyboardShortcutsEnabled: value.pdfKeyboardShortcutsEnabled !== false,
+    pdfRegionShortcutKey: normalizePdfRegionShortcutKey(value.pdfRegionShortcutKey),
     onboardingCompleted:
       typeof value.onboardingCompleted === 'boolean'
         ? value.onboardingCompleted

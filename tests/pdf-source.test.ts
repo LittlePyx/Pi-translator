@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   edgePdfSourceUrl,
+  isEdgePdfSidePanelTab,
   isEdgeNativePdfContext,
   isEdgeNativePdfViewerUrl,
+  isExtensionPdfReaderUrl,
   isLikelyPdfUrl,
   parsePdfSourceUrl,
   parseRemotePdfUrl,
@@ -10,10 +12,26 @@ import {
   pdfFilename,
   pdfInitialPage,
   pdfPermissionPattern,
+  pdfSidePanelOpenTarget,
+  resolvePdfContextTab,
   shouldOpenEdgePdfSidePanelImmediately,
 } from '../core/pdf/source';
 
 describe('PDF source helpers', () => {
+  it('identifies the extension PDF reader across Edge URL presentation variants', () => {
+    const reader = 'chrome-extension://pi-translator/pdf.html';
+    expect(isExtensionPdfReaderUrl(reader, reader)).toBe(true);
+    expect(isExtensionPdfReaderUrl(
+      'extension://pi-translator/pdf.html?url=https%3A%2F%2Fexample.com%2Fpaper.pdf',
+      reader,
+    )).toBe(true);
+    expect(isExtensionPdfReaderUrl(
+      'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/edge_pdf/index.html',
+      reader,
+    )).toBe(false);
+    expect(isExtensionPdfReaderUrl('https://example.com/pdf.html', reader)).toBe(false);
+  });
+
   it('accepts only remote HTTP sources', () => {
     expect(parseRemotePdfUrl('https://example.com/paper.pdf')?.hostname).toBe('example.com');
     expect(parseRemotePdfUrl('file:///private/paper.pdf')).toBeUndefined();
@@ -62,6 +80,18 @@ describe('Edge native PDF context', () => {
     expect(isEdgeNativePdfContext({ tabUrl: 'https://example.com/article' })).toBe(false);
   });
 
+  it('pre-enables the side panel only for Edge PDF tabs, never Pi PDF or webpages', () => {
+    const piReader = 'chrome-extension://pi-translator/pdf.html';
+    expect(isEdgePdfSidePanelTab(viewer, piReader)).toBe(true);
+    expect(isEdgePdfSidePanelTab('edge://pdf-viewer/index.html', piReader)).toBe(true);
+    expect(isEdgePdfSidePanelTab('https://example.com/paper.pdf', piReader)).toBe(true);
+    expect(isEdgePdfSidePanelTab(
+      'extension://pi-translator/pdf.html?url=https%3A%2F%2Fexample.com%2Fpaper.pdf',
+      piReader,
+    )).toBe(false);
+    expect(isEdgePdfSidePanelTab('https://example.com/article', piReader)).toBe(false);
+  });
+
   it('recovers remote and local source URLs from the viewer context', () => {
     expect(edgePdfSourceUrl({
       tabUrl: 'https://example.com/paper.pdf',
@@ -83,5 +113,62 @@ describe('Edge native PDF context', () => {
     expect(shouldOpenEdgePdfSidePanelImmediately({ pageUrl: viewer }, 12, 3)).toBe(false);
     expect(shouldOpenEdgePdfSidePanelImmediately({ tabUrl: 'https://example.com/article' }, -1, -1))
       .toBe(false);
+  });
+
+  it('chooses a synchronous side-panel target before resolving opaque PDF tabs', () => {
+    expect(pdfSidePanelOpenTarget({ id: 12, windowId: 3 })).toEqual({ tabId: 12 });
+    expect(pdfSidePanelOpenTarget({ id: -1, windowId: 3 })).toEqual({ windowId: 3 });
+    expect(pdfSidePanelOpenTarget({ id: -1, windowId: -1 })).toEqual({ windowId: -2 });
+    expect(pdfSidePanelOpenTarget(undefined, 99)).toEqual({ windowId: 99 });
+  });
+
+  it('resolves the correct PDF tab by document identity instead of guessing a window', () => {
+    const candidates = [
+      { id: 2, windowId: 10, url: 'https://example.com/other.pdf' },
+      { id: 3, windowId: 11, url: 'https://example.com/paper.pdf#page=8' },
+    ];
+    expect(resolvePdfContextTab(candidates, {
+      pageUrl: `${viewer}?file=${encodeURIComponent('https://example.com/paper.pdf#page=2')}`,
+    })?.id).toBe(3);
+    expect(resolvePdfContextTab(candidates, { pageUrl: viewer })).toBeUndefined();
+    expect(resolvePdfContextTab([candidates[0]!], { pageUrl: viewer })?.id).toBe(2);
+  });
+
+  it('falls back to one opaque native viewer when Edge hides the source URL', () => {
+    const sourceContext = {
+      pageUrl: `${viewer}?file=${encodeURIComponent('https://example.com/paper.pdf')}`,
+    };
+    expect(resolvePdfContextTab([
+      { id: 7, windowId: 3, url: 'edge://pdf-viewer/index.html' },
+    ], sourceContext)?.id).toBe(7);
+
+    expect(resolvePdfContextTab([
+      { id: 7, windowId: 3, url: 'edge://pdf-viewer/index.html' },
+      { id: 8, windowId: 4, url: viewer },
+    ], sourceContext)).toBeUndefined();
+  });
+
+  it('resolves the only active candidate when host access hides its URL', () => {
+    const sourceContext = {
+      pageUrl: `${viewer}?file=${encodeURIComponent('https://private.example/paper.pdf')}`,
+    };
+    expect(resolvePdfContextTab([
+      { id: 17, windowId: 5 },
+    ], sourceContext)?.id).toBe(17);
+    expect(resolvePdfContextTab([
+      { id: 17, windowId: 5 },
+      { id: 18, windowId: 6 },
+    ], sourceContext)).toBeUndefined();
+    expect(resolvePdfContextTab([
+      { id: 19, windowId: 5 },
+    ], { pageUrl: viewer })?.id).toBe(19);
+  });
+
+  it('never falls back to a different identifiable PDF document', () => {
+    expect(resolvePdfContextTab([
+      { id: 9, windowId: 3, url: 'https://example.com/other.pdf' },
+    ], {
+      pageUrl: `${viewer}?file=${encodeURIComponent('https://example.com/paper.pdf')}`,
+    })).toBeUndefined();
   });
 });

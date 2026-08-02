@@ -6,6 +6,15 @@ export interface GlossaryEntry {
   target: string;
 }
 
+export interface PdfSourceLocation {
+  documentId: string;
+  pageNumber: number;
+  leftRatio: number;
+  topRatio: number;
+  widthRatio: number;
+  heightRatio: number;
+}
+
 export interface TranslateRequest {
   requestId: string;
   text: string;
@@ -17,6 +26,7 @@ export interface TranslateRequest {
   contentMode: TranslationContentMode;
   contextText?: string;
   bypassCache?: boolean;
+  sourceLocation?: PdfSourceLocation;
 }
 
 export interface TranslateImageRegionRequest {
@@ -24,11 +34,14 @@ export interface TranslateImageRegionRequest {
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
+  recognizedTextHint?: string;
   pageUrl: string;
   sourceLabel?: string;
   targetLanguage: string;
   sourceLanguage: 'auto' | string;
   style: TranslationStyle;
+  bypassCache?: boolean;
+  sourceLocation?: PdfSourceLocation;
 }
 
 export type TranslationWarningCode =
@@ -56,20 +69,27 @@ export interface TranslateResult {
   latencyMs?: number;
   contextUsed?: boolean;
   chunkCount?: number;
-  sourceKind?: 'text' | 'image-region';
+  sourceKind?: 'text' | 'pdf-region-text' | 'image-region';
+  sourceLocation?: PdfSourceLocation;
   uncertainSpans?: string[];
+  formulaLatex?: string[];
+  formulaNeedsReview?: boolean;
+  termCandidates?: GlossaryEntry[];
 }
 
 export interface ProviderImageTranslationResult {
   recognizedText: string;
   translatedText: string;
   uncertainSpans: string[];
+  formulaLatex: string[];
+  formulaNeedsReview?: boolean;
 }
 
 export interface ImageTranslationInput {
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
+  recognizedTextHint?: string;
 }
 
 export interface ImageTranslationOptions {
@@ -77,6 +97,7 @@ export interface ImageTranslationOptions {
   sourceLanguage: 'auto' | string;
   targetLanguage: string;
   style: TranslationStyle;
+  glossary?: GlossaryEntry[];
 }
 
 export interface TranslationSegment {
@@ -88,12 +109,6 @@ export interface TranslationSegment {
 export interface TranslationHistoryEntry extends TranslateResult {
   historyId: string;
   createdAt: number;
-  pinned?: boolean;
-}
-
-export interface TranslationFavorite extends TranslateResult {
-  favoriteId: string;
-  createdAt: number;
 }
 
 export interface ProviderTranslationResult {
@@ -102,6 +117,7 @@ export interface ProviderTranslationResult {
   warnings: string[];
   alignedSegments?: ProviderTranslationSegment[];
   structuredResponse?: boolean;
+  termCandidates?: GlossaryEntry[];
 }
 
 export interface ProviderTranslationSegment {

@@ -38,11 +38,14 @@ export interface ExtensionSettingsV8 {
   enableSessionCache: boolean;
   historyLimit: HistoryLimit;
   sentenceAlignmentDefault: boolean;
+  autoRenderLatex: boolean;
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
   enableStreaming: boolean;
   protectSensitiveFields: boolean;
+  pdfKeyboardShortcutsEnabled: boolean;
+  pdfRegionShortcutKey: string;
   onboardingCompleted: boolean;
 }
 
@@ -80,10 +83,13 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   enableSessionCache: true,
   historyLimit: 5,
   sentenceAlignmentDefault: false,
+  autoRenderLatex: true,
   sidebarSide: 'right',
   sidebarWidth: 390,
   contextMode: 'off',
   enableStreaming: true,
   protectSensitiveFields: true,
+  pdfKeyboardShortcutsEnabled: true,
+  pdfRegionShortcutKey: 'r',
   onboardingCompleted: false,
 };

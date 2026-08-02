@@ -2,6 +2,7 @@ import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/p
 import {
   getLocalDiagnosticEvents,
   recordLocalDiagnosticError,
+  type DiagnosticOperation,
 } from '../core/diagnostics/event-log';
 import { toTranslationError, TranslationError } from '../core/messaging/errors';
 import {
@@ -39,9 +40,6 @@ import { OpenAiCompatibleTranslator } from '../core/translation/openai-compatibl
 import {
   addTranslationHistory,
   clearTranslationHistory,
-  deleteTranslationHistoryEntry,
-  getTranslationHistory,
-  setTranslationHistoryPinned,
 } from '../core/translation/history-repository';
 import {
   cacheTranslation,
@@ -49,26 +47,59 @@ import {
   getCachedTranslation,
   translationCacheKey,
 } from '../core/translation/cache-repository';
+import {
+  cacheImageRegionTranslation,
+  clearImageRegionTranslationCache,
+  getCachedImageRegionTranslation,
+  imageRegionCacheKey,
+} from '../core/translation/image-region-cache-repository';
+import {
+  clearTranslationCheckpoint,
+  getTranslationCheckpoint,
+  saveTranslationCheckpoint,
+  type TranslationCheckpointChunk,
+} from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
+import { invalidateTranslationStateForApiKeyChange } from '../core/translation/credential-change';
 import {
   edgePdfSourceUrl,
+  isEdgePdfSidePanelTab,
   isEdgeNativePdfContext,
+  isExtensionPdfReaderUrl,
   parsePdfSourceUrl,
   pdfDocumentIdentity,
   pdfFilename,
   pdfInitialPage,
+  pdfSidePanelOpenTarget,
+  resolvePdfContextTab,
   shouldOpenEdgePdfSidePanelImmediately,
 } from '../core/pdf/source';
+import { normalizePdfSelectionText } from '../core/pdf/text-normalizer';
+import { documentIdentity } from '../core/document/document-identity';
 import {
-  addTranslationFavorite,
-  deleteTranslationFavorite,
-  getTranslationFavorites,
-} from '../core/translation/favorites-repository';
+  buildDocumentReferenceContext,
+  clearDocumentMemory,
+  confirmDocumentTerm,
+  dismissDocumentTermCandidate,
+  getDocumentMemory,
+  mergeDocumentGlossary,
+  rememberDocumentTranslation,
+  removeDocumentTerm,
+  upsertDocumentTerm,
+} from '../core/document/document-memory-repository';
+import {
+  isSamePdfSidePanelSession,
+  reopenExistingPdfSidePanelFromUserGesture,
+  removeStoredPdfSidePanelSession,
+  restorePdfSidePanelSessions,
+  storePdfSidePanelSession,
+} from '../core/pdf/sidepanel-session';
 import type {
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
+  TranslationHistoryEntry,
   TranslationSegment,
 } from '../core/translation/types';
 
@@ -77,9 +108,85 @@ const LEGACY_CONTEXT_MENU_ID = 'translate-selection-with-deepseek';
 const GENERAL_CONTENT_SCRIPT_ID = 'pi-translator-general-pages';
 const GENERAL_CONTENT_SCRIPT_FILE = '/content-scripts/general.js';
 const PDF_SIDE_PANEL_PATH = 'sidepanel.html';
+const PI_PDF_READER_URL = browser.runtime.getURL('/pdf.html');
+const LEGACY_FAVORITES_KEY = 'translationFavorites';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
 const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
+const piPdfReaderTabIds = new Set<number>();
+const activeTabIdsByWindow = new Map<number, number>();
+let lastActiveBrowserTab: { id: number; windowId: number } | undefined;
+
+function rememberActiveBrowserTab(tabId: number, windowId: number): void {
+  if (tabId < 0 || windowId < 0) return;
+  activeTabIdsByWindow.set(windowId, tabId);
+  lastActiveBrowserTab = { id: tabId, windowId };
+}
+
+function immediatePdfSidePanelTab(
+  tab?: { id?: number | undefined; windowId?: number | undefined },
+): { id?: number | undefined; windowId?: number | undefined } | undefined {
+  if (tab?.id !== undefined && tab.id >= 0) return tab;
+  if (tab?.windowId !== undefined && tab.windowId >= 0) {
+    const cachedTabId = activeTabIdsByWindow.get(tab.windowId);
+    if (cachedTabId !== undefined) {
+      return { id: cachedTabId, windowId: tab.windowId };
+    }
+    return tab;
+  }
+  return lastActiveBrowserTab ?? tab;
+}
+
+function beginActiveRequest(tabId: number, requestId: string): AbortController {
+  activeRequests.get(tabId)?.controller.abort();
+  const controller = new AbortController();
+  activeRequests.set(tabId, { requestId, controller });
+  return controller;
+}
+
+function assertActiveRequest(
+  tabId: number,
+  requestId: string,
+  controller: AbortController,
+): void {
+  const current = activeRequests.get(tabId);
+  if (
+    controller.signal.aborted ||
+    current?.requestId !== requestId ||
+    current.controller !== controller
+  ) {
+    throw new TranslationError('REQUEST_ABORTED', 'The request was replaced.');
+  }
+}
+
+function translationBehaviorFingerprint(value: unknown): string {
+  if (!value || typeof value !== 'object') return '';
+  const settings = value as Record<string, unknown>;
+  return JSON.stringify({
+    provider: settings.provider,
+    activeApiProfileId: settings.activeApiProfileId,
+    apiBaseUrl: settings.apiBaseUrl,
+    model: settings.model,
+    sourceLanguage: settings.sourceLanguage,
+    targetLanguage: settings.targetLanguage,
+    style: settings.style,
+    contentMode: settings.contentMode,
+    academicGlossary: settings.academicGlossary,
+    contextMode: settings.contextMode,
+  });
+}
+
+function sourceHostForRequest(
+  request: Pick<TranslateRequest | TranslateImageRegionRequest, 'pageUrl' | 'sourceLabel'>,
+): string | undefined {
+  const sourceLabel = request.sourceLabel?.trim().slice(0, 120);
+  if (sourceLabel) return sourceLabel;
+  try {
+    return new URL(request.pageUrl).hostname || undefined;
+  } catch {
+    return undefined;
+  }
+}
 
 function toPublicSettings(
   settings: Awaited<ReturnType<typeof getSettings>>,
@@ -97,12 +204,15 @@ function toPublicSettings(
     siteAllowlist: settings.siteAllowlist,
     pausedSiteHosts,
     sentenceAlignmentDefault: settings.sentenceAlignmentDefault,
+    autoRenderLatex: settings.autoRenderLatex,
     historyLimit: settings.historyLimit,
     sidebarSide: settings.sidebarSide,
     sidebarWidth: settings.sidebarWidth,
     contextMode: settings.contextMode,
     enableStreaming: settings.enableStreaming,
     protectSensitiveFields: settings.protectSensitiveFields,
+    pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
+    pdfRegionShortcutKey: settings.pdfRegionShortcutKey,
     activeApiProfileId: settings.activeApiProfileId,
     apiProfiles: settings.apiProfiles.map(({ id, name, model }) => ({ id, name, model })),
   };
@@ -150,8 +260,12 @@ function pdfPageFromContext(
   return undefined;
 }
 
-function publishPdfSidePanelSession(session: PdfSidePanelSession): void {
+function publishPdfSidePanelSession(
+  session: PdfSidePanelSession,
+  persist = true,
+): void {
   pdfSidePanelSessions.set(session.tabId, session);
+  if (persist) void storePdfSidePanelSession(session).catch(() => undefined);
   void browser.runtime.sendMessage({
     type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
     payload: session,
@@ -175,12 +289,40 @@ function publishTranslationProgress(
 
   const session = pdfSidePanelSessions.get(tabId);
   if (session?.requestId !== payload.requestId) return;
+  if (payload.result) {
+    publishPdfSidePanelSession({
+      ...session,
+      status: 'complete',
+      result: payload.result,
+      partialText: payload.result.translatedText,
+      completedChunks: payload.totalChunks,
+      totalChunks: payload.totalChunks,
+    });
+    return;
+  }
   publishPdfSidePanelSession({
     ...session,
     ...(payload.partialText ? { partialText: payload.partialText } : {}),
     completedChunks: payload.completedChunks,
     totalChunks: payload.totalChunks,
-  });
+  }, false);
+}
+
+async function settleTranslationFinalization(
+  scope: DiagnosticOperation,
+  historyTask: Promise<TranslationHistoryEntry[]>,
+  maintenanceTasks: Promise<unknown>[],
+): Promise<TranslationHistoryEntry[]> {
+  const [historyOutcome, ...maintenanceOutcomes] = await Promise.allSettled([
+    historyTask,
+    ...maintenanceTasks,
+  ]);
+  for (const outcome of [historyOutcome, ...maintenanceOutcomes]) {
+    if (outcome.status === 'rejected') {
+      void recordLocalDiagnosticError(scope, outcome.reason);
+    }
+  }
+  return historyOutcome.status === 'fulfilled' ? historyOutcome.value : [];
 }
 
 function progressTargetForSender(senderUrl: string | undefined): TranslationProgressTarget {
@@ -188,46 +330,64 @@ function progressTargetForSender(senderUrl: string | undefined): TranslationProg
   return senderUrl?.startsWith(pdfUrl) ? 'runtime' : 'tab';
 }
 
-async function beginPdfSidePanelTranslation(tabId: number): Promise<void> {
+async function beginPdfSidePanelTranslation(
+  tabId: number,
+  expectedRequestId?: string,
+): Promise<void> {
   const session = pdfSidePanelSessions.get(tabId);
-  if (!session) return;
-  const settings = await getSettings();
-  const response = await translate({
-    requestId: session.requestId,
-    text: session.sourceText,
-    pageUrl: session.pageUrl,
-    sourceLabel: session.sourceLabel,
-    targetLanguage: settings.targetLanguage,
-    sourceLanguage: settings.sourceLanguage,
-    style: settings.style,
-    contentMode: settings.contentMode,
-  }, tabId);
-  const current = pdfSidePanelSessions.get(tabId);
-  if (current?.requestId !== session.requestId) return;
-  if (response.ok) {
+  if (!session || (expectedRequestId && session.requestId !== expectedRequestId)) return;
+  try {
+    const settings = await getSettings();
+    const response = await translate({
+      requestId: session.requestId,
+      text: normalizePdfSelectionText(session.sourceText),
+      pageUrl: session.pageUrl,
+      sourceLabel: session.sourceLabel,
+      targetLanguage: settings.targetLanguage,
+      sourceLanguage: settings.sourceLanguage,
+      style: settings.style,
+      contentMode: settings.contentMode,
+    }, tabId);
+    const current = pdfSidePanelSessions.get(tabId);
+    if (current?.requestId !== session.requestId) return;
+    if (response.ok) {
+      publishPdfSidePanelSession({
+        ...current,
+        status: 'complete',
+        result: response.data.result,
+        partialText: response.data.result.translatedText,
+        completedChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
+        totalChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
+      });
+      return;
+    }
     publishPdfSidePanelSession({
       ...current,
-      status: 'complete',
-      result: response.data.result,
-      partialText: response.data.result.translatedText,
-      completedChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
-      totalChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
+      status: 'error',
+      error: response.error,
     });
-    return;
+  } catch (error) {
+    const current = pdfSidePanelSessions.get(tabId);
+    if (current?.requestId !== session.requestId) return;
+    const normalized = toTranslationError(error);
+    publishPdfSidePanelSession({
+      ...current,
+      status: 'error',
+      error: {
+        code: normalized.code,
+        message: normalized.message,
+        retryable: normalized.retryable,
+      },
+    });
   }
-  publishPdfSidePanelSession({
-    ...current,
-    status: 'error',
-    error: response.error,
-  });
 }
 
-function startPdfSidePanelTranslation(
+function preparePdfSidePanelTranslation(
   tabId: number,
   sourceText: string,
   sourceUrl: string | undefined,
   pageNumber?: number,
-): void {
+): PdfSidePanelSession {
   const session: PdfSidePanelSession = {
     tabId,
     requestId: crypto.randomUUID(),
@@ -241,15 +401,15 @@ function startPdfSidePanelTranslation(
     totalChunks: 1,
   };
   publishPdfSidePanelSession(session);
-  void beginPdfSidePanelTranslation(tabId);
+  return session;
 }
 
 function showPdfSidePanelSelectionError(
   tabId: number,
   sourceUrl: string | undefined,
   pageNumber?: number,
-): void {
-  publishPdfSidePanelSession({
+): PdfSidePanelSession {
+  const session: PdfSidePanelSession = {
     tabId,
     requestId: crypto.randomUUID(),
     sourceText: '',
@@ -263,17 +423,35 @@ function showPdfSidePanelSelectionError(
       message: 'Edge 没有把 PDF 选区文字传递给扩展，请重新选择文字后再试，或使用 Pi PDF 阅读器。',
       retryable: false,
     },
-  });
+  };
+  publishPdfSidePanelSession(session);
+  return session;
 }
 
 function getNativeChromeApi(): {
   sidePanel?: typeof browser.sidePanel;
   tabs?: typeof browser.tabs;
+  contextMenus?: {
+    onShown?: {
+      addListener(callback: (
+        info: { contexts: string[]; pageUrl?: string; frameUrl?: string },
+        tab: { id?: number; windowId?: number; url?: string },
+      ) => void): void;
+    };
+  };
 } | undefined {
   return (globalThis as typeof globalThis & {
     chrome?: {
       sidePanel?: typeof browser.sidePanel;
       tabs?: typeof browser.tabs;
+      contextMenus?: {
+        onShown?: {
+          addListener(callback: (
+            info: { contexts: string[]; pageUrl?: string; frameUrl?: string },
+            tab: { id?: number; windowId?: number; url?: string },
+          ) => void): void;
+        };
+      };
     };
   }).chrome;
 }
@@ -293,22 +471,118 @@ async function setPdfSidePanelEnabled(tabId: number, enabled: boolean): Promise<
   });
 }
 
-async function isolatePdfSidePanelToTab(tabId: number): Promise<void> {
-  const tabs = await browser.tabs.query({});
-  await Promise.all(tabs.flatMap((tab) => {
-    if (tab.id === undefined) return [];
-    const enabled = tab.id === tabId || pdfSidePanelSessions.has(tab.id);
-    return [setPdfSidePanelEnabled(tab.id, enabled).catch(() => undefined)];
-  }));
+let pdfSidePanelInitialization: Promise<void> = Promise.resolve();
+let pdfSidePanelInitializationStarted = false;
+let pdfSidePanelOptionsTail: Promise<void> = Promise.resolve();
+
+function initializePdfSidePanelSessions(): Promise<void> {
+  if (pdfSidePanelInitializationStarted) return pdfSidePanelInitialization;
+  pdfSidePanelInitializationStarted = true;
+  pdfSidePanelInitialization = (async () => {
+    const tabs = await browser.tabs.query({});
+    for (const tab of tabs) {
+      if (
+        tab.id !== undefined &&
+        isExtensionPdfReaderUrl(tab.url, PI_PDF_READER_URL)
+      ) {
+        piPdfReaderTabIds.add(tab.id);
+      }
+      if (tab.active && tab.id !== undefined) {
+        rememberActiveBrowserTab(tab.id, tab.windowId);
+      }
+    }
+    const restored = await restorePdfSidePanelSessions(tabs);
+    for (const session of restored) {
+      if (!pdfSidePanelSessions.has(session.tabId)) {
+        publishPdfSidePanelSession(session, false);
+      }
+    }
+  })().catch((error: unknown) => {
+    pdfSidePanelInitializationStarted = false;
+    throw error;
+  });
+  return pdfSidePanelInitialization;
 }
 
-async function initializePdfSidePanelIsolation(): Promise<void> {
-  const tabs = await browser.tabs.query({});
-  await Promise.all(tabs.flatMap((tab) =>
-    tab.id === undefined
-      ? []
-      : [setPdfSidePanelEnabled(tab.id, false).catch(() => undefined)],
-  ));
+function queuePdfSidePanelOptionsSync(): Promise<void> {
+  const next = pdfSidePanelOptionsTail.catch(() => undefined).then(async () => {
+    await initializePdfSidePanelSessions();
+    const tabs = await browser.tabs.query({});
+    await Promise.all(tabs.flatMap((tab) =>
+      tab.id === undefined
+        ? []
+        : [setPdfSidePanelEnabled(
+            tab.id,
+            !piPdfReaderTabIds.has(tab.id) && (
+              pdfSidePanelSessions.has(tab.id) ||
+                isEdgePdfSidePanelTab(tab.url, PI_PDF_READER_URL) ||
+                // Tab.url is intentionally unavailable on sites for which the
+                // user has not granted host access. Treating that as a normal
+                // page used to disable native PDF tabs before the menu click.
+                tab.url === undefined
+            ),
+          )],
+    ));
+  });
+  pdfSidePanelOptionsTail = next;
+  return next;
+}
+
+function beginPdfSidePanelOpenFromUserGesture(
+  tab?: { id?: number | undefined; windowId?: number | undefined },
+): Promise<unknown> | undefined {
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi) return undefined;
+  let openPromise: Promise<unknown>;
+  try {
+    openPromise = sidePanelApi.open(
+      pdfSidePanelOpenTarget(immediatePdfSidePanelTab(tab)),
+    );
+  } catch (error) {
+    openPromise = Promise.reject(error);
+  }
+  // The real handler is attached as soon as Edge resolves the actual PDF tab.
+  // Attach a rejection observer immediately so a very fast API rejection does
+  // not become an unhandled promise while tabs.query is still in flight.
+  void openPromise.catch(() => undefined);
+  return openPromise;
+}
+
+function publishPdfSidePanelTargetError(
+  tabId: number | undefined,
+  sourceUrl: string | undefined,
+): void {
+  const error = new TranslationError(
+    'UNSUPPORTED_PAGE',
+    '无法确认触发右键菜单的 PDF 标签页，请保持该 PDF 为当前标签后重试。',
+    true,
+  );
+  void recordLocalDiagnosticError('resolve-pdf-context-tab', error);
+  if (tabId !== undefined && tabId >= 0) {
+    publishPdfSidePanelSession({
+      tabId,
+      requestId: crypto.randomUUID(),
+      sourceText: '',
+      pageUrl: sourceUrl ?? 'edge://pdf',
+      sourceLabel: sourceUrl ? pdfFilename(sourceUrl, 'PDF') : 'PDF',
+      status: 'error',
+      startedAt: Date.now(),
+      error: {
+        code: error.code,
+        message: error.message,
+        retryable: error.retryable,
+      },
+    });
+  }
+  void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
+  void browser.action.setBadgeText({
+    ...(tabId !== undefined && tabId >= 0 ? { tabId } : {}),
+    text: '!',
+  });
+  void browser.action.setTitle({
+    ...(tabId !== undefined && tabId >= 0 ? { tabId } : {}),
+    title: '无法确认当前 PDF 标签页，请保持 PDF 为当前标签后重试',
+  });
 }
 
 function openPdfTranslationSidePanel(
@@ -316,17 +590,26 @@ function openPdfTranslationSidePanel(
   sourceText: string | undefined,
   sourceUrl: string | undefined,
   pageNumber?: number,
+  userGestureOpenPromise?: Promise<unknown>,
 ): void {
-  if (sourceText?.trim()) {
-    startPdfSidePanelTranslation(tab.id, sourceText, sourceUrl, pageNumber);
-  } else {
-    showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
-  }
+  const hasSelection = Boolean(sourceText?.trim());
+  const session = hasSelection
+    ? preparePdfSidePanelTranslation(tab.id, sourceText!, sourceUrl, pageNumber)
+    : showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
 
   // Prefer the native Chrome namespace here. Edge exposes both namespaces,
   // but sidePanel is defined and documented on chrome.sidePanel.
   const sidePanelApi = getSidePanelApi();
   if (!sidePanelApi) {
+    publishPdfSidePanelSession({
+      ...session,
+      status: 'error',
+      error: {
+        code: 'UNSUPPORTED_PAGE',
+        message: '当前 Edge 版本无法打开扩展侧边栏，翻译请求尚未发送。',
+        retryable: true,
+      },
+    });
     void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
     void browser.action.setTitle({
       tabId: tab.id,
@@ -334,23 +617,32 @@ function openPdfTranslationSidePanel(
     });
     return;
   }
-  void isolatePdfSidePanelToTab(tab.id);
-  // Issue setOptions and open back-to-back. Awaiting between them can consume
-  // Chromium's short-lived context-menu user gesture.
-  void sidePanelApi.setOptions({
-    tabId: tab.id,
-    path: PDF_SIDE_PANEL_PATH,
-    enabled: true,
-  }).catch((error: unknown) => {
-    void recordLocalDiagnosticError('open-pdf-side-panel', error);
-  });
-  void sidePanelApi.open({ tabId: tab.id }).then(
+  // PDF tabs are enabled ahead of time by queuePdfSidePanelOptionsSync(). The
+  // click handler must call open() directly during the user gesture; racing a
+  // just-in-time setOptions() against open() is unreliable in Edge.
+  const openPromise = userGestureOpenPromise ?? beginPdfSidePanelOpenFromUserGesture(tab);
+  if (!openPromise) return;
+  void openPromise.then(
     () => {
+      if (hasSelection) void beginPdfSidePanelTranslation(tab.id, session.requestId);
+      void queuePdfSidePanelOptionsSync().catch(() => undefined);
       void browser.action.setBadgeText({ tabId: tab.id, text: '' });
       void browser.action.setTitle({ tabId: tab.id, title: 'Pi Translator' });
     },
     (error: unknown) => {
       void recordLocalDiagnosticError('open-pdf-side-panel', error);
+      const current = pdfSidePanelSessions.get(tab.id);
+      if (!isSamePdfSidePanelSession(current, session)) return;
+      publishPdfSidePanelSession({
+        ...current,
+        status: 'error',
+        error: {
+          code: 'UNSUPPORTED_PAGE',
+          message: 'PDF 侧边栏打开失败，翻译请求尚未发送。请重新加载扩展后重试。',
+          retryable: true,
+        },
+      });
+      void queuePdfSidePanelOptionsSync().catch(() => undefined);
       void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
       void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
       void browser.action.setTitle({
@@ -361,8 +653,8 @@ function openPdfTranslationSidePanel(
   );
 }
 
-async function closePdfSidePanelAfterOpeningViewer(
-  tab: { id?: number | undefined; windowId: number },
+async function disableSidePanelForPiPdfViewer(
+  tab: { id?: number | undefined },
 ): Promise<void> {
   const sidePanelApi = getSidePanelApi();
   if (!sidePanelApi) return;
@@ -370,20 +662,12 @@ async function closePdfSidePanelAfterOpeningViewer(
   // Pi PDF already has its own compact translation card, so the extension
   // side panel is deliberately unavailable on this one tab.
   if (tab.id !== undefined) {
+    piPdfReaderTabIds.add(tab.id);
     await sidePanelApi.setOptions({ tabId: tab.id, enabled: false }).catch(
       () => undefined,
     );
   }
-
-  if (typeof sidePanelApi.close === 'function') {
-    try {
-      await sidePanelApi.close({ windowId: tab.windowId });
-      return;
-    } catch {
-      // Older Edge builds can expose the method before fully supporting it.
-      // The tab-specific disable below keeps the Pi PDF page uncluttered.
-    }
-  }
+  void queuePdfSidePanelOptionsSync().catch(() => undefined);
 }
 
 function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ started: true }>> {
@@ -405,7 +689,7 @@ function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ 
   delete nextSession.result;
   delete nextSession.error;
   publishPdfSidePanelSession(nextSession);
-  void beginPdfSidePanelTranslation(tabId);
+  void beginPdfSidePanelTranslation(tabId, nextSession.requestId);
   return Promise.resolve({ ok: true, data: { started: true } });
 }
 
@@ -541,56 +825,122 @@ async function translate(
     );
   }
 
+  const controller = beginActiveRequest(tabId, request.requestId);
   try {
-    const previous = activeRequests.get(tabId);
-    if (previous?.requestId !== request.requestId) previous?.controller.abort();
     const settings = await getSettings();
-    const cacheKey = translationCacheKey(request, {
+    assertActiveRequest(tabId, request.requestId, controller);
+    const identity = documentIdentity(request);
+    const documentMemory = await getDocumentMemory(identity);
+    assertActiveRequest(tabId, request.requestId, controller);
+    const glossary = mergeDocumentGlossary(settings.academicGlossary, documentMemory);
+    const contextText = buildDocumentReferenceContext(
+      text,
+      request.contextText,
+      documentMemory,
+    );
+    const effectiveRequest: TranslateRequest = contextText
+      ? { ...request, contextText }
+      : request;
+    const cacheKey = translationCacheKey(effectiveRequest, {
       apiBaseUrl: settings.apiBaseUrl,
       model: settings.model,
-      glossary: settings.academicGlossary,
+      glossary,
     });
+    const chunks = splitLongTranslationText(text);
+    const checkpoint = await getTranslationCheckpoint(tabId, cacheKey, chunks);
+    assertActiveRequest(tabId, request.requestId, controller);
     if (settings.enableSessionCache && !request.bypassCache) {
-      const cached = await getCachedTranslation(tabId, cacheKey, request.requestId);
+      const cached = await getCachedTranslation(
+        tabId,
+        cacheKey,
+        request.requestId,
+        sourceHostForRequest(request),
+        request.sourceLocation,
+      );
+      assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
-        const history = settings.rememberRecentTranslations
-          ? await addTranslationHistory(tabId, cached, settings.historyLimit)
-          : [];
+        publishTranslationProgress(tabId, {
+          requestId: request.requestId,
+          partialText: cached.translatedText,
+          completedChunks: cached.chunkCount ?? 1,
+          totalChunks: cached.chunkCount ?? 1,
+          result: cached,
+        }, progressTarget);
+        const history = await settleTranslationFinalization(
+          'translate-finalization',
+          settings.rememberRecentTranslations
+            ? addTranslationHistory(tabId, cached, settings.historyLimit)
+            : Promise.resolve([]),
+          [
+            clearTranslationCheckpoint(tabId, cacheKey),
+            rememberDocumentTranslation(identity, cached),
+          ],
+        );
+        assertActiveRequest(tabId, request.requestId, controller);
         return { ok: true, data: { result: cached, history } };
       }
     }
 
     const apiKey = await getApiKey(settings.activeApiProfileId);
+    assertActiveRequest(tabId, request.requestId, controller);
     if (!apiKey) {
       throw new TranslationError('NO_API_KEY', 'Configure an API Key first.');
     }
     const apiPermission = apiOriginPattern(settings.apiBaseUrl);
-    if (!(await browser.permissions.contains({ origins: [apiPermission] }))) {
+    const permissionGranted = await browser.permissions.contains({ origins: [apiPermission] });
+    assertActiveRequest(tabId, request.requestId, controller);
+    if (!permissionGranted) {
       throw new TranslationError(
         'API_PERMISSION_REQUIRED',
         `Permission for ${apiPermission} is required.`,
       );
     }
-    const controller = new AbortController();
-    activeRequests.set(tabId, { requestId: request.requestId, controller });
     const startedAt = performance.now();
     const protect = shouldProtectLatex(request.contentMode, request.pageUrl, text);
-    const chunks = splitLongTranslationText(text);
-    const translatedChunks: string[] = [];
-    const warnings: TranslateResult['warnings'] = [];
-    const combinedSegments: TranslationSegment[] = [];
-    let alignmentComplete = true;
-    let detectedLanguage: string | undefined;
+    const completedCheckpointChunks: TranslationCheckpointChunk[] =
+      checkpoint?.completedChunks.map((chunk) => ({ ...chunk })) ?? [];
+    const translatedChunks = completedCheckpointChunks.map((chunk) => chunk.translatedText);
+    const warnings: TranslateResult['warnings'] = completedCheckpointChunks.flatMap(
+      (chunk) => chunk.warnings,
+    );
+    const alignmentCompleteFromCheckpoint = completedCheckpointChunks.every(
+      (chunk) => Boolean(chunk.alignedSegments?.length),
+    );
+    const combinedSegments: TranslationSegment[] = alignmentCompleteFromCheckpoint
+      ? completedCheckpointChunks.flatMap((chunk) => chunk.alignedSegments ?? [])
+      : [];
+    let alignmentComplete = alignmentCompleteFromCheckpoint;
+    let detectedLanguage = completedCheckpointChunks.find(
+      (chunk) => Boolean(chunk.detectedLanguage),
+    )?.detectedLanguage;
+    const termCandidates = completedCheckpointChunks.flatMap(
+      (chunk) => chunk.termCandidates ?? [],
+    );
 
-    for (let chunkIndex = 0; chunkIndex < chunks.length; chunkIndex += 1) {
+    if (completedCheckpointChunks.length) {
+      publishTranslationProgress(tabId, {
+        requestId: request.requestId,
+        partialText: translatedChunks.join('\n\n'),
+        completedChunks: completedCheckpointChunks.length,
+        totalChunks: chunks.length,
+      }, progressTarget);
+    }
+
+    for (
+      let chunkIndex = completedCheckpointChunks.length;
+      chunkIndex < chunks.length;
+      chunkIndex += 1
+    ) {
       const chunk = chunks[chunkIndex]!;
       const protectedLatex = protect ? protectLatex(chunk, `FULL${chunkIndex + 1}`) : undefined;
       const sourceSegments = splitTranslationSegments(chunk, request.sourceLanguage).map(
         (segment) => ({ ...segment, id: `C${chunkIndex + 1}${segment.id}` }),
       );
+      const requestProviderAlignment =
+        settings.sentenceAlignmentDefault && sourceSegments.length > 1;
       const preparedSegments = sourceSegments.map((segment, index) => ({
         source: segment,
-        protected: protect
+        protected: protect && requestProviderAlignment
           ? protectLatex(segment.text, `C${chunkIndex + 1}SEG${index + 1}`)
           : undefined,
       }));
@@ -600,6 +950,7 @@ async function translate(
       const callbacks = settings.enableStreaming
         ? {
             onPartialText: (partialText: string) => {
+              if (activeRequests.get(tabId)?.controller !== controller) return;
               const visiblePartial = protectedLatex
                 ? restoreLatexPreview(partialText, protectedLatex)
                 : partialText;
@@ -625,11 +976,15 @@ async function translate(
             (segment) => segment.protected?.fragments.map((fragment) => fragment.token) ?? [],
           ),
         ],
-        segments: preparedSegments.map((segment) => ({
-          id: segment.source.id,
-          text: segment.protected?.protectedText ?? segment.source.text,
-        })),
-        ...(request.contextText ? { contextText: request.contextText } : {}),
+        ...(requestProviderAlignment
+          ? {
+              segments: preparedSegments.map((segment) => ({
+                id: segment.source.id,
+                text: segment.protected?.protectedText ?? segment.source.text,
+              })),
+            }
+          : {}),
+        ...(contextText ? { contextText } : {}),
       };
       const { providerResult, restored } = await translateWithLatexRetry(
         translator,
@@ -639,27 +994,31 @@ async function translate(
           sourceLanguage: request.sourceLanguage,
           targetLanguage: request.targetLanguage,
           style: request.style,
-          glossary: settings.academicGlossary,
+          glossary,
         },
         { apiKey, apiBaseUrl: settings.apiBaseUrl },
         controller.signal,
         protectedLatex,
         callbacks,
       );
-      const current = activeRequests.get(tabId);
-      if (current?.requestId !== request.requestId) {
-        throw new TranslationError('REQUEST_ABORTED', 'The request was replaced.');
-      }
+      assertActiveRequest(tabId, request.requestId, controller);
 
       detectedLanguage ??= providerResult.detectedLanguage;
       translatedChunks.push(restored.text);
       warnings.push(...restored.warnings);
-      if (providerResult.alignedSegments?.length === preparedSegments.length) {
+      if (providerResult.termCandidates?.length) {
+        termCandidates.push(...providerResult.termCandidates);
+      }
+      let checkpointAlignedSegments: TranslationSegment[] | undefined;
+      if (
+        requestProviderAlignment &&
+        providerResult.alignedSegments?.length === preparedSegments.length
+      ) {
         try {
           const translatedById = new Map(
             providerResult.alignedSegments.map((segment) => [segment.id, segment.translatedText]),
           );
-          combinedSegments.push(...preparedSegments.map(({ source, protected: protectedSegment }) => {
+          checkpointAlignedSegments = preparedSegments.map(({ source, protected: protectedSegment }) => {
             const translated = translatedById.get(source.id);
             if (!translated) throw new Error(`Missing aligned segment ${source.id}.`);
             return {
@@ -669,26 +1028,58 @@ async function translate(
                 ? restoreLatex(translated, protectedSegment).text
                 : translated,
             };
-          }));
+          });
+          if (alignmentComplete) combinedSegments.push(...checkpointAlignedSegments);
         } catch {
           combinedSegments.length = 0;
           alignmentComplete = false;
         }
+      } else if (!requestProviderAlignment) {
+        const translatedSegments = splitTranslationSegments(
+          restored.text,
+          request.targetLanguage,
+        );
+        if (translatedSegments.length === sourceSegments.length) {
+          checkpointAlignedSegments = sourceSegments.map((source, index) => ({
+            id: source.id,
+            originalText: source.text,
+            translatedText: translatedSegments[index]!.text,
+          }));
+          if (alignmentComplete) combinedSegments.push(...checkpointAlignedSegments);
+        } else {
+          combinedSegments.length = 0;
+          alignmentComplete = false;
+        }
       } else alignmentComplete = false;
+      const completedCheckpointChunk: TranslationCheckpointChunk = {
+        sourceText: chunk,
+        translatedText: restored.text,
+        warnings: restored.warnings,
+        ...(providerResult.detectedLanguage
+          ? { detectedLanguage: providerResult.detectedLanguage }
+          : {}),
+        ...(checkpointAlignedSegments ? { alignedSegments: checkpointAlignedSegments } : {}),
+        ...(providerResult.termCandidates?.length
+          ? { termCandidates: providerResult.termCandidates }
+          : {}),
+      };
+      completedCheckpointChunks.push(completedCheckpointChunk);
+      if (chunkIndex < chunks.length - 1) {
+        await saveTranslationCheckpoint(
+          tabId,
+          cacheKey,
+          chunks,
+          completedCheckpointChunks,
+        );
+        assertActiveRequest(tabId, request.requestId, controller);
+      }
       publishTranslationProgress(tabId, {
         requestId: request.requestId,
         completedChunks: chunkIndex + 1,
         totalChunks: chunks.length,
       }, progressTarget);
     }
-    let sourceHost = request.sourceLabel?.trim().slice(0, 120) || undefined;
-    if (!sourceHost) {
-      try {
-        sourceHost = new URL(request.pageUrl).hostname;
-      } catch {
-        sourceHost = undefined;
-      }
-    }
+    const sourceHost = sourceHostForRequest(request);
     const result: TranslateResult = {
       requestId: request.requestId,
       originalText: text,
@@ -699,20 +1090,45 @@ async function translate(
         ? { alignedSegments: combinedSegments }
         : {}),
       ...(sourceHost ? { sourceHost } : {}),
+      sourceKind: request.sourceLocation ? 'pdf-region-text' : 'text',
+      ...(request.sourceLocation ? { sourceLocation: request.sourceLocation } : {}),
       targetLanguage: request.targetLanguage,
       style: request.style,
       completedAt: Date.now(),
       cached: false,
       latencyMs: Math.round(performance.now() - startedAt),
-      contextUsed: Boolean(request.contextText),
+      contextUsed: Boolean(contextText),
       chunkCount: chunks.length,
+      ...(termCandidates.length
+        ? {
+            termCandidates: [...new Map(
+              termCandidates.map((term) => [term.source.trim().toLocaleLowerCase(), term]),
+            ).values()].slice(0, 6),
+          }
+        : {}),
     };
-    if (settings.enableSessionCache) {
-      await cacheTranslation(tabId, cacheKey, result);
-    }
-    const history = settings.rememberRecentTranslations
-      ? await addTranslationHistory(tabId, result, settings.historyLimit)
-      : [];
+    assertActiveRequest(tabId, request.requestId, controller);
+    publishTranslationProgress(tabId, {
+      requestId: request.requestId,
+      partialText: result.translatedText,
+      completedChunks: chunks.length,
+      totalChunks: chunks.length,
+      result,
+    }, progressTarget);
+    const history = await settleTranslationFinalization(
+      'translate-finalization',
+      settings.rememberRecentTranslations
+        ? addTranslationHistory(tabId, result, settings.historyLimit)
+        : Promise.resolve([]),
+      [
+      settings.enableSessionCache
+        ? cacheTranslation(tabId, cacheKey, result)
+        : Promise.resolve(),
+      clearTranslationCheckpoint(tabId, cacheKey),
+      rememberDocumentTranslation(identity, result),
+      ],
+    );
+    assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
     await recordLocalDiagnosticError('translate', error);
@@ -761,33 +1177,84 @@ async function translateImageRegion(
   tabId: number,
   progressTarget: TranslationProgressTarget,
 ): Promise<TranslateRuntimeResponse> {
+  validateImageRegionRequest(request);
+  const controller = beginActiveRequest(tabId, request.requestId);
   try {
-    validateImageRegionRequest(request);
-    const previous = activeRequests.get(tabId);
-    if (previous?.requestId !== request.requestId) previous?.controller.abort();
+    // A region request represents different source content and cannot resume a
+    // text checkpoint. Clear it without ever storing the captured image.
+    await clearTranslationCheckpoint(tabId);
+    assertActiveRequest(tabId, request.requestId, controller);
     const settings = await getSettings();
-    const profile = settings.apiProfiles.find(
+    assertActiveRequest(tabId, request.requestId, controller);
+    const identity = documentIdentity(request);
+    const documentMemory = await getDocumentMemory(identity);
+    assertActiveRequest(tabId, request.requestId, controller);
+    const glossary = mergeDocumentGlossary(settings.academicGlossary, documentMemory);
+    const configuredVisionProfile = settings.apiProfiles.find(
       (candidate) => candidate.id === settings.visionApiProfileId,
     );
-    if (!profile || !settings.visionModel.trim()) {
+    const profile = configuredVisionProfile ?? settings.apiProfiles.find(
+      (candidate) => candidate.id === settings.activeApiProfileId,
+    );
+    const visionModel = configuredVisionProfile && settings.visionModel.trim()
+      ? settings.visionModel.trim()
+      : profile?.model.trim() ?? '';
+    const autoSelectedVisionProfile = !configuredVisionProfile || !settings.visionModel.trim();
+    if (!profile || !visionModel) {
       throw new TranslationError(
         'VISION_NOT_CONFIGURED',
-        'Select a vision API profile and model in extension settings.',
+        'Configure an API profile and model in extension settings first.',
       );
     }
+    const sourceHost = sourceHostForRequest(request);
+    const cacheKey = await imageRegionCacheKey(request, {
+      apiBaseUrl: profile.apiBaseUrl,
+      model: visionModel,
+      glossary,
+    });
+    assertActiveRequest(tabId, request.requestId, controller);
+    if (settings.enableSessionCache && !request.bypassCache) {
+      const cached = await getCachedImageRegionTranslation(
+        tabId,
+        cacheKey,
+        request.requestId,
+        sourceHost,
+        request.sourceLocation,
+      );
+      assertActiveRequest(tabId, request.requestId, controller);
+      if (cached) {
+        publishTranslationProgress(tabId, {
+          requestId: request.requestId,
+          partialText: cached.translatedText,
+          completedChunks: 1,
+          totalChunks: 1,
+          result: cached,
+        }, progressTarget);
+        const history = await settleTranslationFinalization(
+          'translate-image-region-finalization',
+          settings.rememberRecentTranslations
+            ? addTranslationHistory(tabId, cached, settings.historyLimit)
+            : Promise.resolve([]),
+          [rememberDocumentTranslation(identity, cached)],
+        );
+        assertActiveRequest(tabId, request.requestId, controller);
+        return { ok: true, data: { result: cached, history } };
+      }
+    }
     const apiKey = await getApiKey(profile.id);
+    assertActiveRequest(tabId, request.requestId, controller);
     if (!apiKey) {
       throw new TranslationError('NO_API_KEY', `Configure an API Key for ${profile.name} first.`);
     }
     const apiPermission = apiOriginPattern(profile.apiBaseUrl);
-    if (!(await browser.permissions.contains({ origins: [apiPermission] }))) {
+    const permissionGranted = await browser.permissions.contains({ origins: [apiPermission] });
+    assertActiveRequest(tabId, request.requestId, controller);
+    if (!permissionGranted) {
       throw new TranslationError(
         'API_PERMISSION_REQUIRED',
         `Permission for ${apiPermission} is required.`,
       );
     }
-    const controller = new AbortController();
-    activeRequests.set(tabId, { requestId: request.requestId, controller });
     const startedAt = performance.now();
     let lastPartial = '';
     let lastProgressAt = 0;
@@ -796,18 +1263,23 @@ async function translateImageRegion(
         imageDataUrl: request.imageDataUrl,
         imageWidth: request.imageWidth,
         imageHeight: request.imageHeight,
+        ...(request.recognizedTextHint
+          ? { recognizedTextHint: request.recognizedTextHint }
+          : {}),
       },
       {
-        model: settings.visionModel,
+        model: visionModel,
         sourceLanguage: request.sourceLanguage,
         targetLanguage: request.targetLanguage,
         style: request.style,
+        glossary,
       },
       { apiKey, apiBaseUrl: profile.apiBaseUrl },
       controller.signal,
       settings.enableStreaming
         ? {
             onPartialText: (partialText) => {
+              if (activeRequests.get(tabId)?.controller !== controller) return;
               if (!partialText || partialText === lastPartial) return;
               const now = performance.now();
               if (now - lastProgressAt < 80) return;
@@ -823,17 +1295,22 @@ async function translateImageRegion(
           }
         : undefined,
     );
-    if (activeRequests.get(tabId)?.requestId !== request.requestId) {
-      throw new TranslationError('REQUEST_ABORTED', 'The request was replaced.');
-    }
-    let sourceHost = request.sourceLabel?.trim().slice(0, 120) || undefined;
-    if (!sourceHost) {
-      try {
-        sourceHost = new URL(request.pageUrl).hostname;
-      } catch {
-        sourceHost = undefined;
-      }
-    }
+    assertActiveRequest(tabId, request.requestId, controller);
+    const visionProfileMaintenance = autoSelectedVisionProfile
+      ? (async () => {
+          const latestSettings = await getSettings();
+          const profileStillAvailable = latestSettings.apiProfiles.some(
+            (candidate) => candidate.id === profile.id,
+          );
+          if (!latestSettings.visionApiProfileId && profileStillAvailable) {
+            await saveSettings({
+              ...latestSettings,
+              visionApiProfileId: profile.id,
+              visionModel,
+            });
+          }
+        })()
+      : Promise.resolve();
     const result: TranslateResult = {
       requestId: request.requestId,
       originalText: providerResult.recognizedText,
@@ -842,8 +1319,13 @@ async function translateImageRegion(
       ...(providerResult.uncertainSpans.length
         ? { uncertainSpans: providerResult.uncertainSpans }
         : {}),
+      ...(providerResult.formulaLatex.length
+        ? { formulaLatex: providerResult.formulaLatex }
+        : {}),
+      ...(providerResult.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
       ...(sourceHost ? { sourceHost } : {}),
       sourceKind: 'image-region',
+      ...(request.sourceLocation ? { sourceLocation: request.sourceLocation } : {}),
       targetLanguage: request.targetLanguage,
       style: request.style,
       completedAt: Date.now(),
@@ -854,12 +1336,26 @@ async function translateImageRegion(
     };
     publishTranslationProgress(tabId, {
       requestId: request.requestId,
+      partialText: result.translatedText,
       completedChunks: 1,
       totalChunks: 1,
+      result,
     }, progressTarget);
-    const history = settings.rememberRecentTranslations
-      ? await addTranslationHistory(tabId, result, settings.historyLimit)
-      : [];
+    assertActiveRequest(tabId, request.requestId, controller);
+    const history = await settleTranslationFinalization(
+      'translate-image-region-finalization',
+      settings.rememberRecentTranslations
+        ? addTranslationHistory(tabId, result, settings.historyLimit)
+        : Promise.resolve([]),
+      [
+      settings.enableSessionCache
+        ? cacheImageRegionTranslation(tabId, cacheKey, result)
+        : Promise.resolve(),
+      visionProfileMaintenance,
+      rememberDocumentTranslation(identity, result),
+      ],
+    );
+    assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
     await recordLocalDiagnosticError('translate-image-region', error);
@@ -1101,12 +1597,17 @@ async function sendContextMenuTranslationToWebPage(
 export default defineBackground(() => {
   void restrictSensitiveStorageAccess();
   void synchronizeContextMenu();
-  void initializePdfSidePanelIsolation();
+  void initializePdfSidePanelSessions()
+    .then(() => queuePdfSidePanelOptionsSync())
+    .catch(() => undefined);
   scheduleGeneralPageAccessSync();
 
   browser.runtime.onInstalled.addListener((details) => {
     void synchronizeContextMenu();
     scheduleGeneralPageAccessSync();
+    // Favorites were removed from the product UI. Delete the now-inaccessible
+    // legacy records on upgrade instead of retaining hidden page content.
+    void browser.storage.local.remove(LEGACY_FAVORITES_KEY);
     if (details.reason === 'install') {
       void browser.runtime.openOptionsPage();
     }
@@ -1114,7 +1615,9 @@ export default defineBackground(() => {
 
   browser.runtime.onStartup.addListener(() => {
     void synchronizeContextMenu();
-    void initializePdfSidePanelIsolation();
+    void initializePdfSidePanelSessions()
+      .then(() => queuePdfSidePanelOptionsSync())
+      .catch(() => undefined);
     scheduleGeneralPageAccessSync();
   });
 
@@ -1123,6 +1626,15 @@ export default defineBackground(() => {
   });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
+    void invalidateTranslationStateForApiKeyChange(
+      areaName,
+      changes,
+      () => {
+        for (const active of activeRequests.values()) active.controller.abort();
+        activeRequests.clear();
+      },
+      () => clearTranslationCheckpoint(),
+    ).catch(() => undefined);
     if (areaName === 'local' && 'extensionSettings' in changes) {
       void synchronizeContextMenu();
       scheduleGeneralPageAccessSync();
@@ -1133,11 +1645,47 @@ export default defineBackground(() => {
       if (next?.rememberRecentTranslations === false) {
         void clearTranslationHistory();
       }
-      if (next?.enableSessionCache === false) void clearTranslationCache();
+      if (next?.enableSessionCache === false) {
+        void clearTranslationCache();
+        void clearImageRegionTranslationCache();
+      }
+      if (
+        translationBehaviorFingerprint(changes.extensionSettings?.oldValue) !==
+        translationBehaviorFingerprint(changes.extensionSettings?.newValue)
+      ) {
+        for (const active of activeRequests.values()) active.controller.abort();
+        activeRequests.clear();
+        void clearTranslationCheckpoint();
+      }
     }
     if (areaName === 'session' && 'pausedSiteHosts' in changes) {
       void broadcastPublicSettings();
     }
+  });
+
+  getNativeChromeApi()?.contextMenus?.onShown?.addListener((info, tab) => {
+    if (!info.contexts.includes('selection')) return;
+    const contextUrls = {
+      ...(tab?.url ? { tabUrl: tab.url } : {}),
+      ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
+      ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
+    };
+    if (!isEdgeNativePdfContext(contextUrls)) return;
+    if (
+      [contextUrls.tabUrl, contextUrls.pageUrl, contextUrls.frameUrl]
+        .some((url) => isExtensionPdfReaderUrl(url, PI_PDF_READER_URL))
+    ) {
+      return;
+    }
+    const target = immediatePdfSidePanelTab(tab);
+    if (target?.id === undefined || target.id < 0) return;
+    // Edge exposes the native viewer context here before the user chooses a
+    // menu item. This is the last reliable opportunity to clear a stale
+    // tab-specific `enabled: false` override without consuming the click's
+    // user gesture.
+    void setPdfSidePanelEnabled(target.id, true).catch((error: unknown) => {
+      void recordLocalDiagnosticError('open-pdf-side-panel', error);
+    });
   });
 
   browser.contextMenus.onClicked.addListener((info, tab) => {
@@ -1148,39 +1696,99 @@ export default defineBackground(() => {
       ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
       ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
     };
+    if (
+      [eventContextUrls.tabUrl, eventContextUrls.pageUrl, eventContextUrls.frameUrl]
+        .some((url) => isExtensionPdfReaderUrl(url, PI_PDF_READER_URL))
+    ) {
+      // Pi PDF owns its compact in-page translator. Forward the selection to
+      // that page and never re-enable Edge's native side panel for this tab.
+      if (info.selectionText?.trim() && tab?.url) {
+        const snapshot = createContextMenuSnapshot(info.selectionText, tab.url);
+        void browser.runtime.sendMessage({
+          type: 'CONTEXT_MENU_TRANSLATE',
+          payload: snapshot,
+        } satisfies RuntimeMessage).catch(() => undefined);
+      }
+      return;
+    }
+
+    if (
+      tab?.id !== undefined &&
+      tab.id >= 0 &&
+      isEdgeNativePdfContext(eventContextUrls)
+    ) {
+      const sourceUrl = edgePdfSourceUrl(eventContextUrls);
+      const userGestureOpenPromise = beginPdfSidePanelOpenFromUserGesture(tab);
+      openPdfTranslationSidePanel(
+        { id: tab.id, windowId: tab.windowId },
+        info.selectionText,
+        sourceUrl,
+        pdfPageFromContext(eventContextUrls, sourceUrl),
+        userGestureOpenPromise,
+      );
+      return;
+    }
+
     if (shouldOpenEdgePdfSidePanelImmediately(
       eventContextUrls,
       tab?.id,
       tab?.windowId,
     )) {
       const nativeChrome = getNativeChromeApi();
-      if (nativeChrome?.tabs && nativeChrome.sidePanel) {
-        nativeChrome.tabs.query(
-          { active: true, lastFocusedWindow: true },
-          ([resolvedTab]) => {
-            if (
-              resolvedTab?.id === undefined ||
-              resolvedTab.id < 0 ||
-              resolvedTab.windowId < 0
-            ) {
-              return;
-            }
-            const contextUrls = {
-              ...(resolvedTab.url ? { tabUrl: resolvedTab.url } : {}),
-              ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
-              ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
-            };
-            const sourceUrl = edgePdfSourceUrl(contextUrls);
-            openPdfTranslationSidePanel(
-              { id: resolvedTab.id, windowId: resolvedTab.windowId },
-              info.selectionText,
-              sourceUrl,
-              pdfPageFromContext(contextUrls, sourceUrl),
-            );
-          },
-        );
+      // Invoke open() before any query/await. Edge requires sidePanel.open() to
+      // run directly from the context-menu user gesture. The PDF tab itself was
+      // enabled earlier by queuePdfSidePanelOptionsSync().
+      const userGestureOpenPromise = beginPdfSidePanelOpenFromUserGesture(tab);
+      if (!userGestureOpenPromise) {
+        publishPdfSidePanelTargetError(undefined, edgePdfSourceUrl(eventContextUrls));
         return;
       }
+      const handleCandidateTabs = (candidateTabs: Array<{
+        id?: number | undefined;
+        windowId?: number | undefined;
+        url?: string | undefined;
+      }>) => {
+        const resolvedTab = resolvePdfContextTab(candidateTabs, eventContextUrls);
+        if (
+          resolvedTab?.id === undefined ||
+          resolvedTab.id < 0 ||
+          resolvedTab.windowId < 0
+        ) {
+          const onlyCandidate = candidateTabs.length === 1 &&
+            candidateTabs[0]?.id !== undefined &&
+            candidateTabs[0].id >= 0
+            ? candidateTabs[0]
+            : undefined;
+          publishPdfSidePanelTargetError(
+            onlyCandidate?.id,
+            edgePdfSourceUrl(eventContextUrls),
+          );
+          return;
+        }
+        const contextUrls = {
+          ...(resolvedTab.url ? { tabUrl: resolvedTab.url } : {}),
+          ...(info.pageUrl ? { pageUrl: info.pageUrl } : {}),
+          ...(info.frameUrl ? { frameUrl: info.frameUrl } : {}),
+        };
+        const sourceUrl = edgePdfSourceUrl(contextUrls);
+        openPdfTranslationSidePanel(
+          { id: resolvedTab.id, windowId: resolvedTab.windowId },
+          info.selectionText,
+          sourceUrl,
+          pdfPageFromContext(contextUrls, sourceUrl),
+          userGestureOpenPromise,
+        );
+      };
+      const query = { active: true, lastFocusedWindow: true } as const;
+      if (nativeChrome?.tabs) {
+        nativeChrome.tabs.query(query, handleCandidateTabs);
+      } else {
+        void browser.tabs.query(query).then(handleCandidateTabs).catch((error: unknown) => {
+          void recordLocalDiagnosticError('resolve-pdf-context-tab', error);
+          publishPdfSidePanelTargetError(undefined, edgePdfSourceUrl(eventContextUrls));
+        });
+      }
+      return;
     }
 
     void (async () => {
@@ -1193,10 +1801,10 @@ export default defineBackground(() => {
         resolvedTab.id < 0 ||
         resolvedTab.windowId < 0
       ) {
-        [resolvedTab] = await browser.tabs.query({
-          active: true,
-          lastFocusedWindow: true,
-        });
+        resolvedTab = resolvePdfContextTab(
+          await browser.tabs.query({ active: true, lastFocusedWindow: true }),
+          eventContextUrls,
+        );
       }
       if (
         resolvedTab?.id === undefined ||
@@ -1246,6 +1854,49 @@ export default defineBackground(() => {
 
   browser.commands.onCommand.addListener((command, tab) => {
     if (command !== 'translate-selection' || tab?.id === undefined) return;
+    const recovery = reopenExistingPdfSidePanelFromUserGesture(
+      tab,
+      (tabId) => (
+        // On a cold MV3 service-worker start, storage restoration can still be
+        // pending when the keyboard gesture arrives. The command grants
+        // activeTab access, so the PDF URL is available synchronously and lets
+        // us call open() before the user-gesture window closes.
+        !piPdfReaderTabIds.has(tabId) && (
+          pdfSidePanelSessions.has(tabId) ||
+          isEdgePdfSidePanelTab(tab.url, PI_PDF_READER_URL)
+        )
+      ),
+      beginPdfSidePanelOpenFromUserGesture,
+    );
+    if (recovery.matchedSession) {
+      // Do not await or query tabs before open(): Edge only accepts this call
+      // while the keyboard command's user gesture is still active.
+      if (!recovery.openPromise) {
+        void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
+        void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
+        void browser.action.setTitle({
+          tabId: tab.id,
+          title: '当前 Edge 版本未提供侧边栏接口',
+        });
+        return;
+      }
+      void recovery.openPromise.then(
+        () => {
+          void browser.action.setBadgeText({ tabId: tab.id, text: '' });
+          void browser.action.setTitle({ tabId: tab.id, title: 'Pi Translator' });
+        },
+        (error: unknown) => {
+          void recordLocalDiagnosticError('open-pdf-side-panel', error);
+          void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
+          void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
+          void browser.action.setTitle({
+            tabId: tab.id,
+            title: 'PDF 侧边栏恢复失败，请重新加载扩展后重试',
+          });
+        },
+      );
+      return;
+    }
     void sendToSelectionContentScript(tab, {
       type: 'TRIGGER_TRANSLATE',
     }).catch(() => undefined);
@@ -1256,16 +1907,37 @@ export default defineBackground(() => {
     activeRequests.delete(tabId);
     void clearTranslationHistory(tabId);
     void clearTranslationCache(tabId);
+    void clearImageRegionTranslationCache(tabId);
+    void clearTranslationCheckpoint(tabId);
     pdfSidePanelSessions.delete(tabId);
+    piPdfReaderTabIds.delete(tabId);
+    for (const [windowId, activeTabId] of activeTabIdsByWindow) {
+      if (activeTabId === tabId) activeTabIdsByWindow.delete(windowId);
+    }
+    if (lastActiveBrowserTab?.id === tabId) lastActiveBrowserTab = undefined;
+    void removeStoredPdfSidePanelSession(tabId).catch(() => undefined);
+    void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
 
-  browser.tabs.onCreated.addListener((tab) => {
-    if (tab.id === undefined) return;
-    void setPdfSidePanelEnabled(tab.id, false).catch(() => undefined);
+  browser.tabs.onCreated.addListener(() => {
+    void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
 
-  browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
+  browser.tabs.onActivated.addListener(({ tabId, windowId }) => {
+    rememberActiveBrowserTab(tabId, windowId);
+    // Keep the active native PDF tab ready before a context-menu click. This
+    // lets sidePanel.open() be the only browser API needed during the gesture.
+    void queuePdfSidePanelOptionsSync().catch(() => undefined);
+  });
+
+  browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+    if (tab.active) rememberActiveBrowserTab(tabId, tab.windowId);
     if (!changeInfo.url) return;
+    if (isExtensionPdfReaderUrl(changeInfo.url, PI_PDF_READER_URL)) {
+      piPdfReaderTabIds.add(tabId);
+    } else {
+      piPdfReaderTabIds.delete(tabId);
+    }
     const session = pdfSidePanelSessions.get(tabId);
     if (session) {
       const previousSource = pdfDocumentIdentity(session.pageUrl);
@@ -1282,9 +1954,15 @@ export default defineBackground(() => {
         }
         return;
       }
+      activeRequests.get(tabId)?.controller.abort();
+      activeRequests.delete(tabId);
       pdfSidePanelSessions.delete(tabId);
+      void removeStoredPdfSidePanelSession(tabId).catch(() => undefined);
     }
-    void setPdfSidePanelEnabled(tabId, false).catch(() => undefined);
+    activeRequests.get(tabId)?.controller.abort();
+    activeRequests.delete(tabId);
+    void clearTranslationCheckpoint(tabId);
+    void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
 
   browser.runtime.onMessage.addListener(
@@ -1298,6 +1976,17 @@ export default defineBackground(() => {
             data: toPublicSettings(settings, pausedSiteHosts),
           }),
         );
+      }
+
+      if (message.type === 'RENDER_LATEX_MATHML') {
+        const tex = message.payload.tex.trim();
+        if (!tex || tex.length > 10_000) {
+          return Promise.resolve({ ok: true as const, data: {} });
+        }
+        return import('../core/translation/latex-mathml').then(({ renderLatexMathMl }) => {
+          const html = renderLatexMathMl(tex, message.payload.displayMode);
+          return { ok: true as const, data: { ...(html ? { html } : {}) } };
+        }).catch(() => ({ ok: true as const, data: {} }));
       }
 
       if (message.type === 'GET_LOCAL_DIAGNOSTIC_REPORT') {
@@ -1328,23 +2017,24 @@ export default defineBackground(() => {
         return browser.tabs
           .create({ url: viewerUrl.href, active: true })
           .then(async (tab) => {
-            await closePdfSidePanelAfterOpeningViewer(tab);
+            await disableSidePanelForPiPdfViewer(tab);
             return { ok: true as const, data: { opened: true } };
           })
           .catch((error: unknown) => errorResponse(error));
       }
 
       if (message.type === 'GET_PDF_SIDE_PANEL_SESSION') {
-        return Promise.resolve({
+        return initializePdfSidePanelSessions().then(() => ({
           ok: true as const,
           data: {
             session: pdfSidePanelSessions.get(message.payload.tabId) ?? null,
           },
-        });
+        }));
       }
 
       if (message.type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION') {
-        return retryPdfSidePanelTranslation(message.payload.tabId);
+        return initializePdfSidePanelSessions().then(() =>
+          retryPdfSidePanelTranslation(message.payload.tabId));
       }
 
       if (message.type === 'PDF_SIDE_PANEL_SESSION_UPDATED') {
@@ -1376,6 +2066,50 @@ export default defineBackground(() => {
         }));
       }
 
+      if (message.type === 'GET_DOCUMENT_MEMORY') {
+        return getDocumentMemory(documentIdentity(message.payload))
+          .then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'CONFIRM_DOCUMENT_TERM') {
+        return confirmDocumentTerm(
+          documentIdentity(message.payload),
+          message.payload.candidateId,
+        ).then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'UPSERT_DOCUMENT_TERM') {
+        return upsertDocumentTerm(
+          documentIdentity(message.payload),
+          message.payload.term,
+        ).then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'REMOVE_DOCUMENT_TERM') {
+        return removeDocumentTerm(
+          documentIdentity(message.payload),
+          message.payload.termId,
+        ).then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'DISMISS_DOCUMENT_TERM_CANDIDATE') {
+        return dismissDocumentTermCandidate(
+          documentIdentity(message.payload),
+          message.payload.candidateId,
+        ).then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'CLEAR_DOCUMENT_MEMORY') {
+        return clearDocumentMemory(documentIdentity(message.payload))
+          .then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
       if (message.type === 'CANCEL_TRANSLATION') {
         const tabId = sender.tab?.id;
         const active = tabId === undefined ? undefined : activeRequests.get(tabId);
@@ -1383,10 +2117,26 @@ export default defineBackground(() => {
         if (cancelled) {
           active.controller.abort();
         }
-        return Promise.resolve({
-          ok: true,
+        return (cancelled ? clearTranslationCheckpoint(tabId) : Promise.resolve()).then(() => ({
+          ok: true as const,
           data: { cancelled },
-        });
+        }));
+      }
+
+      if (message.type === 'CAPTURE_VISIBLE_TAB') {
+        const windowId = sender.tab?.windowId;
+        const tabUrl = sender.tab?.url;
+        if (windowId === undefined || !tabUrl || !isInjectableWebUrl(tabUrl)) {
+          return Promise.resolve(errorResponse(
+            new TranslationError('UNSUPPORTED_PAGE', 'This page cannot be captured.'),
+          ));
+        }
+        return browser.tabs.captureVisibleTab(windowId, { format: 'png' })
+          .then((imageDataUrl) => ({
+            ok: true as const,
+            data: { imageDataUrl },
+          }))
+          .catch((error: unknown) => errorResponse(error));
       }
 
       if (message.type === 'TRANSLATE_SELECTION') {
@@ -1450,80 +2200,6 @@ export default defineBackground(() => {
           message.payload.model,
           message.payload.profileId,
         );
-      }
-
-      if (message.type === 'GET_TRANSLATION_HISTORY') {
-        const tabId = sender.tab?.id;
-        if (tabId === undefined) {
-          return Promise.resolve(
-            errorResponse(
-              new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
-            ),
-          );
-        }
-        return getTranslationHistory(tabId).then((history) => ({
-          ok: true as const,
-          data: { history },
-        }));
-      }
-
-      if (message.type === 'CLEAR_TRANSLATION_HISTORY') {
-        const tabId = sender.tab?.id;
-        if (tabId === undefined) {
-          return Promise.resolve(
-            errorResponse(
-              new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
-            ),
-          );
-        }
-        return clearTranslationHistory(tabId).then(() => ({
-          ok: true as const,
-          data: { history: [] },
-        }));
-      }
-
-      if (message.type === 'DELETE_TRANSLATION_HISTORY') {
-        const tabId = sender.tab?.id;
-        if (tabId === undefined) {
-          return Promise.resolve(errorResponse(new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.')));
-        }
-        return deleteTranslationHistoryEntry(tabId, message.payload.historyId).then((history) => ({
-          ok: true as const,
-          data: { history },
-        }));
-      }
-
-      if (message.type === 'PIN_TRANSLATION_HISTORY') {
-        const tabId = sender.tab?.id;
-        if (tabId === undefined) {
-          return Promise.resolve(errorResponse(new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.')));
-        }
-        return setTranslationHistoryPinned(
-          tabId,
-          message.payload.historyId,
-          message.payload.pinned,
-        ).then((history) => ({ ok: true as const, data: { history } }));
-      }
-
-      if (message.type === 'GET_TRANSLATION_FAVORITES') {
-        return getTranslationFavorites(message.payload?.query).then((favorites) => ({
-          ok: true as const,
-          data: { favorites },
-        }));
-      }
-
-      if (message.type === 'ADD_TRANSLATION_FAVORITE') {
-        return addTranslationFavorite(message.payload.result).then((favorites) => ({
-          ok: true as const,
-          data: { favorites },
-        }));
-      }
-
-      if (message.type === 'DELETE_TRANSLATION_FAVORITE') {
-        return deleteTranslationFavorite(message.payload.favoriteId).then((favorites) => ({
-          ok: true as const,
-          data: { favorites },
-        }));
       }
 
       return undefined;

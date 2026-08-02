@@ -123,6 +123,17 @@ main {
   white-space: pre-wrap;
 }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.translation-heading-tools { display: flex; align-items: center; gap: 8px; }
+.translation-heading-tools button {
+  border: 0;
+  padding: 2px 3px;
+  color: #5d6475;
+  background: transparent;
+  cursor: pointer;
+  font-size: 9px;
+  font-weight: 680;
+}
+.translation-heading-tools button:hover { color: #4f46e5; }
 #translation-state { color: #7b8498; font-size: 10px; }
 .translation-text {
   min-height: 5em;
@@ -135,6 +146,9 @@ main {
 }
 .translation-text.pending { color: #7b8498; font-size: 12px; }
 .translation-text.error { color: #b4233b; font-size: 12px; }
+.translation-text .pi-math-inline { display: inline-flex; max-width: 100%; vertical-align: -.14em; white-space: normal; }
+.translation-text .pi-math-display { display: block; width: 100%; margin: .6em 0; overflow-x: auto; text-align: center; white-space: normal; }
+.translation-text .pi-math math { color: inherit; }
 
 .progress-track { height: 2px; margin-top: 12px; overflow: hidden; background: #e4e6ef; }
 .progress-track i { display: block; width: 32%; height: 100%; background: #5b4be0; animation: progress 1.15s ease-in-out infinite; }
@@ -158,6 +172,7 @@ button:focus-visible {
   .app-header { border-color: #2b3442; background: rgba(17, 23, 34, .94); }
   .brand img { filter: brightness(0) invert(1); }
   .brand span, .document-line span, #translation-state, #status { color: #8f9aab; }
+  .translation-heading-tools button { color: #a6afbd; }
   .text-action { color: #a6afbd; }
   .empty-mark { border-color: #42436b; color: #a9a1ff; background: #252440; }
   .empty-state p, .reader-hint p { color: #9aa5b5; }

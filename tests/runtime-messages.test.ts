@@ -12,4 +12,18 @@ describe('runtime message guard', () => {
       },
     })).toBe(true);
   });
+
+  it('accepts document-memory operations', () => {
+    expect(isRuntimeMessage({
+      type: 'GET_DOCUMENT_MEMORY',
+      payload: { pageUrl: 'https://example.com/paper' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'UPSERT_DOCUMENT_TERM',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        term: { source: 'ROI', target: '感兴趣区域' },
+      },
+    })).toBe(true);
+  });
 });

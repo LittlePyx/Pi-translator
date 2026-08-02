@@ -3,6 +3,7 @@ import {
   getSettings,
   saveSettings,
 } from '../../core/settings/repository';
+import { apiOriginPattern } from '../../core/settings/api-access';
 import type { RuntimeMessage, RuntimeResponse } from '../../core/messaging/messages';
 import {
   getPausedSiteHosts,
@@ -92,9 +93,21 @@ targetLanguage.addEventListener('change', () => {
 });
 
 apiProfile.addEventListener('change', () => {
-  void activateApiProfile(apiProfile.value)
-    .then(() => setStatus('翻译接口已切换。'))
-    .catch(() => setStatus('翻译接口切换失败。', true));
+  const requestedProfileId = apiProfile.value;
+  void (async () => {
+    const settings = await getSettings();
+    const profile = settings.apiProfiles.find((candidate) => candidate.id === requestedProfileId);
+    if (!profile) throw new Error('The selected API profile no longer exists.');
+    const granted = await browser.permissions.request({
+      origins: [apiOriginPattern(profile.apiBaseUrl)],
+    });
+    if (!granted) throw new Error('API access was not granted.');
+    await activateApiProfile(requestedProfileId);
+    setStatus('翻译接口已切换。');
+  })().catch(async () => {
+    apiProfile.value = (await getSettings()).activeApiProfileId;
+    setStatus('未获得该接口的访问权限，仍使用原配置。', true);
+  });
 });
 
 pauseSite.addEventListener('change', () => {
@@ -132,6 +145,13 @@ openPdf.addEventListener('click', () => {
     const sourceUrl = activePdfSourceUrl;
     const source = parsePdfSourceUrl(sourceUrl);
     if (sourceUrl) {
+      if (
+        source?.protocol === 'file:' &&
+        !(await browser.extension.isAllowedFileSchemeAccess())
+      ) {
+        setStatus('请先在扩展管理页开启“允许访问文件 URL”，再重新打开快捷面板。', true);
+        return;
+      }
       const origin = pdfPermissionPattern(sourceUrl);
       if (origin) {
         const granted =
@@ -141,13 +161,6 @@ openPdf.addEventListener('click', () => {
           setStatus('需要允许读取当前 PDF 所在网站；也可以打开阅读器后选择本地文件。', true);
           return;
         }
-      }
-      if (
-        source?.protocol === 'file:' &&
-        !(await browser.extension.isAllowedFileSchemeAccess())
-      ) {
-        setStatus('请先在扩展管理页开启“允许访问文件 URL”，再重新打开快捷面板。', true);
-        return;
       }
     }
     const response = (await browser.runtime.sendMessage({

@@ -13,6 +13,8 @@ describe('translation prompts', () => {
     expect(prompt).toContain('Preserve every token exactly once');
     expect(prompt).toContain('academic language');
     expect(prompt).toContain('first JSON field');
+    expect(prompt).toContain('termCandidates');
+    expect(prompt).toContain('at most 3 document-specific technical terms');
   });
 
   it('serializes user text as JSON data', () => {

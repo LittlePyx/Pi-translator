@@ -31,6 +31,21 @@ describe('DeepSeek response parsing', () => {
     expect(result.translatedText).toBe('结果');
   });
 
+  it('sanitizes a small set of document-specific term candidates', () => {
+    const result = parseStructuredTranslation(JSON.stringify({
+      translation: '译文',
+      warnings: [],
+      termCandidates: [
+        { source: ' adaptive   sensing ', target: ' 自适应感知 ' },
+        { source: 'same', target: 'same' },
+        { source: '', target: 'empty' },
+      ],
+    }));
+    expect(result.termCandidates).toEqual([
+      { source: 'adaptive sensing', target: '自适应感知' },
+    ]);
+  });
+
   it('extracts content from the provider envelope', () => {
     const content = parseDeepSeekEnvelope({
       choices: [{ message: { content: '{"translation":"ok"}' } }],

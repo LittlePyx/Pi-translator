@@ -23,7 +23,7 @@ Pi Translator translates text that the user explicitly selects in Microsoft Edge
 
 | 权限 | 可粘贴到 Partner Center 的说明 |
 | --- | --- |
-| `storage` | Stores user-selected translation settings, text and vision API profiles, site access choices, user-provided API Keys, session history/cache entries, local error-code summaries, and translations the user explicitly favorites. PDF image crops, Data URLs, Blob data, and Base64 image data are never stored. Error summaries exclude messages and content and expire with the browser session. Favorites are local-only and can be individually deleted. API Keys are session-only by default and can be cleared by the user. |
+| `storage` | Stores user-selected translation settings, text and vision API profiles, site access choices, user-provided API Keys, session history/cache entries, resumable long-text chunk checkpoints, API/model compatibility hints, local error-code summaries, and reading state for up to 30 PDFs. It also stores document-scoped translation memory for up to 40 recently used documents: at most 20 explicitly translated source/translation pairs, 100 user-confirmed terms, and 20 unconfirmed term suggestions per document. Document keys are anonymous local hashes rather than full page URLs. Suggestions do not affect translation until the user confirms them, and all document memory can be edited, removed, or cleared from the sidebar. Session history may include a PDF page number and normalized region coordinates so the user can return to a translated area. Image-region deduplication stores only a SHA-256 crop hash, recognized text, translation, and request metadata; PDF image crops, Data URLs, Blob data, and Base64 image data are never stored. PDF reading state uses an anonymous local hash and contains only page position, zoom, fit mode, and sidebar state; it does not store the original URL, filename, document text, or image. PDF translation markers are session-only by default. Only after the user explicitly enables “Save markers for this PDF” can up to 100 marked source/translation pairs, page numbers, source title, and a short text quote context or normalized region coordinates be stored locally for that document; up to 30 documents are retained, the document key is an anonymous local hash, and the user can stop saving or clear the document's markers. Checkpoints, cache region coordinates, crop hashes, and compatibility hints are session-only. Error summaries exclude messages and content and expire with the browser session. API Keys are session-only by default and can be cleared by the user. |
 | `contextMenus` | Adds a “Translate with Pi Translator” item only when the user has selected text. |
 | `activeTab` | Temporarily accesses the current tab only after the user invokes the shortcut or context-menu command in on-demand mode. |
 | `scripting` | Injects the packaged selection UI into the active page after an explicit user action, or into sites for which the user granted optional access. |
@@ -43,10 +43,11 @@ Pi Translator translates text that the user explicitly selects in Microsoft Edge
 建议在 Partner Center 中如实声明扩展会处理/传输 **Website content（用户主动选中的文本，以及用户确认发送的 PDF 局部截图）** 和 **Authentication information（用户提供的 API Key）**。
 
 - 选中文本和相关翻译约束只在用户主动触发翻译后发送到用户配置的 API。
-- PDF 局部截图只有在用户开启框选模式、拖出区域并点击确认后才发送到用户选择的视觉 API；完整 PDF、完整页面和未确认框选不会发送，截图不会写入扩展存储。
+- PDF 框选会先在本机尝试读取框内已有文字层；只有文字缺失、乱码或覆盖不可靠，并且用户点击确认后，局部截图才发送到用户选择的视觉 API。完整 PDF、完整页面和未确认框选不会发送，截图不会写入扩展存储；会话去重只保存截图 SHA-256 哈希和翻译结果。
 - 页面 URL 不发送到翻译 API。
 - 不出售数据，不用于广告、画像、信用或借贷。
-- 用户启用时，仅在浏览器会话内按标签页保留最近 5、10 或 20 条翻译以及最多 20 条重复翻译缓存；用户主动收藏的翻译最多 100 条并保存在本机，可逐条删除；不进行分析或遥测。
+- 用户启用时，仅在浏览器会话内按标签页保留最近 5、10 或 20 条翻译以及最多 20 条重复翻译缓存；长文失败时会话内暂存已完成分段以供续翻，并保留不含密钥或用户内容的 API/模型兼容性提示；不进行分析或遥测。
+- 用户主动添加的整段或单句轻标记默认只保存在当前页面的运行内存中，用于显示原文浅色标记和悬停译文；它不会修改网页正文或产生额外 API 请求。只有用户在 Pi PDF 中为当前文档明确开启保存后，标记原文、译文、来源标题、页码和短前后文或相对区域坐标才会写入本机扩展存储；普通网页和 Edge 原生 PDF 不持久保存标记。Pi PDF 的本文导航器只在本机整理这些已有标记，支持定位、复制、逐条删除和复制全部；原文无法可靠匹配时明确显示位置变化且不恢复着色。只有用户主动选择复制时，标记原文、译文和来源信息才会整理为 Markdown 并写入系统剪贴板。
 - P&I Lab 没有接收翻译内容的中转服务器。
 - 所有披露必须与 `PRIVACY.md` 保持一致。
 
@@ -88,7 +89,7 @@ Test steps:
 11. Open a text-based PDF in Microsoft Edge's native PDF reader, select text, and choose “使用 Pi Translator 翻译选中文本” from the context menu. Verify that the Pi Translator Edge side panel opens and receives the translation progressively. The original PDF stays in the native reader. The optional “用 Pi 打开” button inherits the current online or local PDF after a second explicit user action, then closes the Edge side panel. Local inheritance additionally requires the user-controlled file-URL access toggle.
 12. Run “兼容性诊断”, copy the local diagnostic report, and verify it contains no API Key, selected text, translation, page URL, glossary entry, or site name.
 13. Export settings and verify the JSON file declares `containsApiKeys: false`. Importing it must require the API Key to be entered again.
-14. Under “PDF 图像区域翻译”, click “测试视觉能力”. The extension sends only its bundled 16×16 test image and reports whether the configured model accepts image input; no PDF or website content is used or stored by this test.
+14. Under “PDF 图像区域翻译”, click “测试视觉能力”. The extension sends only its bundled 130×58 high-contrast character challenge and verifies that the model actually reads the image; no PDF or website content is used or stored by this test.
 
 The extension does not execute remote code. API responses are parsed as JSON and rendered as plain text.
 ```

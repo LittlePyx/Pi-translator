@@ -51,6 +51,36 @@ export function isEdgeNativePdfViewerUrl(value: string | undefined): boolean {
   );
 }
 
+export function isExtensionPdfReaderUrl(
+  value: string | undefined,
+  readerUrl: string,
+): boolean {
+  const candidate = parseUrl(value);
+  const expected = parseUrl(readerUrl);
+  if (!candidate || !expected) return false;
+  const extensionProtocols = new Set(['chrome-extension:', 'extension:', 'moz-extension:']);
+  return (
+    extensionProtocols.has(candidate.protocol) &&
+    extensionProtocols.has(expected.protocol) &&
+    candidate.hostname === expected.hostname &&
+    candidate.pathname === expected.pathname
+  );
+}
+
+/**
+ * Whether a tab may host Edge's native PDF side panel. This intentionally
+ * excludes Pi PDF, which already owns an in-page translation surface.
+ */
+export function isEdgePdfSidePanelTab(
+  value: string | undefined,
+  readerUrl: string,
+): boolean {
+  return (
+    !isExtensionPdfReaderUrl(value, readerUrl) &&
+    isEdgeNativePdfContext({ ...(value ? { tabUrl: value } : {}) })
+  );
+}
+
 export function isLikelyPdfDocumentUrl(value: string | undefined): boolean {
   const url = parseUrl(value);
   if (!url) return false;
@@ -80,6 +110,31 @@ export interface PdfContextUrls {
   pageUrl?: string;
   frameUrl?: string;
 }
+
+export interface PdfTabCandidate {
+  id?: number | undefined;
+  windowId?: number | undefined;
+  url?: string | undefined;
+}
+
+export type PdfSidePanelOpenTarget = { tabId: number } | { windowId: number };
+
+export function pdfSidePanelOpenTarget(
+  tab: Pick<PdfTabCandidate, 'id' | 'windowId'> | undefined,
+  currentWindowId = -2,
+): PdfSidePanelOpenTarget {
+  if (tab?.id !== undefined && tab.id >= 0) return { tabId: tab.id };
+  return {
+    windowId: tab?.windowId !== undefined && tab.windowId >= 0
+      ? tab.windowId
+      : currentWindowId,
+  };
+}
+
+type ResolvedPdfTabCandidate<T extends PdfTabCandidate> = T & {
+  id: number;
+  windowId: number;
+};
 
 export function isEdgeNativePdfContext(urls: PdfContextUrls): boolean {
   return (
@@ -119,6 +174,49 @@ export function edgePdfSourceUrl(urls: PdfContextUrls): string | undefined {
     }
   }
   return undefined;
+}
+
+export function resolvePdfContextTab<T extends PdfTabCandidate>(
+  candidates: T[],
+  contextUrls: PdfContextUrls,
+): ResolvedPdfTabCandidate<T> | undefined {
+  const valid = candidates.filter(
+    (candidate): candidate is ResolvedPdfTabCandidate<T> =>
+      candidate.id !== undefined &&
+      candidate.id >= 0 &&
+      candidate.windowId !== undefined &&
+      candidate.windowId >= 0,
+  );
+  const expectedIdentity = pdfDocumentIdentity(edgePdfSourceUrl(contextUrls));
+  if (expectedIdentity) {
+    const matching = valid.filter((candidate) => {
+      const candidateSource = edgePdfSourceUrl({
+        ...(candidate.url ? { tabUrl: candidate.url } : {}),
+      }) ?? candidate.url;
+      return pdfDocumentIdentity(candidateSource) === expectedIdentity;
+    });
+    if (matching.length === 1) return matching[0];
+    if (matching.length > 1) return undefined;
+
+    // Edge can expose only its opaque internal viewer URL for the real tab,
+    // while the context-menu event still contains the source PDF URL. Falling
+    // back is safe only when there is exactly one such opaque viewer candidate;
+    // never choose a different, explicitly identifiable PDF document.
+    const opaqueViewerCandidates = valid.filter((candidate) => (
+      !candidate.url || (
+        isEdgeNativePdfViewerUrl(candidate.url) &&
+        !pdfDocumentIdentity(edgePdfSourceUrl({ tabUrl: candidate.url }) ?? candidate.url)
+      )
+    ));
+    return opaqueViewerCandidates.length === 1 ? opaqueViewerCandidates[0] : undefined;
+  }
+  const pdfCandidates = valid.filter((candidate) => isEdgeNativePdfContext({
+    ...(candidate.url ? { tabUrl: candidate.url } : {}),
+  }));
+  if (pdfCandidates.length === 1) return pdfCandidates[0];
+  if (pdfCandidates.length > 1) return undefined;
+  const hiddenUrlCandidates = valid.filter((candidate) => !candidate.url);
+  return hiddenUrlCandidates.length === 1 ? hiddenUrlCandidates[0] : undefined;
 }
 
 function positivePage(value: string | null | undefined): number | undefined {

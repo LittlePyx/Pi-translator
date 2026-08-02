@@ -19,9 +19,10 @@ export function buildSystemPrompt(
     'Tokens matching ⟦...⟧ represent protected LaTeX. Preserve every token exactly once and in the same order.',
     'Do not add explanations, Markdown, introductions, or conclusions.',
     'If referenceContext is present, use it only to disambiguate the selected text. Do not translate, quote, summarize, or otherwise include the context in the answer.',
-    'Return valid JSON only, with these fields: translation (string), detectedLanguage (string), warnings (string array), segments (array).',
+    'Return valid JSON only, with these fields: translation (string), detectedLanguage (string), warnings (string array), segments (array), termCandidates (array).',
     'Return translation as the first JSON field so the translated text can be streamed immediately.',
     'When the user provides segments, return one segments item for every input segment as {id, translation}. Keep every id unchanged. Translate all segments in one shared context.',
+    'termCandidates must contain at most 3 document-specific technical terms as {source, target}. Exclude common words, phrases that are not terminology, and uncertain mappings; return an empty array when none are suitable.',
   ];
   if (input?.placeholderTokens.length) {
     instructions.push(

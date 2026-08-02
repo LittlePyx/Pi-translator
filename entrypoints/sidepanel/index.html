@@ -47,10 +47,13 @@
         <section class="content-section result-section">
           <div class="section-heading">
             <h2>译文</h2>
-            <span id="translation-state" aria-live="polite"></span>
+            <div class="translation-heading-tools">
+              <button id="formula-view" type="button" hidden>源码</button>
+              <span id="translation-state" aria-live="polite"></span>
+            </div>
           </div>
           <div id="progress-track" class="progress-track" hidden><i></i></div>
-          <p id="translation-text" class="translation-text"></p>
+          <div id="translation-text" class="translation-text"></div>
           <div id="error-actions" class="error-actions" hidden>
             <button id="retry" type="button">重试</button>
             <button id="error-settings" class="secondary" type="button">检查设置</button>

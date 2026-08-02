@@ -1,4 +1,4 @@
-import type { TranslateRequest, TranslateResult } from './types';
+import type { PdfSourceLocation, TranslateRequest, TranslateResult } from './types';
 
 const CACHE_KEY = 'translationCacheByTab';
 const MAX_CACHE_ENTRIES = 20;
@@ -10,6 +10,17 @@ interface CacheEntry {
 }
 
 type CacheByTab = Record<string, CacheEntry[]>;
+
+let cacheWriteTail: Promise<void> = Promise.resolve();
+
+function serializeCacheWrite<T>(operation: () => Promise<T>): Promise<T> {
+  const next = cacheWriteTail.catch(() => undefined).then(operation);
+  cacheWriteTail = next.then(
+    () => undefined,
+    () => undefined,
+  );
+  return next;
+}
 
 function cacheByTab(value: unknown): CacheByTab {
   return value && typeof value === 'object' ? (value as CacheByTab) : {};
@@ -54,10 +65,25 @@ export async function getCachedTranslation(
   tabId: number,
   key: string,
   requestId: string,
+  sourceHost?: string,
+  sourceLocation?: PdfSourceLocation,
 ): Promise<TranslateResult | undefined> {
   const all = await readAll();
   const entry = all[String(tabId)]?.find((item) => item.key === key);
-  return entry ? { ...entry.result, requestId, cached: true, completedAt: Date.now() } : undefined;
+  if (!entry) return undefined;
+  const {
+    sourceHost: _storedSourceHost,
+    sourceLocation: _storedSourceLocation,
+    ...result
+  } = entry.result;
+  return {
+    ...result,
+    requestId,
+    cached: true,
+    completedAt: Date.now(),
+    ...(sourceHost ? { sourceHost } : {}),
+    ...(sourceLocation ? { sourceLocation } : {}),
+  };
 }
 
 export async function cacheTranslation(
@@ -65,21 +91,25 @@ export async function cacheTranslation(
   key: string,
   result: TranslateResult,
 ): Promise<void> {
-  const all = await readAll();
-  const previous = all[String(tabId)] ?? [];
-  all[String(tabId)] = [
-    { key, result: { ...result, cached: false }, createdAt: Date.now() },
-    ...previous.filter((entry) => entry.key !== key),
-  ].slice(0, MAX_CACHE_ENTRIES);
-  await browser.storage.session.set({ [CACHE_KEY]: all });
+  return serializeCacheWrite(async () => {
+    const all = await readAll();
+    const previous = all[String(tabId)] ?? [];
+    all[String(tabId)] = [
+      { key, result: { ...result, cached: false }, createdAt: Date.now() },
+      ...previous.filter((entry) => entry.key !== key),
+    ].slice(0, MAX_CACHE_ENTRIES);
+    await browser.storage.session.set({ [CACHE_KEY]: all });
+  });
 }
 
 export async function clearTranslationCache(tabId?: number): Promise<void> {
-  if (tabId === undefined) {
-    await browser.storage.session.remove(CACHE_KEY);
-    return;
-  }
-  const all = await readAll();
-  delete all[String(tabId)];
-  await browser.storage.session.set({ [CACHE_KEY]: all });
+  return serializeCacheWrite(async () => {
+    if (tabId === undefined) {
+      await browser.storage.session.remove(CACHE_KEY);
+      return;
+    }
+    const all = await readAll();
+    delete all[String(tabId)];
+    await browser.storage.session.set({ [CACHE_KEY]: all });
+  });
 }

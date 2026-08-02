@@ -1,14 +1,28 @@
 import {
   getDocument,
   GlobalWorkerOptions,
-  TextLayer,
   type PDFDocumentProxy,
   type PDFPageProxy,
   type RenderTask,
 } from 'pdfjs-dist';
+import { TextLayerBuilder } from 'pdfjs-dist/web/pdf_viewer.mjs';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
-import { startSelectionTranslator } from '../../core/content/selection-translator';
-import { parsePdfSourceUrl, pdfFilename, pdfInitialPage } from '../../core/pdf/source';
+import {
+  startSelectionTranslator,
+  type ImageRegionTranslationCapture,
+  type PdfRegionTextTranslationCapture,
+} from '../../core/content/selection-translator';
+import type { SelectionSnapshot } from '../../core/selection/types';
+import { extractPdfRegionText, type PositionedPdfText } from '../../core/pdf/region-text';
+import { resolvePdfTextSelectionSnap } from '../../core/pdf/text-selection-snap';
+import type { PdfSourceLocation } from '../../core/translation/types';
+import { shouldUseVisionForPdfFormula } from '../../core/translation/formula-detection';
+import {
+  parsePdfSourceUrl,
+  pdfDocumentIdentity,
+  pdfFilename,
+  pdfInitialPage,
+} from '../../core/pdf/source';
 import {
   captureCanvasRegion,
   isUsableRegion,
@@ -20,6 +34,21 @@ import {
   type RegionResizeHandle,
 } from '../../core/pdf/region-capture';
 import type { RuntimeMessage } from '../../core/messaging/messages';
+import {
+  DEFAULT_PDF_REGION_SHORTCUT_KEY,
+  resolvePdfRegionShortcut,
+} from '../../core/pdf/region-shortcuts';
+import {
+  getPdfReadingState,
+  savePdfReadingState,
+  type PdfReadingState,
+} from '../../core/pdf/reading-state';
+import {
+  clearPdfTranslationMarkers,
+  getPdfTranslationMarkerState,
+  savePdfTranslationMarkers,
+  setPdfTranslationMarkerPersistence,
+} from '../../core/pdf/translation-marker-repository';
 
 GlobalWorkerOptions.workerSrc = workerUrl;
 
@@ -30,14 +59,22 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const fileInput = element<HTMLInputElement>('file-input');
+const toolbar = element<HTMLElement>('pdf-toolbar');
 const chooseFile = element<HTMLButtonElement>('choose-file');
 const emptyOpen = element<HTMLButtonElement>('empty-open');
 const documentName = element<HTMLElement>('document-name');
-const pageCount = element<HTMLElement>('page-count');
+const pageJump = element<HTMLElement>('page-jump');
+const pageNumberInput = element<HTMLInputElement>('page-number');
+const pageCount = element<HTMLOutputElement>('page-count');
 const regionTranslate = element<HTMLButtonElement>('region-translate');
+const regionQueueButton = element<HTMLButtonElement>('region-queue');
+const regionQueueCount = element<HTMLElement>('region-queue-count');
+const regionQueuePanel = element<HTMLElement>('region-queue-panel');
+const regionQueueList = element<HTMLElement>('region-queue-list');
 const zoomOut = element<HTMLButtonElement>('zoom-out');
 const zoomIn = element<HTMLButtonElement>('zoom-in');
 const zoomValue = element<HTMLOutputElement>('zoom-value');
+const fitWidth = element<HTMLButtonElement>('fit-width');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const stage = element<HTMLElement>('document-stage');
 const emptyState = element<HTMLElement>('empty-state');
@@ -46,19 +83,60 @@ const loadingText = element<HTMLElement>('loading-text');
 const notice = element<HTMLElement>('notice');
 const viewer = element<HTMLElement>('pdf-viewer');
 
-const ZOOM_LEVELS = [0.8, 1, 1.25, 1.5, 1.75, 2] as const;
-let zoomIndex = 2;
+const ZOOM_LEVELS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as const;
+const RETAINED_PAGE_RADIUS = 2;
+const MAX_PAGE_CANVAS_PIXELS = 12_000_000;
+let zoomLevel = 1.25;
 let pdfDocument: PDFDocumentProxy | undefined;
 let currentSourceUrl = location.href;
 let currentSourceLabel: string | undefined;
 let renderGeneration = 0;
+let documentEpoch = 0;
+let currentDocumentSessionId = crypto.randomUUID();
+let openOperationId = 0;
+let openAbortController: AbortController | undefined;
+let openLoadingTask: ReturnType<typeof getDocument> | undefined;
 let pageObserver: IntersectionObserver | undefined;
-const activeRenderTasks = new Set<RenderTask>();
+const activeRenderTasks = new Map<HTMLElement, RenderTask>();
+const activeTextLayerBuilders = new Map<HTMLElement, TextLayerBuilder>();
+const pageRenderRevisions = new WeakMap<HTMLElement, number>();
 const invalidationCallbacks: Array<() => void> = [];
-let regionMode = false;
+type RegionSelectionMode = 'off' | 'single' | 'continuous';
+
+let regionMode: RegionSelectionMode = 'off';
+let pdfKeyboardShortcutsEnabled = true;
+let pdfRegionShortcutKey = DEFAULT_PDF_REGION_SHORTCUT_KEY;
 let scanHintShownForDocument = false;
 let noticeRevision = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
+let retentionFrame: number | undefined;
+let fitWidthActive = false;
+let fitWidthTimer: ReturnType<typeof setTimeout> | undefined;
+let textSelectionSnapFrame: number | undefined;
+let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let currentReadingIdentity: string | undefined;
+let restoringReadingState = false;
+
+interface TextSelectionGesture {
+  pointerId: number;
+  startX: number;
+  startY: number;
+  precise: boolean;
+}
+
+let textSelectionGesture: TextSelectionGesture | undefined;
+
+interface PdfSidebarLayout {
+  expanded: boolean;
+  side: 'left' | 'right';
+  width: number;
+}
+
+let pdfSidebarLayout: PdfSidebarLayout = {
+  expanded: false,
+  side: 'right',
+  width: 390,
+};
 
 type RegionInteraction =
   | { kind: 'draw'; pointerId: number; start: Point }
@@ -71,6 +149,7 @@ type RegionInteraction =
   };
 
 interface ActiveRegionSelection {
+  documentEpoch: number;
   pageElement: HTMLElement;
   canvas: HTMLCanvasElement;
   region: RegionRect;
@@ -80,9 +159,46 @@ interface ActiveRegionSelection {
 }
 
 let activeRegion: ActiveRegionSelection | undefined;
+let sourceRegionHighlight: HTMLElement | undefined;
+let sourceRegionHighlightTimer: ReturnType<typeof setTimeout> | undefined;
+
+function clearSourceRegionHighlight(): void {
+  sourceRegionHighlight?.remove();
+  sourceRegionHighlight = undefined;
+  if (sourceRegionHighlightTimer) clearTimeout(sourceRegionHighlightTimer);
+  sourceRegionHighlightTimer = undefined;
+}
+
+type QueuedRegionTranslationPayload =
+  | { kind: 'image'; capture: ImageRegionTranslationCapture }
+  | { kind: 'text'; capture: PdfRegionTextTranslationCapture };
+
+interface QueuedRegionTranslation {
+  id: string;
+  documentEpoch: number;
+  pageLabel: string;
+  cancelled: boolean;
+  payload: QueuedRegionTranslationPayload;
+}
+
+const MAX_REGION_TRANSLATION_QUEUE = 3;
+const regionTranslationQueue: QueuedRegionTranslation[] = [];
+let regionTranslationRunning = false;
+let activeRegionTranslation: QueuedRegionTranslation | undefined;
+
+interface PageAnchor {
+  pageNumber: number;
+  ratio: number;
+}
+
+interface DocumentOpenOperation {
+  id: number;
+  epoch: number;
+  controller: AbortController;
+}
 
 function currentZoom(): number {
-  return ZOOM_LEVELS[zoomIndex] ?? 1.25;
+  return zoomLevel;
 }
 
 function setLoading(message: string | undefined): void {
@@ -112,10 +228,312 @@ function showNotice(
 }
 
 function setDocumentControls(enabled: boolean): void {
-  zoomOut.disabled = !enabled || zoomIndex === 0;
-  zoomIn.disabled = !enabled || zoomIndex === ZOOM_LEVELS.length - 1;
+  chooseFile.textContent = enabled ? '更换 PDF' : '打开 PDF';
+  chooseFile.title = enabled ? '选择另一份本地 PDF 替换当前文档' : '选择一份本地 PDF';
+  chooseFile.setAttribute(
+    'aria-label',
+    enabled ? '更换当前 PDF 文档' : '打开本地 PDF 文档',
+  );
+  zoomOut.disabled = !enabled || currentZoom() <= ZOOM_LEVELS[0] + 0.001;
+  zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
+  fitWidth.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
   regionTranslate.disabled = !enabled;
+  updateRegionAction();
+}
+
+function isRegionModeActive(): boolean {
+  return regionMode !== 'off';
+}
+
+function pendingRegionTranslationCount(): number {
+  const active = activeRegionTranslation &&
+    activeRegionTranslation.documentEpoch === documentEpoch &&
+    !activeRegionTranslation.cancelled
+    ? 1
+    : 0;
+  return regionTranslationQueue.filter(
+    (task) => task.documentEpoch === documentEpoch && !task.cancelled,
+  ).length + active;
+}
+
+function currentRegionTranslationTasks(): QueuedRegionTranslation[] {
+  return [
+    ...(activeRegionTranslation &&
+      activeRegionTranslation.documentEpoch === documentEpoch &&
+      !activeRegionTranslation.cancelled
+      ? [activeRegionTranslation]
+      : []),
+    ...regionTranslationQueue.filter(
+      (task) => task.documentEpoch === documentEpoch && !task.cancelled,
+    ),
+  ];
+}
+
+function closeRegionQueuePanel(): void {
+  regionQueuePanel.hidden = true;
+  regionQueueButton.setAttribute('aria-expanded', 'false');
+}
+
+function cancelRegionTranslation(taskId: string): void {
+  const queuedIndex = regionTranslationQueue.findIndex((task) => task.id === taskId);
+  if (queuedIndex >= 0) {
+    regionTranslationQueue.splice(queuedIndex, 1);
+    showNotice('已从翻译队列移除。', { transient: true });
+  } else if (activeRegionTranslation?.id === taskId) {
+    activeRegionTranslation.cancelled = true;
+    void selectionTranslator.then((controller) => controller.cancelActiveTranslation());
+    showNotice('正在取消当前框选翻译…', { transient: true });
+  }
+  updateRegionAction();
+}
+
+function renderRegionQueue(): void {
+  const tasks = currentRegionTranslationTasks();
+  regionQueueButton.hidden = tasks.length === 0;
+  regionQueueCount.textContent = String(tasks.length);
+  if (!tasks.length) {
+    closeRegionQueuePanel();
+    regionQueueList.replaceChildren();
+    return;
+  }
+  regionQueueList.replaceChildren(...tasks.map((task) => {
+    const item = document.createElement('div');
+    item.className = 'queue-item';
+    const description = document.createElement('span');
+    const label = document.createElement('strong');
+    label.textContent = task.pageLabel;
+    const status = document.createElement('small');
+    status.textContent = task === activeRegionTranslation ? '翻译中' : '等待中';
+    description.append(label, status);
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.textContent = '取消';
+    cancel.addEventListener('click', () => cancelRegionTranslation(task.id));
+    item.append(description, cancel);
+    return item;
+  }));
+}
+
+function updateRegionAction(): void {
+  const pending = pendingRegionTranslationCount();
+  const shortcut = pdfRegionShortcutKey.toUpperCase();
+  const shortcutHint = pdfKeyboardShortcutsEnabled
+    ? `；${shortcut} 框选一次，Shift+${shortcut} 连续框选`
+    : '';
+  regionTranslate.dataset.regionMode = regionMode;
+  regionTranslate.setAttribute('aria-pressed', String(regionMode === 'continuous'));
+  regionTranslate.setAttribute(
+    'aria-label',
+    `${regionMode === 'continuous' ? '关闭' : '开启'}连续框选翻译${pending ? `，队列中 ${pending} 项` : ''}`,
+  );
+  regionTranslate.title = regionMode === 'continuous'
+    ? `连续框选已开启；点击关闭${pdfKeyboardShortcutsEnabled ? `，或按 Shift+${shortcut}` : ''}`
+    : `点击开启连续框选${shortcutHint}`;
+  renderRegionQueue();
+}
+
+function closestTextLayer(node: Node | null): HTMLElement | undefined {
+  const element = node instanceof Element ? node : node?.parentElement;
+  return element?.closest<HTMLElement>('.textLayer') ?? undefined;
+}
+
+function boundaryTextNode(
+  container: Node,
+  offset: number,
+  edge: 'start' | 'end',
+): { node: Text; offset: number } | undefined {
+  if (container instanceof Text) {
+    return { node: container, offset: clamp(offset, 0, container.data.length) };
+  }
+  const children = [...container.childNodes];
+  const candidate = edge === 'start'
+    ? children[Math.min(offset, children.length - 1)]
+    : children[Math.max(0, Math.min(offset - 1, children.length - 1))];
+  if (!candidate) return undefined;
+  if (candidate instanceof Text) {
+    return { node: candidate, offset: edge === 'start' ? 0 : candidate.data.length };
+  }
+  const walker = document.createTreeWalker(candidate, NodeFilter.SHOW_TEXT);
+  const textNodes: Text[] = [];
+  let current = walker.nextNode();
+  while (current) {
+    textNodes.push(current as Text);
+    current = walker.nextNode();
+  }
+  const node = edge === 'start' ? textNodes[0] : textNodes.at(-1);
+  if (!node) return undefined;
+  return { node, offset: edge === 'start' ? 0 : node.data.length };
+}
+
+function snapPdfSelectionSmartly(): void {
+  const selection = window.getSelection();
+  if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
+  const range = selection.getRangeAt(0);
+  const start = boundaryTextNode(range.startContainer, range.startOffset, 'start');
+  const end = boundaryTextNode(range.endContainer, range.endOffset, 'end');
+  if (!start || !end) return;
+  const startLayer = closestTextLayer(start.node);
+  if (!startLayer || startLayer !== closestTextLayer(end.node)) return;
+  const layerBounds = startLayer.getBoundingClientRect();
+  const nodes: Text[] = [];
+  const items = [...startLayer.querySelectorAll<HTMLElement>('span')]
+    .flatMap((span) => {
+      const bounds = span.getBoundingClientRect();
+      const textNodes: Text[] = [];
+      const walker = document.createTreeWalker(span, NodeFilter.SHOW_TEXT);
+      let current = walker.nextNode();
+      while (current) {
+        const text = current as Text;
+        if (text.data) textNodes.push(text);
+        current = walker.nextNode();
+      }
+      return textNodes.map((node) => {
+        nodes.push(node);
+        return {
+          text: node.data,
+          left: bounds.left - layerBounds.left,
+          top: bounds.top - layerBounds.top,
+          right: bounds.right - layerBounds.left,
+          bottom: bounds.bottom - layerBounds.top,
+        };
+      });
+    });
+  const startIndex = nodes.indexOf(start.node);
+  const endIndex = nodes.indexOf(end.node);
+  if (startIndex < 0 || endIndex < 0) return;
+  const resolved = resolvePdfTextSelectionSnap(items, {
+    startIndex,
+    startOffset: start.offset,
+    endIndex,
+    endOffset: end.offset,
+    pageWidth: layerBounds.width,
+    pageHeight: layerBounds.height,
+  });
+  if (!resolved) return;
+  const startNode = nodes[resolved.startIndex];
+  const endNode = nodes[resolved.endIndex];
+  if (!startNode || !endNode) return;
+  const snapped = document.createRange();
+  try {
+    snapped.setStart(startNode, resolved.startOffset);
+    snapped.setEnd(endNode, resolved.endOffset);
+  } catch {
+    return;
+  }
+  if (!snapped.toString().trim()) return;
+  selection.removeAllRanges();
+  selection.addRange(snapped);
+  requestAnimationFrame(() => {
+    const endOfContent = startLayer.querySelector<HTMLElement>('.endOfContent');
+    if (endOfContent) {
+      startLayer.append(endOfContent);
+      endOfContent.style.removeProperty('width');
+      endOfContent.style.removeProperty('height');
+    }
+    startLayer.classList.remove('selecting');
+  });
+}
+
+function beginSmartTextSelection(event: PointerEvent): void {
+  if (
+    isRegionModeActive() ||
+    event.button !== 0 ||
+    !event.isPrimary ||
+    !['mouse', 'pen'].includes(event.pointerType) ||
+    !(event.target instanceof Element) ||
+    !event.target.closest('.textLayer')
+  ) return;
+  textSelectionGesture = {
+    pointerId: event.pointerId,
+    startX: event.clientX,
+    startY: event.clientY,
+    precise: event.altKey,
+  };
+}
+
+function finishSmartTextSelection(event: PointerEvent): void {
+  const gesture = textSelectionGesture;
+  if (!gesture || gesture.pointerId !== event.pointerId) return;
+  textSelectionGesture = undefined;
+  const moved = Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) >= 3;
+  if (!moved || gesture.precise || event.altKey) return;
+  if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
+  textSelectionSnapFrame = requestAnimationFrame(() => {
+    textSelectionSnapFrame = undefined;
+    snapPdfSelectionSmartly();
+  });
+}
+
+function cancelSmartTextSelection(event: PointerEvent): void {
+  if (textSelectionGesture?.pointerId === event.pointerId) textSelectionGesture = undefined;
+}
+
+function sidebarLayoutInset(layout: PdfSidebarLayout): number {
+  if (!layout.expanded || matchMedia('(max-width: 620px)').matches) return 0;
+  return Math.min(
+    Math.max(0, layout.width + 20),
+    Math.max(0, innerWidth - 280),
+  );
+}
+
+function applyPdfSidebarLayout(layout: PdfSidebarLayout): void {
+  pdfSidebarLayout = layout;
+  const inset = sidebarLayoutInset(layout);
+  stage.style.setProperty('--pdf-sidebar-left', `${layout.side === 'left' ? inset : 0}px`);
+  stage.style.setProperty('--pdf-sidebar-right', `${layout.side === 'right' ? inset : 0}px`);
+  stage.classList.toggle('translation-sidebar-expanded', inset > 0);
+  scheduleFitWidthRefresh();
+  scheduleReadingStateSave();
+}
+
+function isCurrentOpen(operation: DocumentOpenOperation): boolean {
+  return (
+    operation.id === openOperationId &&
+    operation.epoch === documentEpoch &&
+    !operation.controller.signal.aborted
+  );
+}
+
+function beginDocumentOpen(message: string): DocumentOpenOperation {
+  void persistReadingState();
+  currentReadingIdentity = undefined;
+  restoringReadingState = false;
+  openOperationId += 1;
+  documentEpoch += 1;
+  currentDocumentSessionId = crypto.randomUUID();
+  openAbortController?.abort();
+  openAbortController = new AbortController();
+  if (openLoadingTask) {
+    void openLoadingTask.destroy().catch(() => undefined);
+    openLoadingTask = undefined;
+  }
+  const previousDocument = pdfDocument;
+  pdfDocument = undefined;
+  if (previousDocument) void previousDocument.destroy().catch(() => undefined);
+  regionTranslationQueue.length = 0;
+  if (activeRegionTranslation) activeRegionTranslation.cancelled = true;
+  updateRegionAction();
+  clearDocument();
+  void selectionTranslator.then((controller) => controller.reset());
+  setDocumentControls(false);
+  pageJump.hidden = true;
+  setLoading(message);
+  showNotice(undefined);
+  emptyState.hidden = true;
+  viewer.hidden = true;
+  return {
+    id: openOperationId,
+    epoch: documentEpoch,
+    controller: openAbortController,
+  };
+}
+
+function completeDocumentOpen(operation: DocumentOpenOperation): void {
+  if (!isCurrentOpen(operation)) return;
+  openAbortController = undefined;
+  openLoadingTask = undefined;
+  setLoading(undefined);
 }
 
 function clearRegionSelection(): void {
@@ -124,41 +542,232 @@ function clearRegionSelection(): void {
   activeRegion = undefined;
 }
 
-function setRegionMode(enabled: boolean): void {
-  regionMode = enabled && Boolean(pdfDocument);
+function setRegionMode(mode: RegionSelectionMode): void {
+  regionMode = pdfDocument ? mode : 'off';
   clearRegionSelection();
-  viewer.classList.toggle('region-mode', regionMode);
-  regionTranslate.setAttribute('aria-pressed', String(regionMode));
-  if (regionMode) {
+  viewer.classList.toggle('region-mode', isRegionModeActive());
+  updateRegionAction();
+  if (isRegionModeActive()) {
     window.getSelection()?.removeAllRanges();
-    showNotice('拖动框选 · 选框可移动和缩放 · Esc 取消', { transient: true });
+    showNotice(
+      regionMode === 'continuous'
+        ? '连续框选已开启 · 可逐个发送 · Esc 退出'
+        : '拖动框选一次 · Esc 取消',
+      { transient: true },
+    );
   } else {
     showNotice(undefined);
   }
 }
 
 function clearDocument(): void {
-  setRegionMode(false);
+  setRegionMode('off');
+  clearSourceRegionHighlight();
   renderGeneration += 1;
+  if (retentionFrame !== undefined) cancelAnimationFrame(retentionFrame);
+  retentionFrame = undefined;
   pageObserver?.disconnect();
   pageObserver = undefined;
-  for (const task of activeRenderTasks) task.cancel();
+  for (const task of activeRenderTasks.values()) task.cancel();
   activeRenderTasks.clear();
+  for (const builder of activeTextLayerBuilders.values()) builder.cancel();
+  activeTextLayerBuilders.clear();
   viewer.replaceChildren();
   window.getSelection()?.removeAllRanges();
+}
+
+function clamp(value: number, minimum: number, maximum: number): number {
+  return Math.min(maximum, Math.max(minimum, value));
+}
+
+function visiblePageAnchor(): PageAnchor {
+  const pages = [...viewer.querySelectorAll<HTMLElement>('.pdf-page')];
+  if (pages.length === 0) return { pageNumber: 1, ratio: 0 };
+  const stageRect = stage.getBoundingClientRect();
+  const anchorY = stageRect.top + 12;
+  let closestPage = pages[0]!;
+  let closestDistance = Number.POSITIVE_INFINITY;
+  let anchorPage: HTMLElement | undefined;
+  let anchorPageVisibleHeight = 0;
+  let dominantPage = pages[0]!;
+  let dominantVisibleHeight = 0;
+  for (const page of pages) {
+    const rect = page.getBoundingClientRect();
+    const visibleHeight = Math.max(
+      0,
+      Math.min(rect.bottom, stageRect.bottom) - Math.max(rect.top, stageRect.top),
+    );
+    if (visibleHeight > dominantVisibleHeight) {
+      dominantPage = page;
+      dominantVisibleHeight = visibleHeight;
+    }
+    if (rect.top <= anchorY && rect.bottom >= anchorY) {
+      anchorPage = page;
+      anchorPageVisibleHeight = visibleHeight;
+    }
+    const distance = Math.min(Math.abs(rect.top - anchorY), Math.abs(rect.bottom - anchorY));
+    if (distance >= closestDistance) continue;
+    closestPage = page;
+    closestDistance = distance;
+  }
+  const selectedPage = anchorPage && (
+    dominantPage === anchorPage || dominantVisibleHeight < anchorPageVisibleHeight * 1.5
+  )
+    ? anchorPage
+    : dominantVisibleHeight > 0
+      ? dominantPage
+      : closestPage;
+  const rect = selectedPage.getBoundingClientRect();
+  return {
+    pageNumber: Number(selectedPage.dataset.pageNumber) || 1,
+    ratio: rect.height > 0 ? clamp((anchorY - rect.top) / rect.height, 0, 1) : 0,
+  };
+}
+
+function currentPdfReadingState(): PdfReadingState | undefined {
+  if (!pdfDocument || !currentReadingIdentity || restoringReadingState) return undefined;
+  const anchor = visiblePageAnchor();
+  return {
+    pageNumber: anchor.pageNumber,
+    pageRatio: anchor.ratio,
+    zoomLevel: currentZoom(),
+    fitWidth: fitWidthActive,
+    sidebarExpanded: pdfSidebarLayout.expanded,
+    updatedAt: Date.now(),
+  };
+}
+
+async function persistReadingState(): Promise<void> {
+  if (readingStateSaveTimer) clearTimeout(readingStateSaveTimer);
+  readingStateSaveTimer = undefined;
+  const identity = currentReadingIdentity;
+  const state = currentPdfReadingState();
+  if (!identity || !state) return;
+  await savePdfReadingState(identity, state).catch(() => undefined);
+}
+
+function scheduleReadingStateSave(): void {
+  if (!currentReadingIdentity || restoringReadingState) return;
+  if (readingStateSaveTimer) clearTimeout(readingStateSaveTimer);
+  readingStateSaveTimer = setTimeout(() => {
+    readingStateSaveTimer = undefined;
+    void persistReadingState();
+  }, 320);
+}
+
+function scrollToPageAnchor(anchor: PageAnchor): void {
+  const page = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${anchor.pageNumber}"]`,
+  );
+  if (!page) return;
+  stage.scrollTop = Math.max(0, page.offsetTop + page.offsetHeight * clamp(anchor.ratio, 0, 1) - 12);
+}
+
+function updatePageControl(anchor = visiblePageAnchor()): void {
+  if (document.activeElement !== pageNumberInput) {
+    pageNumberInput.value = String(anchor.pageNumber);
+  }
+}
+
+function evictPage(pageElement: HTMLElement): void {
+  if (activeRegion?.pageElement === pageElement) return;
+  pageRenderRevisions.set(pageElement, (pageRenderRevisions.get(pageElement) ?? 0) + 1);
+  activeRenderTasks.get(pageElement)?.cancel();
+  activeRenderTasks.delete(pageElement);
+  activeTextLayerBuilders.get(pageElement)?.cancel();
+  activeTextLayerBuilders.delete(pageElement);
+  const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
+  if (canvas) {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+  pageElement.querySelector<HTMLElement>('.textLayer')?.replaceChildren();
+  delete pageElement.dataset.rendered;
+  delete pageElement.dataset.hasText;
+  pageElement.removeAttribute('title');
+}
+
+function retainNearbyPages(): void {
+  retentionFrame = undefined;
+  if (!pdfDocument) return;
+  const anchor = visiblePageAnchor();
+  updatePageControl(anchor);
+  const pdf = pdfDocument;
+  const generation = renderGeneration;
+  for (const page of viewer.querySelectorAll<HTMLElement>('.pdf-page')) {
+    const pageNumber = Number(page.dataset.pageNumber);
+    if (Math.abs(pageNumber - anchor.pageNumber) <= RETAINED_PAGE_RADIUS) {
+      requestPageRender(pdf, page, generation);
+    } else if (page.dataset.rendered) {
+      evictPage(page);
+    }
+  }
+}
+
+function schedulePageRetention(): void {
+  if (retentionFrame !== undefined) return;
+  retentionFrame = requestAnimationFrame(retainNearbyPages);
+}
+
+function updatePageDimensions(
+  pageElement: HTMLElement,
+  width: number,
+  height: number,
+): void {
+  const widthChanged = Math.abs(pageElement.offsetWidth - width) > 0.5;
+  const heightChanged = Math.abs(pageElement.offsetHeight - height) > 0.5;
+  if (!widthChanged && !heightChanged) return;
+  const anchor = visiblePageAnchor();
+  pageElement.style.width = `${width}px`;
+  pageElement.style.height = `${height}px`;
+  scrollToPageAnchor(anchor);
+}
+
+function requestPageRender(
+  pdf: PDFDocumentProxy,
+  pageElement: HTMLElement,
+  generation: number,
+): void {
+  if (pageElement.dataset.rendered === 'error') {
+    delete pageElement.dataset.rendered;
+    pageElement.removeAttribute('title');
+  }
+  if (pageElement.dataset.rendered) return;
+  const pageRevision = (pageRenderRevisions.get(pageElement) ?? 0) + 1;
+  pageRenderRevisions.set(pageElement, pageRevision);
+  pageElement.dataset.rendered = 'queued';
+  const pageNumber = Number(pageElement.dataset.pageNumber);
+  void pdf.getPage(pageNumber)
+    .then((page) => renderPage(page, pageElement, generation, pageRevision))
+    .catch((error: unknown) => {
+      if (
+        generation !== renderGeneration ||
+        !['queued', 'loading'].includes(pageElement.dataset.rendered ?? '')
+      ) return;
+      pageElement.dataset.rendered = 'error';
+      pageElement.title = error instanceof Error ? error.message : String(error);
+    });
 }
 
 async function renderPage(
   page: PDFPageProxy,
   pageElement: HTMLElement,
   generation: number,
+  pageRevision: number,
 ): Promise<void> {
-  if (pageElement.dataset.rendered || generation !== renderGeneration) return;
+  if (
+    (pageElement.dataset.rendered && pageElement.dataset.rendered !== 'queued') ||
+    generation !== renderGeneration ||
+    pageRenderRevisions.get(pageElement) !== pageRevision
+  ) return;
+  const isCurrentPageRender = (): boolean => (
+    generation === renderGeneration &&
+    pageRenderRevisions.get(pageElement) === pageRevision
+  );
   pageElement.dataset.rendered = 'loading';
   const scale = currentZoom();
   const viewport = page.getViewport({ scale });
-  pageElement.style.width = `${viewport.width}px`;
-  pageElement.style.height = `${viewport.height}px`;
+  updatePageDimensions(pageElement, viewport.width, viewport.height);
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   const textContainer = pageElement.querySelector<HTMLElement>('.textLayer');
   if (!canvas || !textContainer) return;
@@ -174,9 +783,13 @@ async function renderPage(
     desiredOutputScale,
     8192 / Math.max(viewport.width, 1),
     8192 / Math.max(viewport.height, 1),
+    Math.sqrt(
+      MAX_PAGE_CANVAS_PIXELS /
+      Math.max(viewport.width * viewport.height, 1),
+    ),
   );
-  canvas.width = Math.floor(viewport.width * outputScale);
-  canvas.height = Math.floor(viewport.height * outputScale);
+  canvas.width = Math.max(1, Math.floor(viewport.width * outputScale));
+  canvas.height = Math.max(1, Math.floor(viewport.height * outputScale));
   canvas.style.width = `${viewport.width}px`;
   canvas.style.height = `${viewport.height}px`;
   const context = canvas.getContext('2d', { alpha: false });
@@ -190,34 +803,42 @@ async function renderPage(
       ? {}
       : { transform: [outputScale, 0, 0, outputScale, 0, 0] }),
   });
-  activeRenderTasks.add(renderTask);
+  activeRenderTasks.set(pageElement, renderTask);
+  const textLayerBuilder = new TextLayerBuilder({ pdfPage: page });
+  activeTextLayerBuilders.get(pageElement)?.cancel();
+  activeTextLayerBuilders.set(pageElement, textLayerBuilder);
+  textContainer.replaceWith(textLayerBuilder.div);
   try {
-    const textContentPromise = page.getTextContent();
-    await renderTask.promise;
-    const textContent = await textContentPromise;
-    if (generation !== renderGeneration) return;
-    const textLayer = new TextLayer({
-      textContentSource: textContent,
-      container: textContainer,
-      viewport,
-    });
-    await textLayer.render();
-    if (generation !== renderGeneration) return;
+    await Promise.all([
+      renderTask.promise,
+      textLayerBuilder.render({ viewport }),
+    ]);
+    if (!isCurrentPageRender()) return;
     pageElement.dataset.rendered = 'ready';
-    const hasText = textLayer.textContentItemsStr.some((value) => value.trim());
+    const hasText = Boolean(textLayerBuilder.div.textContent?.trim());
     pageElement.dataset.hasText = String(hasText);
-    if (!hasText && !scanHintShownForDocument && !regionMode) {
+    if (!hasText && !scanHintShownForDocument && !isRegionModeActive()) {
       scanHintShownForDocument = true;
       showNotice('可能是扫描版 PDF · 可用“框选翻译”识别局部内容', {
         transient: true,
       });
     }
+    schedulePageRetention();
   } finally {
-    activeRenderTasks.delete(renderTask);
+    if (activeRenderTasks.get(pageElement) === renderTask) {
+      activeRenderTasks.delete(pageElement);
+    }
+    if (!isCurrentPageRender() && activeTextLayerBuilders.get(pageElement) === textLayerBuilder) {
+      textLayerBuilder.cancel();
+      activeTextLayerBuilders.delete(pageElement);
+    }
   }
 }
 
-async function buildPages(pdf: PDFDocumentProxy, targetPage = 1): Promise<void> {
+async function buildPages(
+  pdf: PDFDocumentProxy,
+  targetAnchor: PageAnchor = { pageNumber: 1, ratio: 0 },
+): Promise<void> {
   clearDocument();
   const generation = renderGeneration;
   const scale = currentZoom();
@@ -228,15 +849,7 @@ async function buildPages(pdf: PDFDocumentProxy, targetPage = 1): Promise<void> 
       for (const entry of entries) {
         if (!entry.isIntersecting) continue;
         const pageElement = entry.target as HTMLElement;
-        const pageNumber = Number(pageElement.dataset.pageNumber);
-        void pdf.getPage(pageNumber)
-          .then((page) => renderPage(page, pageElement, generation))
-          .catch((error: unknown) => {
-            if (generation !== renderGeneration) return;
-            pageElement.dataset.rendered = 'error';
-            pageElement.title = error instanceof Error ? error.message : String(error);
-          });
-        pageObserver?.unobserve(pageElement);
+        requestPageRender(pdf, pageElement, generation);
       }
     },
     { root: stage, rootMargin: '900px 0px' },
@@ -260,47 +873,89 @@ async function buildPages(pdf: PDFDocumentProxy, targetPage = 1): Promise<void> 
     viewer.append(pageElement);
     pageObserver.observe(pageElement);
   }
-  const safeTargetPage = Math.min(pdf.numPages, Math.max(1, Math.round(targetPage)));
-  const target = viewer.querySelector<HTMLElement>(
-    `.pdf-page[data-page-number="${safeTargetPage}"]`,
+  const safeTargetPage = Math.min(
+    pdf.numPages,
+    Math.max(1, Math.round(targetAnchor.pageNumber)),
   );
-  stage.scrollTo({ top: target ? Math.max(0, target.offsetTop - 16) : 0 });
+  scrollToPageAnchor({ pageNumber: safeTargetPage, ratio: targetAnchor.ratio });
+  updatePageControl({ pageNumber: safeTargetPage, ratio: targetAnchor.ratio });
+  schedulePageRetention();
 }
 
 async function openPdfData(
   data: Uint8Array,
   name: string,
+  operation: DocumentOpenOperation,
   sourceUrl?: string,
-  initialPage = 1,
+  initialPage?: number,
+  readingIdentity?: string,
 ): Promise<void> {
+  if (!isCurrentOpen(operation)) return;
   setLoading('正在解析 PDF…');
-  showNotice(undefined);
-  emptyState.hidden = true;
-  viewer.hidden = true;
-  clearDocument();
+  let nextDocument: PDFDocumentProxy | undefined;
   try {
+    const readingStatePromise = readingIdentity
+      ? getPdfReadingState(readingIdentity).catch(() => undefined)
+      : Promise.resolve(undefined);
     const task = getDocument({ data, isEvalSupported: false });
-    const nextDocument = await task.promise;
-    await pdfDocument?.destroy();
+    openLoadingTask = task;
+    nextDocument = await task.promise;
+    if (!isCurrentOpen(operation)) {
+      await nextDocument.destroy();
+      return;
+    }
+    openLoadingTask = undefined;
+    const restoredState = await readingStatePromise;
+    if (!isCurrentOpen(operation)) {
+      await nextDocument.destroy();
+      return;
+    }
     pdfDocument = nextDocument;
+    currentReadingIdentity = readingIdentity;
+    restoringReadingState = Boolean(restoredState);
+    zoomLevel = restoredState?.zoomLevel ?? 1.25;
+    fitWidthActive = restoredState?.fitWidth ?? false;
     scanHintShownForDocument = false;
     currentSourceUrl = sourceUrl ?? location.href;
     currentSourceLabel = sourceUrl ? undefined : name;
     documentName.textContent = name;
     document.title = `${name} - Pi PDF`;
-    pageCount.hidden = false;
-    pageCount.textContent = `${nextDocument.numPages} 页`;
+    pageJump.hidden = false;
+    pageCount.value = String(nextDocument.numPages);
+    pageNumberInput.max = String(nextDocument.numPages);
+    const targetPage = clamp(
+      Math.round(initialPage ?? restoredState?.pageNumber ?? 1),
+      1,
+      nextDocument.numPages,
+    );
+    const targetRatio = initialPage === undefined ? restoredState?.pageRatio ?? 0 : 0;
+    pageNumberInput.value = String(targetPage);
     setDocumentControls(true);
     setLoading('正在准备页面…');
-    await buildPages(nextDocument, initialPage);
+    await buildPages(nextDocument, { pageNumber: targetPage, ratio: targetRatio });
+    if (!isCurrentOpen(operation)) return;
+    restoringReadingState = false;
+    const controller = await selectionTranslator;
+    if (!isCurrentOpen(operation)) return;
+    await controller.refreshPersistentMarkers();
+    if (!isCurrentOpen(operation)) return;
+    if (restoredState?.sidebarExpanded) {
+      if (isCurrentOpen(operation)) controller.openSidebar();
+    }
+    if (fitWidthActive) scheduleFitWidthRefresh();
+    scheduleReadingStateSave();
   } catch (error) {
+    if (!isCurrentOpen(operation)) return;
+    if (pdfDocument === nextDocument) pdfDocument = undefined;
+    if (nextDocument) void nextDocument.destroy().catch(() => undefined);
     emptyState.hidden = false;
     viewer.hidden = true;
-    pageCount.hidden = true;
+    pageJump.hidden = true;
     setDocumentControls(false);
     showNotice(error instanceof Error ? `无法打开 PDF：${error.message}` : '无法打开这个 PDF。');
   } finally {
-    setLoading(undefined);
+    if (openLoadingTask && isCurrentOpen(operation)) openLoadingTask = undefined;
+    completeDocumentOpen(operation);
   }
 }
 
@@ -309,7 +964,24 @@ async function openLocalFile(file: File): Promise<void> {
     showNotice('请选择 PDF 文件。');
     return;
   }
-  await openPdfData(new Uint8Array(await file.arrayBuffer()), file.name);
+  const operation = beginDocumentOpen('正在读取本地 PDF…');
+  try {
+    const data = new Uint8Array(await file.arrayBuffer());
+    if (!isCurrentOpen(operation)) return;
+    await openPdfData(
+      data,
+      file.name,
+      operation,
+      undefined,
+      undefined,
+      `local:${file.name}:${file.size}:${file.lastModified}`,
+    );
+  } catch (error) {
+    if (!isCurrentOpen(operation)) return;
+    emptyState.hidden = false;
+    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。');
+    completeDocumentOpen(operation);
+  }
 }
 
 function pageRegionBounds(selection: ActiveRegionSelection): RegionRect {
@@ -375,6 +1047,338 @@ function pointWithinPage(event: PointerEvent, pageElement: HTMLElement): Point {
   return { x: event.clientX - bounds.left, y: event.clientY - bounds.top };
 }
 
+function createActiveRegion(
+  pageElement: HTMLElement,
+  canvas: HTMLCanvasElement,
+  region: RegionRect,
+  interaction?: RegionInteraction,
+): ActiveRegionSelection {
+  clearRegionSelection();
+  const box = document.createElement('div');
+  box.className = 'region-selection-box';
+  pageElement.append(box);
+  const selection: ActiveRegionSelection = {
+    documentEpoch,
+    pageElement,
+    canvas,
+    region,
+    box,
+    interaction,
+  };
+  activeRegion = selection;
+  renderRegionBox(selection);
+  return selection;
+}
+
+function createKeyboardRegion(): void {
+  const anchor = visiblePageAnchor();
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${anchor.pageNumber}"][data-rendered="ready"]`,
+  ) ?? viewer.querySelector<HTMLElement>('.pdf-page[data-rendered="ready"]');
+  const canvas = pageElement?.querySelector<HTMLCanvasElement>('canvas');
+  if (!pageElement || !canvas) {
+    showNotice('页面仍在渲染，请稍后再试。', { transient: true });
+    return;
+  }
+  const bounds = pageElement.getBoundingClientRect();
+  const width = Math.max(18, Math.min(bounds.width * 0.62, bounds.width - 24));
+  const height = Math.max(18, Math.min(bounds.height * 0.38, bounds.height - 24));
+  const left = Math.max(0, (bounds.width - width) / 2);
+  const top = Math.max(0, bounds.height * clamp(anchor.ratio, 0, 1) - height / 2);
+  const region = normalizeRegion(
+    { x: left, y: top },
+    { x: left + width, y: top + height },
+    { left: 0, top: 0, width: bounds.width, height: bounds.height },
+  );
+  const selection = createActiveRegion(pageElement, canvas, region);
+  createRegionConfirmation(selection);
+}
+
+function sourceLocationForRegion(
+  pageNumber: number,
+  region: RegionRect,
+  pageBounds: Pick<DOMRect, 'width' | 'height'>,
+): PdfSourceLocation {
+  return {
+    documentId: currentDocumentSessionId,
+    pageNumber,
+    leftRatio: region.left / pageBounds.width,
+    topRatio: region.top / pageBounds.height,
+    widthRatio: region.width / pageBounds.width,
+    heightRatio: region.height / pageBounds.height,
+  };
+}
+
+function regionViewportRect(selection: ActiveRegionSelection): {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+} {
+  const pageBounds = selection.pageElement.getBoundingClientRect();
+  return {
+    left: pageBounds.left + selection.region.left,
+    top: pageBounds.top + selection.region.top,
+    right: pageBounds.left + selection.region.right,
+    bottom: pageBounds.top + selection.region.bottom,
+  };
+}
+
+function extractReliableTextFromRegion(
+  selection: ActiveRegionSelection,
+): string | undefined {
+  const pageBounds = selection.pageElement.getBoundingClientRect();
+  const items: PositionedPdfText[] = [...selection.pageElement.querySelectorAll<HTMLElement>(
+    '.textLayer span',
+  )].map((span) => {
+    const bounds = span.getBoundingClientRect();
+    return {
+      text: span.textContent ?? '',
+      rect: {
+        left: bounds.left - pageBounds.left,
+        top: bounds.top - pageBounds.top,
+        right: bounds.right - pageBounds.left,
+        bottom: bounds.bottom - pageBounds.top,
+        width: bounds.width,
+        height: bounds.height,
+      },
+    };
+  });
+  const extraction = extractPdfRegionText(items, selection.region);
+  return extraction.reliable ? extraction.text : undefined;
+}
+
+async function capturePdfFormulaSelection(
+  snapshot: SelectionSnapshot,
+  padding = 8,
+): Promise<ImageRegionTranslationCapture | undefined> {
+  if (
+    !snapshot.rect ||
+    !shouldUseVisionForPdfFormula(snapshot.normalizedText)
+  ) return undefined;
+
+  const selection = window.getSelection();
+  const pageElement = closestTextLayer(selection?.anchorNode ?? null)
+    ?.closest<HTMLElement>('.pdf-page[data-rendered="ready"]');
+  const canvas = pageElement?.querySelector<HTMLCanvasElement>('canvas');
+  if (!pageElement || !canvas) return undefined;
+
+  const pageBounds = pageElement.getBoundingClientRect();
+  const region = normalizeRegion(
+    {
+      x: snapshot.rect.left - pageBounds.left - padding,
+      y: snapshot.rect.top - pageBounds.top - padding,
+    },
+    {
+      x: snapshot.rect.right - pageBounds.left + padding,
+      y: snapshot.rect.bottom - pageBounds.top + padding,
+    },
+    { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+  );
+  if (!isUsableRegion(region, 11)) return undefined;
+
+  const pageNumber = Math.max(1, Number(pageElement.dataset.pageNumber) || 1);
+  const capture = await captureCanvasRegion(
+    canvas,
+    { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+    region,
+  );
+  return {
+    imageDataUrl: capture.dataUrl,
+    imageWidth: capture.width,
+    imageHeight: capture.height,
+    recognizedTextHint: snapshot.normalizedText,
+    rect: snapshot.rect,
+    pageUrl: currentSourceUrl,
+    ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
+    selectionReference: sourceLocationForRegion(pageNumber, region, pageBounds),
+    sourceSelection: snapshot,
+    recapture: (nextPadding) => capturePdfFormulaSelection(snapshot, nextPadding),
+  };
+}
+
+function waitForPageReady(
+  pageElement: HTMLElement,
+  expectedDocumentEpoch: number,
+): Promise<boolean> {
+  if (pageElement.dataset.rendered === 'ready') return Promise.resolve(true);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (ready: boolean): void => {
+      if (settled) return;
+      settled = true;
+      observer.disconnect();
+      clearTimeout(timeout);
+      resolve(ready);
+    };
+    const observer = new MutationObserver(() => {
+      if (documentEpoch !== expectedDocumentEpoch) finish(false);
+      else if (pageElement.dataset.rendered === 'ready') finish(true);
+      else if (pageElement.dataset.rendered === 'error') finish(false);
+    });
+    const timeout = setTimeout(() => finish(false), 3000);
+    observer.observe(pageElement, { attributes: true, attributeFilter: ['data-rendered'] });
+  });
+}
+
+async function pageForSourceLocation(
+  reference: PdfSourceLocation,
+): Promise<HTMLElement | undefined> {
+  if (reference.documentId !== currentDocumentSessionId || !pdfDocument) {
+    showNotice('原 PDF 已发生变化，无法恢复这个选区。', { transient: true });
+    return undefined;
+  }
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${reference.pageNumber}"]`,
+  );
+  if (!pageElement) {
+    showNotice('找不到原选区所在页面。', { transient: true });
+    return undefined;
+  }
+  scrollToPageAnchor({ pageNumber: reference.pageNumber, ratio: reference.topRatio });
+  requestPageRender(pdfDocument, pageElement, renderGeneration);
+  if (!await waitForPageReady(pageElement, documentEpoch)) {
+    showNotice('页面尚未渲染完成，请稍后再试。', { transient: true });
+    return undefined;
+  }
+  return pageElement;
+}
+
+function regionFromSourceLocation(
+  reference: PdfSourceLocation,
+  pageElement: HTMLElement,
+): RegionRect {
+  const width = pageElement.clientWidth;
+  const height = pageElement.clientHeight;
+  return normalizeRegion(
+    { x: reference.leftRatio * width, y: reference.topRatio * height },
+    {
+      x: (reference.leftRatio + reference.widthRatio) * width,
+      y: (reference.topRatio + reference.heightRatio) * height,
+    },
+    { left: 0, top: 0, width, height },
+  );
+}
+
+function pdfMarkerRects(reference: PdfSourceLocation): Array<{
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}> {
+  if (reference.documentId !== currentDocumentSessionId) return [];
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${reference.pageNumber}"]`,
+  );
+  if (!pageElement) return [];
+  const pageBounds = pageElement.getBoundingClientRect();
+  const region = regionFromSourceLocation(reference, pageElement);
+  return [{
+    top: pageBounds.top + region.top,
+    right: pageBounds.left + region.right,
+    bottom: pageBounds.top + region.bottom,
+    left: pageBounds.left + region.left,
+  }];
+}
+
+async function restorePdfRegionSelection(reference: PdfSourceLocation): Promise<void> {
+  const pageElement = await pageForSourceLocation(reference);
+  if (!pageElement) return;
+  clearSourceRegionHighlight();
+  const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
+  if (!canvas) {
+    showNotice('无法恢复原选区，请重新框选。', { transient: true });
+    return;
+  }
+  if (regionMode === 'off') setRegionMode('single');
+  const region = regionFromSourceLocation(reference, pageElement);
+  const selection = createActiveRegion(pageElement, canvas, region);
+  createRegionConfirmation(selection);
+  showNotice('已恢复原选区，可拖动或调整角点后重新发送。', { transient: true });
+}
+
+async function navigateToPdfRegion(reference: PdfSourceLocation): Promise<void> {
+  const pageElement = await pageForSourceLocation(reference);
+  if (!pageElement) return;
+  clearSourceRegionHighlight();
+  const region = regionFromSourceLocation(reference, pageElement);
+  const highlight = document.createElement('div');
+  highlight.className = 'region-source-highlight';
+  highlight.style.left = `${region.left}px`;
+  highlight.style.top = `${region.top}px`;
+  highlight.style.width = `${region.width}px`;
+  highlight.style.height = `${region.height}px`;
+  highlight.setAttribute('aria-hidden', 'true');
+  pageElement.append(highlight);
+  sourceRegionHighlight = highlight;
+  sourceRegionHighlightTimer = setTimeout(() => {
+    if (sourceRegionHighlight === highlight) sourceRegionHighlight = undefined;
+    highlight.remove();
+    sourceRegionHighlightTimer = undefined;
+  }, 1800);
+}
+
+async function navigateToPdfMarkerPage(pageNumber: number): Promise<void> {
+  if (!pdfDocument) return;
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${pageNumber}"]`,
+  );
+  if (!pageElement) return;
+  scrollToPageAnchor({ pageNumber, ratio: 0 });
+  requestPageRender(pdfDocument, pageElement, renderGeneration);
+  await waitForPageReady(pageElement, documentEpoch);
+}
+
+function enqueueRegionTranslation(
+  task: Omit<QueuedRegionTranslation, 'id' | 'cancelled'>,
+): boolean {
+  if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
+    showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', { transient: true });
+    return false;
+  }
+  regionTranslationQueue.push({ ...task, id: crypto.randomUUID(), cancelled: false });
+  updateRegionAction();
+  showNotice(`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, { transient: true });
+  void drainRegionTranslationQueue();
+  return true;
+}
+
+async function drainRegionTranslationQueue(): Promise<void> {
+  if (regionTranslationRunning) return;
+  regionTranslationRunning = true;
+  updateRegionAction();
+  try {
+    while (regionTranslationQueue.length) {
+      const task = regionTranslationQueue.shift();
+      if (!task || task.cancelled || task.documentEpoch !== documentEpoch) continue;
+      activeRegionTranslation = task;
+      updateRegionAction();
+      try {
+        const controller = await selectionTranslator;
+        if (task.cancelled || task.documentEpoch !== documentEpoch) continue;
+        if (task.payload.kind === 'text') {
+          await controller.translatePdfRegionText(task.payload.capture);
+        } else {
+          await controller.translateImageRegion(task.payload.capture);
+        }
+      } catch (error) {
+        if (task.cancelled || task.documentEpoch !== documentEpoch) continue;
+        showNotice(
+          error instanceof Error ? error.message : '框选翻译失败，请稍后重试。',
+          { transient: true },
+        );
+      } finally {
+        if (activeRegionTranslation === task) activeRegionTranslation = undefined;
+        updateRegionAction();
+      }
+    }
+  } finally {
+    regionTranslationRunning = false;
+    activeRegionTranslation = undefined;
+    updateRegionAction();
+  }
+}
+
 function createRegionConfirmation(selection: ActiveRegionSelection): void {
   selection.confirm?.remove();
   const confirmation = document.createElement('div');
@@ -383,7 +1387,7 @@ function createRegionConfirmation(selection: ActiveRegionSelection): void {
   confirmation.setAttribute('aria-label', '框选翻译确认');
   const note = document.createElement('span');
   note.className = 'region-confirm-note';
-  note.textContent = '仅此区域会发送至视觉 API';
+  note.textContent = '优先本地提取文字，必要时仅发送此区域';
   const actions = document.createElement('div');
   actions.className = 'region-confirm-actions';
   const confirm = document.createElement('button');
@@ -399,6 +1403,12 @@ function createRegionConfirmation(selection: ActiveRegionSelection): void {
   selection.confirm = confirmation;
   selection.box.classList.add('adjustable');
   selection.box.title = '拖动选框可移动，拖动角点可调整大小';
+  selection.box.tabIndex = 0;
+  selection.box.setAttribute('role', 'group');
+  selection.box.setAttribute(
+    'aria-label',
+    '翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。',
+  );
   for (const handle of ['nw', 'ne', 'se', 'sw'] satisfies RegionResizeHandle[]) {
     const grip = document.createElement('span');
     grip.className = `region-resize-handle ${handle}`;
@@ -406,38 +1416,123 @@ function createRegionConfirmation(selection: ActiveRegionSelection): void {
     grip.ariaHidden = 'true';
     selection.box.append(grip);
   }
+  selection.box.addEventListener('keydown', (event) => {
+    if (activeRegion !== selection || selection.documentEpoch !== documentEpoch) return;
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) return;
+    const step = event.ctrlKey ? 1 : 6;
+    const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+    const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+    const bounds = pageRegionBounds(selection);
+    selection.region = event.shiftKey
+      ? resizeRegion(
+        selection.region,
+        'se',
+        {
+          x: selection.region.right + dx,
+          y: selection.region.bottom + dy,
+        },
+        bounds,
+      )
+      : moveRegion(selection.region, { x: dx, y: dy }, bounds);
+    renderRegionBox(selection);
+    event.preventDefault();
+    event.stopPropagation();
+  });
   positionRegionConfirmation(selection);
-  cancel.addEventListener('click', () => clearRegionSelection());
+  queueMicrotask(() => selection.box.focus({ preventScroll: true }));
+  cancel.addEventListener('click', () => {
+    if (regionMode === 'continuous') {
+      clearRegionSelection();
+      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
+    } else {
+      setRegionMode('off');
+    }
+  });
   confirm.addEventListener('click', () => {
+    if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
+      showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', { transient: true });
+      return;
+    }
     confirm.disabled = true;
     cancel.disabled = true;
-    showNotice('正在准备框选图像…');
-    void (async () => {
-      const currentBounds = selection.pageElement.getBoundingClientRect();
-      const capture = await captureCanvasRegion(
-        selection.canvas,
-        { left: 0, top: 0, width: currentBounds.width, height: currentBounds.height },
-        selection.region,
-      );
-      const rect = {
-        left: currentBounds.left + selection.region.left,
-        top: currentBounds.top + selection.region.top,
-        right: currentBounds.left + selection.region.right,
-        bottom: currentBounds.top + selection.region.bottom,
-      };
-      const pageNumber = selection.pageElement.dataset.pageNumber ?? '';
-      setRegionMode(false);
-      showNotice(undefined);
-      const controller = await selectionTranslator;
-      await controller.translateImageRegion({
-        imageDataUrl: capture.dataUrl,
-        imageWidth: capture.width,
-        imageHeight: capture.height,
+    showNotice('正在检查框选内容…');
+    const captureEpoch = selection.documentEpoch;
+    const requestPageUrl = currentSourceUrl;
+    const requestSourceLabel = currentSourceLabel ?? documentName.textContent ?? 'PDF';
+    const requestRegion = { ...selection.region };
+    const currentBounds = selection.pageElement.getBoundingClientRect();
+    const pageNumber = selection.pageElement.dataset.pageNumber ?? '';
+    const numericPageNumber = Math.max(1, Number(pageNumber) || 1);
+    const rect = regionViewportRect(selection);
+    const sourceLocation = sourceLocationForRegion(
+      numericPageNumber,
+      requestRegion,
+      currentBounds,
+    );
+    const sourceLabel = requestSourceLabel;
+    const extractedText = extractReliableTextFromRegion(selection);
+    const finishSelection = (): void => {
+      clearRegionSelection();
+      if (regionMode === 'single') setRegionMode('off');
+      else if (regionMode === 'continuous') {
+        showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
+      }
+    };
+    if (extractedText && !shouldUseVisionForPdfFormula(extractedText)) {
+      const captureRequest: PdfRegionTextTranslationCapture = {
+        text: extractedText,
         rect,
-        pageUrl: currentSourceUrl,
-        sourceLabel: `${currentSourceLabel ?? documentName.textContent ?? 'PDF'}${pageNumber ? ` · 第 ${pageNumber} 页` : ''}`,
+        pageUrl: requestPageUrl,
+        sourceLabel,
+        sourceLocation,
+      };
+      finishSelection();
+      enqueueRegionTranslation({
+        documentEpoch: captureEpoch,
+        payload: { kind: 'text', capture: captureRequest },
+        pageLabel: pageNumber ? `第 ${pageNumber} 页框选` : 'PDF 框选区域',
+      });
+      return;
+    }
+    void (async () => {
+      const createImageCapture = async (
+        region: RegionRect,
+      ): Promise<ImageRegionTranslationCapture | undefined> => {
+        if (documentEpoch !== captureEpoch || !selection.canvas.isConnected) return undefined;
+        const pageBounds = selection.pageElement.getBoundingClientRect();
+        const capture = await captureCanvasRegion(
+          selection.canvas,
+          { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+          region,
+        );
+        const captureRequest: ImageRegionTranslationCapture = {
+          imageDataUrl: capture.dataUrl,
+          imageWidth: capture.width,
+          imageHeight: capture.height,
+          ...(extractedText ? { recognizedTextHint: extractedText } : {}),
+          rect,
+          pageUrl: requestPageUrl,
+          sourceLabel,
+          selectionReference: sourceLocation,
+          recapture: (padding) => createImageCapture(normalizeRegion(
+            { x: region.left - padding, y: region.top - padding },
+            { x: region.right + padding, y: region.bottom + padding },
+            { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+          )),
+        };
+        return captureRequest;
+      };
+      const captureRequest = await createImageCapture(requestRegion);
+      if (!captureRequest) return;
+      if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+      finishSelection();
+      enqueueRegionTranslation({
+        documentEpoch: captureEpoch,
+        payload: { kind: 'image', capture: captureRequest },
+        pageLabel: pageNumber ? `第 ${pageNumber} 页框选` : 'PDF 框选区域',
       });
     })().catch((error: unknown) => {
+      if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
       confirm.disabled = false;
       cancel.disabled = false;
       showNotice(error instanceof Error ? error.message : '无法处理框选区域，请重新框选。');
@@ -446,12 +1541,15 @@ function createRegionConfirmation(selection: ActiveRegionSelection): void {
 }
 
 viewer.addEventListener('pointerdown', (event) => {
-  if (!regionMode || event.button !== 0) return;
+  if (!isRegionModeActive() || event.button !== 0) return;
   const target = event.target;
   if (!(target instanceof Element)) return;
   if (target.closest('.region-confirm')) return;
   const existing = activeRegion;
-  if (existing && target.closest('.region-selection-box') === existing.box) {
+  if (
+    existing?.documentEpoch === documentEpoch &&
+    target.closest('.region-selection-box') === existing.box
+  ) {
     const handleElement = target.closest<HTMLElement>('[data-region-handle]');
     const handle = handleElement?.dataset.regionHandle as RegionResizeHandle | undefined;
     const point = pointWithinPage(event, existing.pageElement);
@@ -470,24 +1568,19 @@ viewer.addEventListener('pointerdown', (event) => {
   const pageElement = target.closest<HTMLElement>('.pdf-page[data-rendered="ready"]');
   const canvas = pageElement?.querySelector<HTMLCanvasElement>('canvas');
   if (!pageElement || !canvas) return;
-  clearRegionSelection();
   const start = pointWithinPage(event, pageElement);
-  const box = document.createElement('div');
-  box.className = 'region-selection-box';
-  pageElement.append(box);
   const region = normalizeRegion(start, start, {
     left: 0,
     top: 0,
     width: pageElement.clientWidth,
     height: pageElement.clientHeight,
   });
-  activeRegion = {
+  createActiveRegion(
     pageElement,
     canvas,
     region,
-    box,
-    interaction: { kind: 'draw', pointerId: event.pointerId, start },
-  };
+    { kind: 'draw', pointerId: event.pointerId, start },
+  );
   pageElement.setPointerCapture(event.pointerId);
   event.preventDefault();
 });
@@ -532,58 +1625,112 @@ viewer.addEventListener('pointercancel', (event) => {
   renderRegionBox(selection);
 });
 
-regionTranslate.addEventListener('click', () => setRegionMode(!regionMode));
-document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape' || !regionMode) return;
-  setRegionMode(false);
-  showNotice(undefined);
+regionTranslate.addEventListener('click', (event) => {
+  const enable = regionMode !== 'continuous';
+  setRegionMode(enable ? 'continuous' : 'off');
+  if (enable && event.detail === 0) requestAnimationFrame(createKeyboardRegion);
+});
+regionQueueButton.addEventListener('click', () => {
+  const open = regionQueuePanel.hidden;
+  regionQueuePanel.hidden = !open;
+  regionQueueButton.setAttribute('aria-expanded', String(open));
+});
+document.addEventListener('pointerdown', (event) => {
+  if (regionQueuePanel.hidden || !(event.target instanceof Node)) return;
+  if (!regionQueuePanel.contains(event.target) && !regionQueueButton.contains(event.target)) {
+    closeRegionQueuePanel();
+  }
 });
 
-function visiblePageNumber(): number {
-  const pages = [...viewer.querySelectorAll<HTMLElement>('.pdf-page')];
-  if (pages.length === 0) return 1;
-  const anchor = stage.getBoundingClientRect().top + 12;
-  let closestPage = 1;
-  let closestDistance = Number.POSITIVE_INFINITY;
-  for (const page of pages) {
-    const rect = page.getBoundingClientRect();
-    if (rect.top <= anchor && rect.bottom >= anchor) {
-      return Number(page.dataset.pageNumber) || closestPage;
-    }
-    const distance = Math.min(Math.abs(rect.top - anchor), Math.abs(rect.bottom - anchor));
-    if (distance >= closestDistance) continue;
-    closestDistance = distance;
-    closestPage = Number(page.dataset.pageNumber) || closestPage;
-  }
-  return closestPage;
+function ownsTextInput(target: EventTarget | null): boolean {
+  if (!(target instanceof Element)) return false;
+  return Boolean(
+    target.closest('input, textarea, select, button, [contenteditable="true"], [role="textbox"]'),
+  );
 }
 
-async function openPdfSource(source: URL, initialPage = 1): Promise<void> {
-  setLoading(source.protocol === 'file:' ? '正在读取本地 PDF…' : '正在读取在线 PDF…');
-  emptyState.hidden = true;
+function isPdfReadingShortcutContext(event: KeyboardEvent): boolean {
+  if (
+    !pdfDocument ||
+    activeRegion?.confirm ||
+    event.composedPath().some((target) => ownsTextInput(target))
+  ) return false;
+  const active = document.activeElement;
+  if (!active || active === document.body) return true;
+  if (ownsTextInput(active)) return false;
+  return active === stage || active === viewer || Boolean(active.closest('.pdf-page'));
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && !regionQueuePanel.hidden) {
+    closeRegionQueuePanel();
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (event.key === 'Escape' && isRegionModeActive()) {
+    if (activeRegion && regionMode === 'continuous') {
+      clearRegionSelection();
+      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 再次退出', { transient: true });
+    } else {
+      setRegionMode('off');
+    }
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    return;
+  }
+  if (!isPdfReadingShortcutContext(event)) return;
+  const shortcut = resolvePdfRegionShortcut(
+    event,
+    pdfKeyboardShortcutsEnabled,
+    pdfRegionShortcutKey,
+  );
+  if (!shortcut) return;
+  if (shortcut === 'single') {
+    setRegionMode(regionMode === 'single' ? 'off' : 'single');
+  } else {
+    setRegionMode(regionMode === 'continuous' ? 'off' : 'continuous');
+  }
+  event.preventDefault();
+  event.stopImmediatePropagation();
+}, true);
+
+async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
+  const operation = beginDocumentOpen(
+    source.protocol === 'file:' ? '正在读取本地 PDF…' : '正在读取在线 PDF…',
+  );
   try {
     const response = await fetch(
       source.href,
-      source.protocol === 'file:' ? undefined : { credentials: 'include' },
+      source.protocol === 'file:'
+        ? { signal: operation.controller.signal }
+        : { credentials: 'include', signal: operation.controller.signal },
     );
+    if (!isCurrentOpen(operation)) return;
     if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）`);
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
     if (contentType.includes('text/html') || contentType.includes('application/json')) {
       throw new Error('这个地址返回的不是 PDF 文件');
     }
+    const data = new Uint8Array(await response.arrayBuffer());
+    if (!isCurrentOpen(operation)) return;
     await openPdfData(
-      new Uint8Array(await response.arrayBuffer()),
+      data,
       pdfFilename(source.href),
+      operation,
       source.href,
       initialPage,
+      pdfDocumentIdentity(source.href) ?? source.href,
     );
   } catch (error) {
+    if (!isCurrentOpen(operation)) return;
     emptyState.hidden = false;
     showNotice(
       `${error instanceof Error ? error.message : '在线 PDF 读取失败'}。你仍可点击“打开 PDF”选择已下载的本地文件。`,
     );
+    completeDocumentOpen(operation);
   } finally {
-    setLoading(undefined);
+    if (isCurrentOpen(operation) && !pdfDocument) completeDocumentOpen(operation);
   }
 }
 
@@ -599,20 +1746,94 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-zoomOut.addEventListener('click', () => {
-  if (!pdfDocument || zoomIndex === 0) return;
-  const pageNumber = visiblePageNumber();
-  zoomIndex -= 1;
+function steppedZoom(direction: -1 | 1): number {
+  if (direction < 0) {
+    return [...ZOOM_LEVELS].reverse().find((level) => level < currentZoom() - 0.001)
+      ?? ZOOM_LEVELS[0];
+  }
+  return ZOOM_LEVELS.find((level) => level > currentZoom() + 0.001)
+    ?? ZOOM_LEVELS.at(-1)!;
+}
+
+function fitDocumentToAvailableWidth(anchor = visiblePageAnchor()): void {
+  const pdf = pdfDocument;
+  if (!pdf) return;
+  const epoch = documentEpoch;
+  void pdf.getPage(anchor.pageNumber).then((page) => {
+    if (pdfDocument !== pdf || documentEpoch !== epoch || !fitWidthActive) return;
+    const baseViewport = page.getViewport({ scale: 1 });
+    const horizontalPadding = matchMedia('(max-width: 720px)').matches ? 28 : 68;
+    const availableWidth = Math.max(100, stage.clientWidth - horizontalPadding);
+    rebuildAtZoom(availableWidth / Math.max(1, baseViewport.width), anchor);
+  }).catch((error: unknown) => {
+    if (pdfDocument !== pdf || documentEpoch !== epoch) return;
+    showNotice(error instanceof Error ? error.message : '无法计算适合宽度。');
+  });
+}
+
+function scheduleFitWidthRefresh(): void {
+  if (fitWidthTimer) clearTimeout(fitWidthTimer);
+  fitWidthTimer = undefined;
+  if (!fitWidthActive || !pdfDocument) return;
+  fitWidthTimer = setTimeout(() => {
+    fitWidthTimer = undefined;
+    fitDocumentToAvailableWidth();
+  }, 120);
+}
+
+function rebuildAtZoom(nextZoom: number, anchor = visiblePageAnchor()): void {
+  if (!pdfDocument) return;
+  zoomLevel = clamp(nextZoom, ZOOM_LEVELS[0], ZOOM_LEVELS.at(-1)!);
   setDocumentControls(true);
-  void buildPages(pdfDocument, pageNumber);
+  void buildPages(pdfDocument, anchor);
+  scheduleReadingStateSave();
+}
+
+zoomOut.addEventListener('click', () => {
+  if (!pdfDocument || zoomOut.disabled) return;
+  fitWidthActive = false;
+  rebuildAtZoom(steppedZoom(-1));
 });
 zoomIn.addEventListener('click', () => {
-  if (!pdfDocument || zoomIndex === ZOOM_LEVELS.length - 1) return;
-  const pageNumber = visiblePageNumber();
-  zoomIndex += 1;
-  setDocumentControls(true);
-  void buildPages(pdfDocument, pageNumber);
+  if (!pdfDocument || zoomIn.disabled) return;
+  fitWidthActive = false;
+  rebuildAtZoom(steppedZoom(1));
 });
+fitWidth.addEventListener('click', () => {
+  if (!pdfDocument) return;
+  fitWidthActive = true;
+  fitDocumentToAvailableWidth();
+  scheduleReadingStateSave();
+});
+
+function commitPageJump(): void {
+  const total = pdfDocument?.numPages ?? 0;
+  if (!total) return;
+  const requested = Number(pageNumberInput.value);
+  const pageNumber = clamp(Number.isFinite(requested) ? Math.round(requested) : 1, 1, total);
+  pageNumberInput.value = String(pageNumber);
+  scrollToPageAnchor({ pageNumber, ratio: 0 });
+  schedulePageRetention();
+}
+
+pageNumberInput.addEventListener('change', commitPageJump);
+pageNumberInput.addEventListener('keydown', (event) => {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    commitPageJump();
+    pageNumberInput.select();
+  } else if (event.key === 'Escape') {
+    updatePageControl();
+    pageNumberInput.blur();
+  }
+});
+stage.addEventListener('scroll', () => {
+  schedulePageRetention();
+  scheduleReadingStateSave();
+}, { passive: true });
+document.addEventListener('pointerdown', beginSmartTextSelection, true);
+document.addEventListener('pointerup', finishSmartTextSelection, true);
+document.addEventListener('pointercancel', cancelSmartTextSelection, true);
 openSettings.addEventListener('click', () => {
   void browser.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' } satisfies RuntimeMessage);
 });
@@ -624,10 +1845,56 @@ const selectionTranslator = startSelectionTranslator(
     pageUrl: () => currentSourceUrl,
     sourceLabel: () => currentSourceLabel,
     allowSitePause: false,
+    viewportInsets: () => ({ top: toolbar.getBoundingClientRect().bottom }),
+    onSidebarLayoutChange: applyPdfSidebarLayout,
+    onAdjustPdfRegion: restorePdfRegionSelection,
+    onNavigateToPdfRegion: navigateToPdfRegion,
+    onNavigateToPdfMarker: navigateToPdfMarkerPage,
+    resolvePdfRegionRects: pdfMarkerRects,
+    captureVisualSelection: capturePdfFormulaSelection,
+    pdfMarkerPersistence: {
+      isAvailable: () => Boolean(currentReadingIdentity && pdfDocument),
+      currentDocumentId: () => currentDocumentSessionId,
+      load: async () => {
+        const identity = currentReadingIdentity;
+        return identity
+          ? getPdfTranslationMarkerState(identity)
+          : { enabled: false, markers: [], updatedAt: 0 };
+      },
+      setEnabled: async (enabled) => {
+        const identity = currentReadingIdentity;
+        if (identity) await setPdfTranslationMarkerPersistence(identity, enabled);
+      },
+      save: async (markers) => {
+        const identity = currentReadingIdentity;
+        if (identity) await savePdfTranslationMarkers(identity, markers);
+      },
+      clear: async () => {
+        const identity = currentReadingIdentity;
+        if (identity) await clearPdfTranslationMarkers(identity);
+      },
+    },
+    onPublicSettingsChange: (settings) => {
+      pdfKeyboardShortcutsEnabled = settings.pdfKeyboardShortcutsEnabled;
+      pdfRegionShortcutKey = settings.pdfRegionShortcutKey;
+      updateRegionAction();
+    },
   },
 );
 
+const onPdfViewportResize = (): void => applyPdfSidebarLayout(pdfSidebarLayout);
+window.addEventListener('resize', onPdfViewportResize, { passive: true });
+
 window.addEventListener('beforeunload', () => {
+  if (fitWidthTimer) clearTimeout(fitWidthTimer);
+  if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
+  void persistReadingState();
+  window.removeEventListener('resize', onPdfViewportResize);
+  document.removeEventListener('pointerdown', beginSmartTextSelection, true);
+  document.removeEventListener('pointerup', finishSmartTextSelection, true);
+  document.removeEventListener('pointercancel', cancelSmartTextSelection, true);
+  openAbortController?.abort();
+  if (openLoadingTask) void openLoadingTask.destroy().catch(() => undefined);
   clearDocument();
   void pdfDocument?.destroy();
   for (const callback of invalidationCallbacks) callback();
@@ -637,5 +1904,5 @@ setDocumentControls(false);
 const initialSource = parsePdfSourceUrl(
   new URLSearchParams(location.search).get('url') ?? undefined,
 );
-const initialPage = pdfInitialPage(location.href) ?? pdfInitialPage(initialSource?.href) ?? 1;
+const initialPage = pdfInitialPage(location.href) ?? pdfInitialPage(initialSource?.href);
 if (initialSource) void openPdfSource(initialSource, initialPage);

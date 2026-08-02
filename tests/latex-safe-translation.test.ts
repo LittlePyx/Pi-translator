@@ -42,7 +42,42 @@ describe('LaTeX-safe translation retry', () => {
       .strictPlaceholderPreservation).toBe(true);
   });
 
-  it('still blocks the result when the corrective retry is invalid', async () => {
+  it('falls back to translating prose segments and reconstructs LaTeX locally', async () => {
+    const protectedLatex = protectLatex('See \\cite{paper}.');
+    const translate = vi.fn()
+      .mockResolvedValueOnce({ translatedText: '参见该论文。', warnings: [] })
+      .mockResolvedValueOnce({ translatedText: '参见该论文。', warnings: [] })
+      .mockImplementationOnce(async (input: PreparedTranslationInput) => ({
+        translatedText: 'unused',
+        warnings: [],
+        alignedSegments: input.segments?.map((segment) => ({
+          id: segment.id,
+          translatedText: segment.text === 'See' ? '参见' : segment.text,
+        })),
+      }));
+
+    const result = await translateWithLatexRetry(
+      { translate } as Pick<Translator, 'translate'>,
+      {
+        text: protectedLatex.protectedText,
+        placeholderTokens: protectedLatex.fragments.map((fragment) => fragment.token),
+      },
+      options,
+      { apiKey: 'test-key', apiBaseUrl: 'https://example.com/v1' },
+      new AbortController().signal,
+      protectedLatex,
+      undefined,
+    );
+
+    expect(result.restored.text).toBe('参见 \\cite{paper}.');
+    expect(result.restored.warnings).toContainEqual(expect.objectContaining({
+      code: 'PLAIN_TEXT_FALLBACK',
+    }));
+    expect(translate).toHaveBeenCalledTimes(3);
+    expect((translate.mock.calls[2]![0] as PreparedTranslationInput).placeholderTokens).toEqual([]);
+  });
+
+  it('still blocks the result when the provider omits prose fallback segments', async () => {
     const protectedLatex = protectLatex('See \\cite{paper}.');
     const translate = vi.fn().mockResolvedValue({
       translatedText: '参见该论文。',
@@ -61,6 +96,6 @@ describe('LaTeX-safe translation retry', () => {
       protectedLatex,
       undefined,
     )).rejects.toMatchObject({ code: 'LATEX_VALIDATION_FAILED' });
-    expect(translate).toHaveBeenCalledTimes(2);
+    expect(translate).toHaveBeenCalledTimes(3);
   });
 });

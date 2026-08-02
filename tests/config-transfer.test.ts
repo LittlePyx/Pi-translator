@@ -24,6 +24,8 @@ function configuredSettings(): ExtensionSettings {
     model: 'example-model',
     siteAllowlist: ['docs.example.org'],
     academicGlossary: [{ source: 'attention', target: '注意力' }],
+    pdfRegionShortcutKey: 'q',
+    autoRenderLatex: false,
   };
 }
 
@@ -38,6 +40,8 @@ describe('safe settings transfer', () => {
     expect(exported).toContain('docs.example.org');
     expect(exported).toContain('attention');
     expect(exported).toContain('example-vision-model');
+    expect(exported).toContain('pdfRegionShortcutKey');
+    expect(exported).toContain('autoRenderLatex');
   });
 
   it('ignores injected key fields, regenerates ids, and requires keys to be re-entered', () => {
@@ -54,6 +58,8 @@ describe('safe settings transfer', () => {
     expect(imported.visionApiProfileId).toBe(imported.apiProfiles[0]?.id);
     expect(imported.visionModel).toBe('example-vision-model');
     expect(imported.apiKeyStorage).toBe('session');
+    expect(imported.pdfRegionShortcutKey).toBe('q');
+    expect(imported.autoRenderLatex).toBe(false);
     expect(imported.onboardingCompleted).toBe(true);
   });
 
