@@ -1571,7 +1571,25 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   const scanHint = pdfPage.locator('#notice');
   await expect(scanHint).toHaveClass(/transient/);
   await expect(scanHint).toContainText('扫描版 PDF');
+  const recognizePage = scanHint.getByRole('button', { name: '识别并翻译第 1 页' });
+  await expect(recognizePage).toBeVisible();
   expect(await scanHint.evaluate((element) => getComputedStyle(element).position)).toBe('fixed');
+  expect(visionRequests).toHaveLength(requestCount);
+
+  await recognizePage.click();
+  const suggestedRegion = firstPage.locator('.region-selection-box');
+  await expect(suggestedRegion).toBeVisible();
+  const [pageBounds, suggestedBounds] = await Promise.all([
+    firstPage.boundingBox(),
+    suggestedRegion.boundingBox(),
+  ]);
+  expect(pageBounds).not.toBeNull();
+  expect(suggestedBounds).not.toBeNull();
+  if (!pageBounds || !suggestedBounds) return;
+  expect(suggestedBounds.width / pageBounds.width).toBeGreaterThan(0.93);
+  expect(suggestedBounds.height / pageBounds.height).toBeGreaterThan(0.93);
+  await expect(firstPage.locator('.region-confirm-note')).toContainText('仅发送本页选定区域');
+  await firstPage.getByRole('button', { name: '取消' }).click();
   expect(visionRequests).toHaveLength(requestCount);
 
   const regionButton = pdfPage.locator('#region-translate');

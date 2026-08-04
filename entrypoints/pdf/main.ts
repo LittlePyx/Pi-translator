@@ -29,6 +29,7 @@ import {
   moveRegion,
   normalizeRegion,
   resizeRegion,
+  suggestedPageRecognitionRegion,
   type Point,
   type RegionRect,
   type RegionResizeHandle,
@@ -208,13 +209,26 @@ function setLoading(message: string | undefined): void {
 
 function showNotice(
   message: string | undefined,
-  options: { transient?: boolean } = {},
+  options: {
+    transient?: boolean;
+    action?: { label: string; ariaLabel?: string; onClick: () => void };
+  } = {},
 ): void {
   if (noticeTimer) clearTimeout(noticeTimer);
   noticeTimer = undefined;
   noticeRevision += 1;
   notice.hidden = !message;
-  notice.textContent = message ?? '';
+  notice.replaceChildren();
+  if (message) notice.append(document.createTextNode(message));
+  if (message && options.action) {
+    const action = document.createElement('button');
+    action.className = 'notice-action';
+    action.type = 'button';
+    action.textContent = options.action.label;
+    action.setAttribute('aria-label', options.action.ariaLabel ?? options.action.label);
+    action.addEventListener('click', () => options.action?.onClick());
+    notice.append(action);
+  }
   notice.classList.toggle('transient', Boolean(message && options.transient));
   if (!message || !options.transient) return;
   const revision = noticeRevision;
@@ -224,7 +238,7 @@ function showNotice(
     notice.textContent = '';
     notice.classList.remove('transient');
     noticeTimer = undefined;
-  }, 4500);
+  }, options.action ? 8000 : 4500);
 }
 
 function setDocumentControls(enabled: boolean): void {
@@ -819,8 +833,13 @@ async function renderPage(
     pageElement.dataset.hasText = String(hasText);
     if (!hasText && !scanHintShownForDocument && !isRegionModeActive()) {
       scanHintShownForDocument = true;
-      showNotice('可能是扫描版 PDF · 可用“框选翻译”识别局部内容', {
+      showNotice('可能是扫描版 PDF', {
         transient: true,
+        action: {
+          label: '识别本页',
+          ariaLabel: `识别并翻译第 ${pageElement.dataset.pageNumber ?? '当前'} 页`,
+          onClick: () => createPageRecognitionRegion(pageElement),
+        },
       });
     }
     schedulePageRetention();
@@ -1092,6 +1111,30 @@ function createKeyboardRegion(): void {
   );
   const selection = createActiveRegion(pageElement, canvas, region);
   createRegionConfirmation(selection);
+}
+
+function createPageRecognitionRegion(pageElement: HTMLElement): void {
+  const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
+  if (pageElement.dataset.rendered !== 'ready' || !canvas) {
+    showNotice('页面仍在渲染，请稍后再试。', { transient: true });
+    return;
+  }
+  const bounds = pageElement.getBoundingClientRect();
+  if (bounds.width <= 0 || bounds.height <= 0) {
+    showNotice('当前页面不可见，请滚动到页面后重试。', { transient: true });
+    return;
+  }
+  setRegionMode('single');
+  const selection = createActiveRegion(
+    pageElement,
+    canvas,
+    suggestedPageRecognitionRegion({ width: bounds.width, height: bounds.height }),
+  );
+  createRegionConfirmation(
+    selection,
+    '仅发送本页选定区域；可先拖动边框排除页眉、页脚或空白边缘',
+  );
+  showNotice(undefined);
 }
 
 function sourceLocationForRegion(
@@ -1379,7 +1422,10 @@ async function drainRegionTranslationQueue(): Promise<void> {
   }
 }
 
-function createRegionConfirmation(selection: ActiveRegionSelection): void {
+function createRegionConfirmation(
+  selection: ActiveRegionSelection,
+  noteText = '优先本地提取文字，必要时仅发送此区域',
+): void {
   selection.confirm?.remove();
   const confirmation = document.createElement('div');
   confirmation.className = 'region-confirm';
@@ -1387,7 +1433,7 @@ function createRegionConfirmation(selection: ActiveRegionSelection): void {
   confirmation.setAttribute('aria-label', '框选翻译确认');
   const note = document.createElement('span');
   note.className = 'region-confirm-note';
-  note.textContent = '优先本地提取文字，必要时仅发送此区域';
+  note.textContent = noteText;
   const actions = document.createElement('div');
   actions.className = 'region-confirm-actions';
   const confirm = document.createElement('button');

@@ -189,6 +189,22 @@ button { color: inherit; font: inherit; cursor: pointer; }
   transform: translateX(-50%);
 }
 
+.notice-action {
+  margin-left: 10px;
+  padding: 2px 7px;
+  border: 0;
+  border-left: 1px solid currentColor;
+  border-radius: 0;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-weight: 650;
+  cursor: pointer;
+}
+
+.notice-action:hover { text-decoration: underline; }
+.notice-action:focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+
 .pdf-viewer {
   --scale-factor: 1.25;
   display: grid;

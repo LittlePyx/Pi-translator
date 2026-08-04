@@ -68,6 +68,16 @@ export function isUsableRegion(region: Pick<RegionRect, 'width' | 'height'>, min
   return region.width >= minimum && region.height >= minimum;
 }
 
+export function suggestedPageRecognitionRegion(
+  page: Pick<RegionRect, 'width' | 'height'>,
+): RegionRect {
+  const width = Math.max(0, page.width);
+  const height = Math.max(0, page.height);
+  const insetX = Math.min(24, width * 0.025);
+  const insetY = Math.min(24, height * 0.025);
+  return regionRect(insetX, insetY, width - insetX, height - insetY);
+}
+
 function regionRect(left: number, top: number, right: number, bottom: number): RegionRect {
   return {
     left,

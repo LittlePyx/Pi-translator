@@ -6,6 +6,7 @@ import {
   normalizeRegion,
   resizeRegion,
   scaledImageDimensions,
+  suggestedPageRecognitionRegion,
 } from '../core/pdf/region-capture';
 
 describe('PDF image region geometry', () => {
@@ -60,6 +61,25 @@ describe('PDF image region geometry', () => {
     expect(scaledImageDimensions(4096, 1024)).toEqual({ width: 2048, height: 512 });
     expect(scaledImageDimensions(1024, 4096)).toEqual({ width: 512, height: 2048 });
     expect(scaledImageDimensions(800, 600)).toEqual({ width: 800, height: 600 });
+  });
+
+  it('suggests a nearly full-page region that leaves adjustable edge margins', () => {
+    expect(suggestedPageRecognitionRegion({ width: 800, height: 1200 })).toEqual({
+      left: 20,
+      top: 24,
+      right: 780,
+      bottom: 1176,
+      width: 760,
+      height: 1152,
+    });
+    expect(suggestedPageRecognitionRegion({ width: 2000, height: 3000 })).toEqual({
+      left: 24,
+      top: 24,
+      right: 1976,
+      bottom: 2976,
+      width: 1952,
+      height: 2952,
+    });
   });
 
   it('moves an existing region while preserving its size and constraining it to the page', () => {
