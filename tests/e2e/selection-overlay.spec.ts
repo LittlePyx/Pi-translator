@@ -2651,6 +2651,61 @@ test('automatically binds a visual-capable active API when settings are saved', 
   await options.close();
 });
 
+test('keeps the text API active while a second profile is configured for PDF images', async () => {
+  const options = await context.newPage();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  const profileIds = await options.evaluate(async () => {
+    const extensionChrome = (
+      globalThis as typeof globalThis & { chrome: TestChromeApi }
+    ).chrome;
+    const stored = await extensionChrome.storage.local.get('extensionSettings');
+    const settings = stored.extensionSettings as {
+      apiProfiles: Array<{ id: string; name: string; apiBaseUrl: string; model: string }>;
+    };
+    const textProfile = settings.apiProfiles[0]!;
+    const visionProfile = {
+      ...textProfile,
+      id: 'e2e-vision-profile',
+      name: 'Qwen 视觉测试',
+    };
+    await extensionChrome.storage.local.set({
+      extensionSettings: {
+        ...stored.extensionSettings,
+        apiProfiles: [textProfile, visionProfile],
+        activeApiProfileId: textProfile.id,
+        visionApiProfileId: '',
+        visionModel: '',
+      },
+    });
+    return { text: textProfile.id, vision: visionProfile.id };
+  });
+  await options.reload();
+  await expect(options.locator('#profile-role-status')).toContainText('文字翻译');
+
+  await options.locator('#api-profile').selectOption(profileIds.vision);
+  await expect(options.locator('#profile-role-status')).toContainText('尚未分配');
+  await expect(options.locator('#use-text-profile')).toBeVisible();
+  await options.locator('#api-key').fill('e2e-review-key');
+  await options.locator('#refresh-models').click();
+  await expect(options.locator('#status')).toContainText('文字继续使用');
+  await expect(options.locator('#profile-role-status')).toContainText('PDF 图像');
+  await expect(options.locator('#profile-role-status')).not.toContainText('文字翻译');
+
+  await options.locator('button[type="submit"]').click();
+  await expect(options.locator('#status')).toContainText('文字继续使用');
+  await expect.poll(() => options.evaluate(async () => {
+    const extensionChrome = (
+      globalThis as typeof globalThis & { chrome: TestChromeApi }
+    ).chrome;
+    const stored = await extensionChrome.storage.local.get('extensionSettings');
+    return {
+      text: stored.extensionSettings?.activeApiProfileId,
+      vision: stored.extensionSettings?.visionApiProfileId,
+    };
+  })).toEqual(profileIds);
+  await options.close();
+});
+
 test('uses and remembers a visual-capable active API on the first image translation', async () => {
   const extensionPage = await context.newPage();
   await extensionPage.goto(`chrome-extension://${extensionId}/options.html`);

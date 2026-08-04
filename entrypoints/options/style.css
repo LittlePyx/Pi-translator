@@ -1361,6 +1361,24 @@ button:hover { background: #f1f3f6; }
   border-top: 1px solid #dfe3e9;
 }
 
+.profile-role-line {
+  display: flex;
+  min-height: 31px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 7px 2px 0;
+  color: #69768a;
+  font-size: 11px;
+}
+
+.profile-role-line .text-button {
+  padding: 2px 0;
+  border: 0;
+  border-radius: 0;
+  font-size: 11px;
+}
+
 .connection-step {
   display: grid;
   grid-template-columns: 28px minmax(0, 1fr);
