@@ -8,17 +8,18 @@ export interface ApiPreset {
 
 export const API_PRESETS: ApiPreset[] = [
   {
+    id: 'deepseek',
+    name: 'DeepSeek',
+    apiBaseUrl: 'https://api.deepseek.com',
+    model: 'deepseek-v4-flash',
+    keyHint: '选择服务商后，扩展会自动填写官方接口地址；连接后再读取此 Key 可用的模型。',
+  },
+  {
     id: 'qwen',
     name: 'Qwen / 阿里云百炼',
     apiBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen3.7-plus',
     keyHint: 'API Key 与地域需要匹配；此预设使用中国内地（北京）兼容地址。',
-  },
-  {
-    id: 'deepseek',
-    name: 'DeepSeek',
-    apiBaseUrl: 'https://api.deepseek.com',
-    model: 'deepseek-v4-flash',
   },
   {
     id: 'openrouter',

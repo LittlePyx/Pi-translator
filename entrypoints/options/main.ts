@@ -9,6 +9,10 @@ import type {
 } from '../../core/messaging/messages';
 import { runtimeConnectionErrorMessage, translationErrorMessage } from '../../core/messaging/user-facing-error';
 import { apiOriginPattern, normalizeApiBaseUrl } from '../../core/settings/api-access';
+import {
+  recommendedTextModel,
+  recommendedVisionModelCandidates,
+} from '../../core/settings/api-model-selection';
 import { API_PRESETS } from '../../core/settings/api-presets';
 import {
   exportSettingsConfiguration,
@@ -47,7 +51,9 @@ const addProfileButton=element<HTMLButtonElement>('add-profile');
 const deleteProfileButton=element<HTMLButtonElement>('delete-profile');
 const profileName=element<HTMLInputElement>('profile-name');
 const apiPreset=element<HTMLSelectElement>('api-preset');
+const apiProviderHint=element<HTMLElement>('api-provider-hint');
 const apiBaseUrl=element<HTMLInputElement>('api-base-url');
+const connectionAdvanced=element<HTMLDetailsElement>('connection-advanced');
 const apiPermissionState=element<HTMLElement>('api-permission-state');
 const apiKeyInput=element<HTMLInputElement>('api-key');
 const apiKeyState=element<HTMLElement>('api-key-state');
@@ -55,6 +61,10 @@ const persistKey=element<HTMLInputElement>('persist-key');
 const modelInput=element<HTMLInputElement>('model');
 const modelList=element<HTMLDataListElement>('model-list');
 const refreshModelsButton=element<HTMLButtonElement>('refresh-models');
+const connectionSummary=element<HTMLElement>('connection-summary');
+const connectionTextStatus=element<HTMLElement>('connection-text-status');
+const connectionFormatStatus=element<HTMLElement>('connection-format-status');
+const connectionVisionStatus=element<HTMLElement>('connection-vision-status');
 const sourceLanguage=element<HTMLSelectElement>('source-language');
 const targetLanguage=element<HTMLSelectElement>('target-language');
 const styleSelect=element<HTMLSelectElement>('style');
@@ -91,6 +101,7 @@ const diagnosticReport=element<HTMLElement>('diagnostic-report');
 const shortcutsButton=element<HTMLButtonElement>('open-shortcuts');
 const onboardingDialog=element<HTMLDialogElement>('onboarding-dialog');
 const onboardingPreset=element<HTMLSelectElement>('onboarding-preset');
+const onboardingBaseUrlField=element<HTMLElement>('onboarding-base-url-field');
 const onboardingBaseUrl=element<HTMLInputElement>('onboarding-base-url');
 const onboardingApiKey=element<HTMLInputElement>('onboarding-api-key');
 const onboardingPersistKey=element<HTMLInputElement>('onboarding-persist-key');
@@ -110,6 +121,7 @@ const supportStatus=element<HTMLElement>('support-status');
 const navProfileName=element<HTMLElement>('nav-profile-name');
 const navKeyStatus=element<HTMLElement>('nav-key-status');
 const saveState=element<HTMLElement>('save-state');
+const extensionVersion=element<HTMLElement>('extension-version');
 const settingsNavButtons=[...document.querySelectorAll<HTMLButtonElement>('[data-settings-target]')];
 const settingsSections=[...document.querySelectorAll<HTMLElement>('[data-settings-section]')];
 
@@ -120,9 +132,14 @@ let currentProfileId='default';
 let visionProfileId='';
 let visionSelectionTouched=false;
 let onboardingStep=1;
+let onboardingAvailableModels:string[]=[];
 let formDirty=false;
 
-for(const preset of API_PRESETS){for(const select of [apiPreset,onboardingPreset]){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.name;select.append(option)}}
+for(const select of [apiPreset,onboardingPreset]){
+  for(const preset of API_PRESETS){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.name;select.append(option)}
+  const custom=document.createElement('option');custom.value='custom';custom.textContent='自定义 OpenAI 兼容 API';select.append(custom);
+}
+extensionVersion.textContent=browser.runtime.getManifest().version;
 
 function setStatus(message:string,error=false):void{status.textContent=message;status.classList.toggle('error',error)}
 function setOnboardingStatus(message:string,error=false):void{onboardingStatus.textContent=message;onboardingStatus.classList.toggle('error',error)}
@@ -134,7 +151,13 @@ function setSaved():void{formDirty=false;saveState.textContent='所有设置已�
 function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`)}
 
 function activeOnboardingPreset(){return API_PRESETS.find(preset=>preset.id===onboardingPreset.value)}
-function applyOnboardingPreset():void{const preset=activeOnboardingPreset();if(!preset){onboardingBaseUrl.value='';onboardingModel.value='';onboardingKeyHint.textContent='填写任意 OpenAI 兼容接口的 Base URL、API Key 与模型名称。';return}onboardingBaseUrl.value=preset.apiBaseUrl;onboardingModel.value=preset.model;onboardingKeyHint.textContent=preset.keyHint??'Key 不会发送给 P&I Lab，也不会写入配置导出文件。';if(preset.id==='ollama'&&!onboardingApiKey.value)onboardingApiKey.value='ollama'}
+function providerHint(presetId:string):string {
+  const preset=API_PRESETS.find(item=>item.id===presetId);
+  if(!preset)return '自定义接口需要在“高级接口设置”中填写 API Base URL；模型可读取或手动输入。';
+  return preset.keyHint??`将使用 ${preset.name} 的预设接口地址；连接后读取此 Key 实际可用的模型。`;
+}
+function refreshProviderHint():void{apiProviderHint.textContent=providerHint(apiPreset.value)}
+function applyOnboardingPreset():void{onboardingAvailableModels=[];const preset=activeOnboardingPreset();onboardingBaseUrlField.hidden=Boolean(preset);if(!preset){onboardingBaseUrl.value='';onboardingModel.value='';onboardingKeyHint.textContent='自定义接口需要填写 Base URL；随后会尝试读取当前 Key 可用的模型。';return}onboardingBaseUrl.value=preset.apiBaseUrl;onboardingModel.value=preset.model;onboardingKeyHint.textContent=preset.keyHint??'Key 不会发送给 P&I Lab，也不会写入配置导出文件。';if(preset.id==='ollama'&&!onboardingApiKey.value)onboardingApiKey.value='ollama'}
 function showOnboardingStep(step:number):void{onboardingStep=Math.min(3,Math.max(1,step));for(const section of document.querySelectorAll<HTMLElement>('[data-onboarding-step]'))section.hidden=Number(section.dataset.onboardingStep)!==onboardingStep;for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){const index=Number(dot.dataset.onboardingDot);dot.classList.toggle('active',index===onboardingStep);dot.classList.toggle('complete',index<onboardingStep)}onboardingBack.hidden=onboardingStep===1;onboardingNext.textContent=onboardingStep===1?'下一步':onboardingStep===2?'连接并读取模型':'测试并完成';setOnboardingStatus('')}
 
 async function finishOnboarding():Promise<void>{
@@ -149,16 +172,16 @@ async function finishOnboarding():Promise<void>{
   const current=await getSettings();
   const preset=activeOnboardingPreset();
   const profile:ApiProfile={id:current.apiProfiles[0]?.id??crypto.randomUUID(),name:preset?.name??'自定义 API',apiBaseUrl:base,model};
-  const visionResponse=await requestVisionCapabilityTest(profile,model,apiKey);
-  const visionSupported=visionResponse.ok;
+  const visionDetection=await detectVisionModel(profile,onboardingAvailableModels,model,apiKey);
+  const visionSupported=Boolean(visionDetection.model);
   const mode:ApiKeyStorageMode=onboardingPersistKey.checked?'local':'session';
-  const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:[profile],activeApiProfileId:profile.id,visionApiProfileId:visionSupported?profile.id:'',visionModel:visionSupported?model:current.visionModel,apiBaseUrl:base,model,apiKeyStorage:mode,onboardingCompleted:true};
+  const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:[profile],activeApiProfileId:profile.id,visionApiProfileId:visionSupported?profile.id:'',visionModel:visionDetection.model??current.visionModel,apiBaseUrl:base,model,apiKeyStorage:mode,onboardingCompleted:true};
   await saveSettings(next);
   await saveApiKey(apiKey,mode,profile.id);
   onboardingApiKey.value='';
   onboardingDialog.close();
   await load();
-  setStatus(visionSupported?'首次设置已完成，并已自动启用 PDF 图像框选翻译。':'首次设置已完成；当前模型未通过图片输入检测，文字翻译可以正常使用。');
+  setStatus(visionSupported?`首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`:'首次设置已完成；当前接口未检测到可用的图片模型，文字翻译可以正常使用。');
 }
 
 function validatedProfiles():ApiProfile[] {
@@ -191,7 +214,8 @@ function renderVisionProfileSelect():void {
 }
 
 async function loadProfile(profileId:string):Promise<void>{
-  const profile=profiles.find(item=>item.id===profileId);if(!profile)return;currentProfileId=profile.id;profileName.value=profile.name;apiBaseUrl.value=profile.apiBaseUrl;modelInput.value=profile.model;apiPreset.value=API_PRESETS.find(preset=>preset.apiBaseUrl===profile.apiBaseUrl&&(!preset.model||preset.model===profile.model))?.id??'custom';apiKeyInput.value='';renderProfileSelect();diagnosticReport.hidden=true;await Promise.all([refreshKeyState(),refreshApiPermissionState()]);
+  const profile=profiles.find(item=>item.id===profileId);if(!profile)return;currentProfileId=profile.id;profileName.value=profile.name;apiBaseUrl.value=profile.apiBaseUrl;modelInput.value=profile.model;apiPreset.value=API_PRESETS.find(preset=>preset.apiBaseUrl===profile.apiBaseUrl)?.id??'custom';connectionAdvanced.open=apiPreset.value==='custom';refreshProviderHint();apiKeyInput.value='';renderProfileSelect();diagnosticReport.hidden=true;await Promise.all([refreshKeyState(),refreshApiPermissionState()]);
+  connectionSummary.hidden=true;
 }
 
 function refreshPageModeFields():void {
@@ -217,6 +241,54 @@ async function requestVisionCapabilityTest(profile:ApiProfile,model:string,apiKe
     type:'TEST_VISION_CAPABILITY',
     payload:{apiBaseUrl:profile.apiBaseUrl,model,profileId:profile.id,...(apiKey.trim()?{apiKey:apiKey.trim()}: {})},
   } satisfies RuntimeMessage) as Promise<VisionCapabilityTestResponse>;
+}
+
+interface VisionDetectionResult {
+  model?:string;
+  latencyMs?:number;
+  error?:string;
+  preserved?:boolean;
+}
+
+async function detectVisionModel(
+  profile:ApiProfile,
+  availableModels:string[],
+  textModel:string,
+  apiKey='',
+  preferred='',
+):Promise<VisionDetectionResult>{
+  const candidates=recommendedVisionModelCandidates(availableModels,textModel,preferred);
+  let lastError='当前接口未返回明显支持图片输入的模型。';
+  for(const candidate of candidates){
+    const response=await requestVisionCapabilityTest(profile,candidate,apiKey);
+    if(response.ok)return {model:candidate,latencyMs:response.data.latencyMs};
+    lastError=translationErrorMessage(response.error.code,response.error.message);
+    if(!['VISION_MODEL_UNSUPPORTED','MODEL_NOT_FOUND'].includes(response.error.code))break;
+  }
+  return {error:lastError};
+}
+
+function setCapabilityStatus(element:HTMLElement,text:string,state:'success'|'muted'='success'):void{
+  element.textContent=text;
+  element.classList.toggle('success',state==='success');
+  element.classList.toggle('muted',state==='muted');
+}
+
+function renderConnectionSummary(
+  report:ApiDiagnosticReport,
+  textModel:string,
+  vision:VisionDetectionResult,
+):void{
+  setCapabilityStatus(connectionTextStatus,report.chatCompletion?`可用 · ${textModel}`:'对话接口验证失败',report.chatCompletion?'success':'muted');
+  const formats=[report.structuredOutput?'结构化输出':'完整译文降级',report.sentenceAlignment?'逐句对照':'逐句自动降级'];
+  setCapabilityStatus(connectionFormatStatus,formats.join(' · '),report.structuredOutput&&report.sentenceAlignment?'success':'muted');
+  if(vision.model){
+    const latency=vision.latencyMs?` · ${vision.latencyMs} ms`:'';
+    setCapabilityStatus(connectionVisionStatus,`${vision.preserved?'保留现有配置':'可用'} · ${vision.model}${latency}`,vision.preserved?'muted':'success');
+  }else{
+    setCapabilityStatus(connectionVisionStatus,'未自动启用；文字翻译不受影响','muted');
+  }
+  connectionSummary.hidden=false;
 }
 
 async function autoConfigureVisionProfile(active:ApiProfile):Promise<{attempted:boolean;configured:boolean}>{
@@ -258,15 +330,15 @@ window.addEventListener('beforeunload',event=>{if(!formDirty)return;event.preven
 onboardingPreset.addEventListener('change',applyOnboardingPreset);
 onboardingBack.addEventListener('click',()=>showOnboardingStep(onboardingStep-1));
 onboardingSkip.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();await saveSettings({...settings,onboardingCompleted:true});onboardingDialog.close();await load();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
-onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingStep===1){showOnboardingStep(2);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));if(!onboardingModel.value&&response.data.models[0])onboardingModel.value=response.data.models[0];message=response.data.models.length?`已读取 ${response.data.models.length} 个模型。`:'接口未返回模型列表，请手动填写。'}else{message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步手动填写模型。`;error=true}showOnboardingStep(3);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
+onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingStep===1){showOnboardingStep(2);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在验证 Key 并读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingAvailableModels=response.data.models;onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?`连接成功，已自动推荐文字模型 ${onboardingModel.value}；下一步会检测图片输入能力。`:'Key 验证成功，但接口未返回模型列表，请手动填写模型 ID。'}else{onboardingAvailableModels=[];message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步核对并手动填写模型。`;error=true}showOnboardingStep(3);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
 
-apiBaseUrl.addEventListener('input',()=>{apiPreset.value='custom';void refreshApiPermissionState()});generalPageMode.addEventListener('change',refreshPageModeFields);
+apiBaseUrl.addEventListener('input',()=>{apiPreset.value='custom';connectionAdvanced.open=true;connectionSummary.hidden=true;refreshProviderHint();void refreshApiPermissionState()});generalPageMode.addEventListener('change',refreshPageModeFields);
 pdfKeyboardShortcuts.addEventListener('change',refreshPdfShortcutField);
 pdfRegionShortcutKey.addEventListener('input',()=>{
   const letter=pdfRegionShortcutKey.value.match(/[a-z]/i)?.[0]??'';
   pdfRegionShortcutKey.value=letter.toUpperCase();
 });
-apiPreset.addEventListener('change',()=>{const preset=API_PRESETS.find(item=>item.id===apiPreset.value);if(!preset)return;apiBaseUrl.value=preset.apiBaseUrl;modelInput.value=preset.model;updateCurrentProfile();void refreshApiPermissionState();setStatus(preset.keyHint??`已填入 ${preset.name} 接口，可读取模型后再保存。`)});
+apiPreset.addEventListener('change',()=>{connectionSummary.hidden=true;const preset=API_PRESETS.find(item=>item.id===apiPreset.value);if(!preset){apiBaseUrl.value='';modelInput.value='';connectionAdvanced.open=true;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus('请在高级接口设置中填写自定义 API Base URL，然后连接并自动配置。');queueMicrotask(()=>apiBaseUrl.focus());return}apiBaseUrl.value=preset.apiBaseUrl;modelInput.value=preset.model;if(/^(?:默认接口|未命名配置)$/u.test(profileName.value.trim()))profileName.value=preset.name;connectionAdvanced.open=false;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus(`已配置 ${preset.name} 接口；填写 Key 后点击“连接并自动配置”。`)});
 profileSelect.addEventListener('change',()=>{if(apiKeyInput.value.trim()){profileSelect.value=currentProfileId;setStatus('请先保存当前输入的 API Key，再切换配置。',true);return}updateCurrentProfile();void loadProfile(profileSelect.value)});
 profileName.addEventListener('input',()=>{const profile=currentProfile();if(profile){profile.name=profileName.value.trim()||'未命名配置';renderProfileSelect()}});
 visionApiProfile.addEventListener('change',()=>{visionProfileId=visionApiProfile.value;visionSelectionTouched=true;const profile=profiles.find(item=>item.id===visionProfileId);if(profile)visionModel.value=profile.model;setDirty()});
@@ -282,7 +354,39 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
   void(async()=>{const active=currentProfile()!;await requestSaveAccess(profiles,active.id,visionProfileId,mode,allowlist);const autoVision=await autoConfigureVisionProfile(active);const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';const current=loadedSettings??await getSettings();const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:profiles.map(profile=>({...profile})),activeApiProfileId:active.id,visionApiProfileId:visionProfileId,visionModel:visionModel.value.trim()||active.model,apiBaseUrl:active.apiBaseUrl,model:active.model,sourceLanguage:sourceLanguage.value,targetLanguage:targetLanguage.value,style:styleSelect.value as TranslationStyle,contentMode:contentMode.value as ContentMode,apiKeyStorage:keyMode,academicGlossary:glossary.entries,rememberRecentTranslations:rememberHistory.checked,historyLimit:Number(historyLimit.value) as HistoryLimit,enableSessionCache:sessionCache.checked,sentenceAlignmentDefault:alignmentDefault.checked,autoRenderLatex:autoRenderLatex.checked,sidebarSide:sidebarSide.value as SidebarSide,contextMode:contextMode.value as ContextMode,enableStreaming:enableStreaming.checked,protectSensitiveFields:protectSensitiveFields.checked,pdfKeyboardShortcutsEnabled:pdfKeyboardShortcuts.checked,pdfRegionShortcutKey:normalizePdfRegionShortcutKey(pdfRegionShortcutKey.value),showFloatingButtonOnOverleaf:floatingButton.checked,hideFloatingButtonForTargetLanguage:hideTargetLanguageTrigger.checked,generalPageMode:mode,siteAllowlist:allowlist,enableContextMenu:contextMenu.checked,onboardingCompleted:true};await saveSettings(next);if(apiKeyInput.value.trim()){await saveApiKey(apiKeyInput.value,keyMode,currentProfileId);apiKeyInput.value=''}else if(keyMode!==originalMode)await moveApiKey(keyMode);await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,mode,allowlist);originalMode=keyMode;loadedSettings=next;visionSelectionTouched=false;await refreshKeyState();setSaved();setStatus(autoVision.configured&&autoVision.attempted?'设置已保存，并已自动启用 PDF 图像区域翻译。':autoVision.attempted?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。':'设置已保存，并已同步到打开的页面。')})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
 });
 
-async function callModels():Promise<void>{const base=currentApiBaseUrl();await requestApiAccess(base);refreshModelsButton.disabled=true;setStatus('正在读取可用模型…');const apiKey=apiKeyInput.value.trim();const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiBaseUrl:base,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ModelListResponse;if(!response.ok){setStatus(translationErrorMessage(response.error.code,response.error.message),true);return}modelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));setStatus(response.data.models.length?`已读取 ${response.data.models.length} 个模型，可在输入框中选择。`:'接口没有返回模型列表，请手动填写模型名称。')}
+async function callModels():Promise<void>{
+  const apiKey=apiKeyInput.value.trim();
+  if(!apiKey&&!await hasApiKey(currentProfileId))throw new Error('请先填写 API Key，再连接并自动配置。');
+  const base=currentApiBaseUrl();
+  await requestApiAccess(base);
+  refreshModelsButton.disabled=true;
+  connectionSummary.hidden=true;
+  setStatus('正在读取可用模型…');
+  const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiBaseUrl:base,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ModelListResponse;
+  if(!response.ok){setStatus(translationErrorMessage(response.error.code,response.error.message),true);return}
+  modelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));
+  const suggested=recommendedTextModel(response.data.models,modelInput.value.trim())??modelInput.value.trim();
+  if(!suggested){setStatus('接口没有返回模型列表，请手动填写模型 ID 后使用“仅验证当前模型”。',true);return}
+  if(suggested!==modelInput.value.trim()){modelInput.value=suggested;updateCurrentProfile();setDirty()}
+  const active={...(currentProfile()??{id:currentProfileId,name:'当前接口',apiBaseUrl:base,model:suggested}),apiBaseUrl:base,model:suggested};
+  setStatus(`已读取 ${response.data.models.length} 个模型，正在验证文字模型 ${suggested}…`);
+  const diagnostic=await browser.runtime.sendMessage({type:'DIAGNOSE_API',payload:{apiBaseUrl:base,model:suggested,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ApiDiagnosticResponse;
+  if(!diagnostic.ok){setStatus(translationErrorMessage(diagnostic.error.code,diagnostic.error.message),true);return}
+  let vision:VisionDetectionResult;
+  if(visionProfileId){
+    const configuredProfile=profiles.find(profile=>profile.id===visionProfileId);
+    const configuredModel=visionModel.value.trim()||configuredProfile?.model;
+    vision=configuredModel?{model:configuredModel,preserved:true}:{preserved:true};
+  }else{
+    setStatus(`文字模型 ${suggested} 可用，正在检测 PDF 图片输入能力…`);
+    vision=await detectVisionModel(active,response.data.models,suggested,apiKey,visionModel.value);
+    if(vision.model){visionProfileId=active.id;visionModel.value=vision.model;renderVisionProfileSelect();setVisionTestStatus(`已自动启用 PDF 图像区域翻译 · ${vision.model}${vision.latencyMs?` · ${vision.latencyMs} ms`:''}`,'success')}
+    else setVisionTestStatus('当前接口未检测到可用的图片模型；文字翻译不受影响。');
+  }
+  renderConnectionSummary(diagnostic.data,suggested,vision);
+  setDirty();
+  setStatus(vision.model?`自动配置完成：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。请保存设置。`:`文字模型 ${suggested} 已配置；未检测到图片模型。请保存设置。`);
+}
 refreshModelsButton.addEventListener('click',()=>void callModels().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{refreshModelsButton.disabled=false}));
 
 testButton.addEventListener('click',()=>{const model=modelInput.value.trim();if(!model){setStatus('请先填写模型名称。',true);return}void(async()=>{const base=currentApiBaseUrl();await requestApiAccess(base);testButton.disabled=true;setStatus('正在测试 API、Key 与模型…');const apiKey=apiKeyInput.value.trim();const response=await browser.runtime.sendMessage({type:'TEST_API_CONNECTION',payload:{apiBaseUrl:base,model,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ConnectionTestResponse;setStatus(response.ok?'连接成功，API Key 与模型可用。':translationErrorMessage(response.error.code,response.error.message),!response.ok)})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{testButton.disabled=false})});

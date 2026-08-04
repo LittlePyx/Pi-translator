@@ -29,20 +29,19 @@
           <p>预设只会填写接口地址和建议模型，API Key 由你自己提供。</p>
           <label>
             <span>接口类型</span>
-            <select id="onboarding-preset">
-              <option value="custom">自定义 OpenAI 兼容 API</option>
-            </select>
+            <select id="onboarding-preset"></select>
           </label>
         </section>
         <section class="onboarding-step" data-onboarding-step="2" hidden>
           <h3>连接你的 API</h3>
           <label>
-            <span>API Base URL</span>
-            <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" />
-          </label>
-          <label>
             <span>API Key</span>
             <input id="onboarding-api-key" type="password" autocomplete="off" placeholder="只保存在浏览器扩展存储中" />
+          </label>
+          <label id="onboarding-base-url-field" hidden>
+            <span>API Base URL</span>
+            <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" />
+            <small>仅自定义接口需要填写；预设服务商会自动配置。</small>
           </label>
           <label class="check-row compact-check">
             <input id="onboarding-persist-key" type="checkbox" />
@@ -73,7 +72,7 @@
         <div class="brand-row">
           <span class="brand-mark" aria-hidden="true"><img src="/brand/pi_logo.png" alt="" /></span>
           <div class="hero-title">
-            <p class="eyebrow">Microsoft Edge 扩展 · v0.8.0</p>
+            <p class="eyebrow">Microsoft Edge 扩展 · v<span id="extension-version">0.8.2</span></p>
             <h1>Pi Translator</h1>
           </div>
           <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab" /></span>
@@ -111,35 +110,60 @@
               <div><span class="section-kicker">连接</span><h2>翻译 API</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>
             </div>
-            <p class="section-intro">选择接口并配置当前模型。读取模型、测试和诊断只会访问当前 API 域名。</p>
+            <p class="section-intro">选择服务商并填写 Key，扩展会配置接口地址并读取这个 Key 可用的模型。</p>
             <div class="profile-bar">
               <label><span>API 配置</span><select id="api-profile"></select></label>
               <button id="add-profile" class="small-button" type="button">新增</button>
               <button id="delete-profile" class="small-button danger-text" type="button">删除</button>
             </div>
-            <div class="grid">
-              <label><span>配置名称</span><input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" /></label>
-              <label><span>快速填写接口</span><select id="api-preset"><option value="custom">自定义 OpenAI 兼容 API</option></select><small>只填写地址与建议模型。</small></label>
+            <div class="connection-flow">
+              <div class="connection-step">
+                <span class="connection-step-number">01</span>
+                <div class="connection-step-body">
+                  <label><span>服务商</span><select id="api-preset"></select></label>
+                  <small id="api-provider-hint" class="connection-step-help">选择预设后会自动填写官方兼容接口地址。</small>
+                </div>
+              </div>
+              <div class="connection-step">
+                <span class="connection-step-number">02</span>
+                <div class="connection-step-body">
+                  <div class="key-field-row">
+                    <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="粘贴服务商提供的 API Key" /><small id="api-key-state">尚未配置</small></label>
+                    <button id="clear-key" class="danger subtle-danger" type="button">清除</button>
+                  </div>
+                  <label class="check-row compact-check"><input id="persist-key" type="checkbox" /><span>在本机持久保存；不勾选则仅保留到浏览器会话结束</span></label>
+                  <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
+                </div>
+              </div>
+              <div class="connection-step">
+                <span class="connection-step-number">03</span>
+                <div class="connection-step-body">
+                  <div class="field-heading"><label for="model">翻译模型</label><button id="refresh-models" class="connect-model-button" type="button">连接并自动配置</button></div>
+                  <input id="model" type="text" list="model-list" spellcheck="false" placeholder="连接后选择，或手动填写模型 ID" />
+                  <datalist id="model-list"></datalist>
+                  <small>自动读取模型、验证文字翻译，并尝试启用支持图片输入的模型；无法读取时仍可手动填写。</small>
+                </div>
+              </div>
             </div>
-            <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" /><small>扩展会调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
-            <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
-            <div class="key-field-row">
-              <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="输入新的 API Key" /><small id="api-key-state">尚未配置</small></label>
-              <button id="clear-key" class="danger subtle-danger" type="button">清除 Key</button>
-            </div>
-            <label class="check-row"><input id="persist-key" type="checkbox" /><span>在本机持久保存 API Key</span></label>
-            <p class="hint">默认仅保存在当前浏览器会话。持久保存更方便，但不代表操作系统级加密。</p>
-            <div class="field-block">
-              <div class="field-heading"><label for="model">模型名称</label><button id="refresh-models" class="text-button" type="button">读取可用模型</button></div>
-              <input id="model" type="text" list="model-list" spellcheck="false" placeholder="例如 model-name" />
-              <datalist id="model-list"></datalist>
-              <small>可直接填写，也可以读取当前 Key 可用的模型后选择。</small>
-            </div>
+            <section id="connection-summary" class="connection-summary" aria-label="连接能力" aria-live="polite" hidden>
+              <div><span>文字翻译</span><strong id="connection-text-status">尚未检测</strong></div>
+              <div><span>兼容能力</span><strong id="connection-format-status">尚未检测</strong></div>
+              <div><span>PDF 图像</span><strong id="connection-vision-status">尚未检测</strong></div>
+            </section>
             <div class="section-actions">
-              <button id="test-connection" type="button">测试连接</button>
-              <button id="diagnose-api" type="button">兼容性诊断</button>
+              <button id="test-connection" type="button">仅验证当前模型</button>
             </div>
-            <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
+            <details id="connection-advanced" class="connection-advanced">
+              <summary><span><strong>高级接口设置</strong><small>自定义地址、配置名称与兼容性诊断</small></span></summary>
+              <div class="connection-advanced-content">
+                <div class="grid">
+                  <label><span>配置名称</span><input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" /></label>
+                  <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" /><small>调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
+                </div>
+                <button id="diagnose-api" class="text-button" type="button">运行兼容性诊断</button>
+                <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
+              </div>
+            </details>
           </section>
 
           <section id="settings-translation" class="card settings-section" role="tabpanel" data-settings-section="translation" hidden>

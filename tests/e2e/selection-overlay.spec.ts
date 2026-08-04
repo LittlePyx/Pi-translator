@@ -295,6 +295,13 @@ test.beforeAll(async () => {
   page = await context.newPage();
   await bootstrapPage.close();
   await context.route('https://www.overleaf.com/pi-translator-e2e-api/**', async (route) => {
+    if (route.request().method() === 'GET' && route.request().url().endsWith('/models')) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({ data: [{ id: 'e2e-model' }, { id: 'e2e-model-fast' }] }),
+      });
+      return;
+    }
     const body = route.request().postDataJSON() as Record<string, unknown>;
     const imageMessageContent = (body.messages as Array<{
       content?: string | Array<{ type?: string; text?: string }>;
@@ -783,7 +790,7 @@ test('opens the full settings page in a browser tab', async () => {
   const settingsPagePromise = context.waitForEvent('page');
   await openSettings.click();
   const settingsPage = await settingsPagePromise;
-  await settingsPage.waitForLoadState('domcontentloaded');
+  await settingsPage.waitForURL(`chrome-extension://${extensionId}/options.html`);
   const settingsUrl = new URL(settingsPage.url());
   expect(settingsUrl.protocol).toBe('chrome-extension:');
   expect(settingsUrl.host).toBe(extensionId);
@@ -799,7 +806,7 @@ test('opens the PDF reader from the quick popup', async () => {
   const pdfPagePromise = context.waitForEvent('page');
   await popup.locator('#open-pdf').click();
   const pdfPage = await pdfPagePromise;
-  await pdfPage.waitForLoadState('domcontentloaded');
+  await pdfPage.waitForURL(`chrome-extension://${extensionId}/pdf.html`);
   expect(new URL(pdfPage.url()).pathname).toBe('/pdf.html');
   await expect(pdfPage.locator('#empty-state')).toBeVisible();
   await pdfPage.close();
@@ -2524,6 +2531,18 @@ test('keeps advanced options collapsed until requested', async () => {
   await expect(onboarding).not.toBeVisible();
   await expect(options.locator('[data-settings-section="connection"]')).toBeVisible();
   await expect(options.locator('[data-settings-section="results"]')).not.toBeVisible();
+  await expect(options.locator('.connection-step')).toHaveCount(3);
+  await expect(options.locator('.connection-step').nth(0)).toContainText('服务商');
+  await expect(options.locator('.connection-step').nth(1)).toContainText('API Key');
+  await expect(options.locator('.connection-step').nth(2)).toContainText('连接并自动配置');
+  const providerSelect = options.locator('#api-preset');
+  await expect(providerSelect.locator('option').first()).toHaveAttribute('value', 'deepseek');
+  await expect(providerSelect.locator('option').last()).toHaveAttribute('value', 'custom');
+  await options.locator('#refresh-models').click();
+  await expect(options.locator('#status')).toContainText('自动配置完成');
+  await expect(options.locator('#model-list option')).toHaveCount(2);
+  await expect(options.locator('#connection-summary')).toBeVisible();
+  await expect(options.locator('#connection-text-status')).toContainText('e2e-model');
   const connectionTab = options.locator('[data-settings-target="connection"]');
   await connectionTab.focus();
   await connectionTab.press('ArrowRight');
@@ -2559,6 +2578,9 @@ test('keeps advanced options collapsed until requested', async () => {
   await reopened.locator('#restart-onboarding').click();
   await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
   const onboardingPreset = reopened.locator('#onboarding-preset');
+  await expect(onboardingPreset.locator('option')).toHaveCount(5);
+  await expect(onboardingPreset.locator('option').first()).toHaveAttribute('value', 'deepseek');
+  await expect(onboardingPreset.locator('option').last()).toHaveAttribute('value', 'custom');
   await expect(onboardingPreset.locator('option[value="custom"]')).toHaveText(
     '自定义 OpenAI 兼容 API',
   );
@@ -2566,7 +2588,10 @@ test('keeps advanced options collapsed until requested', async () => {
   await expect(reopened.locator('#onboarding-base-url')).toHaveValue(
     'https://api.deepseek.com',
   );
+  await expect(reopened.locator('#onboarding-base-url-field')).toBeHidden();
   await onboardingPreset.selectOption('custom');
+  await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-base-url-field')).toBeVisible();
   await expect(reopened.locator('#onboarding-base-url')).toHaveValue('');
   await expect(reopened.locator('#onboarding-model')).toHaveValue('');
   await reopened.close();
