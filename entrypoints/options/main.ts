@@ -50,6 +50,7 @@ const profileSelect=element<HTMLSelectElement>('api-profile');
 const addProfileButton=element<HTMLButtonElement>('add-profile');
 const deleteProfileButton=element<HTMLButtonElement>('delete-profile');
 const profileRoleStatus=element<HTMLElement>('profile-role-status');
+const backToTextProfileButton=element<HTMLButtonElement>('back-to-text-profile');
 const useTextProfileButton=element<HTMLButtonElement>('use-text-profile');
 const profileName=element<HTMLInputElement>('profile-name');
 const apiPreset=element<HTMLSelectElement>('api-preset');
@@ -141,6 +142,7 @@ let visionSetupIntentProfileId='';
 let onboardingStep=1;
 let onboardingAvailableModels:string[]=[];
 let formDirty=false;
+let nonConnectionDirty=false;
 
 for(const select of [apiPreset,onboardingPreset]){
   for(const preset of API_PRESETS){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.id==='qwen'?`${preset.name}（PDF 图像推荐）`:preset.name;select.append(option)}
@@ -161,7 +163,11 @@ function isOfficialQwenProfile(profile:ApiProfile|undefined):boolean{
   try{return normalizeApiBaseUrl(profile.apiBaseUrl)===normalizeApiBaseUrl(preset.apiBaseUrl)}catch{return false}
 }
 function setDirty():void{formDirty=true;saveState.textContent='有未保存的更改';saveState.classList.add('unsaved')}
-function setSaved():void{formDirty=false;saveState.textContent='所有设置已保存';saveState.classList.remove('unsaved')}
+function setSaved():void{formDirty=false;nonConnectionDirty=false;saveState.textContent='所有设置已保存';saveState.classList.remove('unsaved')}
+function setApiConnectionSaved():void{
+  if(nonConnectionDirty){formDirty=true;saveState.textContent='API 已保存，其他更改未保存';saveState.classList.add('unsaved');return}
+  setSaved();
+}
 function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`)}
 
 function activeOnboardingPreset(){return API_PRESETS.find(preset=>preset.id===onboardingPreset.value)}
@@ -228,6 +234,7 @@ function renderProfileRole():void {
   if(currentProfileId===activeTextProfileId)roles.push('文字翻译');
   if(currentProfileId===visionProfileId)roles.push('PDF 图像');
   profileRoleStatus.textContent=`当前配置用途：${roles.length?roles.join(' · '):'尚未分配'}`;
+  backToTextProfileButton.hidden=currentProfileId===activeTextProfileId;
   useTextProfileButton.hidden=currentProfileId===activeTextProfileId;
 }
 
@@ -374,8 +381,13 @@ for(const [index,button] of settingsNavButtons.entries()){
   button.addEventListener('keydown',event=>{if(!['ArrowDown','ArrowRight','ArrowUp','ArrowLeft'].includes(event.key))return;event.preventDefault();const delta=event.key==='ArrowDown'||event.key==='ArrowRight'?1:-1;const next=settingsNavButtons[(index+delta+settingsNavButtons.length)%settingsNavButtons.length];if(!next)return;showSettingsSection(next.dataset.settingsTarget??'connection');next.focus()});
 }
 const requestedSection=location.hash.slice(1);showSettingsSection(settingsSections.some(section=>section.dataset.settingsSection===requestedSection)?requestedSection:'connection');
-form.addEventListener('input',setDirty);
-form.addEventListener('change',setDirty);
+function markFormDirty(event:Event):void{
+  const target=event.target;
+  if(target instanceof Element&&!target.closest('#settings-connection'))nonConnectionDirty=true;
+  setDirty();
+}
+form.addEventListener('input',markFormDirty);
+form.addEventListener('change',markFormDirty);
 window.addEventListener('beforeunload',event=>{if(!formDirty)return;event.preventDefault();event.returnValue=''});
 
 onboardingPreset.addEventListener('change',applyOnboardingPreset);
@@ -389,7 +401,7 @@ pdfRegionShortcutKey.addEventListener('input',()=>{
   const letter=pdfRegionShortcutKey.value.match(/[a-z]/i)?.[0]??'';
   pdfRegionShortcutKey.value=letter.toUpperCase();
 });
-apiPreset.addEventListener('change',()=>{connectionSummary.hidden=true;const preset=API_PRESETS.find(item=>item.id===apiPreset.value);if(!preset){apiBaseUrl.value='';modelInput.value='';connectionAdvanced.open=true;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus('请在高级接口设置中填写自定义 API Base URL，然后连接并自动配置。');queueMicrotask(()=>apiBaseUrl.focus());return}apiBaseUrl.value=preset.apiBaseUrl;modelInput.value=preset.model;if(/^(?:默认接口|未命名配置)$/u.test(profileName.value.trim()))profileName.value=preset.name;connectionAdvanced.open=false;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus(`已配置 ${preset.name} 接口；填写 Key 后点击“连接并自动配置”。`)});
+apiPreset.addEventListener('change',()=>{connectionSummary.hidden=true;const preset=API_PRESETS.find(item=>item.id===apiPreset.value);if(!preset){apiBaseUrl.value='';modelInput.value='';connectionAdvanced.open=true;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus('请在高级接口设置中填写自定义 API Base URL，然后连接并保存。');queueMicrotask(()=>apiBaseUrl.focus());return}apiBaseUrl.value=preset.apiBaseUrl;modelInput.value=preset.model;if(/^(?:默认接口|未命名配置)$/u.test(profileName.value.trim()))profileName.value=preset.name;connectionAdvanced.open=false;refreshProviderHint();updateCurrentProfile();void refreshApiPermissionState();setStatus(`已配置 ${preset.name} 接口；填写 Key 后点击“连接并保存”。`)});
 profileSelect.addEventListener('change',()=>{if(apiKeyInput.value.trim()){profileSelect.value=currentProfileId;setStatus('请先保存当前输入的 API Key，再切换配置。',true);return}updateCurrentProfile();void loadProfile(profileSelect.value)});
 profileName.addEventListener('input',()=>{const profile=currentProfile();if(profile){profile.name=profileName.value.trim()||'未命名配置';renderProfileSelect()}});
 visionApiProfile.addEventListener('change',()=>{visionProfileId=visionApiProfile.value;visionSetupIntentProfileId='';visionSelectionTouched=true;const profile=profiles.find(item=>item.id===visionProfileId);if(profile)visionModel.value=profile.model;renderProfileRole();void refreshVisionSetupStatus();setDirty()});
@@ -417,7 +429,7 @@ setupQwenButton.addEventListener('click',()=>{void(async()=>{
   if(created)setDirty();
   const textProfile=activeTextProfile();
   const keyConfigured=await hasApiKey(profile.id);
-  const nextAction=keyConfigured?'Qwen Key 已保存，请点击“连接并自动配置”重新读取模型。':'请填写 Qwen Key，然后点击“连接并自动配置”。';
+  const nextAction=keyConfigured?'Qwen Key 已保存，请点击“连接并保存”重新读取模型。':'请填写 Qwen Key，然后点击“连接并保存”。';
   setStatus(textProfile?.id===profile.id
     ? `Qwen 也将继续用于文字翻译。${nextAction}`
     : `${nextAction} 文字翻译仍使用“${textProfile?.name??'现有配置'}”，不会被替换。`);
@@ -425,6 +437,13 @@ setupQwenButton.addEventListener('click',()=>{void(async()=>{
 })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'无法开始配置 Qwen。',true))});
 
 addProfileButton.addEventListener('click',()=>{if(profiles.length>=6){setStatus('最多保存 6 个 API 配置。',true);return}updateCurrentProfile();const id=crypto.randomUUID();profiles.push({id,name:`翻译接口 ${profiles.length+1}`,apiBaseUrl:apiBaseUrl.value.trim(),model:modelInput.value.trim()});void loadProfile(id);setDirty();setStatus('已创建新配置，填写后请保存设置。')});
+backToTextProfileButton.addEventListener('click',()=>{
+  if(apiKeyInput.value.trim()){setStatus('当前输入的 Key 尚未连接保存；请先点击“连接并保存”，再返回文字 API。',true);apiKeyInput.focus();return}
+  const textProfile=activeTextProfile();
+  if(!textProfile){setStatus('当前没有可返回的文字翻译 API。',true);return}
+  updateCurrentProfile();
+  void loadProfile(textProfile.id).then(()=>setStatus(visionProfileId?`已返回文字 API“${textProfile.name}”；PDF 图像配置仍保留。`:`已返回文字 API“${textProfile.name}”。`));
+});
 useTextProfileButton.addEventListener('click',()=>{updateCurrentProfile();activeTextProfileId=currentProfileId;renderProfileSelect();setDirty();setStatus(`保存后将使用“${currentProfile()?.name??'当前配置'}”进行文字翻译。`)});
 deleteProfileButton.addEventListener('click',()=>{if(profiles.length<=1)return;const deletedId=currentProfileId;profiles=profiles.filter(profile=>profile.id!==currentProfileId);if(visionProfileId===deletedId)visionProfileId='';if(visionSetupIntentProfileId===deletedId)visionSetupIntentProfileId='';if(activeTextProfileId===deletedId)activeTextProfileId=profiles[0]!.id;void loadProfile(profiles[0]!.id);setDirty();setStatus('配置已从草稿中删除，点击“保存设置”后生效。')});
 
@@ -433,9 +452,46 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
   void(async()=>{const editing=currentProfile()!;const active=activeTextProfile()??editing;const pendingKey=apiKeyInput.value.trim();await requestSaveAccess(profiles,active.id,visionProfileId,mode,allowlist,pendingKey?[editing.id]:[]);const autoVision=await autoConfigureVisionProfile(editing);const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';const current=loadedSettings??await getSettings();const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);const visionProfile=profiles.find(profile=>profile.id===visionProfileId);const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:profiles.map(profile=>({...profile})),activeApiProfileId:active.id,visionApiProfileId:visionProfileId,visionModel:visionModel.value.trim()||visionProfile?.model||active.model,apiBaseUrl:active.apiBaseUrl,model:active.model,sourceLanguage:sourceLanguage.value,targetLanguage:targetLanguage.value,style:styleSelect.value as TranslationStyle,contentMode:contentMode.value as ContentMode,apiKeyStorage:keyMode,academicGlossary:glossary.entries,rememberRecentTranslations:rememberHistory.checked,historyLimit:Number(historyLimit.value) as HistoryLimit,enableSessionCache:sessionCache.checked,sentenceAlignmentDefault:alignmentDefault.checked,autoRenderLatex:autoRenderLatex.checked,sidebarSide:sidebarSide.value as SidebarSide,contextMode:contextMode.value as ContextMode,enableStreaming:enableStreaming.checked,protectSensitiveFields:protectSensitiveFields.checked,pdfKeyboardShortcutsEnabled:pdfKeyboardShortcuts.checked,pdfRegionShortcutKey:normalizePdfRegionShortcutKey(pdfRegionShortcutKey.value),showFloatingButtonOnOverleaf:floatingButton.checked,hideFloatingButtonForTargetLanguage:hideTargetLanguageTrigger.checked,generalPageMode:mode,siteAllowlist:allowlist,enableContextMenu:contextMenu.checked,onboardingCompleted:true};await saveSettings(next);if(pendingKey){await saveApiKey(pendingKey,keyMode,currentProfileId);apiKeyInput.value=''}else if(keyMode!==originalMode)await moveApiKey(keyMode);await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,mode,allowlist);activeTextProfileId=active.id;originalMode=keyMode;loadedSettings=next;visionSelectionTouched=false;renderProfileSelect();await refreshKeyState();setSaved();const roleMessage=active.id!==editing.id&&visionProfileId===editing.id?`设置已保存：文字继续使用“${active.name}”，PDF 图像使用“${editing.name}”。`:autoVision.configured&&autoVision.attempted?'设置已保存，并已自动启用 PDF 图像区域翻译。':autoVision.attempted?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。':'设置已保存，并已同步到打开的页面。';setStatus(roleMessage)})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
 });
 
+async function persistConnectedApiConfiguration(message:string):Promise<void>{
+  profiles=validatedProfiles();
+  const editing=currentProfile();
+  const active=activeTextProfile()??editing;
+  if(!editing||!active)throw new Error('当前 API 配置不存在，请重新加载设置页。');
+  const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';
+  const pendingKey=apiKeyInput.value.trim();
+  const current=loadedSettings??await getSettings();
+  const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);
+  const visionProfile=profiles.find(profile=>profile.id===visionProfileId);
+  const next:ExtensionSettings={
+    ...current,
+    schemaVersion:8,
+    apiProfiles:profiles.map(profile=>({...profile})),
+    activeApiProfileId:active.id,
+    visionApiProfileId:visionProfileId,
+    visionModel:visionProfile?(visionModel.value.trim()||visionProfile.model):'',
+    apiBaseUrl:active.apiBaseUrl,
+    model:active.model,
+    apiKeyStorage:keyMode,
+    onboardingCompleted:true,
+  };
+  await saveSettings(next);
+  if(pendingKey){await saveApiKey(pendingKey,keyMode,editing.id);apiKeyInput.value=''}
+  if(keyMode!==originalMode)await moveApiKey(keyMode);
+  await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));
+  await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,current.generalPageMode,current.siteAllowlist);
+  activeTextProfileId=active.id;
+  originalMode=keyMode;
+  loadedSettings=next;
+  visionSelectionTouched=false;
+  renderProfileSelect();
+  await refreshKeyState();
+  setApiConnectionSaved();
+  setStatus(message);
+}
+
 async function callModels():Promise<void>{
   const apiKey=apiKeyInput.value.trim();
-  if(!apiKey&&!await hasApiKey(currentProfileId))throw new Error('请先填写 API Key，再连接并自动配置。');
+  if(!apiKey&&!await hasApiKey(currentProfileId))throw new Error('请先填写 API Key，再连接并保存。');
   const base=currentApiBaseUrl();
   await requestApiAccess(base);
   refreshModelsButton.disabled=true;
@@ -468,13 +524,14 @@ async function callModels():Promise<void>{
   setDirty();
   const separateText=vision.model&&activeTextProfileId!==active.id?activeTextProfile():undefined;
   const configuredVision=profiles.find(profile=>profile.id===visionProfileId);
-  setStatus(vision.preserved
-    ? `自动配置完成：保留现有 PDF 图像配置“${configuredVision?.name??'已配置接口'}”。请保存设置。`
+  const savedMessage=vision.preserved
+    ? `自动配置完成并已保存：保留现有 PDF 图像配置“${configuredVision?.name??'已配置接口'}”。`
     : separateText
-      ? `自动配置完成：PDF 图像将使用“${active.name}”，文字继续使用“${separateText.name}”。请保存设置。`
+      ? `自动配置完成并已保存：PDF 图像使用“${active.name}”，文字继续使用“${separateText.name}”。`
       : vision.model
-        ? `自动配置完成：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。请保存设置。`
-        : `文字模型 ${suggested} 已配置；未检测到图片模型。普通文字翻译不受影响，需要扫描件功能时可配置 Qwen。请保存设置。`);
+        ? `自动配置完成并已保存：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。`
+        : `文字模型 ${suggested} 已连接并保存；普通文字翻译可用。需要扫描件功能时再配置 Qwen。`;
+  await persistConnectedApiConfiguration(savedMessage);
 }
 refreshModelsButton.addEventListener('click',()=>void callModels().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{refreshModelsButton.disabled=false}));
 

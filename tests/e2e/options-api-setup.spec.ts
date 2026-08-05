@@ -92,6 +92,12 @@ test('offers a focused Qwen setup without replacing the text API', async () => {
   await expect(options.locator('#api-key')).toBeFocused();
   await expect(options.locator('#status')).toContainText('文字翻译仍使用“DeepSeek 文字翻译”');
   await expect(options.locator('#vision-setup-status')).toContainText('连接成功后会自动用于 PDF 图像');
+  await expect(options.locator('#back-to-text-profile')).toBeVisible();
+
+  await options.locator('#back-to-text-profile').click();
+  await expect(options.locator('#api-profile')).toHaveValue('text-api');
+  await expect(options.locator('#api-profile option')).toHaveCount(2);
+  await expect(options.locator('#status')).toContainText('已返回文字 API“DeepSeek 文字翻译”');
 
   const activeTextProfile = await options.evaluate(async () => {
     const extensionChrome = (
@@ -101,4 +107,32 @@ test('offers a focused Qwen setup without replacing the text API', async () => {
     return stored.extensionSettings?.activeApiProfileId;
   });
   expect(activeTextProfile).toBe('text-api');
+});
+
+test('keeps settings interaction surfaces dark on hover and keyboard focus', async () => {
+  await options.emulateMedia({ colorScheme: 'dark' });
+  await options.reload();
+
+  const backgroundAfter = async (
+    selector: string,
+    interaction: 'hover' | 'focus',
+  ): Promise<string> => {
+    const target = options.locator(selector);
+    if (interaction === 'hover') await target.hover();
+    else await target.focus();
+    return target.evaluate((element) => getComputedStyle(element).backgroundColor);
+  };
+
+  await expect.poll(() => backgroundAfter('#api-preset', 'hover'))
+    .toBe('rgb(32, 41, 56)');
+  await expect.poll(() => backgroundAfter('#refresh-models', 'focus'))
+    .toBe('rgb(32, 41, 56)');
+  await expect.poll(() => backgroundAfter(
+    '.settings-nav-item[data-settings-target="translation"]',
+    'hover',
+  )).toBe('rgb(22, 31, 44)');
+  await expect.poll(() => backgroundAfter('#connection-advanced > summary', 'hover'))
+    .toBe('rgb(23, 31, 44)');
+
+  await options.emulateMedia({ colorScheme: 'light' });
 });

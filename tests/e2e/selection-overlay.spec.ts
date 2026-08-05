@@ -2702,12 +2702,14 @@ test('keeps advanced options collapsed until requested', async () => {
   await expect(options.locator('.connection-step')).toHaveCount(3);
   await expect(options.locator('.connection-step').nth(0)).toContainText('服务商');
   await expect(options.locator('.connection-step').nth(1)).toContainText('API Key');
-  await expect(options.locator('.connection-step').nth(2)).toContainText('连接并自动配置');
+  await expect(options.locator('.connection-step').nth(2)).toContainText('连接并保存');
   const providerSelect = options.locator('#api-preset');
   await expect(providerSelect.locator('option').first()).toHaveAttribute('value', 'deepseek');
   await expect(providerSelect.locator('option').last()).toHaveAttribute('value', 'custom');
   await options.locator('#refresh-models').click();
   await expect(options.locator('#status')).toContainText('自动配置完成');
+  await expect(options.locator('#status')).toContainText('已保存');
+  await expect(options.locator('#save-state')).toContainText('所有设置已保存');
   await expect(options.locator('#model-list option')).toHaveCount(2);
   await expect(options.locator('#connection-summary')).toBeVisible();
   await expect(options.locator('#connection-text-status')).toContainText('e2e-model');

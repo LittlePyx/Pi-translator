@@ -111,7 +111,7 @@
               <div><span class="section-kicker">连接</span><h2>文字翻译 API（必需）</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>
             </div>
-            <p class="section-intro">选择服务商并填写 Key，扩展会配置官方接口地址并读取这个 Key 可用的模型；不会根据 Key 猜测或尝试其他服务商。</p>
+            <p class="section-intro">普通网页、Overleaf 和可直接选中文字的 PDF 只需完成这里：选择服务商，粘贴 Key，再连接保存。扩展不会根据 Key 猜测或尝试其他服务商。</p>
             <div class="profile-bar">
               <label><span>API 配置</span><select id="api-profile"></select></label>
               <button id="add-profile" class="small-button" type="button">新增</button>
@@ -119,6 +119,7 @@
             </div>
             <div class="profile-role-line">
               <span id="profile-role-status" aria-live="polite">当前配置用途：文字翻译</span>
+              <button id="back-to-text-profile" class="text-button" type="button" hidden>返回文字 API</button>
               <button id="use-text-profile" class="text-button" type="button" hidden>设为文字翻译</button>
             </div>
             <div class="connection-flow">
@@ -143,10 +144,10 @@
               <div class="connection-step">
                 <span class="connection-step-number">03</span>
                 <div class="connection-step-body">
-                  <div class="field-heading"><label for="model">翻译模型</label><button id="refresh-models" class="connect-model-button" type="button">连接并自动配置</button></div>
+                  <div class="field-heading"><label for="model">翻译模型</label><button id="refresh-models" class="connect-model-button" type="button">连接并保存</button></div>
                   <input id="model" type="text" list="model-list" spellcheck="false" placeholder="连接后选择，或手动填写模型 ID" />
                   <datalist id="model-list"></datalist>
-                  <small>自动读取模型、验证文字翻译，并尝试启用支持图片输入的模型；无法读取时仍可手动填写。</small>
+                  <small>自动读取模型、验证文字翻译并保存当前 API；无需再点击页面底部的“保存设置”。无法读取时仍可手动填写。</small>
                 </div>
               </div>
             </div>
@@ -163,7 +164,7 @@
                 </div>
                 <button id="setup-qwen" class="text-button vision-setup-button" type="button">配置 Qwen</button>
               </div>
-              <p>网页、Overleaf 和可选文字 PDF 不需要 Qwen；框选扫描件需要视觉模型，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
+              <p>网页、Overleaf 和可直接选中文字的 PDF 不需要 Qwen；只有框选扫描件或模糊公式时才需要视觉模型，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
               <div id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
               <details id="vision-setup-details" class="vision-setup-details">
                 <summary><span>手动选择或检查视觉配置</span></summary>

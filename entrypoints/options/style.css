@@ -1,5 +1,6 @@
 :root {
   font-family: Inter, "Segoe UI", system-ui, -apple-system, sans-serif;
+  color-scheme: light;
   color: #172033;
   background: #eef2f8;
   font-synthesis: none;
@@ -9,6 +10,15 @@
   --surface: #ffffff;
   --surface-soft: #f6f8fc;
   --accent: #4f46e5;
+  --control-bg: #ffffff;
+  --control-hover: #f1f3f6;
+  --control-focus: #ffffff;
+  --control-border-hover: #aebbd0;
+  --row-hover: #fafbfc;
+  --nav-hover: #eef1f5;
+  --summary-hover: #f8f9fb;
+  --focus-ring: rgba(99, 102, 241, .16);
+  --danger-hover: #fff1f2;
 }
 
 .onboarding-dialog {
@@ -95,12 +105,22 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
+    color-scheme: dark;
     --text: #edf2f8;
     --muted: #a9b5c7;
     --line: #344055;
     --surface: #111827;
     --surface-soft: #182231;
     --accent: #818cf8;
+    --control-bg: #101722;
+    --control-hover: #202938;
+    --control-focus: #171f2c;
+    --control-border-hover: #69758a;
+    --row-hover: #161f2c;
+    --nav-hover: #161f2c;
+    --summary-hover: #171f2c;
+    --focus-ring: rgba(129, 140, 248, .2);
+    --danger-hover: #3a1b23;
   }
   .onboarding-dialog { color-scheme: dark; }
   .onboarding-header img { filter: brightness(0) invert(1); }
@@ -1567,4 +1587,108 @@ button:hover { background: #f1f3f6; }
   .connect-model-button:hover { border-color: #69758a; background: #202938; }
   .connection-advanced > summary { color: #aebbd0; }
   .connection-advanced summary strong { color: #e5e7eb; }
+}
+
+/* Shared interaction states. Keep these last so later layout refinements cannot
+   accidentally restore light surfaces while the page is in dark mode. */
+input[type="text"]:hover,
+input[type="password"]:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--control-border-hover);
+  background: var(--control-hover);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  border-color: var(--accent);
+  background: var(--control-focus);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+select option {
+  color: var(--text);
+  background: var(--control-bg);
+}
+
+button:hover {
+  border-color: var(--control-border-hover);
+  background: var(--control-hover);
+}
+
+button:focus-visible {
+  border-color: var(--accent);
+  background: var(--control-focus);
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.primary,
+.primary:hover,
+.primary:focus-visible {
+  border-color: #5353d8;
+  color: #fff;
+  background: #5353d8;
+}
+
+.danger:hover,
+.danger:focus-visible {
+  border-color: #e24f68;
+  background: var(--danger-hover);
+}
+
+.text-button:hover,
+.text-button:focus-visible,
+.vision-setup-button:hover,
+.vision-setup-button:focus-visible {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: 0 0 0 3px var(--focus-ring);
+}
+
+.text-button:hover,
+.vision-setup-button:hover { box-shadow: none; }
+
+.connect-model-button:hover,
+.connect-model-button:focus-visible {
+  border-color: #9295df;
+  color: #4338ca;
+  background: #f0f0ff;
+}
+
+.settings-nav-item:hover { background: var(--nav-hover); }
+.preference-row:hover { background: var(--row-hover); }
+
+.advanced-panel > summary:hover,
+.disclosure-panel > summary:hover,
+.support-disclosure > summary:hover,
+.vision-setup-details > summary:hover,
+.connection-advanced > summary:hover {
+  background: var(--summary-hover);
+}
+
+.advanced-panel > summary:focus-visible,
+.disclosure-panel > summary:focus-visible,
+.support-disclosure > summary:focus-visible,
+.vision-setup-details > summary:focus-visible,
+.connection-advanced > summary:focus-visible {
+  outline: none;
+  background: var(--summary-hover);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+@media (prefers-color-scheme: dark) {
+  .connect-model-button:hover,
+  .connect-model-button:focus-visible {
+    border-color: var(--control-border-hover);
+    color: #c7d2fe;
+    background: var(--control-hover);
+  }
+
+  .profile-role-line,
+  .connection-summary span,
+  .connection-summary strong.muted { color: #9ca9bc; }
+  .connection-summary strong { color: #dbe3ef; }
+  .connection-summary strong.success { color: #86efac; }
+  .connection-summary > div { border-color: #2d3747; }
 }
