@@ -1792,15 +1792,38 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
               pageNumber: 1,
               coordinateSystem: 'normalized-page',
               source: 'qwen-advanced-recognition',
-              blocks: [{
-                id: 'e2e-ocr-line',
-                order: 0,
-                text: 'Selectable scanned academic sentence.',
-                confidence: 0.9,
-                confidenceSource: 'trusted-adapter',
-                kind: 'text',
-                box: { left: 0.1, top: 0.2, width: 0.7, height: 0.06 },
-              }],
+              blocks: [
+                {
+                  id: 'e2e-ocr-line',
+                  order: 0,
+                  text: 'Selectable scanned academic sentence.',
+                  confidence: 0.9,
+                  confidenceSource: 'trusted-adapter',
+                  kind: 'text',
+                  rotationDegrees: 0,
+                  box: { left: 0.1, top: 0.2, width: 0.7, height: 0.06 },
+                },
+                {
+                  id: 'e2e-ocr-formula',
+                  order: 1,
+                  text: 'x = A y + lambda R(x)',
+                  confidence: 0.9,
+                  confidenceSource: 'trusted-adapter',
+                  kind: 'formula',
+                  rotationDegrees: 0,
+                  box: { left: 0.2, top: 0.3, width: 0.4, height: 0.06 },
+                },
+                {
+                  id: 'e2e-ocr-rotated',
+                  order: 2,
+                  text: 'Rotated margin note.',
+                  confidence: 0.9,
+                  confidenceSource: 'trusted-adapter',
+                  kind: 'text',
+                  rotationDegrees: 90,
+                  box: { left: 0.02, top: 0.2, width: 0.04, height: 0.5 },
+                },
+              ],
             },
           },
         });
@@ -1823,6 +1846,8 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await firstPage.getByRole('button', { name: '识别文字' }).click();
   const ocrLine = firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]');
   await expect(ocrLine).toHaveText('Selectable scanned academic sentence.');
+  await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-formula"]')).toHaveCount(0);
+  await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-rotated"]')).toHaveCount(0);
   await expect(firstPage).toHaveAttribute('data-has-text', 'true');
   await expect(pdfPage.locator('#notice')).toContainText('临时文字层');
   await ocrLine.evaluate((element) => {

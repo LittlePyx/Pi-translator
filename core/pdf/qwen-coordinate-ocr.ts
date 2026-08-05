@@ -6,6 +6,11 @@ import {
   type CoordinateOcrPage,
   type RecognizePdfPageRequest,
 } from './ocr-text-layer';
+import {
+  inferOcrBlockKind,
+  ocrLineRotationDegrees,
+  orderAcademicOcrBlocks,
+} from './ocr-layout';
 
 const QWEN_OCR_MODEL = 'qwen3.5-ocr';
 // The native advanced-recognition response has no numeric probability. This
@@ -96,7 +101,8 @@ export function parseQwenCoordinateOcr(
       text,
       confidence: TRUSTED_ADAPTER_CONFIDENCE,
       confidenceSource: 'trusted-adapter' as const,
-      kind: 'text' as const,
+      kind: inferOcrBlockKind(text),
+      rotationDegrees: ocrLineRotationDegrees(location as number[]),
       box: { left, top, width: right - left, height: bottom - top },
     };
   }).filter((block) => block !== undefined);
@@ -104,7 +110,7 @@ export function parseQwenCoordinateOcr(
     pageNumber,
     coordinateSystem: 'normalized-page',
     source: 'qwen-advanced-recognition',
-    blocks,
+    blocks: orderAcademicOcrBlocks(blocks),
   });
   if (!validation.ok) {
     throw new TranslationError('OCR_INVALID_RESPONSE', validation.reason, true);

@@ -53,8 +53,18 @@ describe('Qwen native coordinate OCR adapter', () => {
       text: 'Single-pixel imaging.',
       confidence: 0.9,
       confidenceSource: 'trusted-adapter',
+      kind: 'text',
+      rotationDegrees: 0,
       box: { left: 0.1, top: 0.2, width: 0.4, height: 0.06 },
     });
+  });
+
+  it('classifies formula lines and records visible line rotation', () => {
+    const response = nativeResponse([100, 100, 100, 500, 140, 500, 140, 100]);
+    const content = response.output.choices[0]!.message.content[0]!.ocr_result.words_info[0]!;
+    content.text = 'x = A y + \\lambda R(x)';
+    const page = parseQwenCoordinateOcr(response, 1, 1000, 1000);
+    expect(page.blocks[0]).toMatchObject({ kind: 'formula', rotationDegrees: 90 });
   });
 
   it('rejects missing native layout data and out-of-image coordinates', () => {

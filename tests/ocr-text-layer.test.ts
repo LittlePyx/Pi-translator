@@ -53,9 +53,16 @@ describe('coordinate OCR text-layer boundary', () => {
     const oversized = structuredClone(valid);
     oversized.blocks[0]!.text = 'x'.repeat(4_001);
     expect(validateCoordinateOcrPage(oversized).ok).toBe(false);
+    const invalidRotation = {
+      ...structuredClone(valid),
+      blocks: structuredClone(valid.blocks).map((block, index) => (
+        index === 0 ? { ...block, rotationDegrees: 181 } : block
+      )),
+    };
+    expect(validateCoordinateOcrPage(invalidRotation).ok).toBe(false);
   });
 
-  it('excludes low-confidence and table blocks from selectable overlays', () => {
+  it('only exposes reliable horizontal prose as selectable overlays', () => {
     const result = validateCoordinateOcrPage({
       ...valid,
       blocks: [
@@ -76,14 +83,20 @@ describe('coordinate OCR text-layer boundary', () => {
           kind: 'table',
           box: { left: 0.1, top: 0.6, width: 0.8, height: 0.2 },
         },
+        {
+          id: 'rotated-1',
+          order: 4,
+          text: 'rotated margin note',
+          confidence: 0.99,
+          kind: 'text',
+          rotationDegrees: 90,
+          box: { left: 0.02, top: 0.2, width: 0.03, height: 0.5 },
+        },
       ],
     });
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(selectableOcrBlocks(result.page).map((block) => block.id)).toEqual([
-      'text-1',
-      'formula-1',
-    ]);
+    expect(selectableOcrBlocks(result.page).map((block) => block.id)).toEqual(['text-1']);
   });
 
   it('maps OCR coordinates from a confirmed crop back onto the full PDF page', () => {

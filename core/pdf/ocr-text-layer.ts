@@ -14,6 +14,7 @@ export interface CoordinateOcrBlock {
   confidence: number;
   confidenceSource?: 'provider' | 'trusted-adapter';
   kind: OcrBlockKind;
+  rotationDegrees?: number;
   box: NormalizedOcrBox;
 }
 
@@ -88,6 +89,7 @@ export function validateCoordinateOcrPage(value: unknown): CoordinateOcrValidati
     const confidence=block.confidence;
     const confidenceSource=block.confidenceSource;
     const kind=block.kind;
+    const rotationDegrees=block.rotationDegrees;
     const box=normalizedBox(block.box);
     if(!id||id.length>80||ids.has(id))return {ok:false,reason:`第 ${index+1} 个 OCR 文字块 ID 无效或重复。`};
     if(!Number.isInteger(order)||(order as number)<0||orders.has(order as number))return {ok:false,reason:`第 ${index+1} 个 OCR 阅读顺序无效或重复。`};
@@ -98,6 +100,7 @@ export function validateCoordinateOcrPage(value: unknown): CoordinateOcrValidati
       confidenceSource === 'trusted-adapter'
       ? confidenceSource
       : undefined;
+    if(rotationDegrees!==undefined&&(!finiteNumber(rotationDegrees)||rotationDegrees < -180||rotationDegrees > 180))return {ok:false,reason:`第 ${index+1} 个 OCR 旋转角度无效。`};
     if(!['text','formula','table'].includes(String(kind)))return {ok:false,reason:`第 ${index+1} 个 OCR 类型无效。`};
     if(!box)return {ok:false,reason:`第 ${index+1} 个 OCR 坐标越界。`};
     totalText+=text.length;
@@ -110,6 +113,7 @@ export function validateCoordinateOcrPage(value: unknown): CoordinateOcrValidati
       confidence,
       ...(normalizedConfidenceSource?{confidenceSource:normalizedConfidenceSource}:{}),
       kind:kind as OcrBlockKind,
+      ...(finiteNumber(rotationDegrees)?{rotationDegrees}:{}),
       box,
     });
   }
@@ -130,7 +134,11 @@ export function selectableOcrBlocks(
   page: CoordinateOcrPage,
   minimumConfidence = 0.82,
 ): CoordinateOcrBlock[] {
-  return page.blocks.filter((block) => block.kind !== 'table' && block.confidence >= minimumConfidence);
+  return page.blocks.filter((block) => (
+    block.kind === 'text' &&
+    block.confidence >= minimumConfidence &&
+    Math.abs(block.rotationDegrees ?? 0) <= 5
+  ));
 }
 
 export function mapCoordinateOcrPageToRegion(
