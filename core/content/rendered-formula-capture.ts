@@ -55,7 +55,6 @@ export async function captureRenderedFormula(
       rect: snapshot.rect,
       pageUrl: snapshot.pageUrl,
       sourceSelection: snapshot,
-      recapture: (nextPadding) => captureRenderedFormula(snapshot, nextPadding),
     };
   } finally {
     if (translatorRoot) translatorRoot.style.visibility = previousRootVisibility;

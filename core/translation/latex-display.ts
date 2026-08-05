@@ -2,6 +2,32 @@ export type LatexDisplaySegment =
   | { kind: 'text'; text: string }
   | { kind: 'math'; tex: string; raw: string; displayMode: boolean };
 
+export interface LatexRenderParts {
+  tex: string;
+  equationTag?: string;
+}
+
+const SIMPLE_DISPLAY_TAG = /\\tag\s*\{([^{}]{1,40})\}/gu;
+const ROW_ENVIRONMENT = /\\begin\s*\{(?:cases|aligned|alignedat|array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|gathered|split)\}/u;
+
+/**
+ * Keeps a single top-level equation number outside the horizontally scrolling
+ * formula body. The original segment remains untouched for copy/export.
+ */
+export function latexRenderParts(tex: string, displayMode: boolean): LatexRenderParts {
+  if (!displayMode || ROW_ENVIRONMENT.test(tex)) return { tex };
+  const tags = [...tex.matchAll(SIMPLE_DISPLAY_TAG)];
+  SIMPLE_DISPLAY_TAG.lastIndex = 0;
+  if (tags.length !== 1) return { tex };
+  const match = tags[0]!;
+  const equationTag = match[1]?.trim();
+  if (!equationTag || match.index === undefined) return { tex };
+  return {
+    tex: `${tex.slice(0, match.index)}${tex.slice(match.index + match[0].length)}`.trim(),
+    equationTag,
+  };
+}
+
 function isEscaped(text: string, index: number): boolean {
   let slashes = 0;
   for (let cursor = index - 1; cursor >= 0 && text[cursor] === '\\'; cursor -= 1) {

@@ -454,26 +454,32 @@ describe('image region translator', () => {
       .toThrow(/recognizedText/i);
   });
 
-  it('automatically retries once when the first LaTeX result is inconsistent', async () => {
+  it('repairs single JSON backslashes in common LaTeX commands locally', () => {
+    const damaged = String.raw`{"translation":"其中 $\text{Q}_{\Omega}=\tau$，见式 \\[x=y,\tag{8}\\]","recognizedText":"where $\text{Q}_{\Omega}=\tau$, see \\[x=y,\tag{8}\\]","formulaLatex":["\text{Q}_{\Omega}=\tau","x=y,\tag{8}"],"uncertainSpans":[]}`;
+    expect(parseImageTranslation(damaged)).toMatchObject({
+      translatedText: '其中 $\\text{Q}_{\\Omega}=\\tau$，见式 \\[x=y,\\tag{8}\\]',
+      recognizedText: 'where $\\text{Q}_{\\Omega}=\\tau$, see \\[x=y,\\tag{8}\\]',
+      formulaLatex: ['\\text{Q}_{\\Omega}=\\tau', 'x=y,\\tag{8}'],
+    });
+  });
+
+  it('preserves genuine JSON newline escapes while repairing TeX', () => {
+    const result = parseImageTranslation(
+      '{"translation":"line 1\\nline 2 $x$","recognizedText":"source $x$","formulaLatex":["x"]}',
+    );
+    expect(result.translatedText).toBe('line 1\nline 2 $x$');
+  });
+
+  it('keeps the first usable LaTeX result without a hidden corrective request', async () => {
     const invalid = JSON.stringify({
       translation: '译文缺少公式',
       recognizedText: 'Source $R=\\frac{a+b}{c}$',
       formulaLatex: ['R=\\frac{a+b}{c}'],
       uncertainSpans: [],
     });
-    const corrected = JSON.stringify({
-      translation: '译文 $R=\\frac{a+b}{c}$',
-      recognizedText: 'Source $R=\\frac{a+b}{c}$',
-      formulaLatex: ['R=\\frac{a+b}{c}'],
-      uncertainSpans: [],
-    });
-    const fetchMock = vi.fn()
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        choices: [{ message: { content: invalid } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
-      .mockResolvedValueOnce(new Response(JSON.stringify({
-        choices: [{ message: { content: corrected } }],
-      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: invalid } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await new OpenAiCompatibleTranslator().translateImageRegion(
@@ -483,12 +489,10 @@ describe('image region translator', () => {
       new AbortController().signal,
     );
     expect(result).toMatchObject({
-      translatedText: '译文 $R=\\frac{a+b}{c}$',
+      translatedText: '译文缺少公式',
+      formulaNeedsReview: true,
     });
-    expect(result).not.toHaveProperty('formulaNeedsReview');
-    expect(fetchMock).toHaveBeenCalledTimes(2);
-    const retryBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
-    expect(JSON.stringify(retryBody)).toContain('上一次结果未通过 LaTeX 一致性检查');
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('repairs same-count formula drift locally without a second vision request', async () => {
@@ -515,7 +519,7 @@ describe('image region translator', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the first usable result when the hidden formula correction cannot connect', async () => {
+  it('does not consume a second prepared response for formula correction', async () => {
     const incomplete = JSON.stringify({
       translation: '译文缺少公式',
       recognizedText: 'Source $x+y$',
@@ -538,10 +542,10 @@ describe('image region translator', () => {
       translatedText: '译文缺少公式',
       formulaNeedsReview: true,
     });
-    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the usable translation with a review flag after one failed correction', async () => {
+  it('keeps the usable translation with a local review flag', async () => {
     const invalid = JSON.stringify({
       translation: '译文缺少公式',
       recognizedText: 'Source $x+y$',

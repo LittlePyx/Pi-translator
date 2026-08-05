@@ -1,10 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
+  repairCommonVisionLatex,
   reconcileImageFormulaResult,
   validateImageFormulaResult,
 } from '../core/translation/formula-output-validation';
 
 describe('vision formula output validation', () => {
+  it('repairs common OCR pseudo-TeX commands without another model request', () => {
+    expect(repairCommonVisionLatex(String.raw`\textbbQ_{\textOmega}=\textPi_{\texttau}`))
+      .toBe(String.raw`\mathbb{Q}_{\Omega}=\Pi_{\tau}`);
+    const result = reconcileImageFormulaResult({
+      recognizedText: String.raw`where $\textbbQ_{\textOmega}=\textPi_{\texttau}$`,
+      translatedText: String.raw`其中 $\textbbQ_{\textOmega}=\textPi_{\texttau}$`,
+      formulaLatex: [String.raw`\textbbQ_{\textOmega}=\textPi_{\texttau}`],
+      uncertainSpans: [],
+    });
+    expect(result.formulaLatex).toEqual([String.raw`\mathbb{Q}_{\Omega}=\Pi_{\tau}`]);
+    expect(result.translatedText).toContain(String.raw`$\mathbb{Q}_{\Omega}=\Pi_{\tau}$`);
+  });
+
+  it('reattaches a visible trailing equation number as a LaTeX tag locally', () => {
+    const result = reconcileImageFormulaResult({
+      recognizedText: String.raw`where \[x=y\] (8)`,
+      translatedText: String.raw`其中 \[x=y\] (8)`,
+      formulaLatex: ['x=y'],
+      uncertainSpans: [],
+    });
+    expect(result.recognizedText).toBe(String.raw`where \[x=y\tag{8}\]`);
+    expect(result.translatedText).toBe(String.raw`其中 \[x=y\tag{8}\]`);
+    expect(result.formulaLatex).toEqual([String.raw`x=y\tag{8}`]);
+  });
+
   it('accepts matching, structurally valid LaTeX', () => {
     expect(validateImageFormulaResult({
       recognizedText: 'Energy is $E=mc^2$ and \\[R=\\frac{a+b}{c}.\\]',

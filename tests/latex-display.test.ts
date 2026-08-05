@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   containsRenderableLatex,
+  latexRenderParts,
   splitLatexDisplaySegments,
 } from '../core/translation/latex-display';
 import { renderLatexMathMl } from '../core/translation/latex-mathml';
@@ -38,6 +39,15 @@ describe('LaTeX result display', () => {
     expect(renderLatexMathMl('\\frac{', false)).toBeUndefined();
     const untrusted = renderLatexMathMl('\\href{javascript:alert(1)}{x}', false) ?? '';
     expect(untrusted).not.toMatch(/\shref\s*=|<script/iu);
+  });
+
+  it('separates one top-level equation number from a scrolling display body', () => {
+    const source = String.raw`\arg\min_x f(x),\qquad \text{s.t. }g(x)=0,\tag{8}`;
+    expect(latexRenderParts(source, true)).toEqual({
+      tex: String.raw`\arg\min_x f(x),\qquad \text{s.t. }g(x)=0,`,
+      equationTag: '8',
+    });
+    expect(latexRenderParts(source, false)).toEqual({ tex: source });
   });
 
   it('renders numbered equations nested in cases through a display-only fallback', () => {

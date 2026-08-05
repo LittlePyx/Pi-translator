@@ -89,7 +89,6 @@ export interface ImageRegionTranslationCapture {
   sourceLabel?: string;
   selectionReference?: PdfSourceLocation;
   sourceSelection?: SelectionSnapshot;
-  recapture?: (padding: number) => Promise<ImageRegionTranslationCapture | undefined>;
 }
 
 export interface PdfRegionTextTranslationCapture {
@@ -1091,7 +1090,6 @@ export async function startSelectionTranslator(
   async function translateImageRegion(
     capture: ImageRegionTranslationCapture,
     isRetry = false,
-    expandedFormulaCrop = false,
   ): Promise<void> {
     const requestId = crypto.randomUUID();
     if (inFlightRequestId) {
@@ -1141,18 +1139,6 @@ export async function startSelectionTranslator(
       inFlightRequestId = undefined;
       if (response.ok) {
         overlayHistory = response.data.history;
-        if (
-          response.data.result.formulaNeedsReview &&
-          capture.recapture &&
-          !expandedFormulaCrop
-        ) {
-          completedEarlyRequestId = undefined;
-          const expandedCapture = await capture.recapture(24);
-          if (expandedCapture) {
-            await translateImageRegion(expandedCapture, true, true);
-            return;
-          }
-        }
         if (alreadyRendered) {
           overlay.updateHistory(combinedOverlayHistory());
           completedEarlyRequestId = undefined;

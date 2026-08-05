@@ -160,6 +160,42 @@ function sameFormulae(left: string[], right: string[]): boolean {
   ));
 }
 
+const GREEK_COMMAND_NAME = '(?:Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|omicron|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega)';
+
+/** Repairs a small set of deterministic pseudo-TeX forms emitted by OCR. */
+export function repairCommonVisionLatex(formula: string): string {
+  return formula
+    .replace(/\\textbb\s*(?:\{([^{}]+)\}|([A-Za-z]))/gu, (_match, group: string, letter: string) =>
+      `\\mathbb{${group ?? letter}}`)
+    .replace(new RegExp(`\\\\text\\s*\\{\\s*(${GREEK_COMMAND_NAME})\\s*\\}`, 'gu'), '\\$1')
+    .replace(new RegExp(`\\\\text(${GREEK_COMMAND_NAME})(?![A-Za-z])`, 'gu'), '\\$1');
+}
+
+function repairDelimitedVisionLatex(text: string): string {
+  const numbered = text.replace(
+    /\\\[([\s\S]*?)\\\]\s*\(([A-Za-z]?\d+(?:[.-]\d+)*[A-Za-z]?)\)/gu,
+    (match, formula: string, tag: string) => (
+      /\\tag\s*\{/u.test(formula)
+        ? match
+        : `\\[${formula.trim()}\\tag{${tag}}\\]`
+    ),
+  );
+  const parsed = extractDelimitedFormulae(numbered);
+  if (!parsed.balanced || !parsed.formulae.length) return numbered;
+  return replaceDelimitedFormulae(numbered, parsed.formulae.map(repairCommonVisionLatex)) ?? numbered;
+}
+
+function repairImageFormulaResult(
+  result: ProviderImageTranslationResult,
+): ProviderImageTranslationResult {
+  return {
+    ...result,
+    recognizedText: repairDelimitedVisionLatex(result.recognizedText),
+    translatedText: repairDelimitedVisionLatex(result.translatedText),
+    formulaLatex: result.formulaLatex.map(repairCommonVisionLatex),
+  };
+}
+
 /**
  * The OCR text is the source of truth for formula bodies. Vision models often
  * preserve the meaning while changing harmless LaTeX spelling in the
@@ -170,20 +206,21 @@ function sameFormulae(left: string[], right: string[]): boolean {
 export function reconcileImageFormulaResult(
   result: ProviderImageTranslationResult,
 ): ProviderImageTranslationResult {
-  const recognized = extractDelimitedFormulae(result.recognizedText);
-  const translated = extractDelimitedFormulae(result.translatedText);
+  const repaired = repairImageFormulaResult(result);
+  const recognized = extractDelimitedFormulae(repaired.recognizedText);
+  const translated = extractDelimitedFormulae(repaired.translatedText);
   if (
     !recognized.balanced ||
     !translated.balanced ||
     recognized.formulae.length !== translated.formulae.length ||
     recognized.formulae.some((formula) => structuralIssues(formula).length > 0)
   ) {
-    return result;
+    return repaired;
   }
-  const translatedText = replaceDelimitedFormulae(result.translatedText, recognized.formulae);
-  if (translatedText === undefined) return result;
+  const translatedText = replaceDelimitedFormulae(repaired.translatedText, recognized.formulae);
+  if (translatedText === undefined) return repaired;
   return {
-    ...result,
+    ...repaired,
     translatedText,
     formulaLatex: recognized.formulae.map((formula) => formula.trim()),
   };

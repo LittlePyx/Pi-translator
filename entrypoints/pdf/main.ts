@@ -1290,7 +1290,6 @@ async function capturePdfFormulaSelection(
     ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
     selectionReference: sourceLocationForRegion(pageNumber, region, pageBounds),
     sourceSelection: snapshot,
-    recapture: (nextPadding) => capturePdfFormulaSelection(snapshot, nextPadding),
   };
 }
 
@@ -1666,11 +1665,6 @@ function createRegionConfirmation(
           pageUrl: requestPageUrl,
           sourceLabel,
           selectionReference: sourceLocation,
-          recapture: (padding) => createImageCapture(normalizeRegion(
-            { x: region.left - padding, y: region.top - padding },
-            { x: region.right + padding, y: region.bottom + padding },
-            { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
-          )),
         };
         return captureRequest;
       };

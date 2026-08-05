@@ -17,6 +17,7 @@ import {
 import { getSettings } from '../../core/settings/repository';
 import {
   containsRenderableLatex,
+  latexRenderParts,
   splitLatexDisplaySegments,
 } from '../../core/translation/latex-display';
 
@@ -65,12 +66,24 @@ function renderTranslationText(text: string, renderLatex: boolean): void {
     math.className = `pi-math ${segment.displayMode ? 'pi-math-display' : 'pi-math-inline'}`;
     math.textContent = segment.raw;
     translationText.append(math);
+    const renderParts = latexRenderParts(segment.tex, segment.displayMode);
     void browser.runtime.sendMessage({
       type: 'RENDER_LATEX_MATHML',
-      payload: { tex: segment.tex, displayMode: segment.displayMode },
+      payload: { tex: renderParts.tex, displayMode: segment.displayMode },
     } satisfies RuntimeMessage).then((response: LatexMathMlResponse) => {
       if (response.ok && response.data.html && math.isConnected) {
-        math.innerHTML = response.data.html;
+        if (!renderParts.equationTag) {
+          math.innerHTML = response.data.html;
+          return;
+        }
+        const scroll = document.createElement('span');
+        scroll.className = 'pi-math-scroll';
+        scroll.innerHTML = response.data.html;
+        const tag = document.createElement('span');
+        tag.className = 'pi-equation-tag';
+        tag.textContent = `(${renderParts.equationTag})`;
+        math.classList.add('pi-math-numbered');
+        math.replaceChildren(scroll, tag);
       }
     }).catch(() => undefined);
   }

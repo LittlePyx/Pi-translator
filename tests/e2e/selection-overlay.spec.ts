@@ -2393,6 +2393,28 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-text'))
     .toHaveText('流式译文应当显示在原生 PDF 阅读器旁边，其中 $E=mc^2$。');
   await expect(sidePanel.locator('#formula-view')).toHaveText('公式');
+  await sidePanel.locator('#formula-view').click();
+  await messageSender.evaluate(async (session) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload: {
+        ...session,
+        status: 'complete',
+        result: {
+          requestId: session.requestId,
+          originalText: session.sourceText,
+          translatedText: '\\[\\arg\\min_x f(x),\\qquad \\text{s.t. }g(x)=0,\\tag{8}\\]',
+          warnings: [],
+          latencyMs: 850,
+        },
+      },
+    });
+  }, baseSession);
+  await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toBeVisible();
+  await expect(sidePanel.locator('#translation-text .pi-equation-tag')).toHaveText('(8)');
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   const inheritedReaderPromise = context.waitForEvent('page');
   await sidePanel.locator('#open-pi-reader').click();

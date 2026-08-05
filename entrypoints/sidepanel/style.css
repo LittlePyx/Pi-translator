@@ -148,6 +148,9 @@ main {
 .translation-text.error { color: #b4233b; font-size: 12px; }
 .translation-text .pi-math-inline { display: inline-flex; max-width: 100%; vertical-align: -.14em; white-space: normal; }
 .translation-text .pi-math-display { display: block; width: 100%; margin: .6em 0; overflow-x: auto; text-align: center; white-space: normal; }
+.translation-text .pi-math-display.pi-math-numbered { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; overflow: visible; }
+.translation-text .pi-math-scroll { min-width: 0; overflow-x: auto; text-align: center; scrollbar-width: thin; }
+.translation-text .pi-equation-tag { align-self: center; white-space: nowrap; font-family: "Cambria Math", "STIX Two Math", serif; }
 .translation-text .pi-math math { color: inherit; }
 
 .progress-track { height: 2px; margin-top: 12px; overflow: hidden; background: #e4e6ef; }
