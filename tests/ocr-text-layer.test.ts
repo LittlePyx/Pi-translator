@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  mapCoordinateOcrPageToRegion,
   selectableOcrBlocks,
   validateCoordinateOcrPage,
 } from '../core/pdf/ocr-text-layer';
@@ -83,5 +84,23 @@ describe('coordinate OCR text-layer boundary', () => {
       'text-1',
       'formula-1',
     ]);
+  });
+
+  it('maps OCR coordinates from a confirmed crop back onto the full PDF page', () => {
+    const parsed = validateCoordinateOcrPage(valid);
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    const mapped = mapCoordinateOcrPageToRegion(parsed.page, {
+      left: 0.1,
+      top: 0.2,
+      width: 0.8,
+      height: 0.6,
+    });
+    expect(mapped.ok).toBe(true);
+    if (!mapped.ok) return;
+    expect(mapped.page.blocks[0]!.box.left).toBeCloseTo(0.18);
+    expect(mapped.page.blocks[0]!.box.top).toBeCloseTo(0.26);
+    expect(mapped.page.blocks[0]!.box.width).toBeCloseTo(0.64);
+    expect(mapped.page.blocks[0]!.box.height).toBeCloseTo(0.048);
   });
 });

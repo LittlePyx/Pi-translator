@@ -17,6 +17,8 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   LATEX_VALIDATION_FAILED: '模型没有完整保留 LaTeX 结构，结果已被拦截。',
   VISION_NOT_CONFIGURED: '请先在扩展设置中选择视觉翻译 API，并填写视觉模型。',
   VISION_MODEL_UNSUPPORTED: '当前视觉模型不支持图片输入，请在设置中选择支持图像理解的模型。',
+  OCR_NOT_SUPPORTED: '当前接口不能生成可靠的扫描 PDF 文字层；仍可使用框选翻译。坐标 OCR 目前支持官方 Qwen / 阿里云百炼接口。',
+  OCR_INVALID_RESPONSE: 'OCR 没有返回可靠的文字坐标，未生成文字层；请调整识别区域或继续使用框选翻译。',
   IMAGE_REGION_INVALID: '框选图片无法处理，请缩小框选范围或重新框选更清晰的区域。',
   UNSUPPORTED_PAGE: '当前页面禁止扩展注入，请在普通网页或 Overleaf 项目页使用。',
   REQUEST_ABORTED: '翻译请求已取消。',

@@ -14,6 +14,7 @@ import {
   type PdfSidePanelSession,
   type PublicSettings,
   type PublicSettingsResponse,
+  type RecognizePdfPageResponse,
   type RuntimeMessage,
   type RuntimeResponse,
   type TranslateRuntimeResponse,
@@ -76,6 +77,8 @@ import {
   shouldOpenEdgePdfSidePanelImmediately,
 } from '../core/pdf/source';
 import { normalizePdfSelectionText } from '../core/pdf/text-normalizer';
+import { recognizeQwenPdfPage } from '../core/pdf/qwen-coordinate-ocr';
+import type { RecognizePdfPageRequest } from '../core/pdf/ocr-text-layer';
 import { documentIdentity } from '../core/document/document-identity';
 import {
   buildDocumentReferenceContext,
@@ -1141,7 +1144,9 @@ async function translate(
   }
 }
 
-function validateImageRegionRequest(request: TranslateImageRegionRequest): void {
+function validateImagePayload(
+  request: Pick<TranslateImageRegionRequest, 'imageDataUrl' | 'imageWidth' | 'imageHeight'>,
+): void {
   const match = /^data:image\/(png|jpeg|webp);base64,([A-Za-z0-9+/]+={0,2})$/i.exec(
     request.imageDataUrl,
   );
@@ -1169,6 +1174,49 @@ function validateImageRegionRequest(request: TranslateImageRegionRequest): void 
     ) > 200
   ) {
     throw new TranslationError('IMAGE_REGION_INVALID', 'The selected image dimensions are invalid.');
+  }
+}
+
+function validateImageRegionRequest(request: TranslateImageRegionRequest): void {
+  validateImagePayload(request);
+}
+
+async function recognizePdfPage(
+  request: RecognizePdfPageRequest,
+): Promise<RecognizePdfPageResponse> {
+  try {
+    validateImagePayload(request);
+    if (!Number.isInteger(request.pageNumber) || request.pageNumber < 1) {
+      throw new TranslationError('IMAGE_REGION_INVALID', 'The PDF page number is invalid.');
+    }
+    const settings = await getSettings();
+    const profile = settings.apiProfiles.find(
+      (candidate) => candidate.id === settings.visionApiProfileId,
+    ) ?? settings.apiProfiles.find(
+      (candidate) => candidate.id === settings.activeApiProfileId,
+    );
+    if (!profile) {
+      throw new TranslationError('VISION_NOT_CONFIGURED', 'Configure a Qwen API profile first.');
+    }
+    const apiKey = await getApiKey(profile.id);
+    if (!apiKey) {
+      throw new TranslationError('NO_API_KEY', `Configure an API Key for ${profile.name} first.`);
+    }
+    const permission = apiOriginPattern(profile.apiBaseUrl);
+    if (!await browser.permissions.contains({ origins: [permission] })) {
+      throw new TranslationError('API_PERMISSION_REQUIRED', `Permission for ${permission} is required.`);
+    }
+    const controller = new AbortController();
+    const page = await recognizeQwenPdfPage(
+      request,
+      settings.visionModel.trim() || profile.model,
+      { apiKey, apiBaseUrl: profile.apiBaseUrl },
+      controller.signal,
+    );
+    return { ok: true, data: { page } };
+  } catch (error) {
+    await recordLocalDiagnosticError('recognize-pdf-page', error);
+    return errorResponse(error);
   }
 }
 
@@ -2165,6 +2213,10 @@ export default defineBackground(() => {
           tabId,
           progressTargetForSender(sender.url),
         );
+      }
+
+      if (message.type === 'RECOGNIZE_PDF_PAGE') {
+        return recognizePdfPage(message.payload);
       }
 
       if (message.type === 'TEST_API_CONNECTION') {

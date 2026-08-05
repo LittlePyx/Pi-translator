@@ -34,7 +34,16 @@ import {
   type RegionRect,
   type RegionResizeHandle,
 } from '../../core/pdf/region-capture';
-import type { RuntimeMessage } from '../../core/messaging/messages';
+import type {
+  RecognizePdfPageResponse,
+  RuntimeMessage,
+} from '../../core/messaging/messages';
+import { translationErrorMessage } from '../../core/messaging/user-facing-error';
+import {
+  mapCoordinateOcrPageToRegion,
+  selectableOcrBlocks,
+  type CoordinateOcrPage,
+} from '../../core/pdf/ocr-text-layer';
 import {
   DEFAULT_PDF_REGION_SHORTCUT_KEY,
   resolvePdfRegionShortcut,
@@ -100,6 +109,7 @@ let openLoadingTask: ReturnType<typeof getDocument> | undefined;
 let pageObserver: IntersectionObserver | undefined;
 const activeRenderTasks = new Map<HTMLElement, RenderTask>();
 const activeTextLayerBuilders = new Map<HTMLElement, TextLayerBuilder>();
+const temporaryOcrPages = new Map<number, CoordinateOcrPage>();
 const pageRenderRevisions = new WeakMap<HTMLElement, number>();
 const invalidationCallbacks: Array<() => void> = [];
 type RegionSelectionMode = 'off' | 'single' | 'continuous';
@@ -156,6 +166,7 @@ interface ActiveRegionSelection {
   region: RegionRect;
   box: HTMLElement;
   confirm?: HTMLElement;
+  purpose: 'translate' | 'page-recognition';
   interaction: RegionInteraction | undefined;
 }
 
@@ -526,6 +537,7 @@ function beginDocumentOpen(message: string): DocumentOpenOperation {
   pdfDocument = undefined;
   if (previousDocument) void previousDocument.destroy().catch(() => undefined);
   regionTranslationQueue.length = 0;
+  temporaryOcrPages.clear();
   if (activeRegionTranslation) activeRegionTranslation.cancelled = true;
   updateRegionAction();
   clearDocument();
@@ -829,7 +841,14 @@ async function renderPage(
     ]);
     if (!isCurrentPageRender()) return;
     pageElement.dataset.rendered = 'ready';
-    const hasText = Boolean(textLayerBuilder.div.textContent?.trim());
+    const hasNativeText = Boolean(textLayerBuilder.div.textContent?.trim());
+    const temporaryOcrCount = hasNativeText
+      ? 0
+      : renderTemporaryOcrTextLayer(
+          pageElement,
+          temporaryOcrPages.get(page.pageNumber),
+        );
+    const hasText = hasNativeText || temporaryOcrCount > 0;
     pageElement.dataset.hasText = String(hasText);
     if (!hasText && !scanHintShownForDocument && !isRegionModeActive()) {
       scanHintShownForDocument = true;
@@ -837,7 +856,7 @@ async function renderPage(
         transient: true,
         action: {
           label: '识别本页',
-          ariaLabel: `识别并翻译第 ${pageElement.dataset.pageNumber ?? '当前'} 页`,
+          ariaLabel: `识别第 ${pageElement.dataset.pageNumber ?? '当前'} 页并生成临时文字层`,
           onClick: () => createPageRecognitionRegion(pageElement),
         },
       });
@@ -1071,6 +1090,7 @@ function createActiveRegion(
   canvas: HTMLCanvasElement,
   region: RegionRect,
   interaction?: RegionInteraction,
+  purpose: ActiveRegionSelection['purpose'] = 'translate',
 ): ActiveRegionSelection {
   clearRegionSelection();
   const box = document.createElement('div');
@@ -1081,6 +1101,7 @@ function createActiveRegion(
     pageElement,
     canvas,
     region,
+    purpose,
     box,
     interaction,
   };
@@ -1129,10 +1150,12 @@ function createPageRecognitionRegion(pageElement: HTMLElement): void {
     pageElement,
     canvas,
     suggestedPageRecognitionRegion({ width: bounds.width, height: bounds.height }),
+    undefined,
+    'page-recognition',
   );
   createRegionConfirmation(
     selection,
-    '仅发送本页选定区域；可先拖动边框排除页眉、页脚或空白边缘',
+    '仅发送本页选定区域；使用同一 Qwen Key 调用 qwen3.5-ocr，可先排除页眉与页脚',
   );
   showNotice(undefined);
 }
@@ -1189,6 +1212,37 @@ function extractReliableTextFromRegion(
   });
   const extraction = extractPdfRegionText(items, selection.region);
   return extraction.reliable ? extraction.text : undefined;
+}
+
+function renderTemporaryOcrTextLayer(
+  pageElement: HTMLElement,
+  page: CoordinateOcrPage | undefined,
+): number {
+  const textLayer = pageElement.querySelector<HTMLElement>('.textLayer');
+  if (!textLayer) return 0;
+  for (const previous of textLayer.querySelectorAll('[data-pi-ocr-block]')) previous.remove();
+  if (!page) {
+    textLayer.classList.remove('pi-ocr-text-layer');
+    return 0;
+  }
+  const blocks = selectableOcrBlocks(page);
+  const pageBounds = pageElement.getBoundingClientRect();
+  for (const block of blocks) {
+    const span = document.createElement('span');
+    span.dataset.piOcrBlock = block.id;
+    span.textContent = block.text;
+    span.style.left = `${block.box.left * 100}%`;
+    span.style.top = `${block.box.top * 100}%`;
+    span.style.fontSize = `${Math.max(6, block.box.height * pageBounds.height * 0.88)}px`;
+    textLayer.append(span);
+    const naturalWidth = span.getBoundingClientRect().width;
+    const targetWidth = block.box.width * pageBounds.width;
+    if (naturalWidth > 0 && targetWidth > 0) {
+      span.style.transform = `scaleX(${Math.min(4, Math.max(0.25, targetWidth / naturalWidth))})`;
+    }
+  }
+  textLayer.classList.toggle('pi-ocr-text-layer', blocks.length > 0);
+  return blocks.length;
 }
 
 async function capturePdfFormulaSelection(
@@ -1430,7 +1484,10 @@ function createRegionConfirmation(
   const confirmation = document.createElement('div');
   confirmation.className = 'region-confirm';
   confirmation.setAttribute('role', 'group');
-  confirmation.setAttribute('aria-label', '框选翻译确认');
+  confirmation.setAttribute(
+    'aria-label',
+    selection.purpose === 'page-recognition' ? '扫描页文字识别确认' : '框选翻译确认',
+  );
   const note = document.createElement('span');
   note.className = 'region-confirm-note';
   note.textContent = noteText;
@@ -1439,7 +1496,7 @@ function createRegionConfirmation(
   const confirm = document.createElement('button');
   confirm.className = 'confirm';
   confirm.type = 'button';
-  confirm.textContent = '发送并翻译';
+  confirm.textContent = selection.purpose === 'page-recognition' ? '识别文字' : '发送并翻译';
   const cancel = document.createElement('button');
   cancel.type = 'button';
   cancel.textContent = '取消';
@@ -1501,7 +1558,11 @@ function createRegionConfirmation(
     }
     confirm.disabled = true;
     cancel.disabled = true;
-    showNotice('正在检查框选内容…');
+    showNotice(
+      selection.purpose === 'page-recognition'
+        ? '正在识别本页文字…'
+        : '正在检查框选内容…',
+    );
     const captureEpoch = selection.documentEpoch;
     const requestPageUrl = currentSourceUrl;
     const requestSourceLabel = currentSourceLabel ?? documentName.textContent ?? 'PDF';
@@ -1524,6 +1585,51 @@ function createRegionConfirmation(
         showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
       }
     };
+    if (selection.purpose === 'page-recognition') {
+      void (async () => {
+        const captured = await captureCanvasRegion(
+          selection.canvas,
+          { left: 0, top: 0, width: currentBounds.width, height: currentBounds.height },
+          requestRegion,
+        );
+        if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+        const response = await browser.runtime.sendMessage({
+          type: 'RECOGNIZE_PDF_PAGE',
+          payload: {
+            requestId: crypto.randomUUID(),
+            imageDataUrl: captured.dataUrl,
+            imageWidth: captured.width,
+            imageHeight: captured.height,
+            pageNumber: numericPageNumber,
+          },
+        } satisfies RuntimeMessage) as RecognizePdfPageResponse;
+        if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+        if (!response.ok) {
+          throw new Error(translationErrorMessage(response.error.code, response.error.message));
+        }
+        const mapped = mapCoordinateOcrPageToRegion(response.data.page, {
+          left: requestRegion.left / currentBounds.width,
+          top: requestRegion.top / currentBounds.height,
+          width: requestRegion.width / currentBounds.width,
+          height: requestRegion.height / currentBounds.height,
+        });
+        if (!mapped.ok) throw new Error(mapped.reason);
+        temporaryOcrPages.set(numericPageNumber, mapped.page);
+        const lineCount = renderTemporaryOcrTextLayer(selection.pageElement, mapped.page);
+        if (!lineCount) throw new Error('OCR 没有返回可安全选择的文字行。');
+        selection.pageElement.dataset.hasText = 'true';
+        finishSelection();
+        showNotice(`已生成临时文字层 · ${lineCount} 行 · 现在可以直接划选翻译`, {
+          transient: true,
+        });
+      })().catch((error: unknown) => {
+        if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+        confirm.disabled = false;
+        cancel.disabled = false;
+        showNotice(error instanceof Error ? error.message : '本页文字识别失败，请继续使用框选翻译。');
+      });
+      return;
+    }
     if (extractedText && !shouldUseVisionForPdfFormula(extractedText)) {
       const captureRequest: PdfRegionTextTranslationCapture = {
         text: extractedText,

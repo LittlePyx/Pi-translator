@@ -8,6 +8,7 @@ export type DiagnosticOperation =
   | 'translate-finalization'
   | 'translate-image-region'
   | 'translate-image-region-finalization'
+  | 'recognize-pdf-page'
   | 'test-connection'
   | 'test-vision-capability'
   | 'list-models'

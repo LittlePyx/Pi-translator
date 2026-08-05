@@ -12,6 +12,7 @@ export interface CoordinateOcrBlock {
   order: number;
   text: string;
   confidence: number;
+  confidenceSource?: 'provider' | 'trusted-adapter';
   kind: OcrBlockKind;
   box: NormalizedOcrBox;
 }
@@ -19,7 +20,16 @@ export interface CoordinateOcrBlock {
 export interface CoordinateOcrPage {
   pageNumber: number;
   coordinateSystem: 'normalized-page';
+  source?: 'qwen-advanced-recognition';
   blocks: CoordinateOcrBlock[];
+}
+
+export interface RecognizePdfPageRequest {
+  requestId: string;
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  pageNumber: number;
 }
 
 export type CoordinateOcrValidation =
@@ -76,18 +86,32 @@ export function validateCoordinateOcrPage(value: unknown): CoordinateOcrValidati
     const text=typeof block.text==='string'?block.text.trim():'';
     const order=block.order;
     const confidence=block.confidence;
+    const confidenceSource=block.confidenceSource;
     const kind=block.kind;
     const box=normalizedBox(block.box);
     if(!id||id.length>80||ids.has(id))return {ok:false,reason:`第 ${index+1} 个 OCR 文字块 ID 无效或重复。`};
     if(!Number.isInteger(order)||(order as number)<0||orders.has(order as number))return {ok:false,reason:`第 ${index+1} 个 OCR 阅读顺序无效或重复。`};
     if(!text||text.length>MAX_OCR_BLOCK_TEXT)return {ok:false,reason:`第 ${index+1} 个 OCR 文字块为空或过长。`};
     if(!finiteNumber(confidence)||confidence<0||confidence>1)return {ok:false,reason:`第 ${index+1} 个 OCR 置信度无效。`};
+    if(confidenceSource!==undefined&&!['provider','trusted-adapter'].includes(String(confidenceSource)))return {ok:false,reason:`第 ${index+1} 个 OCR 置信度来源无效。`};
+    const normalizedConfidenceSource = confidenceSource === 'provider' ||
+      confidenceSource === 'trusted-adapter'
+      ? confidenceSource
+      : undefined;
     if(!['text','formula','table'].includes(String(kind)))return {ok:false,reason:`第 ${index+1} 个 OCR 类型无效。`};
     if(!box)return {ok:false,reason:`第 ${index+1} 个 OCR 坐标越界。`};
     totalText+=text.length;
     if(totalText>MAX_OCR_PAGE_TEXT)return {ok:false,reason:'OCR 单页文字总量过大。'};
     ids.add(id);orders.add(order as number);
-    blocks.push({id,order:order as number,text,confidence,kind:kind as OcrBlockKind,box});
+    blocks.push({
+      id,
+      order:order as number,
+      text,
+      confidence,
+      ...(normalizedConfidenceSource?{confidenceSource:normalizedConfidenceSource}:{}),
+      kind:kind as OcrBlockKind,
+      box,
+    });
   }
 
   blocks.sort((left,right)=>left.order-right.order);
@@ -96,6 +120,7 @@ export function validateCoordinateOcrPage(value: unknown): CoordinateOcrValidati
     page:{
       pageNumber:page.pageNumber as number,
       coordinateSystem:'normalized-page',
+      ...(page.source==='qwen-advanced-recognition'?{source:page.source}:{}),
       blocks,
     },
   };
@@ -106,4 +131,24 @@ export function selectableOcrBlocks(
   minimumConfidence = 0.82,
 ): CoordinateOcrBlock[] {
   return page.blocks.filter((block) => block.kind !== 'table' && block.confidence >= minimumConfidence);
+}
+
+export function mapCoordinateOcrPageToRegion(
+  page: CoordinateOcrPage,
+  region: NormalizedOcrBox,
+): CoordinateOcrValidation {
+  const normalizedRegion = normalizedBox(region);
+  if (!normalizedRegion) return { ok: false, reason: 'OCR 识别区域坐标无效。' };
+  return validateCoordinateOcrPage({
+    ...page,
+    blocks: page.blocks.map((block) => ({
+      ...block,
+      box: {
+        left: normalizedRegion.left + block.box.left * normalizedRegion.width,
+        top: normalizedRegion.top + block.box.top * normalizedRegion.height,
+        width: block.box.width * normalizedRegion.width,
+        height: block.box.height * normalizedRegion.height,
+      },
+    })),
+  });
 }

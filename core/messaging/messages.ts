@@ -13,6 +13,10 @@ import type {
 import type { TranslationErrorCode } from './errors';
 import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
 import type { PdfSourceLocation } from '../translation/types';
+import type {
+  CoordinateOcrPage,
+  RecognizePdfPageRequest,
+} from '../pdf/ocr-text-layer';
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
@@ -80,6 +84,7 @@ export interface PdfSidePanelSession {
 export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
+  | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
@@ -149,6 +154,7 @@ export interface TranslationSessionResult {
 }
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
+export type RecognizePdfPageResponse = RuntimeResponse<{ page: CoordinateOcrPage }>;
 export type ConnectionTestResponse = RuntimeResponse<{ connected: true }>;
 export type VisionCapabilityTestResponse = RuntimeResponse<{
   supported: true;
@@ -170,6 +176,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   return (
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
+    type === 'RECOGNIZE_PDF_PAGE' ||
     type === 'CAPTURE_VISIBLE_TAB' ||
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||

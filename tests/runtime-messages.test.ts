@@ -13,6 +13,19 @@ describe('runtime message guard', () => {
     })).toBe(true);
   });
 
+  it('accepts the dedicated PDF page OCR message', () => {
+    expect(isRuntimeMessage({
+      type: 'RECOGNIZE_PDF_PAGE',
+      payload: {
+        requestId: 'ocr-1',
+        imageDataUrl: 'data:image/png;base64,AA==',
+        imageWidth: 100,
+        imageHeight: 100,
+        pageNumber: 1,
+      },
+    })).toBe(true);
+  });
+
   it('accepts document-memory operations', () => {
     expect(isRuntimeMessage({
       type: 'GET_DOCUMENT_MEMORY',

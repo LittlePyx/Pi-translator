@@ -1571,7 +1571,9 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   const scanHint = pdfPage.locator('#notice');
   await expect(scanHint).toHaveClass(/transient/);
   await expect(scanHint).toContainText('扫描版 PDF');
-  const recognizePage = scanHint.getByRole('button', { name: '识别并翻译第 1 页' });
+  const recognizePage = scanHint.getByRole('button', {
+    name: '识别第 1 页并生成临时文字层',
+  });
   await expect(recognizePage).toBeVisible();
   expect(await scanHint.evaluate((element) => getComputedStyle(element).position)).toBe('fixed');
   expect(visionRequests).toHaveLength(requestCount);
@@ -1762,6 +1764,92 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   });
   expect(serializedStorage).not.toContain('data:image/');
   expect(serializedStorage).not.toContain(image?.image_url?.url?.slice(-80) ?? 'never-match');
+  await pdfPage.close();
+});
+
+test('creates a selectable temporary OCR layer for a confirmed scanned PDF page', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.addInitScript(() => {
+    const runtime = (globalThis as typeof globalThis & {
+      chrome: {
+        runtime: {
+          sendMessage: (message: unknown, ...args: unknown[]) => Promise<unknown>;
+        };
+      };
+    }).chrome.runtime;
+    const original = runtime.sendMessage.bind(runtime);
+    runtime.sendMessage = (message: unknown, ...args: unknown[]) => {
+      if (
+        message &&
+        typeof message === 'object' &&
+        'type' in message &&
+        message.type === 'RECOGNIZE_PDF_PAGE'
+      ) {
+        return Promise.resolve({
+          ok: true,
+          data: {
+            page: {
+              pageNumber: 1,
+              coordinateSystem: 'normalized-page',
+              source: 'qwen-advanced-recognition',
+              blocks: [{
+                id: 'e2e-ocr-line',
+                order: 0,
+                text: 'Selectable scanned academic sentence.',
+                confidence: 0.9,
+                confidenceSource: 'trusted-adapter',
+                kind: 'text',
+                box: { left: 0.1, top: 0.2, width: 0.7, height: 0.06 },
+              }],
+            },
+          },
+        });
+      }
+      return original(message, ...args);
+    };
+  });
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'scanned-ocr.pdf',
+    mimeType: 'application/pdf',
+    buffer: createRasterPdf(),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-has-text', 'false');
+  await pdfPage.getByRole('button', {
+    name: '识别第 1 页并生成临时文字层',
+  }).click();
+  await expect(firstPage.locator('.region-confirm-note')).toContainText('qwen3.5-ocr');
+  await firstPage.getByRole('button', { name: '识别文字' }).click();
+  const ocrLine = firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]');
+  await expect(ocrLine).toHaveText('Selectable scanned academic sentence.');
+  await expect(firstPage).toHaveAttribute('data-has-text', 'true');
+  await expect(pdfPage.locator('#notice')).toContainText('临时文字层');
+  await ocrLine.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  await expect.poll(() => pdfPage.evaluate(
+    () => window.getSelection()?.toString().trim(),
+  )).toBe('Selectable scanned academic sentence.');
+
+  await pdfPage.locator('#zoom-in').click();
+  await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]'))
+    .toHaveText('Selectable scanned academic sentence.');
+
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'new-scanned.pdf',
+    mimeType: 'application/pdf',
+    buffer: createRasterPdf(),
+  });
+  const replacementPage = pdfPage.locator('.pdf-page').first();
+  await expect(replacementPage).toHaveAttribute('data-rendered', 'ready');
+  await expect(replacementPage.locator('[data-pi-ocr-block]')).toHaveCount(0);
+  await expect(replacementPage).toHaveAttribute('data-has-text', 'false');
   await pdfPage.close();
 });
 
