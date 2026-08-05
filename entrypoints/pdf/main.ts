@@ -22,6 +22,7 @@ import {
   pdfDocumentIdentity,
   pdfFilename,
   pdfInitialPage,
+  pdfPermissionPattern,
 } from '../../core/pdf/source';
 import {
   captureCanvasRegion,
@@ -53,6 +54,7 @@ import {
   savePdfReadingState,
   type PdfReadingState,
 } from '../../core/pdf/reading-state';
+import { pdfWheelZoomDelta, pdfWheelZoomStepCount } from '../../core/pdf/wheel-zoom';
 import {
   clearPdfTranslationMarkers,
   getPdfTranslationMarkerState,
@@ -123,6 +125,9 @@ let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let retentionFrame: number | undefined;
 let fitWidthActive = false;
 let fitWidthTimer: ReturnType<typeof setTimeout> | undefined;
+let wheelZoomTimer: ReturnType<typeof setTimeout> | undefined;
+let wheelZoomAccumulatedDelta = 0;
+let wheelZoomAnchor: PageAnchor | undefined;
 let textSelectionSnapFrame: number | undefined;
 let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let currentReadingIdentity: string | undefined;
@@ -587,6 +592,7 @@ function setRegionMode(mode: RegionSelectionMode): void {
 }
 
 function clearDocument(): void {
+  clearPendingWheelZoom();
   setRegionMode('off');
   clearSourceRegionHighlight();
   renderGeneration += 1;
@@ -1846,6 +1852,47 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     source.protocol === 'file:' ? '正在读取本地 PDF…' : '正在读取在线 PDF…',
   );
   try {
+    if (
+      source.protocol === 'file:' &&
+      !(await browser.extension.isAllowedFileSchemeAccess())
+    ) {
+      emptyState.hidden = false;
+      showNotice(
+        'Edge 尚未允许 Pi Translator 读取本地 PDF。请在扩展详情中开启“允许访问文件 URL”，再返回重试。',
+        {
+          action: {
+            label: '打开扩展管理页',
+            onClick: () => {
+              void browser.tabs.create({
+                url: `edge://extensions/?id=${browser.runtime.id}`,
+                active: true,
+              }).catch(() => showNotice('请手动打开 edge://extensions，并进入 Pi Translator 详情。'));
+            },
+          },
+        },
+      );
+      completeDocumentOpen(operation);
+      return;
+    }
+    const permission = pdfPermissionPattern(source.href);
+    if (permission && !await browser.permissions.contains({ origins: [permission] })) {
+      emptyState.hidden = false;
+      showNotice(
+        'Pi PDF 还没有当前 PDF 地址的读取权限。授权只针对当前文件来源。',
+        {
+          action: {
+            label: '授权并重试',
+            onClick: () => {
+              void browser.permissions.request({ origins: [permission] }).then((granted) => {
+                if (granted) void openPdfSource(source, initialPage);
+              }).catch(() => showNotice('未能发起 PDF 地址授权，请返回快捷面板后重试。'));
+            },
+          },
+        },
+      );
+      completeDocumentOpen(operation);
+      return;
+    }
     const response = await fetch(
       source.href,
       source.protocol === 'file:'
@@ -1853,12 +1900,26 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
         : { credentials: 'include', signal: operation.controller.signal },
     );
     if (!isCurrentOpen(operation)) return;
-    if (!response.ok) throw new Error(`下载失败（HTTP ${response.status}）`);
+    const isOverleafSource = /(^|\.)overleaf\.com$/iu.test(source.hostname);
+    if (!response.ok) {
+      if (isOverleafSource && [401, 403].includes(response.status)) {
+        throw new Error('Overleaf 登录态或编译下载链接已失效。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件');
+      }
+      throw new Error(`下载失败（HTTP ${response.status}）`);
+    }
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
     if (contentType.includes('text/html') || contentType.includes('application/json')) {
-      throw new Error('这个地址返回的不是 PDF 文件');
+      throw new Error(isOverleafSource
+        ? 'Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件'
+        : '这个地址返回的不是 PDF 文件');
     }
     const data = new Uint8Array(await response.arrayBuffer());
+    const responseStart = new TextDecoder().decode(data.subarray(0, 256)).trimStart();
+    if (/^(?:<!doctype\s+html|<html\b|\{\s*["'])/iu.test(responseStart)) {
+      throw new Error(isOverleafSource
+        ? 'Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件'
+        : '这个地址返回的不是 PDF 文件');
+    }
     if (!isCurrentOpen(operation)) return;
     await openPdfData(
       data,
@@ -1892,14 +1953,52 @@ fileInput.addEventListener('change', () => {
   fileInput.value = '';
 });
 
-function steppedZoom(direction: -1 | 1): number {
+function steppedZoom(direction: -1 | 1, fromZoom = currentZoom()): number {
   if (direction < 0) {
-    return [...ZOOM_LEVELS].reverse().find((level) => level < currentZoom() - 0.001)
+    return [...ZOOM_LEVELS].reverse().find((level) => level < fromZoom - 0.001)
       ?? ZOOM_LEVELS[0];
   }
-  return ZOOM_LEVELS.find((level) => level > currentZoom() + 0.001)
+  return ZOOM_LEVELS.find((level) => level > fromZoom + 0.001)
     ?? ZOOM_LEVELS.at(-1)!;
 }
+
+function clearPendingWheelZoom(): void {
+  if (wheelZoomTimer) clearTimeout(wheelZoomTimer);
+  wheelZoomTimer = undefined;
+  wheelZoomAccumulatedDelta = 0;
+  wheelZoomAnchor = undefined;
+}
+
+function commitWheelZoom(): void {
+  wheelZoomTimer = undefined;
+  const delta = wheelZoomAccumulatedDelta;
+  const anchor = wheelZoomAnchor ?? visiblePageAnchor();
+  wheelZoomAccumulatedDelta = 0;
+  wheelZoomAnchor = undefined;
+  if (!pdfDocument || delta === 0) return;
+
+  const direction: -1 | 1 = delta > 0 ? -1 : 1;
+  let nextZoom = currentZoom();
+  for (let index = 0; index < pdfWheelZoomStepCount(delta); index += 1) {
+    nextZoom = steppedZoom(direction, nextZoom);
+  }
+  if (Math.abs(nextZoom - currentZoom()) < 0.001) return;
+  fitWidthActive = false;
+  rebuildAtZoom(nextZoom, anchor);
+}
+
+viewer.addEventListener('wheel', (event) => {
+  const delta = pdfWheelZoomDelta(event);
+  if (!pdfDocument || delta === undefined) return;
+
+  // Prevent Chromium from zooming the complete extension page. Plain wheel
+  // scrolling and Ctrl + wheel outside the PDF document remain untouched.
+  event.preventDefault();
+  wheelZoomAccumulatedDelta += delta;
+  wheelZoomAnchor ??= visiblePageAnchor();
+  if (wheelZoomTimer) clearTimeout(wheelZoomTimer);
+  wheelZoomTimer = setTimeout(commitWheelZoom, 80);
+}, { passive: false });
 
 function fitDocumentToAvailableWidth(anchor = visiblePageAnchor()): void {
   const pdf = pdfDocument;

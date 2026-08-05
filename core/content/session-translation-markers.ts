@@ -1,5 +1,6 @@
 import type { ViewportRect } from '../selection/types';
 import type { PdfSourceLocation, TranslateResult } from '../translation/types';
+import { splitLightMarkup } from '../translation/light-markup';
 
 export type TranslationMarkerAnchor =
   | {
@@ -612,7 +613,7 @@ export class SessionTranslationMarkerManager {
       .tooltip{position:fixed;max-width:min(360px,calc(100vw - 20px));max-height:min(42vh,360px);padding:7px 9px 9px;border:1px solid rgba(99,102,241,.2);border-radius:6px;color:#1f2937;background:rgba(255,255,255,.98);box-shadow:0 10px 30px rgba(15,23,42,.18);font-size:11px;line-height:1.58;pointer-events:auto;overflow-x:hidden;overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}
       .tooltip-actions{position:sticky;z-index:1;top:-7px;display:flex;justify-content:flex-end;height:22px;margin:-2px -2px 2px;padding-top:2px;background:linear-gradient(var(--tooltip-bg,rgba(255,255,255,.98)) 72%,transparent)}
       .unmark{height:20px;padding:0 4px;border:0;border-radius:3px;color:#6e7b91;background:transparent;font:600 9px/20px Inter,"Segoe UI",system-ui,sans-serif;cursor:pointer}.unmark:hover{color:#4f46e5;background:rgba(99,102,241,.08)}
-      .tooltip-text{white-space:pre-wrap;overflow-wrap:anywhere}
+      .tooltip-text{white-space:pre-wrap;overflow-wrap:anywhere}.tooltip-text strong{font-weight:700}
       .tooltip[hidden]{display:none}
       @media(prefers-color-scheme:dark){.tooltip{--tooltip-bg:rgba(20,27,39,.98);color:#eef2f7;background:var(--tooltip-bg);border-color:rgba(165,180,252,.28)}.unmark{color:#a9b5c7}.unmark:hover{color:#c7d2fe;background:rgba(129,140,248,.12)}.marker{background:rgba(129,140,248,.13)}}
       @media(prefers-reduced-motion:reduce){.marker{transition:none}.marker.focused{animation:none}}
@@ -1003,7 +1004,16 @@ export class SessionTranslationMarkerManager {
       this.tooltip.scrollTop = 0;
       this.scheduleRender();
     }
-    this.tooltipText.textContent = record.content.translatedText;
+    this.tooltipText.replaceChildren();
+    for (const segment of splitLightMarkup(record.content.translatedText)) {
+      if (segment.kind === 'text') {
+        this.tooltipText.append(document.createTextNode(segment.text));
+      } else {
+        const strong = document.createElement('strong');
+        strong.textContent = segment.text;
+        this.tooltipText.append(strong);
+      }
+    }
     this.tooltip.hidden = false;
     if (!shouldPosition) return;
     const margin = 10;

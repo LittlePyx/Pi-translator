@@ -15,7 +15,7 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   EMPTY_RESPONSE: 'API 返回了空结果，请重试。',
   INVALID_RESPONSE: 'API 返回格式异常，请重试或切换模型。',
   LATEX_VALIDATION_FAILED: '模型没有完整保留 LaTeX 结构，结果已被拦截。',
-  VISION_NOT_CONFIGURED: '请先在扩展设置中选择视觉翻译 API，并填写视觉模型。',
+  VISION_NOT_CONFIGURED: '尚未配置 PDF 图像能力。普通文字翻译仍可使用；框选扫描件需要支持图片的模型，“识别本页”需要在设置中配置官方 Qwen / 阿里云百炼。',
   VISION_MODEL_UNSUPPORTED: '当前视觉模型不支持图片输入，请在设置中选择支持图像理解的模型。',
   OCR_NOT_SUPPORTED: '当前接口不能生成可靠的扫描 PDF 文字层；仍可使用框选翻译。坐标 OCR 目前支持官方 Qwen / 阿里云百炼接口。',
   OCR_INVALID_RESPONSE: 'OCR 没有返回可靠的文字坐标，未生成文字层；请调整识别区域或继续使用框选翻译。',

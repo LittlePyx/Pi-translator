@@ -39,6 +39,16 @@
           <button id="open-pi-reader" type="button">用 Pi 打开</button>
         </aside>
 
+        <aside id="pdf-access-alert" class="access-alert" role="alert" hidden>
+          <strong id="pdf-access-title">需要 PDF 读取权限</strong>
+          <p id="pdf-access-message"></p>
+          <ol id="pdf-access-steps"></ol>
+          <div class="access-actions">
+            <button id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
+            <button id="retry-pdf-access" type="button">重新检测</button>
+          </div>
+        </aside>
+
         <section class="content-section source-section">
           <h2>原文</h2>
           <p id="source-text"></p>

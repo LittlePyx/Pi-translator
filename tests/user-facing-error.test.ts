@@ -11,7 +11,8 @@ describe('user-facing errors', () => {
   });
 
   it('explains how to fix image-region translation errors', () => {
-    expect(translationErrorMessage('VISION_NOT_CONFIGURED')).toContain('视觉翻译 API');
+    expect(translationErrorMessage('VISION_NOT_CONFIGURED')).toContain('普通文字翻译仍可使用');
+    expect(translationErrorMessage('VISION_NOT_CONFIGURED')).toContain('官方 Qwen');
     expect(translationErrorMessage('VISION_MODEL_UNSUPPORTED')).toContain('图片输入');
     expect(translationErrorMessage('IMAGE_REGION_INVALID')).toContain('重新框选');
   });

@@ -1444,6 +1444,79 @@ button:hover { background: #f1f3f6; }
 .connection-summary strong.success { color: #16804b; }
 .connection-summary strong.muted { color: #718096; font-weight: 500; }
 
+.onboarding-step .onboarding-vision-note {
+  margin: 16px 0 0;
+  padding-top: 12px;
+  border-top: 1px solid #e3e7ed;
+  color: #69768a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.vision-setup {
+  margin-top: 17px;
+  padding: 14px 2px 13px;
+  border-top: 1px solid #dfe3e9;
+  border-bottom: 1px solid #dfe3e9;
+}
+
+.vision-setup-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.vision-setup-heading > div {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+}
+
+.vision-setup-heading strong { color: #334155; font-size: 13px; }
+.optional-label {
+  color: #7775dc;
+  font-size: 9px;
+  font-weight: 800;
+  letter-spacing: .08em;
+}
+.vision-setup-button {
+  flex: 0 0 auto;
+  padding: 3px 0;
+  border: 0;
+  border-radius: 0;
+  font-size: 11px;
+}
+.vision-setup > p {
+  margin: 8px 0 0;
+  color: #69768a;
+  font-size: 11px;
+  line-height: 1.55;
+}
+.vision-setup-status {
+  margin-top: 7px;
+  color: #4f5d72;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.vision-setup-details { margin-top: 9px; border-top: 1px solid #edf0f5; }
+.vision-setup-details > summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 0 2px;
+  color: #69768a;
+  cursor: pointer;
+  list-style: none;
+  font-size: 10px;
+}
+.vision-setup-details > summary::-webkit-details-marker { display: none; }
+.vision-setup-details > summary::after { content: "+"; color: #758198; font-size: 16px; }
+.vision-setup-details[open] > summary::after { content: "−"; }
+.vision-setup-content { padding-top: 10px; }
+.vision-setup-content .grid { margin: 0; }
+
 .connection-advanced {
   margin-top: 18px;
   border-top: 1px solid #dfe3e9;
@@ -1473,15 +1546,23 @@ button:hover { background: #f1f3f6; }
 
 @media (max-width: 640px) {
   .connection-step { grid-template-columns: 23px minmax(0, 1fr); gap: 8px; }
+  .vision-setup-heading { align-items: flex-start; }
 }
 
 @media (prefers-color-scheme: dark) {
   .connection-flow,
   .connection-summary,
   .connection-step,
+  .vision-setup,
+  .vision-setup-details,
   .connection-advanced,
-  .connection-advanced-content { border-color: #2d3747; }
+  .connection-advanced-content,
+  .onboarding-step .onboarding-vision-note { border-color: #2d3747; }
   .connection-step-number { color: #a5b4fc; }
+  .vision-setup-heading strong { color: #e5e7eb; }
+  .vision-setup > p,
+  .vision-setup-status,
+  .vision-setup-details > summary { color: #9ca9bc; }
   .connect-model-button { color: #c7d2fe; border-color: #465268; background: #171f2c; }
   .connect-model-button:hover { border-color: #69758a; background: #202938; }
   .connection-advanced > summary { color: #aebbd0; }

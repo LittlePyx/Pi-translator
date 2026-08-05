@@ -8,19 +8,24 @@ export interface LatexRenderParts {
 }
 
 const SIMPLE_DISPLAY_TAG = /\\tag\s*\{([^{}]{1,40})\}/gu;
-const ROW_ENVIRONMENT = /\\begin\s*\{(?:cases|aligned|alignedat|array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|gathered|split)\}/u;
+
+function normalizedEquationTag(value: string): string {
+  const trimmed = value.trim();
+  const parenthesized = /^\(\s*([^()]*)\s*\)$/u.exec(trimmed);
+  return parenthesized?.[1]?.trim() || trimmed;
+}
 
 /**
  * Keeps a single top-level equation number outside the horizontally scrolling
  * formula body. The original segment remains untouched for copy/export.
  */
 export function latexRenderParts(tex: string, displayMode: boolean): LatexRenderParts {
-  if (!displayMode || ROW_ENVIRONMENT.test(tex)) return { tex };
+  if (!displayMode) return { tex };
   const tags = [...tex.matchAll(SIMPLE_DISPLAY_TAG)];
   SIMPLE_DISPLAY_TAG.lastIndex = 0;
   if (tags.length !== 1) return { tex };
   const match = tags[0]!;
-  const equationTag = match[1]?.trim();
+  const equationTag = normalizedEquationTag(match[1] ?? '');
   if (!equationTag || match.index === undefined) return { tex };
   return {
     tex: `${tex.slice(0, match.index)}${tex.slice(match.index + match[0].length)}`.trim(),

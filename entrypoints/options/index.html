@@ -25,8 +25,8 @@
           <span data-onboarding-dot="3">3</span>
         </div>
         <section class="onboarding-step" data-onboarding-step="1">
-          <h3>选择翻译接口</h3>
-          <p>预设只会填写接口地址和建议模型，API Key 由你自己提供。</p>
+          <h3>选择文字翻译接口（必需）</h3>
+          <p>网页、Overleaf 和可选中文字的 PDF 只需一个文字 API。预设会填写接口地址和建议模型，API Key 由你自己提供。</p>
           <label>
             <span>接口类型</span>
             <select id="onboarding-preset"></select>
@@ -57,6 +57,7 @@
             <input id="onboarding-model" type="text" list="onboarding-model-list" spellcheck="false" />
             <datalist id="onboarding-model-list"></datalist>
           </label>
+          <p class="onboarding-vision-note">扫描版 PDF 属于可选能力：框选图片需要视觉模型；“识别本页”需要官方 Qwen / 阿里云百炼。完成文字 API 后也可稍后配置。</p>
         </section>
         <p id="onboarding-status" class="status" role="status" aria-live="polite"></p>
         <footer class="onboarding-actions">
@@ -107,10 +108,10 @@
         <form id="settings-form" class="settings-content">
           <section id="settings-connection" class="card settings-section active" role="tabpanel" data-settings-section="connection">
             <div class="section-heading">
-              <div><span class="section-kicker">连接</span><h2>翻译 API</h2></div>
+              <div><span class="section-kicker">连接</span><h2>文字翻译 API（必需）</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>
             </div>
-            <p class="section-intro">选择服务商并填写 Key，扩展会配置接口地址并读取这个 Key 可用的模型。</p>
+            <p class="section-intro">选择服务商并填写 Key，扩展会配置官方接口地址并读取这个 Key 可用的模型；不会根据 Key 猜测或尝试其他服务商。</p>
             <div class="profile-bar">
               <label><span>API 配置</span><select id="api-profile"></select></label>
               <button id="add-profile" class="small-button" type="button">新增</button>
@@ -154,6 +155,30 @@
               <div><span>兼容能力</span><strong id="connection-format-status">尚未检测</strong></div>
               <div><span>PDF 图像</span><strong id="connection-vision-status">尚未检测</strong></div>
             </section>
+            <section class="vision-setup" aria-labelledby="vision-setup-title">
+              <div class="vision-setup-heading">
+                <div>
+                  <span class="optional-label">可选</span>
+                  <strong id="vision-setup-title">PDF 图像与扫描件</strong>
+                </div>
+                <button id="setup-qwen" class="text-button vision-setup-button" type="button">配置 Qwen</button>
+              </div>
+              <p>网页、Overleaf 和可选文字 PDF 不需要 Qwen；框选扫描件需要视觉模型，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
+              <div id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
+              <details id="vision-setup-details" class="vision-setup-details">
+                <summary><span>手动选择或检查视觉配置</span></summary>
+                <div class="vision-setup-content">
+                  <div class="grid">
+                    <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。</small></label>
+                    <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>
+                  </div>
+                  <div class="vision-test-row">
+                    <button id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
+                    <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 130×58 高对比字符测试图，不含文档内容。</span>
+                  </div>
+                </div>
+              </details>
+            </section>
             <div class="section-actions">
               <button id="test-connection" type="button">仅验证当前模型</button>
             </div>
@@ -184,20 +209,6 @@
               <summary><span><strong>术语与翻译约束</strong><small>可选；用于保持术语一致</small></span></summary>
               <div class="disclosure-content">
                 <label><span>固定术语翻译</span><textarea id="academic-glossary" rows="7" spellcheck="false" placeholder="每行一条，例如：&#10;large language model = 大语言模型&#10;knowledge distillation = 知识蒸馏"></textarea><small>最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small></label>
-              </div>
-            </details>
-            <details class="disclosure-panel">
-              <summary><span><strong>PDF 图像区域翻译</strong><small>可选；用于扫描版或文字不清晰的 PDF</small></span></summary>
-              <div class="disclosure-content">
-                <div class="grid">
-                  <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>留空时，保存设置会自动检测当前 API；支持图片输入便会自动启用。也可手动选择不同配置。</small></label>
-                  <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>
-                </div>
-                <p class="field-help">只在你确认框选后发送局部图片，不会上传完整 PDF；截图不会写入历史、缓存或诊断记录。</p>
-                <div class="vision-test-row">
-                  <button id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
-                  <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 130×58 高对比字符测试图，不含文档内容。</span>
-                </div>
               </div>
             </details>
           </section>

@@ -175,9 +175,12 @@ function repairDelimitedVisionLatex(text: string): string {
   const numbered = text.replace(
     /\\\[([\s\S]*?)\\\]\s*\(([A-Za-z]?\d+(?:[.-]\d+)*[A-Za-z]?)\)/gu,
     (match, formula: string, tag: string) => (
-      /\\tag\s*\{/u.test(formula)
-        ? match
-        : `\\[${formula.trim()}\\tag{${tag}}\\]`
+      (() => {
+        const existingTag = /\\tag\s*\{\s*(?:\(\s*)?([^(){}]+?)(?:\s*\))?\s*\}/u.exec(formula)?.[1]
+          ?.trim();
+        if (!existingTag) return `\\[${formula.trim()}\\tag{${tag}}\\]`;
+        return existingTag === tag ? `\\[${formula.trim()}\\]` : match;
+      })()
     ),
   );
   const parsed = extractDelimitedFormulae(numbered);

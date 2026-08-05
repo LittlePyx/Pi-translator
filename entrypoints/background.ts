@@ -72,6 +72,7 @@ import {
   pdfDocumentIdentity,
   pdfFilename,
   pdfInitialPage,
+  pdfPermissionPattern,
   pdfSidePanelOpenTarget,
   resolvePdfContextTab,
   shouldOpenEdgePdfSidePanelImmediately,
@@ -1622,24 +1623,58 @@ async function sendToSelectionContentScript(
 async function sendContextMenuTranslationToWebPage(
   tab: { id?: number | undefined; url?: string | undefined },
   snapshot: ReturnType<typeof createContextMenuSnapshot>,
+  frameId?: number,
 ): Promise<void> {
   if (tab.id === undefined || !tab.url) return;
-  if (isOverleafProjectUrl(tab.url)) {
+  const targetFrameId = frameId !== undefined && frameId >= 0 ? frameId : 0;
+  const message = {
+    type: 'CONTEXT_MENU_TRANSLATE',
+    payload: snapshot,
+  } satisfies RuntimeMessage;
+  const sendToTargetFrame = () => browser.tabs.sendMessage(
+    tab.id!,
+    message,
+    { frameId: targetFrameId },
+  );
+  if (isOverleafProjectUrl(tab.url) && targetFrameId === 0) {
+    await sendToTargetFrame();
+    return;
+  }
+  try {
+    await sendToTargetFrame();
+    return;
+  } catch {
+    // The top-level Overleaf translator deliberately does not run in every
+    // frame. Inject the compact on-demand translator only into the frame that
+    // produced the context-menu selection, then address that frame precisely.
+  }
+  const frameUrl = snapshot.pageUrl;
+  if (!isInjectableWebUrl(frameUrl)) {
+    if (isOverleafProjectUrl(tab.url) && targetFrameId !== 0) {
+      await browser.tabs.sendMessage(tab.id, message, { frameId: 0 });
+      return;
+    }
+    throw new Error('The selected frame cannot host a content script.');
+  }
+  try {
+    await browser.scripting.executeScript({
+      target: { tabId: tab.id, frameIds: [targetFrameId] },
+      files: [GENERAL_CONTENT_SCRIPT_FILE],
+    });
     await browser.tabs.sendMessage(tab.id, {
       type: 'CONTEXT_MENU_TRANSLATE',
       payload: snapshot,
-    } satisfies RuntimeMessage);
-    return;
+    } satisfies RuntimeMessage, { frameId: targetFrameId });
+  } catch (error) {
+    if (isOverleafProjectUrl(tab.url) && targetFrameId !== 0) {
+      // Protected/blob preview frames cannot be injected. The top-level
+      // Overleaf script can still translate the browser-provided selectionText
+      // exactly once, although it cannot recover the child frame's rectangle.
+      await browser.tabs.sendMessage(tab.id, message, { frameId: 0 });
+      return;
+    }
+    throw error;
   }
-  if (!isInjectableWebUrl(tab.url)) return;
-  await browser.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: [GENERAL_CONTENT_SCRIPT_FILE],
-  });
-  await browser.tabs.sendMessage(tab.id, {
-    type: 'CONTEXT_MENU_TRANSLATE',
-    payload: snapshot,
-  } satisfies RuntimeMessage);
 }
 
 export default defineBackground(() => {
@@ -1882,8 +1917,13 @@ export default defineBackground(() => {
         openPdfTranslationSidePanel(activeTab, undefined, sourceUrl, pageNumber);
         return;
       }
-      const snapshot = createContextMenuSnapshot(info.selectionText, resolvedTab.url);
-      await sendContextMenuTranslationToWebPage(resolvedTab, snapshot).catch((error: unknown) => {
+      const selectionPageUrl = info.frameUrl ?? info.pageUrl ?? resolvedTab.url;
+      const snapshot = createContextMenuSnapshot(info.selectionText, selectionPageUrl);
+      await sendContextMenuTranslationToWebPage(
+        resolvedTab,
+        snapshot,
+        info.frameId,
+      ).catch((error: unknown) => {
         // Some PDF endpoints keep their original HTTPS URL instead of exposing
         // the internal viewer URL. Failed injection is therefore treated as a
         // protected-document fallback and rendered in the native side panel.
@@ -1891,7 +1931,7 @@ export default defineBackground(() => {
         openPdfTranslationSidePanel(
           activeTab,
           info.selectionText,
-          resolvedTab.url,
+          sourceUrl ?? selectionPageUrl,
           pageNumber,
         );
       });
@@ -2037,6 +2077,23 @@ export default defineBackground(() => {
         }).catch(() => ({ ok: true as const, data: {} }));
       }
 
+      if (message.type === 'RENDER_LATEX_MATHML_BATCH') {
+        const items = message.payload.items.slice(0, 64);
+        return import('../core/translation/latex-mathml').then(({ renderLatexMathMl }) => ({
+          ok: true as const,
+          data: {
+            html: items.map((item) => {
+              const tex = item.tex.trim();
+              if (!tex || tex.length > 10_000) return null;
+              return renderLatexMathMl(tex, item.displayMode) ?? null;
+            }),
+          },
+        })).catch(() => ({
+          ok: true as const,
+          data: { html: items.map(() => null) },
+        }));
+      }
+
       if (message.type === 'GET_LOCAL_DIAGNOSTIC_REPORT') {
         return localDiagnosticReport()
           .then((report) => ({ ok: true as const, data: { report } }))
@@ -2062,13 +2119,32 @@ export default defineBackground(() => {
         const viewerUrl = new URL(browser.runtime.getURL('/pdf.html'));
         if (source) viewerUrl.searchParams.set('url', source);
         if (page) viewerUrl.searchParams.set('page', String(page));
-        return browser.tabs
-          .create({ url: viewerUrl.href, active: true })
-          .then(async (tab) => {
-            await disableSidePanelForPiPdfViewer(tab);
-            return { ok: true as const, data: { opened: true } };
-          })
-          .catch((error: unknown) => errorResponse(error));
+        return (async () => {
+          if (source) {
+            const parsed = parsePdfSourceUrl(source)!;
+            if (
+              parsed.protocol === 'file:' &&
+              !(await browser.extension.isAllowedFileSchemeAccess())
+            ) {
+              throw new TranslationError(
+                'UNSUPPORTED_PAGE',
+                '请先在 Edge 扩展管理页的 Pi Translator 详情中开启“允许访问文件 URL”。',
+                true,
+              );
+            }
+            const origin = pdfPermissionPattern(source);
+            if (origin && !await browser.permissions.contains({ origins: [origin] })) {
+              throw new TranslationError(
+                'UNSUPPORTED_PAGE',
+                '尚未授权读取当前 PDF 所在地址，请从快捷面板或 PDF 侧边栏重新授权。',
+                true,
+              );
+            }
+          }
+          const tab = await browser.tabs.create({ url: viewerUrl.href, active: true });
+          await disableSidePanelForPiPdfViewer(tab);
+          return { ok: true as const, data: { opened: true } };
+        })().catch((error: unknown) => errorResponse(error));
       }
 
       if (message.type === 'GET_PDF_SIDE_PANEL_SESSION') {

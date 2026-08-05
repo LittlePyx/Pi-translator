@@ -31,6 +31,18 @@ describe('vision formula output validation', () => {
     expect(result.formulaLatex).toEqual([String.raw`x=y\tag{8}`]);
   });
 
+  it('removes a duplicated visible number when the formula already contains the same tag', () => {
+    const result = reconcileImageFormulaResult({
+      recognizedText: String.raw`where \[x=y\tag{8}\] (8)`,
+      translatedText: String.raw`其中 \[x=y\tag{8}\] (8)`,
+      formulaLatex: [String.raw`x=y\tag{8}`],
+      uncertainSpans: [],
+    });
+    expect(result.recognizedText).toBe(String.raw`where \[x=y\tag{8}\]`);
+    expect(result.translatedText).toBe(String.raw`其中 \[x=y\tag{8}\]`);
+    expect(result.formulaLatex).toEqual([String.raw`x=y\tag{8}`]);
+  });
+
   it('accepts matching, structurally valid LaTeX', () => {
     expect(validateImageFormulaResult({
       recognizedText: 'Energy is $E=mc^2$ and \\[R=\\frac{a+b}{c}.\\]',

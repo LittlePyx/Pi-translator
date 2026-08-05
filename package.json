@@ -11,7 +11,7 @@
     "zip:edge": "wxt zip -b edge",
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",
-    "test:e2e": "npm run build:edge && playwright test tests/e2e/selection-overlay.spec.ts tests/e2e/release-upgrade.spec.ts",
+    "test:e2e": "npm run build:edge && playwright test tests/e2e/selection-overlay.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
     "test:live-formula": "vite-node tools/live-formula-acceptance.ts",
     "test:marketing": "npm run build:edge && playwright test tests/e2e/marketing-screenshots.spec.ts",
     "check:secrets": "node tools/check-secrets.mjs",

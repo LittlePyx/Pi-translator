@@ -39,4 +39,20 @@ describe('runtime message guard', () => {
       },
     })).toBe(true);
   });
+
+  it('accepts batched local MathML rendering', () => {
+    expect(isRuntimeMessage({
+      type: 'RENDER_LATEX_MATHML_BATCH',
+      payload: {
+        items: [
+          { tex: 'E=mc^2', displayMode: false },
+          { tex: '\\arg\\min_x f(x)', displayMode: true },
+        ],
+      },
+    })).toBe(true);
+  });
+
+  it('accepts a top-frame PDF preview source query', () => {
+    expect(isRuntimeMessage({ type: 'GET_ACTIVE_PDF_SOURCE' })).toBe(true);
+  });
 });

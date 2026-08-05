@@ -50,6 +50,19 @@ describe('LaTeX result display', () => {
     expect(latexRenderParts(source, false)).toEqual({ tex: source });
   });
 
+  it('keeps one aligned equation number fixed and normalizes existing parentheses', () => {
+    const source = String.raw`\begin{aligned}a&=b\\c&=d\end{aligned}\tag{(8)}`;
+    expect(latexRenderParts(source, true)).toEqual({
+      tex: String.raw`\begin{aligned}a&=b\\c&=d\end{aligned}`,
+      equationTag: '8',
+    });
+  });
+
+  it('leaves multiple row equation numbers in the formula for the local fallback', () => {
+    const source = String.raw`\begin{cases}x=1\tag{3}\\y=2\tag{4}\end{cases}`;
+    expect(latexRenderParts(source, true)).toEqual({ tex: source });
+  });
+
   it('renders numbered equations nested in cases through a display-only fallback', () => {
     const source = String.raw`\begin{cases}
 \boldsymbol{z}_k = \boldsymbol{x}_{k-1} + \rho \mathbf{A}^\top

@@ -39,7 +39,7 @@ jobs:
         run: npm run build:edge
 
       - name: Run Edge end-to-end tests
-        run: npx playwright test tests/e2e/selection-overlay.spec.ts
+        run: npx playwright test tests/e2e/selection-overlay.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts
 
       - name: Create Edge installation package
         run: npm run zip:edge

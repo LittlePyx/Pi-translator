@@ -45,6 +45,15 @@
       </section>
 
       <p id="status" class="status" role="status" aria-live="polite"></p>
+      <section id="pdf-access-alert" class="access-alert" role="alert" hidden>
+        <strong id="pdf-access-title">需要 PDF 读取权限</strong>
+        <p id="pdf-access-message"></p>
+        <ol id="pdf-access-steps"></ol>
+        <div class="access-actions">
+          <button id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
+          <button id="retry-pdf-access" type="button">重新检测</button>
+        </div>
+      </section>
       <button id="open-sidebar" class="primary-action" type="button">打开连续翻译侧栏</button>
       <button id="open-pdf" type="button">打开 PDF 阅读器</button>
       <button id="open-settings" type="button">打开完整设置</button>

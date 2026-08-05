@@ -2406,19 +2406,34 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
         result: {
           requestId: session.requestId,
           originalText: session.sourceText,
-          translatedText: '\\[\\arg\\min_x f(x),\\qquad \\text{s.t. }g(x)=0,\\tag{8}\\]',
+          translatedText: [
+            '**h-Transform**',
+            '\\[Q^{\\Pi^*}(dZ)=\\pi^*(Z_\\tau)Q(dZ),\\tag{8}\\]',
+            '**命题 2.8**',
+            '\\[Q^{\\Pi^*}=\\arg\\min_{P\\in\\mathcal{P}(V,\\Omega)} KL(P\\Vert Q),\\tag{12}\\]',
+            '\\[KL(P\\Vert Q^{\\Pi^*})=KL(P\\Vert Q)-E_P[\\log\\pi^*(Z_\\tau)],\\tag{13}\\]',
+          ].join('\\n'),
           warnings: [],
           latencyMs: 850,
         },
       },
     });
   }, baseSession);
-  await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toBeVisible();
-  await expect(sidePanel.locator('#translation-text .pi-equation-tag')).toHaveText('(8)');
+  await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toHaveCount(3);
+  await expect(sidePanel.locator('#translation-text strong')).toHaveText([
+    'h-Transform',
+    '命题 2.8',
+  ]);
+  await expect(sidePanel.locator('#translation-text .pi-equation-tag')).toHaveText([
+    '(8)',
+    '(12)',
+    '(13)',
+  ]);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   const inheritedReaderPromise = context.waitForEvent('page');
   await sidePanel.locator('#open-pi-reader').click();
   const inheritedReader = await inheritedReaderPromise;
+  await inheritedReader.waitForURL((url) => url.pathname === '/pdf.html');
   await inheritedReader.waitForLoadState('domcontentloaded');
   const inheritedUrl = new URL(inheritedReader.url());
   expect(inheritedUrl.pathname).toBe('/pdf.html');

@@ -1,11 +1,11 @@
 import type {
-  LatexMathMlResponse,
   PdfSidePanelSession,
   RuntimeMessage,
   RuntimeResponse,
 } from '../../core/messaging/messages';
 import { translationErrorMessage } from '../../core/messaging/user-facing-error';
 import {
+  edgePdfSourceUrl,
   parsePdfSourceUrl,
   pdfInitialPage,
   pdfPermissionPattern,
@@ -15,11 +15,8 @@ import {
   isSamePdfSidePanelSession,
 } from '../../core/pdf/sidepanel-session';
 import { getSettings } from '../../core/settings/repository';
-import {
-  containsRenderableLatex,
-  latexRenderParts,
-  splitLatexDisplaySegments,
-} from '../../core/translation/latex-display';
+import { containsRenderableLatex } from '../../core/translation/latex-display';
+import { renderTranslationContent } from '../../ui/translation-content';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -43,6 +40,12 @@ const openPiReader = element<HTMLButtonElement>('open-pi-reader');
 const readerHintText = element<HTMLElement>('reader-hint-text');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const errorSettings = element<HTMLButtonElement>('error-settings');
+const pdfAccessAlert = element<HTMLElement>('pdf-access-alert');
+const pdfAccessTitle = element<HTMLElement>('pdf-access-title');
+const pdfAccessMessage = element<HTMLElement>('pdf-access-message');
+const pdfAccessSteps = element<HTMLOListElement>('pdf-access-steps');
+const openExtensionManagement = element<HTMLButtonElement>('open-extension-management');
+const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
 
 let activeTabId: number | undefined;
 let activeWindowId: number | undefined;
@@ -52,41 +55,7 @@ let formulaRenderOverride: boolean | undefined;
 const sessionLoadGate = createLatestRequestGate();
 
 function renderTranslationText(text: string, renderLatex: boolean): void {
-  translationText.replaceChildren();
-  if (!renderLatex) {
-    translationText.textContent = text;
-    return;
-  }
-  for (const segment of splitLatexDisplaySegments(text)) {
-    if (segment.kind === 'text') {
-      translationText.append(document.createTextNode(segment.text));
-      continue;
-    }
-    const math = document.createElement(segment.displayMode ? 'div' : 'span');
-    math.className = `pi-math ${segment.displayMode ? 'pi-math-display' : 'pi-math-inline'}`;
-    math.textContent = segment.raw;
-    translationText.append(math);
-    const renderParts = latexRenderParts(segment.tex, segment.displayMode);
-    void browser.runtime.sendMessage({
-      type: 'RENDER_LATEX_MATHML',
-      payload: { tex: renderParts.tex, displayMode: segment.displayMode },
-    } satisfies RuntimeMessage).then((response: LatexMathMlResponse) => {
-      if (response.ok && response.data.html && math.isConnected) {
-        if (!renderParts.equationTag) {
-          math.innerHTML = response.data.html;
-          return;
-        }
-        const scroll = document.createElement('span');
-        scroll.className = 'pi-math-scroll';
-        scroll.innerHTML = response.data.html;
-        const tag = document.createElement('span');
-        tag.className = 'pi-equation-tag';
-        tag.textContent = `(${renderParts.equationTag})`;
-        math.classList.add('pi-math-numbered');
-        math.replaceChildren(scroll, tag);
-      }
-    }).catch(() => undefined);
-  }
+  renderTranslationContent(translationText, text, renderLatex);
 }
 
 function setStatus(message: string): void {
@@ -95,6 +64,89 @@ function setStatus(message: string): void {
   window.setTimeout(() => {
     if (status.textContent === message) status.textContent = '';
   }, 2200);
+}
+
+function hidePdfAccessAlert(): void {
+  pdfAccessAlert.hidden = true;
+}
+
+function showPdfAccessAlert(title: string, message: string, steps: string[]): void {
+  pdfAccessTitle.textContent = title;
+  pdfAccessMessage.textContent = message;
+  pdfAccessSteps.replaceChildren(...steps.map((text) => {
+    const item = document.createElement('li');
+    item.textContent = text;
+    return item;
+  }));
+  pdfAccessAlert.hidden = false;
+}
+
+function showHiddenPdfSourceAlert(): void {
+  showPdfAccessAlert(
+    'Edge 没有提供原 PDF 地址',
+    '如果这是本地 PDF，通常是 Pi Translator 尚未获准访问文件 URL。',
+    [
+      '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
+      '开启“允许访问文件 URL”，回到原 PDF 后重新检测。',
+    ],
+  );
+}
+
+async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
+  const source = parsePdfSourceUrl(sourceUrl);
+  if (!source) return false;
+  if (
+    source.protocol === 'file:' &&
+    !(await browser.extension.isAllowedFileSchemeAccess())
+  ) {
+    showPdfAccessAlert(
+      '还差一步：允许读取本地 PDF',
+      'Edge 默认不允许扩展读取 file:// 文件，这不是 API 或 PDF 损坏。',
+      [
+        '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
+        '开启“允许访问文件 URL”，回到原 PDF 后重新检测。',
+      ],
+    );
+    return false;
+  }
+  const origin = pdfPermissionPattern(sourceUrl);
+  if (!origin) return true;
+  let granted = false;
+  try {
+    // Preserve Edge's transient user activation: request directly from the
+    // click path instead of awaiting a separate contains() call first.
+    granted = await browser.permissions.request({ origins: [origin] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    showPdfAccessAlert(
+      '需要当前 PDF 所在站点的读取权限',
+      `Pi PDF 只会申请 ${source.protocol === 'file:' ? '本地文件' : source.origin}，不会因此读取其他网站。`,
+      [
+        '点击“重新检测”，并在 Edge 的权限提示中选择允许。',
+        '授权后再次点击“用 Pi 打开”。',
+      ],
+    );
+    return false;
+  }
+  hidePdfAccessAlert();
+  return true;
+}
+
+async function recoverActivePdfSource(): Promise<string | undefined> {
+  const session = activeSession();
+  if (!session) return undefined;
+  const tab = await browser.tabs.get(session.tabId);
+  const sourceUrl = edgePdfSourceUrl({ ...(tab.url ? { tabUrl: tab.url } : {}) });
+  if (!sourceUrl) return undefined;
+  currentSession = {
+    ...session,
+    pageUrl: sourceUrl,
+    sourceLabel: parsePdfSourceUrl(sourceUrl)?.pathname.split('/').at(-1) || session.sourceLabel,
+  };
+  render(currentSession);
+  return sourceUrl;
 }
 
 function render(session: PdfSidePanelSession | null | undefined): void {
@@ -113,8 +165,10 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     ? pageNumber
       ? `将直接继承当前 PDF，并定位到第 ${pageNumber} 页。`
       : '将直接继承当前 PDF，并在打开后收起此侧边栏。'
-    : '未识别到原 PDF 地址，可手动选择本地文件。';
-  openPiReader.textContent = pdfSource ? '用 Pi 打开' : '打开 Pi 阅读器';
+    : 'Edge 没有提供原 PDF 地址；若为本地文件，请先开启文件 URL 权限。';
+  openPiReader.textContent = pdfSource ? '用 Pi 打开' : '解决 PDF 读取权限';
+  if (!pdfSource) showHiddenPdfSourceAlert();
+  else hidePdfAccessAlert();
 
   const isTranslating = session.status === 'translating';
   progressTrack.hidden = !isTranslating;
@@ -246,25 +300,11 @@ openPiReader.addEventListener('click', () => {
     const source = parsePdfSourceUrl(session.pageUrl);
     const sourceUrl = source?.href;
     const pageNumber = session.pageNumber ?? pdfInitialPage(sourceUrl);
-    if (sourceUrl) {
-      if (
-        source?.protocol === 'file:' &&
-        !(await browser.extension.isAllowedFileSchemeAccess())
-      ) {
-        setStatus('请先在扩展管理页开启“允许访问文件 URL”，再重新尝试');
-        return;
-      }
-      const origin = pdfPermissionPattern(sourceUrl);
-      if (origin) {
-        const granted =
-          (await browser.permissions.contains({ origins: [origin] })) ||
-          (await browser.permissions.request({ origins: [origin] }));
-        if (!granted) {
-          setStatus('未授予当前 PDF 的读取权限');
-          return;
-        }
-      }
+    if (!sourceUrl) {
+      showHiddenPdfSourceAlert();
+      return;
     }
+    if (!await requestPdfSourceAccess(sourceUrl)) return;
     if (
       activeTabId !== session.tabId ||
       !isSamePdfSidePanelSession(currentSession, session)
@@ -284,10 +324,31 @@ openPiReader.addEventListener('click', () => {
         : {}),
     } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
-    if (!sourceUrl) setStatus('请在 Pi 阅读器中选择本地 PDF');
   })().catch((error: unknown) => setStatus(
     error instanceof Error ? error.message : '无法打开 Pi PDF 阅读器',
   ));
+});
+
+openExtensionManagement.addEventListener('click', () => {
+  void browser.tabs.create({
+    url: `edge://extensions/?id=${browser.runtime.id}`,
+    active: true,
+  }).catch(() => setStatus('请手动打开 edge://extensions 并进入 Pi Translator 详情。'));
+});
+
+retryPdfAccess.addEventListener('click', () => {
+  void (async () => {
+    const session = activeSession();
+    if (!session) return;
+    const sourceUrl = parsePdfSourceUrl(session.pageUrl)?.href ?? await recoverActivePdfSource();
+    if (!sourceUrl) {
+      showHiddenPdfSourceAlert();
+      return;
+    }
+    if (await requestPdfSourceAccess(sourceUrl)) {
+      setStatus('PDF 读取权限已就绪');
+    }
+  })().catch(() => showHiddenPdfSourceAlert());
 });
 
 browser.runtime.onMessage.addListener((message: unknown) => {

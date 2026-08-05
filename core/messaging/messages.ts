@@ -89,6 +89,7 @@ export type RuntimeMessage =
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
   | { type: 'OPEN_OPTIONS_PAGE' }
+  | { type: 'GET_ACTIVE_PDF_SOURCE' }
   | { type: 'OPEN_PDF_VIEWER'; payload?: { url?: string; page?: number } }
   | { type: 'GET_PDF_SIDE_PANEL_SESSION'; payload: { tabId: number } }
   | { type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION'; payload: { tabId: number } }
@@ -106,6 +107,10 @@ export type RuntimeMessage =
   | { type: 'DISMISS_DOCUMENT_TERM_CANDIDATE'; payload: DocumentMemoryLocator & { candidateId: string } }
   | { type: 'CLEAR_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
   | { type: 'RENDER_LATEX_MATHML'; payload: { tex: string; displayMode: boolean } }
+  | {
+      type: 'RENDER_LATEX_MATHML_BATCH';
+      payload: { items: Array<{ tex: string; displayMode: boolean }> };
+    }
   | {
       type: 'TRANSLATION_PROGRESS';
       payload: {
@@ -165,7 +170,12 @@ export type ApiDiagnosticResponse = RuntimeResponse<ApiDiagnosticReport>;
 export type PublicSettingsResponse = RuntimeResponse<PublicSettings>;
 export type LocalDiagnosticReportResponse = RuntimeResponse<{ report: string }>;
 export type DocumentMemoryResponse = RuntimeResponse<{ memory: DocumentMemorySnapshot }>;
+export type ActivePdfSourceResponse = RuntimeResponse<{
+  detected: boolean;
+  sourceUrl?: string;
+}>;
 export type LatexMathMlResponse = RuntimeResponse<{ html?: string }>;
+export type LatexMathMlBatchResponse = RuntimeResponse<{ html: Array<string | null> }>;
 
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
@@ -181,6 +191,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
     type === 'OPEN_OPTIONS_PAGE' ||
+    type === 'GET_ACTIVE_PDF_SOURCE' ||
     type === 'OPEN_PDF_VIEWER' ||
     type === 'GET_PDF_SIDE_PANEL_SESSION' ||
     type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION' ||
@@ -195,6 +206,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'DISMISS_DOCUMENT_TERM_CANDIDATE' ||
     type === 'CLEAR_DOCUMENT_MEMORY' ||
     type === 'RENDER_LATEX_MATHML' ||
+    type === 'RENDER_LATEX_MATHML_BATCH' ||
     type === 'TRANSLATION_PROGRESS' ||
     type === 'CONTEXT_MENU_TRANSLATE' ||
     type === 'GET_PUBLIC_SETTINGS' ||

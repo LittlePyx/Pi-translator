@@ -118,6 +118,23 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 .status { min-height: 16px; margin: 10px 0; color: #4f46e5; font-size: 11px; line-height: 1.4; }
 .status.error { color: #b4233b; }
 
+.access-alert {
+  margin: 10px 0 12px;
+  padding: 12px;
+  border: 1px solid #e5b7bd;
+  border-left: 3px solid #b4233b;
+  border-radius: 6px;
+  color: #5f1d28;
+  background: #fff7f8;
+}
+.access-alert[hidden] { display: none; }
+.access-alert strong { display: block; font-size: 13px; }
+.access-alert p { margin: 5px 0 0; font-size: 11px; line-height: 1.55; }
+.access-alert ol { margin: 7px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.55; }
+.access-actions { display: grid; grid-template-columns: 1fr auto; gap: 7px; margin-top: 9px; }
+.access-actions button { padding: 7px 8px; border-radius: 5px; font-size: 11px; }
+.access-actions button:first-child { color: #fff; border-color: #9f2033; background: #a92437; }
+
 @media (prefers-color-scheme: dark) {
   :root { color: #eef2f7; background: #0f172a; }
   body {
@@ -132,4 +149,6 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   select { border-color: #465269; color: #eef2f7; background: #182131; }
   button { border-color: #465269; color: #e2e8f0; background: #202938; }
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
+  .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
+  .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
 }
