@@ -30,6 +30,32 @@ function normalizedItem(item: PositionedPdfText): PositionedPdfText | undefined 
   return { text, rect: item.rect };
 }
 
+function rectArea(rect: RegionRect): number {
+  return Math.max(0, rect.width) * Math.max(0, rect.height);
+}
+
+function overlapRatio(left: RegionRect, right: RegionRect): number {
+  const width = Math.max(0, Math.min(left.right, right.right) - Math.max(left.left, right.left));
+  const height = Math.max(0, Math.min(left.bottom, right.bottom) - Math.max(left.top, right.top));
+  const intersectionArea = width * height;
+  if (!intersectionArea) return 0;
+  return Math.min(
+    intersectionArea / Math.max(1, rectArea(left)),
+    intersectionArea / Math.max(1, rectArea(right)),
+  );
+}
+
+function hasOverprintedDuplicateText(items: PositionedPdfText[]): boolean {
+  const itemsByText = new Map<string, PositionedPdfText[]>();
+  for (const item of items) {
+    const matches = itemsByText.get(item.text) ?? [];
+    if (matches.some((match) => overlapRatio(match.rect, item.rect) >= 0.78)) return true;
+    matches.push(item);
+    itemsByText.set(item.text, matches);
+  }
+  return false;
+}
+
 function appendText(previous: PositionedPdfText | undefined, current: PositionedPdfText): string {
   if (!previous) return current.text;
   const previousText = previous.text;
@@ -92,10 +118,12 @@ export function extractPdfRegionText(
   const replacementCharacters = characters.filter((character) => character === '\uFFFD');
   const readableRatio = readableCharacters.length / Math.max(1, characters.length);
   const unreliableCharacters = privateUseCharacters.length + replacementCharacters.length;
+  const hasOverprintedDuplicates = hasOverprintedDuplicateText(selected);
   const reliable = (
     characters.length >= 2 &&
     readableRatio >= 0.82 &&
-    unreliableCharacters / Math.max(1, characters.length) <= 0.05
+    unreliableCharacters / Math.max(1, characters.length) <= 0.05 &&
+    !hasOverprintedDuplicates
   );
   return { text, reliable, itemCount: selected.length };
 }

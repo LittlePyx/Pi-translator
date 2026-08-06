@@ -36,6 +36,7 @@ describe('Pi PDF persistent translation markers', () => {
       ...older,
       markerId: 'newer',
       createdAt: 20,
+      content: { ...older.content, translatedText: '修订后的译文' },
     };
     const firstPage = marker('first-page', 1, 30);
     const state = normalizePdfTranslationMarkerState({
@@ -46,6 +47,8 @@ describe('Pi PDF persistent translation markers', () => {
 
     expect(state?.enabled).toBe(true);
     expect(state?.markers.map((item) => item.markerId)).toEqual(['first-page', 'newer']);
+    expect(state?.markers.find((item) => item.markerId === 'newer')?.content.translatedText)
+      .toBe('修订后的译文');
   });
 
   it('limits each document to 100 safe marker records', () => {

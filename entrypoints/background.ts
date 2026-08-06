@@ -196,6 +196,23 @@ function sourceHostForRequest(
   }
 }
 
+function revisionDraftChunk(
+  draft: string | undefined,
+  chunkIndex: number,
+  chunkCount: number,
+): string | undefined {
+  if (!draft) return undefined;
+  if (chunkCount <= 1) return draft;
+  const preferred = splitLongTranslationText(
+    draft,
+    Math.max(200, Math.ceil(draft.length / chunkCount)),
+  );
+  if (preferred.length === chunkCount) return preferred[chunkIndex];
+  const start = Math.floor((draft.length * chunkIndex) / chunkCount);
+  const end = Math.floor((draft.length * (chunkIndex + 1)) / chunkCount);
+  return draft.slice(start, end).trim() || undefined;
+}
+
 function toPublicSettings(
   settings: Awaited<ReturnType<typeof getSettings>>,
   pausedSiteHosts: string[],
@@ -581,8 +598,8 @@ function publishPdfSidePanelTargetError(
 ): void {
   const error = new TranslationError(
     'UNSUPPORTED_PAGE',
-    '无法确认触发右键菜单的 PDF 标签页，请保持该 PDF 为当前标签后重试。',
-    true,
+    '无法确认触发右键菜单的 PDF 标签页。请保持该 PDF 为当前标签，并重新右键选择“使用 Pi Translator 翻译选中文本”。',
+    false,
   );
   void recordLocalDiagnosticError('resolve-pdf-context-tab', error);
   if (tabId !== undefined && tabId >= 0) {
@@ -634,7 +651,7 @@ function openPdfTranslationSidePanel(
       error: {
         code: 'UNSUPPORTED_PAGE',
         message: '当前 Edge 版本无法打开扩展侧边栏，翻译请求尚未发送。',
-        retryable: true,
+        retryable: false,
       },
     });
     void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
@@ -666,7 +683,7 @@ function openPdfTranslationSidePanel(
         error: {
           code: 'UNSUPPORTED_PAGE',
           message: 'PDF 侧边栏打开失败，翻译请求尚未发送。请重新加载扩展后重试。',
-          retryable: true,
+          retryable: false,
         },
       });
       void queuePdfSidePanelOptionsSync().catch(() => undefined);
@@ -699,9 +716,14 @@ async function disableSidePanelForPiPdfViewer(
 
 function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ started: true }>> {
   const session = pdfSidePanelSessions.get(tabId);
-  if (!session) {
+  if (!session || !session.sourceText.trim()) {
     return Promise.resolve(errorResponse(
       new TranslationError('EMPTY_SELECTION', '请先在 PDF 中选择文字并使用右键翻译。'),
+    ));
+  }
+  if (session.error?.code === 'UNSUPPORTED_PAGE') {
+    return Promise.resolve(errorResponse(
+      new TranslationError('UNSUPPORTED_PAGE', session.error.message, false),
     ));
   }
   const nextSession: PdfSidePanelSession = {
@@ -845,6 +867,10 @@ async function translate(
   providerOverride?: NativePdfTranslationProvider,
 ): Promise<TranslateRuntimeResponse> {
   const text = request.text.trim();
+  const revisionInstruction = request.revision?.instruction.trim().slice(0, 500);
+  const previousTranslation = request.revision?.previousTranslation
+    ?.trim()
+    .slice(0, MAX_SELECTION_LENGTH);
   if (!text) {
     return errorResponse(new TranslationError('EMPTY_SELECTION', 'No text was selected.'));
   }
@@ -895,7 +921,7 @@ async function translate(
     const chunks = splitLongTranslationText(text);
     const checkpoint = await getTranslationCheckpoint(tabId, cacheKey, chunks);
     assertActiveRequest(tabId, request.requestId, controller);
-    if (settings.enableSessionCache && !request.bypassCache) {
+    if (settings.enableSessionCache && !request.bypassCache && !request.revision) {
       const cached = await getCachedTranslation(
         tabId,
         cacheKey,
@@ -1014,6 +1040,11 @@ async function translate(
             },
           }
         : undefined;
+      const previousTranslationChunk = revisionDraftChunk(
+        previousTranslation,
+        chunkIndex,
+        chunks.length,
+      );
       const preparedInput = {
         text: protectedLatex?.protectedText ?? chunk,
         placeholderTokens: [
@@ -1031,6 +1062,8 @@ async function translate(
             }
           : {}),
         ...(contextText ? { contextText } : {}),
+        ...(revisionInstruction ? { adjustmentInstruction: revisionInstruction } : {}),
+        ...(previousTranslationChunk ? { previousTranslation: previousTranslationChunk } : {}),
       };
       const { providerResult, restored } = await translateWithLatexRetry(
         translator,
@@ -1128,6 +1161,7 @@ async function translate(
     const sourceHost = sourceHostForRequest(request);
     const result: TranslateResult = {
       requestId: request.requestId,
+      documentId: identity.documentId,
       originalText: text,
       translatedText: translatedChunks.join('\n\n'),
       ...(detectedLanguage ? { detectedLanguage } : {}),
@@ -1136,7 +1170,7 @@ async function translate(
         ? { alignedSegments: combinedSegments }
         : {}),
       ...(sourceHost ? { sourceHost } : {}),
-      sourceKind: request.sourceLocation ? 'pdf-region-text' : 'text',
+      sourceKind: request.revision?.sourceKind ?? (request.sourceLocation ? 'pdf-region-text' : 'text'),
       ...(request.sourceLocation ? { sourceLocation: request.sourceLocation } : {}),
       targetLanguage: request.targetLanguage,
       style: request.style,
@@ -1152,6 +1186,23 @@ async function translate(
             ).values()].slice(0, 6),
           }
         : {}),
+      ...(request.revision?.formulaLatex?.length
+        ? { formulaLatex: [...request.revision.formulaLatex] }
+        : {}),
+      ...(request.revision?.uncertainSpans?.length
+        ? { uncertainSpans: [...request.revision.uncertainSpans] }
+        : {}),
+      ...(request.revision?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
+      ...(request.revision
+        ? {
+            revision: {
+              rootRequestId: request.revision.rootRequestId,
+              kind: request.revision.kind,
+              label: request.revision.label,
+              scope: request.revision.scope ?? 'current',
+            },
+          }
+        : {}),
     };
     assertActiveRequest(tabId, request.requestId, controller);
     publishTranslationProgress(tabId, {
@@ -1161,17 +1212,25 @@ async function translate(
       totalChunks: chunks.length,
       result,
     }, progressTarget);
+    if (request.revision?.scope === 'document') {
+      await rememberDocumentTranslation(identity, result);
+      assertActiveRequest(tabId, request.requestId, controller);
+    }
     const history = await settleTranslationFinalization(
       'translate-finalization',
       settings.rememberRecentTranslations
         ? addTranslationHistory(tabId, result, settings.historyLimit)
         : Promise.resolve([]),
       [
-      settings.enableSessionCache
-        ? cacheTranslation(tabId, cacheKey, result)
-        : Promise.resolve(),
+      request.revision
+        ? clearTranslationCache(tabId)
+        : settings.enableSessionCache
+          ? cacheTranslation(tabId, cacheKey, result)
+          : Promise.resolve(),
       clearTranslationCheckpoint(tabId, cacheKey),
-      rememberDocumentTranslation(identity, result),
+      !request.revision
+        ? rememberDocumentTranslation(identity, result)
+        : Promise.resolve(),
       ],
     );
     assertActiveRequest(tabId, request.requestId, controller);
@@ -1184,6 +1243,58 @@ async function translate(
     if (current?.requestId === request.requestId) {
       activeRequests.delete(tabId);
     }
+  }
+}
+
+async function updateTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
+  tabId: number,
+): Promise<TranslateRuntimeResponse> {
+  try {
+    const originalText = payload.result.originalText.trim();
+    const translatedText = payload.result.translatedText.trim();
+    if (!originalText || !translatedText) {
+      throw new TranslationError('EMPTY_SELECTION', 'The edited translation cannot be empty.');
+    }
+    if (originalText.length > MAX_SELECTION_LENGTH || translatedText.length > MAX_SELECTION_LENGTH * 4) {
+      throw new TranslationError('SELECTION_TOO_LONG', 'The edited translation is too long.');
+    }
+    const rootRequestId = payload.result.revision?.rootRequestId?.trim() ||
+      payload.result.requestId;
+    const result: TranslateResult = {
+      ...payload.result,
+      originalText,
+      translatedText,
+      warnings: payload.result.warnings ?? [],
+      completedAt: Date.now(),
+      cached: false,
+      latencyMs: 0,
+      revision: {
+        rootRequestId,
+        kind: 'manual',
+        label: '手动修改',
+        scope: payload.rememberForDocument ? 'document' : 'current',
+      },
+    };
+    delete result.alignedSegments;
+    const settings = await getSettings();
+    if (payload.rememberForDocument) {
+      await rememberDocumentTranslation(documentIdentity(payload), result);
+    }
+    const historyTask = settings.rememberRecentTranslations
+      ? addTranslationHistory(tabId, result, settings.historyLimit)
+      : Promise.resolve([]);
+    const history = await settleTranslationFinalization(
+      'translate-finalization',
+      historyTask,
+      [
+        clearTranslationCache(tabId),
+      ],
+    );
+    return { ok: true, data: { result, history } };
+  } catch (error) {
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
   }
 }
 
@@ -1226,13 +1337,16 @@ function validateImageRegionRequest(request: TranslateImageRegionRequest): void 
 
 async function recognizePdfPage(
   request: RecognizePdfPageRequest,
+  tabId: number,
 ): Promise<RecognizePdfPageResponse> {
+  const controller = beginActiveRequest(tabId, request.requestId);
   try {
     validateImagePayload(request);
     if (!Number.isInteger(request.pageNumber) || request.pageNumber < 1) {
       throw new TranslationError('IMAGE_REGION_INVALID', 'The PDF page number is invalid.');
     }
     const settings = await getSettings();
+    assertActiveRequest(tabId, request.requestId, controller);
     const profile = settings.apiProfiles.find(
       (candidate) => candidate.id === settings.visionApiProfileId,
     ) ?? settings.apiProfiles.find(
@@ -1242,6 +1356,7 @@ async function recognizePdfPage(
       throw new TranslationError('VISION_NOT_CONFIGURED', 'Configure a Qwen API profile first.');
     }
     const apiKey = await getApiKey(profile.id);
+    assertActiveRequest(tabId, request.requestId, controller);
     if (!apiKey) {
       throw new TranslationError('NO_API_KEY', `Configure an API Key for ${profile.name} first.`);
     }
@@ -1249,17 +1364,21 @@ async function recognizePdfPage(
     if (!await browser.permissions.contains({ origins: [permission] })) {
       throw new TranslationError('API_PERMISSION_REQUIRED', `Permission for ${permission} is required.`);
     }
-    const controller = new AbortController();
+    assertActiveRequest(tabId, request.requestId, controller);
     const page = await recognizeQwenPdfPage(
       request,
       settings.visionModel.trim() || profile.model,
       { apiKey, apiBaseUrl: profile.apiBaseUrl },
       controller.signal,
     );
+    assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { page } };
   } catch (error) {
     await recordLocalDiagnosticError('recognize-pdf-page', error);
     return errorResponse(error);
+  } finally {
+    const current = activeRequests.get(tabId);
+    if (current?.requestId === request.requestId) activeRequests.delete(tabId);
   }
 }
 
@@ -1304,7 +1423,7 @@ async function translateImageRegion(
       glossary,
     });
     assertActiveRequest(tabId, request.requestId, controller);
-    if (settings.enableSessionCache && !request.bypassCache) {
+    if (settings.enableSessionCache && !request.bypassCache && !request.revision) {
       const cached = await getCachedImageRegionTranslation(
         tabId,
         cacheKey,
@@ -1404,6 +1523,7 @@ async function translateImageRegion(
       : Promise.resolve();
     const result: TranslateResult = {
       requestId: request.requestId,
+      documentId: identity.documentId,
       originalText: providerResult.recognizedText,
       translatedText: providerResult.translatedText,
       warnings: [],
@@ -1414,6 +1534,13 @@ async function translateImageRegion(
         ? { formulaLatex: providerResult.formulaLatex }
         : {}),
       ...(providerResult.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
+      ...(request.revision?.formulaLatex?.length
+        ? { formulaLatex: request.revision.formulaLatex }
+        : {}),
+      ...(request.revision?.uncertainSpans?.length
+        ? { uncertainSpans: request.revision.uncertainSpans }
+        : {}),
+      ...(request.revision?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
       ...(sourceHost ? { sourceHost } : {}),
       sourceKind: 'image-region',
       ...(request.sourceLocation ? { sourceLocation: request.sourceLocation } : {}),
@@ -1424,6 +1551,16 @@ async function translateImageRegion(
       latencyMs: Math.round(performance.now() - startedAt),
       contextUsed: false,
       chunkCount: 1,
+      ...(request.revision
+        ? {
+            revision: {
+              rootRequestId: request.revision.rootRequestId,
+              kind: request.revision.kind,
+              label: request.revision.label,
+              scope: request.revision.scope ?? 'current',
+            },
+          }
+        : {}),
     };
     publishTranslationProgress(tabId, {
       requestId: request.requestId,
@@ -1433,6 +1570,10 @@ async function translateImageRegion(
       result,
     }, progressTarget);
     assertActiveRequest(tabId, request.requestId, controller);
+    if (request.revision?.scope === 'document') {
+      await rememberDocumentTranslation(identity, result);
+      assertActiveRequest(tabId, request.requestId, controller);
+    }
     const history = await settleTranslationFinalization(
       'translate-image-region-finalization',
       settings.rememberRecentTranslations
@@ -1443,7 +1584,9 @@ async function translateImageRegion(
         ? cacheImageRegionTranslation(tabId, cacheKey, result)
         : Promise.resolve(),
       visionProfileMaintenance,
-      rememberDocumentTranslation(identity, result),
+      !request.revision
+        ? rememberDocumentTranslation(identity, result)
+        : Promise.resolve(),
       ],
     );
     assertActiveRequest(tabId, request.requestId, controller);
@@ -2143,9 +2286,15 @@ export default defineBackground(() => {
       }
 
       if (message.type === 'OPEN_OPTIONS_PAGE') {
+        const focus = message.payload?.focus;
+        const suffix = focus === 'support'
+          ? '?focus=support#support'
+          : focus
+            ? `?focus=${encodeURIComponent(focus)}#connection`
+            : '';
         return browser.tabs
           .create({
-            url: browser.runtime.getURL('/options.html'),
+            url: `${browser.runtime.getURL('/options.html')}${suffix}`,
             active: true,
           })
           .then(() => ({ ok: true as const, data: { opened: true } }))
@@ -2276,6 +2425,18 @@ export default defineBackground(() => {
           .catch((error: unknown) => errorResponse(error));
       }
 
+      if (message.type === 'UPDATE_TRANSLATION_RESULT') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(
+            errorResponse(
+              new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
+            ),
+          );
+        }
+        return updateTranslationResult(message.payload, tabId);
+      }
+
       if (message.type === 'CANCEL_TRANSLATION') {
         const tabId = sender.tab?.id;
         const active = tabId === undefined ? undefined : activeRequests.get(tabId);
@@ -2334,7 +2495,13 @@ export default defineBackground(() => {
       }
 
       if (message.type === 'RECOGNIZE_PDF_PAGE') {
-        return recognizePdfPage(message.payload);
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(errorResponse(
+            new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
+          ));
+        }
+        return recognizePdfPage(message.payload, tabId);
       }
 
       if (message.type === 'TEST_API_CONNECTION') {

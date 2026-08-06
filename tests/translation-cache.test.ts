@@ -50,6 +50,36 @@ describe('translation cache key', () => {
     expect(translationCacheKey(request, provider)).not.toBe(
       translationCacheKey({ ...request, contextText: 'Earlier document context.' }, provider),
     );
+    expect(translationCacheKey(request, provider)).not.toBe(
+      translationCacheKey({
+        ...request,
+        revision: {
+          rootRequestId: 'one',
+          kind: 'custom',
+          label: 'Custom',
+          instruction: 'Use a more formal term.',
+        },
+      }, provider),
+    );
+    const revision = {
+      rootRequestId: 'one',
+      kind: 'custom' as const,
+      label: 'Custom',
+      instruction: 'Use a more formal term.',
+      previousTranslation: 'First draft.',
+    };
+    expect(translationCacheKey({ ...request, revision }, provider)).not.toBe(
+      translationCacheKey({
+        ...request,
+        revision: { ...revision, previousTranslation: 'Manually corrected draft.' },
+      }, provider),
+    );
+    expect(translationCacheKey({ ...request, revision }, provider)).toBe(
+      translationCacheKey({
+        ...request,
+        revision: { ...revision, rootRequestId: 'different-root', label: 'Different label' },
+      }, provider),
+    );
   });
 
   it('preserves concurrent writes for different tabs', async () => {

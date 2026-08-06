@@ -11,6 +11,7 @@ import type {
   TranslationHistoryEntry,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
+import type { SettingsFocus } from './user-facing-error';
 import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
 import type { PdfSourceLocation } from '../translation/types';
 import type {
@@ -20,6 +21,7 @@ import type {
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
+  documentId?: string;
   sourceLabel?: string;
   sourceLocation?: PdfSourceLocation;
 }
@@ -93,7 +95,7 @@ export type RuntimeMessage =
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
-  | { type: 'OPEN_OPTIONS_PAGE' }
+  | { type: 'OPEN_OPTIONS_PAGE'; payload?: { focus?: SettingsFocus } }
   | { type: 'GET_ACTIVE_PDF_SOURCE' }
   | { type: 'OPEN_PDF_VIEWER'; payload?: { url?: string; page?: number } }
   | { type: 'GET_PDF_SIDE_PANEL_SESSION'; payload: { tabId: number } }
@@ -111,6 +113,13 @@ export type RuntimeMessage =
   | { type: 'REMOVE_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { termId: string } }
   | { type: 'DISMISS_DOCUMENT_TERM_CANDIDATE'; payload: DocumentMemoryLocator & { candidateId: string } }
   | { type: 'CLEAR_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
+  | {
+      type: 'UPDATE_TRANSLATION_RESULT';
+      payload: DocumentMemoryLocator & {
+        result: TranslateResult;
+        rememberForDocument?: boolean;
+      };
+    }
   | { type: 'RENDER_LATEX_MATHML'; payload: { tex: string; displayMode: boolean } }
   | {
       type: 'RENDER_LATEX_MATHML_BATCH';
@@ -175,6 +184,7 @@ export type ApiDiagnosticResponse = RuntimeResponse<ApiDiagnosticReport>;
 export type PublicSettingsResponse = RuntimeResponse<PublicSettings>;
 export type LocalDiagnosticReportResponse = RuntimeResponse<{ report: string }>;
 export type DocumentMemoryResponse = RuntimeResponse<{ memory: DocumentMemorySnapshot }>;
+export type UpdateTranslationResultResponse = RuntimeResponse<TranslationSessionResult>;
 export type ActivePdfSourceResponse = RuntimeResponse<{
   detected: boolean;
   sourceUrl?: string;
@@ -210,6 +220,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'REMOVE_DOCUMENT_TERM' ||
     type === 'DISMISS_DOCUMENT_TERM_CANDIDATE' ||
     type === 'CLEAR_DOCUMENT_MEMORY' ||
+    type === 'UPDATE_TRANSLATION_RESULT' ||
     type === 'RENDER_LATEX_MATHML' ||
     type === 'RENDER_LATEX_MATHML_BATCH' ||
     type === 'TRANSLATION_PROGRESS' ||

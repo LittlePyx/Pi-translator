@@ -11,32 +11,15 @@ import {
   ocrLineRotationDegrees,
   orderAcademicOcrBlocks,
 } from './ocr-layout';
+import { qwenCoordinateOcrEndpoint } from './qwen-endpoint';
+
+export { qwenCoordinateOcrEndpoint } from './qwen-endpoint';
 
 const QWEN_OCR_MODEL = 'qwen3.5-ocr';
 // The native advanced-recognition response has no numeric probability. This
 // value is a selection-policy marker for a trusted, geometry-bearing OCR
 // endpoint, not a probability invented by the model.
 const TRUSTED_ADAPTER_CONFIDENCE = 0.9;
-
-function qwenHost(hostname: string): boolean {
-  return /^(?:dashscope(?:-intl)?\.aliyuncs\.com|[^.]+\.[^.]+\.maas\.aliyuncs\.com)$/i
-    .test(hostname);
-}
-
-export function qwenCoordinateOcrEndpoint(apiBaseUrl: string): string | undefined {
-  try {
-    const url = new URL(apiBaseUrl);
-    if (url.protocol !== 'https:' || !qwenHost(url.hostname)) return undefined;
-    const basePath = url.pathname.replace(/\/+$/, '');
-    if (!basePath.endsWith('/compatible-mode/v1')) return undefined;
-    url.pathname = `${basePath.slice(0, -'/compatible-mode/v1'.length)}/api/v1/services/aigc/multimodal-generation/generation`;
-    url.search = '';
-    url.hash = '';
-    return url.toString();
-  } catch {
-    return undefined;
-  }
-}
 
 export function qwenCoordinateOcrModel(configuredModel: string): string {
   return /(?:^|[-_.])qwen(?:3\.5|-vl)?-ocr(?:$|[-_.])/i.test(configuredModel)

@@ -307,7 +307,6 @@ export function persistedPdfMarkerKey(
   return JSON.stringify([
     ...location,
     normalizeMarkerText(content.originalText),
-    content.translatedText.trim(),
   ]);
 }
 
@@ -328,6 +327,12 @@ export function restorePersistedPdfTranslationMarker(
   marker: PersistedPdfTranslationMarker,
   documentId: string,
 ): TranslationMarkerEntry {
+  const segmentSeparator = marker.markerId.indexOf('::segment:');
+  const restoredRequestId = segmentSeparator >= 0
+    ? marker.markerId.slice(0, segmentSeparator)
+    : marker.markerId.endsWith('::full')
+      ? marker.markerId.slice(0, -'::full'.length)
+      : marker.markerId;
   const sourceLocation: PdfSourceLocation | undefined = marker.anchor.kind === 'region'
     ? {
         documentId,
@@ -352,7 +357,7 @@ export function restorePersistedPdfTranslationMarker(
     anchor,
     content: { ...marker.content },
     result: {
-      requestId: marker.markerId,
+      requestId: restoredRequestId,
       originalText: marker.content.originalText,
       translatedText: marker.content.translatedText,
       warnings: [],
@@ -642,7 +647,12 @@ export class SessionTranslationMarkerManager {
     this.mutationObserver = new MutationObserver(this.scheduleRender);
     this.mutationObserver.observe(document.documentElement, {
       attributes: true,
-      attributeFilter: ['class', 'style'],
+      // PDF text markers can be restored before the lazily rendered page is
+      // ready. The page's text layer may finish mutating while its canvas is
+      // still rendering, so those earlier child-list notifications can only
+      // produce an empty marker pass. Re-render when the reader publishes its
+      // explicit ready state instead of relying on incidental DOM mutations.
+      attributeFilter: ['class', 'style', 'data-rendered'],
       childList: true,
       characterData: true,
       subtree: true,
@@ -765,6 +775,44 @@ export class SessionTranslationMarkerManager {
       content: entry.content,
     });
     this.scheduleRender();
+  }
+
+  updateResult(rootRequestId: string, result: TranslateResult): number {
+    let updated = 0;
+    const alignedBySource = new Map(
+      result.alignedSegments?.map((segment) => [normalizeMarkerText(segment.originalText), segment]) ?? [],
+    );
+    for (const [markerId, record] of [...this.records]) {
+      const recordRoot = record.result.revision?.rootRequestId ?? record.result.requestId;
+      if (recordRoot !== rootRequestId) continue;
+      if (markerId.includes('::segment:')) {
+        const segment = alignedBySource.get(normalizeMarkerText(record.content.originalText));
+        // A full-text manual edit or model revision may intentionally omit
+        // sentence alignment. Keep the user's sentence mark rather than
+        // silently deleting it; update its translation only when a stable
+        // source-text match is available.
+        if (segment) {
+          record.content = {
+            ...record.content,
+            originalText: segment.originalText,
+            translatedText: segment.translatedText,
+          };
+        }
+      } else {
+        record.content = {
+          ...record.content,
+          originalText: result.originalText,
+          translatedText: result.translatedText,
+        };
+      }
+      record.result = result;
+      updated += 1;
+    }
+    if (!updated) return 0;
+    this.hideTooltip();
+    this.scheduleRender();
+    this.options.onChange?.(this.entries());
+    return updated;
   }
 
   replace(entries: TranslationMarkerEntry[]): void {

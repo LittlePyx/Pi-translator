@@ -29,4 +29,11 @@ describe('document identity', () => {
       sourceLocation,
     }).label).toBe('PDF 文档');
   });
+
+  it('keeps an explicit local document identity across later page navigation', () => {
+    expect(documentIdentity({
+      pageUrl: 'https://new.example/another-page',
+      documentId: 'doc-original-page',
+    }).documentId).toBe('doc-original-page');
+  });
 });

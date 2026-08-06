@@ -14,6 +14,7 @@ import {
 } from '../../core/content/selection-translator';
 import type { SelectionSnapshot } from '../../core/selection/types';
 import { extractPdfRegionText, type PositionedPdfText } from '../../core/pdf/region-text';
+import { resolvePdfFormulaCaptureRegion } from '../../core/pdf/formula-capture-region';
 import { resolvePdfTextSelectionSnap } from '../../core/pdf/text-selection-snap';
 import type { PdfSourceLocation } from '../../core/translation/types';
 import { shouldUseVisionForPdfFormula } from '../../core/translation/formula-detection';
@@ -38,8 +39,13 @@ import {
 import type {
   RecognizePdfPageResponse,
   RuntimeMessage,
+  RuntimeResponse,
 } from '../../core/messaging/messages';
-import { translationErrorMessage } from '../../core/messaging/user-facing-error';
+import {
+  translationErrorRecovery,
+  translationErrorMessage,
+  type SettingsFocus,
+} from '../../core/messaging/user-facing-error';
 import {
   mapCoordinateOcrPageToRegion,
   selectableOcrBlocks,
@@ -78,6 +84,7 @@ const documentName = element<HTMLElement>('document-name');
 const pageJump = element<HTMLElement>('page-jump');
 const pageNumberInput = element<HTMLInputElement>('page-number');
 const pageCount = element<HTMLOutputElement>('page-count');
+const recognizePage = element<HTMLButtonElement>('recognize-page');
 const regionTranslate = element<HTMLButtonElement>('region-translate');
 const regionQueueButton = element<HTMLButtonElement>('region-queue');
 const regionQueueCount = element<HTMLElement>('region-queue-count');
@@ -120,6 +127,7 @@ let regionMode: RegionSelectionMode = 'off';
 let pdfKeyboardShortcutsEnabled = true;
 let pdfRegionShortcutKey = DEFAULT_PDF_REGION_SHORTCUT_KEY;
 let scanHintShownForDocument = false;
+let activePageRecognitionRequestId: string | undefined;
 let noticeRevision = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let retentionFrame: number | undefined;
@@ -138,9 +146,20 @@ interface TextSelectionGesture {
   startX: number;
   startY: number;
   precise: boolean;
+  pageElement: HTMLElement;
 }
 
 let textSelectionGesture: TextSelectionGesture | undefined;
+
+interface CompletedTextSelectionGesture {
+  documentEpoch: number;
+  pageElement: HTMLElement;
+  region: RegionRect;
+  selectedText: string;
+  capturedAt: number;
+}
+
+let completedTextSelectionGesture: CompletedTextSelectionGesture | undefined;
 
 interface PdfSidebarLayout {
   expanded: boolean;
@@ -257,6 +276,15 @@ function showNotice(
   }, options.action ? 8000 : 4500);
 }
 
+async function openPdfSettings(focus?:SettingsFocus):Promise<boolean>{
+  try{
+    const response=await browser.runtime.sendMessage({type:'OPEN_OPTIONS_PAGE',...(focus?{payload:{focus}}:{})} satisfies RuntimeMessage) as RuntimeResponse<{opened:true}>;
+    if(response.ok)return true;
+  }catch{}
+  showNotice('无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。');
+  return false;
+}
+
 function setDocumentControls(enabled: boolean): void {
   chooseFile.textContent = enabled ? '更换 PDF' : '打开 PDF';
   chooseFile.title = enabled ? '选择另一份本地 PDF 替换当前文档' : '选择一份本地 PDF';
@@ -268,6 +296,8 @@ function setDocumentControls(enabled: boolean): void {
   zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
   fitWidth.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
+  recognizePage.hidden = !enabled;
+  recognizePage.disabled = !enabled;
   regionTranslate.disabled = !enabled;
   updateRegionAction();
 }
@@ -465,6 +495,61 @@ function snapPdfSelectionSmartly(): void {
   });
 }
 
+function compactSelectionGestureText(value: string): string {
+  return value.replaceAll(/\s+/gu, ' ').trim();
+}
+
+function rememberCompletedTextSelectionGesture(
+  gesture: TextSelectionGesture,
+  endX: number,
+  endY: number,
+): void {
+  const pageBounds = gesture.pageElement.getBoundingClientRect();
+  const selectedText = compactSelectionGestureText(window.getSelection()?.toString() ?? '');
+  if (!selectedText || pageBounds.width <= 0 || pageBounds.height <= 0) {
+    completedTextSelectionGesture = undefined;
+    return;
+  }
+  completedTextSelectionGesture = {
+    documentEpoch,
+    pageElement: gesture.pageElement,
+    region: normalizeRegion(
+      { x: gesture.startX - pageBounds.left, y: gesture.startY - pageBounds.top },
+      { x: endX - pageBounds.left, y: endY - pageBounds.top },
+      { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+    ),
+    selectedText,
+    capturedAt: Date.now(),
+  };
+}
+
+function explicitFormulaGestureRegion(
+  snapshot: SelectionSnapshot,
+  pageElement: HTMLElement,
+  selectionRegion: RegionRect,
+): RegionRect | undefined {
+  const gesture = completedTextSelectionGesture;
+  if (
+    !gesture ||
+    gesture.documentEpoch !== documentEpoch ||
+    gesture.pageElement !== pageElement ||
+    Date.now() - gesture.capturedAt > 30_000 ||
+    compactSelectionGestureText(snapshot.sourceText) !== gesture.selectedText
+  ) return undefined;
+  const horizontalGap = Math.max(
+    0,
+    Math.max(selectionRegion.left, gesture.region.left) -
+      Math.min(selectionRegion.right, gesture.region.right),
+  );
+  const verticalGap = Math.max(
+    0,
+    Math.max(selectionRegion.top, gesture.region.top) -
+      Math.min(selectionRegion.bottom, gesture.region.bottom),
+  );
+  if (horizontalGap > 4 || verticalGap > 4) return undefined;
+  return gesture.region;
+}
+
 function beginSmartTextSelection(event: PointerEvent): void {
   if (
     isRegionModeActive() ||
@@ -474,11 +559,15 @@ function beginSmartTextSelection(event: PointerEvent): void {
     !(event.target instanceof Element) ||
     !event.target.closest('.textLayer')
   ) return;
+  const pageElement = event.target.closest<HTMLElement>('.pdf-page[data-rendered="ready"]');
+  if (!pageElement) return;
+  completedTextSelectionGesture = undefined;
   textSelectionGesture = {
     pointerId: event.pointerId,
     startX: event.clientX,
     startY: event.clientY,
     precise: event.altKey,
+    pageElement,
   };
 }
 
@@ -487,16 +576,21 @@ function finishSmartTextSelection(event: PointerEvent): void {
   if (!gesture || gesture.pointerId !== event.pointerId) return;
   textSelectionGesture = undefined;
   const moved = Math.hypot(event.clientX - gesture.startX, event.clientY - gesture.startY) >= 3;
-  if (!moved || gesture.precise || event.altKey) return;
+  if (!moved) return;
+  rememberCompletedTextSelectionGesture(gesture, event.clientX, event.clientY);
+  if (gesture.precise || event.altKey) return;
   if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
   textSelectionSnapFrame = requestAnimationFrame(() => {
     textSelectionSnapFrame = undefined;
     snapPdfSelectionSmartly();
+    rememberCompletedTextSelectionGesture(gesture, event.clientX, event.clientY);
   });
 }
 
 function cancelSmartTextSelection(event: PointerEvent): void {
-  if (textSelectionGesture?.pointerId === event.pointerId) textSelectionGesture = undefined;
+  if (textSelectionGesture?.pointerId !== event.pointerId) return;
+  textSelectionGesture = undefined;
+  completedTextSelectionGesture = undefined;
 }
 
 function sidebarLayoutInset(layout: PdfSidebarLayout): number {
@@ -529,6 +623,7 @@ function beginDocumentOpen(message: string): DocumentOpenOperation {
   void persistReadingState();
   currentReadingIdentity = undefined;
   restoringReadingState = false;
+  completedTextSelectionGesture = undefined;
   openOperationId += 1;
   documentEpoch += 1;
   currentDocumentSessionId = crypto.randomUUID();
@@ -568,6 +663,14 @@ function completeDocumentOpen(operation: DocumentOpenOperation): void {
 }
 
 function clearRegionSelection(): void {
+  if (activePageRecognitionRequestId) {
+    const requestId = activePageRecognitionRequestId;
+    activePageRecognitionRequestId = undefined;
+    void browser.runtime.sendMessage({
+      type: 'CANCEL_TRANSLATION',
+      payload: { requestId },
+    } satisfies RuntimeMessage).catch(() => undefined);
+  }
   activeRegion?.box.remove();
   activeRegion?.confirm?.remove();
   activeRegion = undefined;
@@ -1267,15 +1370,26 @@ async function capturePdfFormulaSelection(
   if (!pageElement || !canvas) return undefined;
 
   const pageBounds = pageElement.getBoundingClientRect();
+  const selectionRegion = normalizeRegion(
+    {
+      x: snapshot.rect.left - pageBounds.left,
+      y: snapshot.rect.top - pageBounds.top,
+    },
+    {
+      x: snapshot.rect.right - pageBounds.left,
+      y: snapshot.rect.bottom - pageBounds.top,
+    },
+    { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+  );
+  const explicitGesture = explicitFormulaGestureRegion(snapshot, pageElement, selectionRegion);
+  const captureRegion = resolvePdfFormulaCaptureRegion(
+    selectionRegion,
+    explicitGesture,
+    { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+  );
   const region = normalizeRegion(
-    {
-      x: snapshot.rect.left - pageBounds.left - padding,
-      y: snapshot.rect.top - pageBounds.top - padding,
-    },
-    {
-      x: snapshot.rect.right - pageBounds.left + padding,
-      y: snapshot.rect.bottom - pageBounds.top + padding,
-    },
+    { x: captureRegion.left - padding, y: captureRegion.top - padding },
+    { x: captureRegion.right + padding, y: captureRegion.bottom + padding },
     { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
   );
   if (!isUsableRegion(region, 11)) return undefined;
@@ -1549,6 +1663,12 @@ function createRegionConfirmation(
   positionRegionConfirmation(selection);
   queueMicrotask(() => selection.box.focus({ preventScroll: true }));
   cancel.addEventListener('click', () => {
+    if (activePageRecognitionRequestId) {
+      clearRegionSelection();
+      if (regionMode === 'single') setRegionMode('off');
+      showNotice('已取消本页识别。', { transient: true });
+      return;
+    }
     if (regionMode === 'continuous') {
       clearRegionSelection();
       showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
@@ -1591,6 +1711,10 @@ function createRegionConfirmation(
       }
     };
     if (selection.purpose === 'page-recognition') {
+      const recognitionRequestId = crypto.randomUUID();
+      activePageRecognitionRequestId = recognitionRequestId;
+      cancel.disabled = false;
+      cancel.textContent = '取消识别';
       void (async () => {
         const captured = await captureCanvasRegion(
           selection.canvas,
@@ -1601,16 +1725,29 @@ function createRegionConfirmation(
         const response = await browser.runtime.sendMessage({
           type: 'RECOGNIZE_PDF_PAGE',
           payload: {
-            requestId: crypto.randomUUID(),
+            requestId: recognitionRequestId,
             imageDataUrl: captured.dataUrl,
             imageWidth: captured.width,
             imageHeight: captured.height,
             pageNumber: numericPageNumber,
           },
         } satisfies RuntimeMessage) as RecognizePdfPageResponse;
-        if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+        if (
+          activePageRecognitionRequestId !== recognitionRequestId ||
+          documentEpoch !== captureEpoch ||
+          activeRegion !== selection
+        ) return;
         if (!response.ok) {
-          throw new Error(translationErrorMessage(response.error.code, response.error.message));
+          activePageRecognitionRequestId = undefined;
+          confirm.disabled = false;
+          cancel.disabled = false;
+          cancel.textContent = '取消';
+          const recovery=translationErrorRecovery(response.error.code,response.error.retryable,'vision');
+          showNotice(
+            translationErrorMessage(response.error.code,response.error.message),
+            recovery.settingsFocus?{action:{label:recovery.settingsLabel??'检查图像 API',onClick:()=>{void openPdfSettings(recovery.settingsFocus)}}}:{},
+          );
+          return;
         }
         const mapped = mapCoordinateOcrPageToRegion(response.data.page, {
           left: requestRegion.left / currentBounds.width,
@@ -1623,14 +1760,21 @@ function createRegionConfirmation(
         const lineCount = renderTemporaryOcrTextLayer(selection.pageElement, mapped.page);
         if (!lineCount) throw new Error('OCR 没有返回可安全选择的文字行。');
         selection.pageElement.dataset.hasText = 'true';
+        activePageRecognitionRequestId = undefined;
         finishSelection();
         showNotice(`已生成临时文字层 · ${lineCount} 行 · 现在可以直接划选翻译`, {
           transient: true,
         });
       })().catch((error: unknown) => {
-        if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
+        if (
+          activePageRecognitionRequestId !== recognitionRequestId ||
+          documentEpoch !== captureEpoch ||
+          activeRegion !== selection
+        ) return;
+        activePageRecognitionRequestId = undefined;
         confirm.disabled = false;
         cancel.disabled = false;
+        cancel.textContent = '取消';
         showNotice(error instanceof Error ? error.message : '本页文字识别失败，请继续使用框选翻译。');
       });
       return;
@@ -1781,6 +1925,19 @@ regionTranslate.addEventListener('click', (event) => {
   const enable = regionMode !== 'continuous';
   setRegionMode(enable ? 'continuous' : 'off');
   if (enable && event.detail === 0) requestAnimationFrame(createKeyboardRegion);
+});
+
+recognizePage.addEventListener('click', () => {
+  if (!pdfDocument || recognizePage.disabled) return;
+  const pageNumber = visiblePageAnchor().pageNumber;
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${pageNumber}"]`,
+  );
+  if (!pageElement) {
+    showNotice('找不到当前页，请稍后重试。', { transient: true });
+    return;
+  }
+  createPageRecognitionRegion(pageElement);
 });
 regionQueueButton.addEventListener('click', () => {
   const open = regionQueuePanel.hidden;
@@ -2028,6 +2185,7 @@ function scheduleFitWidthRefresh(): void {
 
 function rebuildAtZoom(nextZoom: number, anchor = visiblePageAnchor()): void {
   if (!pdfDocument) return;
+  completedTextSelectionGesture = undefined;
   zoomLevel = clamp(nextZoom, ZOOM_LEVELS[0], ZOOM_LEVELS.at(-1)!);
   setDocumentControls(true);
   void buildPages(pdfDocument, anchor);
@@ -2080,7 +2238,7 @@ document.addEventListener('pointerdown', beginSmartTextSelection, true);
 document.addEventListener('pointerup', finishSmartTextSelection, true);
 document.addEventListener('pointercancel', cancelSmartTextSelection, true);
 openSettings.addEventListener('click', () => {
-  void browser.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' } satisfies RuntimeMessage);
+  void openPdfSettings();
 });
 
 const selectionTranslator = startSelectionTranslator(

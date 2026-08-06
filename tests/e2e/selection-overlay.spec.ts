@@ -17,6 +17,8 @@ let extensionId: string;
 const visionRequests: Array<Record<string, unknown>> = [];
 const textRequests: Array<Record<string, unknown>> = [];
 let echoVisionPayloadOnce = false;
+let failNextRevisionRequest = false;
+let returnRevisedVisionResultOnce = false;
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -315,7 +317,19 @@ test.beforeAll(async () => {
     const isMultiSentenceSelection = JSON.stringify(body).includes('First important sentence');
     const isDocumentTermSelection = JSON.stringify(body).includes('adaptive sensing');
     const isPdfOptimizerFallback = JSON.stringify(body).includes('Optimizer fallback fixture');
+    const isTranslationRevision = JSON.stringify(body).includes('translationRevisionPreference');
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
+    if (isTranslationRevision && failNextRevisionRequest) {
+      failNextRevisionRequest = false;
+      await route.fulfill({
+        status: 400,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { message: 'Synthetic revision failure.', type: 'invalid_request_error' },
+        }),
+      });
+      return;
+    }
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -325,6 +339,11 @@ test.beforeAll(async () => {
               translation: '自动识别并翻译的图像区域。',
               recognizedText: 'Automatically recognized image text.',
               uncertainSpans: [],
+            } : isTranslationRevision ? {
+              translation: '经用户调整后，更忠实地保留原文限定条件。',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isPdfOptimizerFallback ? {
               translation: String.raw`优化目标为 \[Q^{\Pi^*}=\operatorname{argmin}P\in P(V,\Omega)\left\{KL(P\Vert Q)\right\},\tag{12}\]`,
               detectedLanguage: 'en',
@@ -385,6 +404,8 @@ test.beforeAll(async () => {
         : undefined;
     const shouldEcho = echoVisionPayloadOnce;
     echoVisionPayloadOnce = false;
+    const shouldReturnRevisedRecognition = returnRevisedVisionResultOnce;
+    returnRevisedVisionResultOnce = false;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -397,7 +418,9 @@ test.beforeAll(async () => {
                 ? '能量关系式 $E=mc^2$ 保持不变。'
                 : isRenderedFormula
                   ? '该量满足 $\\sum_i x_i^2 \\ge 0$。'
-                : '图像区域的学术翻译结果。',
+                  : shouldReturnRevisedRecognition
+                    ? '重新识别后修正的学术翻译结果。'
+                  : '图像区域的学术翻译结果。',
               recognizedText: shouldEcho
                 ? requestImage
                 : isEscapedFormula
@@ -406,7 +429,9 @@ test.beforeAll(async () => {
                   ? 'Energy $E=mc^2$ is invariant.'
                   : isRenderedFormula
                     ? 'The quantity $\\sum_i x_i^2 \\ge 0$ is nonnegative.'
-                  : 'Scanned academic source text.',
+                    : shouldReturnRevisedRecognition
+                      ? 'Re-recognized academic source text.'
+                    : 'Scanned academic source text.',
               formulaLatex: formulaLatex ? [formulaLatex] : [],
               uncertainSpans: [],
             }),
@@ -447,6 +472,12 @@ test.afterAll(async () => {
   }
 });
 
+test.afterEach(() => {
+  echoVisionPayloadOnce = false;
+  failNextRevisionRequest = false;
+  returnRevisedVisionResultOnce = false;
+});
+
 test('exposes the native Edge side panel API to the service worker', async () => {
   const worker = context.serviceWorkers()[0];
   expect(worker).toBeDefined();
@@ -462,6 +493,89 @@ test('exposes the native Edge side panel API to the service worker', async () =>
     };
   });
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
+});
+
+test('deep-links recovery actions to API and PDF image settings', async () => {
+  const options = await context.newPage();
+  try {
+    await options.goto(`chrome-extension://${extensionId}/options.html?focus=api#connection`);
+    await expect(options.locator('#api-key')).toBeFocused();
+    await options.goto(
+      `chrome-extension://${extensionId}/options.html?focus=api-model#connection`,
+    );
+    await expect(options.locator('#model')).toBeFocused();
+    await options.goto(
+      `chrome-extension://${extensionId}/options.html?focus=api-permission#connection`,
+    );
+    await expect(options.locator('#test-connection')).toBeFocused();
+    await options.goto(`chrome-extension://${extensionId}/options.html?focus=vision#connection`);
+    await expect(options.locator('#vision-setup-details')).toHaveAttribute('open', '');
+    await expect(options.locator('#api-profile')).toHaveValue('vision-e2e');
+    await expect(options.locator('#api-key')).toBeFocused();
+    await options.goto(
+      `chrome-extension://${extensionId}/options.html?focus=vision-model#connection`,
+    );
+    await expect(options.locator('#api-profile')).toHaveValue('vision-e2e');
+    await expect(options.locator('#vision-model')).toBeFocused();
+    await options.goto(
+      `chrome-extension://${extensionId}/options.html?focus=vision-permission#connection`,
+    );
+    await expect(options.locator('#api-profile')).toHaveValue('vision-e2e');
+    await expect(options.locator('#test-vision-capability')).toBeFocused();
+    await options.goto(
+      `chrome-extension://${extensionId}/options.html?focus=vision-ocr#connection`,
+    );
+    await expect(options.locator('#vision-setup-details')).toHaveAttribute('open', '');
+    await expect(options.locator('#setup-qwen')).toBeFocused();
+    await options.goto(`chrome-extension://${extensionId}/options.html?focus=support#support`);
+    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
+
+    await options.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      await api.storage.local.set({
+        extensionSettings: { ...(stored.extensionSettings ?? {}), onboardingCompleted: false },
+      });
+    });
+    await options.reload({ waitUntil: 'domcontentloaded' });
+    await expect(options.locator('#onboarding-dialog')).toBeVisible();
+    await options.locator('#onboarding-skip').click();
+    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
+
+    await options.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      await api.storage.local.set({
+        extensionSettings: { ...(stored.extensionSettings ?? {}), onboardingCompleted: false },
+      });
+    });
+    await options.reload({ waitUntil: 'domcontentloaded' });
+    await expect(options.locator('#onboarding-dialog')).toBeVisible();
+    await options.keyboard.press('Escape');
+    await expect(options.locator('#onboarding-dialog')).not.toBeVisible();
+    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
+    await options.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      await api.storage.local.set({
+        extensionSettings: { ...(stored.extensionSettings ?? {}), onboardingCompleted: true },
+      });
+    });
+  } finally {
+    if (!options.isClosed()) {
+      await options.evaluate(async () => {
+        const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+        const stored = await api.storage.local.get('extensionSettings');
+        await api.storage.local.set({
+          extensionSettings: { ...(stored.extensionSettings ?? {}), onboardingCompleted: true },
+        });
+      }).catch(() => undefined);
+    }
+    await options.close();
+  }
 });
 
 test('keeps the native PDF side panel disabled on unrelated webpages', async () => {
@@ -614,6 +728,11 @@ test('opens, drags, and dismisses a translation card', async () => {
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   await overlay.locator('.trigger').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  // The loading surface is intentionally replaced by the result surface. Wait
+  // for that transition before measuring the draggable elements, otherwise a
+  // locator can be detached between toBeVisible() and boundingBox().
+  await expect(overlay.locator('.body'))
+    .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
 
   const card = overlay.locator('.card');
   const header = overlay.locator('.header');
@@ -726,6 +845,139 @@ test('lightly marks translated source text and previews the translation on hover
   await overlay.getByRole('button', { name: '关闭' }).click();
 });
 
+test('keeps translation correction compact, versioned, and synchronized with source marks', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.getByTitle('关闭').count()) {
+    await overlay.getByTitle('关闭').click();
+  }
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await overlay.locator('.mark-action').click();
+
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  const editor = overlay.getByRole('textbox', { name: '直接修改译文' });
+  await expect(editor).toBeVisible();
+  await editor.fill('用户手动修订后的学术译文。');
+  const revisionScope = overlay.getByRole('combobox', { name: '译文调整作用范围' });
+  await expect(revisionScope).toHaveValue('current');
+  await revisionScope.selectOption('document');
+  const requestsBeforeManualSave = textRequests.length;
+  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
+  expect(textRequests).toHaveLength(requestsBeforeManualSave);
+  await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
+
+  const markerLayer = page.locator('#pi-translation-marker-layer');
+  const marker = markerLayer.locator('.marker').first();
+  await expect(marker).toBeVisible();
+  const markerBox = await marker.boundingBox();
+  expect(markerBox).not.toBeNull();
+  if (markerBox) {
+    await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+    await expect(markerLayer.locator('.tooltip')).toContainText('用户手动修订后的学术译文。');
+  }
+
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  await overlay.getByRole('button', { name: '更忠实原文' }).click();
+  await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await expect(overlay.locator('.version-counter')).toHaveText('v1/3');
+  expect(JSON.stringify(textRequests.at(-1))).toContain('translationRevisionPreference');
+  expect(JSON.stringify(textRequests.at(-1))).toContain('用户手动修订后的学术译文。');
+  const worker = context.serviceWorkers()[0]!;
+  await expect.poll(() => worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+    const stored = await api.storage.local.get('documentTranslationMemoryV1');
+    const memories = Object.values(
+      (stored.documentTranslationMemoryV1 ?? {}) as Record<string, {
+        recentTranslations?: Array<{ originalText?: string; translatedText?: string }>;
+      }>,
+    );
+    return memories.flatMap((memory) => memory.recentTranslations ?? []).find(
+      (entry) => entry.originalText ===
+        'A consistent academic translation improves the readability of research papers.',
+    )?.translatedText;
+  })).toBe('用户手动修订后的学术译文。');
+
+  await overlay.getByTitle('查看上一版译文').click();
+  await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
+  await expect(overlay.locator('.version-counter')).toHaveText('v2/3');
+  await overlay.getByTitle('查看下一版译文').click();
+  await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await overlay.locator('.mark-action').click();
+  await expect(markerLayer.locator('.marker')).toHaveCount(0);
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
+test('retries a failed model adjustment with the frozen draft and revision context', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await overlay.locator('.mark-action').click();
+
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  const editor = overlay.getByRole('textbox', { name: '直接修改译文' });
+  await editor.fill('必须保留的人工术语修订。');
+  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await expect(overlay.locator('.body')).toHaveText('必须保留的人工术语修订。');
+
+  failNextRevisionRequest = true;
+  const requestsBeforeFailedRevision = textRequests.length;
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  await overlay.getByRole('combobox', { name: '译文调整作用范围' })
+    .selectOption('document');
+  await overlay.getByRole('button', { name: '更自然简洁' }).click();
+  await expect(overlay.locator('.error')).toContainText('API 拒绝了本次请求');
+  expect(textRequests).toHaveLength(requestsBeforeFailedRevision + 1);
+  const failedRequest = JSON.stringify(textRequests.at(-1));
+  expect(failedRequest).toContain('translationRevisionPreference');
+  expect(failedRequest).toContain('必须保留的人工术语修订。');
+
+  await overlay.getByRole('button', { name: '重试' }).click();
+  await expect(overlay.locator('.body')).toContainText('经用户调整后');
+  expect(textRequests).toHaveLength(requestsBeforeFailedRevision + 2);
+  const retriedRequest = JSON.stringify(textRequests.at(-1));
+  expect(retriedRequest).toContain('translationRevisionPreference');
+  expect(retriedRequest).toContain('必须保留的人工术语修订。');
+  await expect(overlay.locator('.version-counter')).toHaveText('v1/3');
+
+  const worker = context.serviceWorkers()[0]!;
+  await expect.poll(() => worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+    const stored = await api.storage.local.get('documentTranslationMemoryV1');
+    const memories = Object.values(
+      (stored.documentTranslationMemoryV1 ?? {}) as Record<string, {
+        recentTranslations?: Array<{ originalText?: string; translatedText?: string }>;
+      }>,
+    );
+    return memories.flatMap((memory) => memory.recentTranslations ?? []).find(
+      (entry) => entry.originalText ===
+        'A consistent academic translation improves the readability of research papers.',
+    )?.translatedText;
+  })).toBe('经用户调整后，更忠实地保留原文限定条件。');
+
+  const marker = page.locator('#pi-translation-marker-layer .marker').first();
+  await expect(marker).toBeVisible();
+  const markerBox = await marker.boundingBox();
+  expect(markerBox).not.toBeNull();
+  if (!markerBox) throw new Error('Expected a visible source marker after retry.');
+  await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+  await expect(page.locator('#pi-translation-marker-layer .tooltip')).toContainText('经用户调整后');
+  await overlay.locator('.mark-action').click();
+  await expect(page.locator('#pi-translation-marker-layer .marker')).toHaveCount(0);
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
 test('marks one aligned sentence and copies marked notes as Markdown', async () => {
   await page.evaluate(() => {
     const source = document.querySelector('#multi-source');
@@ -769,6 +1021,19 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
   await page.mouse.click(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  await overlay.getByRole('textbox', { name: '直接修改译文' }).fill('手动修改后的完整双句译文。');
+  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await expect(markerLayer.locator('.marker')).toHaveCount(1);
+  await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+  await expect(markerLayer.locator('.tooltip')).toContainText('第一句重要译文。');
+
+  const moreMenu = overlay.locator('details.more');
+  await moreMenu.locator(':scope > summary').click();
+  await expect(moreMenu).toHaveAttribute('open', '');
+  await overlay.locator('.body').click();
+  await expect(moreMenu).not.toHaveAttribute('open', '');
+  await moreMenu.locator(':scope > summary').click();
   const exportNotes = overlay.getByRole('button', { name: '复制标记笔记' });
   await exportNotes.click();
   await expect(overlay.getByRole('button', { name: '已复制 1 条标记' })).toBeVisible();
@@ -1713,10 +1978,75 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await copySource.click();
   await expect(overlay.getByRole('button', { name: '已复制' })).toBeVisible();
 
+  await overlay.locator('.mark-action').click();
+  const sourceMarker = pdfPage.locator('#pi-translation-marker-layer .marker').first();
+  await expect(sourceMarker).toBeVisible();
+
+  returnRevisedVisionResultOnce = true;
   await overlay.locator('details.more > summary').click();
   await overlay.getByRole('button', { name: '重新识别此区域' }).click();
   await expect.poll(() => visionRequests.length).toBe(requestCount + 2);
-  await expect(overlay.locator('.body')).toHaveText('图像区域的学术翻译结果。');
+  await expect(overlay.locator('.body')).toHaveText('重新识别后修正的学术翻译结果。');
+  await overlay.locator('.recognized-source summary').click();
+  await expect(overlay.locator('.recognized-text')).toHaveText('Re-recognized academic source text.');
+  await overlay.locator('.recognized-source summary').click();
+  await expect(overlay.locator('.mark-action')).toHaveAttribute('aria-pressed', 'true');
+  const sourceMarkerBox = await sourceMarker.boundingBox();
+  expect(sourceMarkerBox).not.toBeNull();
+  if (sourceMarkerBox) {
+    await pdfPage.mouse.move(
+      sourceMarkerBox.x + sourceMarkerBox.width / 2,
+      sourceMarkerBox.y + sourceMarkerBox.height / 2,
+    );
+    const sourceTooltip = pdfPage.locator('#pi-translation-marker-layer .tooltip');
+    await expect(sourceTooltip.locator('.tooltip-text'))
+      .toHaveText('重新识别后修正的学术翻译结果。');
+  }
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '查看本文标记（1）' }).click();
+  await expect(overlay.locator('.marker-note')).toHaveCount(1);
+  await expect(overlay.locator('.marker-note-source'))
+    .toHaveText('Re-recognized academic source text.');
+  await expect(overlay.locator('.marker-note-target'))
+    .toHaveText('重新识别后修正的学术翻译结果。');
+  await overlay.getByRole('button', { name: '返回翻译结果' }).click();
+  const repeatedRequest = visionRequests.at(-1) as {
+    messages?: Array<{ content?: Array<{ type?: string; image_url?: { url?: string } }> }>;
+  };
+  const repeatedImage = repeatedRequest.messages?.[0]?.content?.find(
+    (item) => item.type === 'image_url',
+  )?.image_url?.url;
+  expect(repeatedImage).toBe(image?.image_url?.url);
+  await overlay.locator('details.more > summary').click();
+  await expect(overlay.getByRole('button', { name: '重新识别此区域' })).toBeVisible();
+  await expect(overlay.getByRole('button', { name: '重新翻译' })).toHaveCount(0);
+  await overlay.locator('details.more > summary').click();
+
+  const rememberedImageTranslations = await pdfPage.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+    }).chrome;
+    const stored = await api.storage.local.get('documentTranslationMemoryV1');
+    const memories = Object.values(
+      (stored.documentTranslationMemoryV1 ?? {}) as Record<string, {
+        recentTranslations?: Array<{ originalText?: string; translatedText?: string }>;
+      }>,
+    );
+    const currentMemory = memories.find((memory) => (
+      memory.recentTranslations?.some((entry) => (
+        entry.originalText === 'Re-recognized academic source text.' &&
+        entry.translatedText === '重新识别后修正的学术翻译结果。'
+      ))
+    ));
+    return (currentMemory?.recentTranslations ?? []).filter((entry) => (
+      entry.originalText === 'Scanned academic source text.' ||
+      entry.originalText === 'Re-recognized academic source text.'
+    ));
+  });
+  expect(rememberedImageTranslations).toEqual([expect.objectContaining({
+    originalText: 'Re-recognized academic source text.',
+    translatedText: '重新识别后修正的学术翻译结果。',
+  })]);
 
   await overlay.locator('details.more > summary').click();
   await overlay.getByRole('button', { name: '调整原选区' }).click();
@@ -1739,6 +2069,10 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   expect(restoredSelection.height).toBeCloseTo(resizedSelection.height, 0);
   await firstPage.locator('.region-confirm .confirm').click();
   await expect(overlay.locator('.cache-badge')).toHaveText('会话缓存');
+  await expect(overlay.locator('.body')).toHaveText('重新识别后修正的学术翻译结果。');
+  await overlay.locator('.recognized-source summary').click();
+  await expect(overlay.locator('.recognized-text')).toHaveText('Re-recognized academic source text.');
+  await overlay.locator('.recognized-source summary').click();
   expect(visionRequests).toHaveLength(requestCount + 2);
 
   await overlay.locator('details.more > summary').click();
@@ -1852,9 +2186,12 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-has-text', 'false');
-  await pdfPage.getByRole('button', {
+  await expect(pdfPage.getByRole('button', {
     name: '识别第 1 页并生成临时文字层',
-  }).click();
+  })).toBeVisible();
+  const recognizeCurrentPage = pdfPage.locator('#recognize-page');
+  await expect(recognizeCurrentPage).toBeVisible();
+  await recognizeCurrentPage.click();
   await expect(firstPage.locator('.region-confirm-note')).toContainText('qwen3.5-ocr');
   await firstPage.getByRole('button', { name: '识别文字' }).click();
   const ocrLine = firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]');
@@ -1878,6 +2215,11 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await pdfPage.locator('#zoom-in').click();
   await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]'))
     .toHaveText('Selectable scanned academic sentence.');
+  await expect(recognizeCurrentPage).toBeVisible();
+  await recognizeCurrentPage.click();
+  await expect(firstPage.locator('.region-confirm')).toBeVisible();
+  await firstPage.getByRole('button', { name: '取消' }).click();
+  await expect(firstPage.locator('.region-confirm')).toHaveCount(0);
 
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'new-scanned.pdf',
@@ -1888,6 +2230,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await expect(replacementPage).toHaveAttribute('data-rendered', 'ready');
   await expect(replacementPage.locator('[data-pi-ocr-block]')).toHaveCount(0);
   await expect(replacementPage).toHaveAttribute('data-has-text', 'false');
+  await expect(recognizeCurrentPage).toBeVisible();
   await pdfPage.close();
 });
 
@@ -2501,6 +2844,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-state')).toHaveText('正在流式接收');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
+  await expect(sidePanel.locator('#reader-hint-text')).toContainText('未提供选区图像');
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('第 6 页');
 
   await messageSender.evaluate(async (session) => {

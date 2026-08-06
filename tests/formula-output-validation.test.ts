@@ -298,6 +298,51 @@ describe('vision formula output validation', () => {
     expect(validateImageFormulaResult(reconciled).valid).toBe(true);
   });
 
+  it('restores safe recognized formulae when the model omits every formula from translation', () => {
+    const reconciled = reconcileImageFormulaResult({
+      recognizedText: [
+        'The linear system is',
+        String.raw`\[y = \left[ \begin{array}{cc} a & b \\ c & d \end{array} \right] x\]`,
+      ].join('\n'),
+      translatedText: '该线性系统为',
+      formulaLatex: [String.raw`y = \left[ \begin{array}{cc} a & b \\ c & d \end{array} \right] x`],
+      uncertainSpans: [],
+    });
+
+    expect(reconciled.translatedText).toBe([
+      '该线性系统为',
+      String.raw`\[y = \left[ \begin{array}{cc} a & b \\ c & d \end{array} \right] x\]`,
+    ].join('\n'));
+    expect(reconciled.formulaLatex).toEqual([
+      String.raw`y = \left[ \begin{array}{cc} a & b \\ c & d \end{array} \right] x`,
+    ]);
+    expect(validateImageFormulaResult(reconciled).valid).toBe(true);
+  });
+
+  it('does not move omitted inline formulae to the end of a translation', () => {
+    const reconciled = reconcileImageFormulaResult({
+      recognizedText: 'Given $x$, derive $y$ from the observation.',
+      translatedText: '给定变量，并由观测推导结果。',
+      formulaLatex: ['x', 'y'],
+      uncertainSpans: [],
+    });
+
+    expect(reconciled.translatedText).toBe('给定变量，并由观测推导结果。');
+    expect(validateImageFormulaResult(reconciled).valid).toBe(false);
+  });
+
+  it('does not duplicate an undelimited trailing display formula', () => {
+    const reconciled = reconcileImageFormulaResult({
+      recognizedText: 'The result is\n\\[y=Ax\\]',
+      translatedText: '结果为 y=Ax',
+      formulaLatex: ['y=Ax'],
+      uncertainSpans: [],
+    });
+
+    expect(reconciled.translatedText).toBe('结果为 y=Ax');
+    expect(validateImageFormulaResult(reconciled).valid).toBe(false);
+  });
+
   it('accepts a dense academic paragraph with fractions, norms, tags, and bold symbols', () => {
     const recognizedText = [
       'Sampling ratio $\\frac{M}{N}$ with $M \\| N$.',

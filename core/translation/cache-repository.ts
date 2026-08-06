@@ -50,6 +50,14 @@ export function translationCacheKey(
     style: request.style,
     contentMode: request.contentMode,
     contextText: request.contextText?.trim() ?? '',
+    revision: request.revision
+      ? {
+          kind: request.revision.kind,
+          instruction: request.revision.instruction.trim(),
+          previousTranslation: request.revision.previousTranslation?.trim() ?? '',
+          scope: request.revision.scope ?? 'current',
+        }
+      : undefined,
     apiBaseUrl: provider.apiBaseUrl,
     model: provider.model,
     glossary: provider.glossary,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   runtimeConnectionErrorMessage,
+  translationErrorRecovery,
   translationErrorMessage,
 } from '../core/messaging/user-facing-error';
 
@@ -38,5 +39,55 @@ describe('user-facing errors', () => {
         new Error('Could not establish connection. Receiving end does not exist.'),
       ),
     ).toContain('翻译组件');
+  });
+
+  it('routes configuration errors to the exact recovery surface', () => {
+    expect(translationErrorRecovery('NO_API_KEY', false)).toEqual({
+      showRetry: true,
+      settingsFocus: 'api',
+      settingsLabel: '配置 API',
+    });
+    expect(translationErrorRecovery('VISION_NOT_CONFIGURED', false)).toEqual({
+      showRetry: true,
+      settingsFocus: 'vision',
+      settingsLabel: '配置 PDF 图像',
+    });
+    expect(translationErrorRecovery('NETWORK_ERROR', false)).toEqual({
+      showRetry: true,
+      settingsFocus: 'api',
+      settingsLabel: '检查 API 配置',
+    });
+    expect(translationErrorRecovery('AUTH_FAILED', false, 'vision')).toEqual({
+      showRetry: true,
+      settingsFocus: 'vision',
+      settingsLabel: '检查图像 API',
+    });
+    expect(translationErrorRecovery('REQUEST_TIMEOUT', false, 'vision')).toEqual({
+      showRetry: true,
+      settingsFocus: 'vision',
+      settingsLabel: '检查图像 API',
+    });
+    expect(translationErrorRecovery('INVALID_RESPONSE', false)).toMatchObject({
+      showRetry: true,
+      settingsFocus: 'api',
+    });
+    expect(translationErrorRecovery('MODEL_NOT_FOUND', false)).toMatchObject({
+      showRetry: true,
+      settingsFocus: 'api-model',
+    });
+    expect(translationErrorRecovery('MODEL_NOT_FOUND', false, 'vision')).toMatchObject({
+      settingsFocus: 'vision-model',
+    });
+    expect(translationErrorRecovery('API_PERMISSION_REQUIRED', false, 'vision')).toMatchObject({
+      showRetry: true,
+      settingsFocus: 'vision-permission',
+    });
+    expect(translationErrorRecovery('OCR_NOT_SUPPORTED', false, 'vision')).toEqual({
+      showRetry: true,
+      settingsFocus: 'vision-ocr',
+      settingsLabel: '配置 Qwen OCR',
+    });
+    expect(translationErrorRecovery('IMAGE_REGION_INVALID', true)).toEqual({ showRetry: false });
+    expect(translationErrorRecovery('UNSUPPORTED_PAGE', true)).toEqual({ showRetry: false });
   });
 });

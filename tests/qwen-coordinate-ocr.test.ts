@@ -34,6 +34,11 @@ describe('Qwen native coordinate OCR adapter', () => {
     )).toBe(
       'https://workspace.cn-beijing.maas.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
     );
+    expect(qwenCoordinateOcrEndpoint(
+      'https://dashscope-intl.aliyuncs.com/compatible-mode/v1',
+    )).toBe(
+      'https://dashscope-intl.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation',
+    );
     expect(qwenCoordinateOcrEndpoint('https://api.example.com/v1')).toBeUndefined();
   });
 

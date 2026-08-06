@@ -169,11 +169,21 @@ async function main(): Promise<void> {
     totalMs: number;
     formulas: string[];
     checks: Record<string, boolean>;
+    recognizedText?: string;
+    translatedText?: string;
+    formulaNeedsReview?: boolean;
     error?: string;
   }> = [];
+  const requestedCase = process.env.PI_FORMULA_CASE?.trim();
+  const selectedCases = requestedCase
+    ? cases.filter((testCase) => testCase.name === requestedCase)
+    : cases;
+  if (!selectedCases.length) {
+    throw new Error(`Unknown PI_FORMULA_CASE: ${requestedCase}`);
+  }
 
   try {
-    for (const testCase of cases) {
+    for (const testCase of selectedCases) {
       try {
         await page.setContent(pageHtml(testCase.markup), { waitUntil: 'load' });
         const capture = page.locator('#capture');
@@ -224,15 +234,23 @@ async function main(): Promise<void> {
           ),
           boundedLatency: totalMs < 120_000,
         };
+        const passed = Object.values(checks).every(Boolean);
         results.push({
           name: testCase.name,
-          passed: Object.values(checks).every(Boolean),
+          passed,
           ...(firstPartialAt === undefined
             ? {}
             : { ttftMs: Math.round(firstPartialAt - startedAt) }),
           totalMs,
           formulas,
           checks,
+          ...(passed
+            ? {}
+            : {
+                recognizedText: output.recognizedText,
+                translatedText: output.translatedText,
+                formulaNeedsReview: output.formulaNeedsReview,
+              }),
         });
       } catch (error) {
         results.push({

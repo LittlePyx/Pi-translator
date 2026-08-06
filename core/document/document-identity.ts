@@ -2,6 +2,7 @@ import type { PdfSourceLocation } from '../translation/types';
 
 export interface DocumentIdentityInput {
   pageUrl: string;
+  documentId?: string;
   sourceLabel?: string;
   sourceLocation?: PdfSourceLocation;
 }
@@ -47,12 +48,15 @@ function labelForDocument(input: DocumentIdentityInput): string {
 }
 
 export function documentIdentity(input: DocumentIdentityInput): DocumentIdentity {
+  const explicitDocumentId = input.documentId?.trim();
   const explicitPdfId = input.sourceLocation?.documentId.trim();
-  const basis = explicitPdfId
-    ? `pdf:${explicitPdfId}`
-    : `url:${normalizedDocumentUrl(input.pageUrl)}`;
+  const basis = explicitDocumentId
+    ? undefined
+    : explicitPdfId
+      ? `pdf:${explicitPdfId}`
+      : `url:${normalizedDocumentUrl(input.pageUrl)}`;
   return {
-    documentId: `doc-${stableHash(basis)}`,
+    documentId: explicitDocumentId ?? `doc-${stableHash(basis!)}`,
     label: labelForDocument(input),
   };
 }

@@ -4,6 +4,8 @@ import type {
   TranslationHistoryEntry,
   TranslationSegment,
   TranslationStyle,
+  TranslationRevisionKind,
+  TranslationRevisionScope,
   PdfSourceLocation,
 } from '../core/translation/types';
 import type { SidebarSide } from '../core/settings/schema';
@@ -14,6 +16,7 @@ import type {
 import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
 import { validateImageFormulaResult } from '../core/translation/formula-output-validation';
+import type { SettingsFocus } from '../core/messaging/user-facing-error';
 import {
   renderTranslationContent,
   renderTranslationContents,
@@ -69,23 +72,24 @@ function normalizeResultForPresentation(
 
 const STYLES = `
   :host {
-    all: initial; color-scheme: light; font-family: Inter,"Segoe UI",system-ui,sans-serif;
+    all: initial; position:fixed;z-index:2147483647;inset:0;pointer-events:none;
+    color-scheme: light; font-family: Inter,"Segoe UI",system-ui,sans-serif;
     --accent:#5959df; --accent2:#06a6c7; --text:#192238; --muted:#6e7b91;
     --line:#dfe5ef; --soft:#f4f7fb; --surface:rgba(255,255,255,.985);
     --pi-viewport-top:0px; --pi-viewport-right:0px; --pi-viewport-bottom:0px; --pi-viewport-left:0px;
   }
   :host([data-pi-theme="dark"]) { color-scheme:dark; --text:#edf2f8; --muted:#a9b5c7; --line:#3a465a; --soft:#202938; --surface:rgba(17,24,39,.985); }
   * { box-sizing:border-box; } button,select { font:inherit; } button { cursor:pointer; }
-  .trigger { position:fixed;z-index:2147483647;display:grid;place-items:center;width:38px;height:38px;padding:0;border:1px solid rgba(91,92,226,.23);border-radius:13px;background:var(--surface);box-shadow:0 9px 28px rgba(30,41,59,.21);transition:.16s transform,.16s box-shadow; }
+  .trigger { position:fixed;z-index:2147483647;display:grid;place-items:center;width:38px;height:38px;padding:0;border:1px solid rgba(91,92,226,.23);border-radius:13px;background:var(--surface);box-shadow:0 9px 28px rgba(30,41,59,.21);pointer-events:auto;transition:.16s transform,.16s box-shadow; }
   .trigger:hover { transform:translateY(-2px) scale(1.04);box-shadow:0 13px 33px rgba(30,41,59,.25); }
   .trigger-logo { width:24px;height:21px;object-fit:contain; }.sparkle { position:absolute;right:-4px;top:-5px;color:#f3b526;font-size:11px; }
-  .surface { position:fixed;z-index:2147483647;container-type:inline-size;color:var(--text);background:var(--surface);border:1px solid rgba(99,102,241,.18);box-shadow:0 25px 70px rgba(15,23,42,.25);backdrop-filter:blur(20px);overflow:auto;scrollbar-width:thin; }
+  .surface { position:fixed;z-index:2147483647;container-type:inline-size;color:var(--text);background:var(--surface);border:1px solid rgba(99,102,241,.18);box-shadow:0 25px 70px rgba(15,23,42,.25);backdrop-filter:blur(20px);overflow:auto;scrollbar-width:thin;pointer-events:auto; }
   .surface::before { content:"";position:absolute;inset:0 0 auto;height:3px;background:linear-gradient(90deg,#4f46e5,#8b5cf6,#06b6d4); }
   .card { width:min(500px,calc(100vw - var(--pi-viewport-left) - var(--pi-viewport-right) - 24px));max-height:min(540px,calc(100vh - var(--pi-viewport-top) - var(--pi-viewport-bottom) - 24px));padding:16px;border-radius:20px; }
   .sidebar { top:calc(var(--pi-viewport-top) + 10px);bottom:calc(var(--pi-viewport-bottom) + 10px);width:min(var(--sidebar-width,390px),calc(100vw - var(--pi-viewport-left) - var(--pi-viewport-right) - 20px));padding:15px;border-radius:18px;max-height:none; }
   .sidebar.right { right:calc(var(--pi-viewport-right) + 10px); }.sidebar.left { left:calc(var(--pi-viewport-left) + 10px); }
   .sidebar-resizer { position:absolute;z-index:3;top:0;bottom:0;width:8px;cursor:ew-resize; }.sidebar.right .sidebar-resizer{left:-4px}.sidebar.left .sidebar-resizer{right:-4px}
-  .collapsed-tab { position:fixed;z-index:2147483647;top:max(calc(var(--pi-viewport-top) + 8px),38%);display:grid;gap:6px;place-items:center;width:42px;padding:13px 7px;border:1px solid rgba(99,102,241,.24);color:#fff;background:linear-gradient(160deg,#4f46e5,#6f55df);box-shadow:0 14px 34px rgba(31,38,100,.3); }
+  .collapsed-tab { position:fixed;z-index:2147483647;top:max(calc(var(--pi-viewport-top) + 8px),38%);display:grid;gap:6px;place-items:center;width:42px;padding:13px 7px;border:1px solid rgba(99,102,241,.24);color:#fff;background:linear-gradient(160deg,#4f46e5,#6f55df);box-shadow:0 14px 34px rgba(31,38,100,.3);pointer-events:auto; }
   .collapsed-tab.right { right:var(--pi-viewport-right);border-radius:13px 0 0 13px; }.collapsed-tab.left { left:var(--pi-viewport-left);border-radius:0 13px 13px 0; }
   .collapsed-tab img { width:22px;height:19px;filter:brightness(0) invert(1); }.collapsed-tab span { writing-mode:vertical-rl;font-size:11px;font-weight:750;letter-spacing:.08em; }
   .header { display:flex;align-items:center;gap:8px;min-height:30px;user-select:none; }.card .header{cursor:grab;touch-action:none}.card.dragging .header{cursor:grabbing}
@@ -95,6 +99,7 @@ const STYLES = `
   .pin-action{height:26px;padding:0 7px;border:1px solid var(--line);border-radius:5px;color:#4b5870;background:transparent;font-size:10px;font-weight:680;white-space:nowrap}.pin-action:hover{color:var(--accent);border-color:#b8c0ea;background:var(--soft)}
   .result-topline{display:flex;align-items:center;gap:6px;min-height:20px;margin-top:5px}.meta{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:5px;min-width:0;color:var(--muted);font-size:9px}.meta-dot::before{content:"·";margin-right:5px}.cache-badge{padding:0;color:#16839a;background:transparent;font-weight:650}.source-location{padding:0;border:0;border-bottom:1px solid transparent;color:var(--muted);background:transparent;font-size:9px}.source-location:hover{color:var(--accent);border-bottom-color:currentColor}
   .source-badge{color:#4f46e5;font-weight:700}.recognized-source{margin-top:7px;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.recognized-source summary{padding:6px 1px;color:var(--muted);cursor:pointer;font-size:10px;list-style:none}.recognized-source summary::-webkit-details-marker{display:none}.recognized-source summary::after{content:"＋";float:right}.recognized-source[open] summary::after{content:"－"}.recognized-content{padding:0 1px 8px}.recognized-text{max-height:150px;color:var(--muted);font-size:11px;line-height:1.65;white-space:pre-wrap;overflow:auto}.formula-latex{max-height:120px;margin:7px 0 0;padding:7px 8px;border-left:2px solid rgba(79,70,229,.42);color:var(--text);background:var(--soft);font:10px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace;white-space:pre-wrap;overflow:auto}.recognized-editor{display:block;width:100%;min-height:92px;max-height:190px;padding:7px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font-family:inherit;font-size:11px;line-height:1.65;resize:vertical}.recognized-actions{display:flex;align-items:center;gap:4px;margin-top:6px}.recognized-actions button{padding:3px 6px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:10px}.recognized-actions button:hover{color:var(--accent);background:var(--soft)}.recognized-actions .commit{color:var(--accent);font-weight:680}.uncertain-note{margin-top:7px;color:#85651d;font-size:10px}
+  .revision-panel{display:grid;gap:9px;margin-top:8px}.revision-label{display:grid;gap:5px;color:var(--text);font-size:11px;font-weight:680}.revision-editor,.revision-custom textarea{width:100%;padding:8px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font:11px/1.65 inherit;resize:vertical}.revision-editor{min-height:120px;max-height:300px}.revision-note{margin:0;color:var(--muted);font-size:9.5px;line-height:1.55}.revision-scope{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 0;border-top:1px solid var(--line);border-bottom:1px solid var(--line);color:var(--muted);font-size:10px}.revision-scope select{height:25px;padding:0 22px 0 6px;border:1px solid var(--line);border-radius:3px;color:var(--text);background:var(--surface);font-size:10px}.revision-actions{display:flex;align-items:center;justify-content:flex-end;gap:5px}.revision-status{margin-right:auto;color:var(--muted);font-size:9.5px}.revision-divider{padding-top:9px;border-top:1px solid var(--line);color:var(--muted);font-size:10px;font-weight:650}.revision-choices{display:grid}.revision-choice{padding:7px 2px;border:0;border-bottom:1px solid var(--line);color:var(--text);background:transparent;text-align:left;font-size:11px}.revision-choice::after{content:"›";float:right;color:var(--muted)}.revision-choice:hover{color:var(--accent);background:var(--soft)}.revision-custom{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:5px;align-items:end}.revision-custom[hidden]{display:none}.revision-custom textarea{grid-column:1/-1;min-height:68px;max-height:140px}.revision-custom span{color:var(--muted);font-size:9px}.version-counter{min-width:31px;font-size:9px}
   .view-switch{display:inline-flex;flex:0 0 auto;align-items:center;gap:2px;margin-left:auto}.view-button{min-width:30px;height:19px;padding:0 4px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px;font-weight:680;line-height:1}.view-button:hover{color:var(--text);background:var(--soft)}.view-button.active{color:#4338ca;background:var(--soft);box-shadow:inset 0 -1px 0 rgba(79,70,229,.45)}
   .body { margin-top:8px;font-size:14px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere; }.pi-rich-strong{font-weight:700}.pi-math-inline{display:inline-flex;max-width:100%;vertical-align:-.14em;white-space:normal}.pi-math-display{display:block;width:100%;margin:.72em 0;padding:.08em 0 .12em;overflow-x:auto;overflow-y:hidden;text-align:center;line-height:1.28;white-space:normal}.pi-math-display.pi-math-numbered{display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-rows:auto;align-items:center;column-gap:6px;overflow:visible}.pi-math-numbered .pi-math-scroll{grid-row:1;grid-column:1;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;text-align:center;overscroll-behavior-inline:contain;scrollbar-width:thin}.pi-equation-tag{grid-row:1;grid-column:2;align-self:center;white-space:nowrap;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-size:.9em;font-variant-numeric:tabular-nums;line-height:1}.pi-math .katex{color:inherit;font-size:1.02em}.pi-math math{color:inherit;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-synthesis:none}.pi-math-display math{font-size:1.06em}.progress{margin-top:10px}.loading{display:flex;align-items:center;gap:10px;padding:10px 0;color:var(--muted);font-size:12px}.spinner{flex:0 0 auto;width:17px;height:17px;border:2px solid #cdd5e5;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}.stream-preview{max-height:300px;margin-top:5px;padding:11px;border-radius:12px;background:var(--soft);font-size:13px;line-height:1.72;white-space:pre-wrap;overflow:auto}.stream-preview[hidden]{display:none}@keyframes spin{to{transform:rotate(360deg)}}
   .idle { display:grid;place-items:center;min-height:240px;padding:30px;text-align:center;color:var(--muted); }.idle img{width:42px;height:37px;opacity:.3}.idle strong{margin-top:16px;color:var(--text);font-size:15px}.idle p{max-width:260px;margin:7px 0 0;font-size:12px;line-height:1.65}
@@ -114,7 +119,7 @@ const STYLES = `
   details.more{position:relative;margin-left:auto}details.more>summary{display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);cursor:pointer;list-style:none;font-size:12px;font-weight:800}details.more>summary:hover{background:var(--soft)}details.more>summary::-webkit-details-marker{display:none}.menu{position:absolute;z-index:5;right:0;bottom:30px;width:220px;max-height:calc(100vh - 32px);padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 16px 40px rgba(15,23,42,.2);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}.menu.opens-down{top:30px;bottom:auto}.sidebar.left .menu{left:0;right:auto}.menu button{width:100%;padding:7px 9px;border:0;border-radius:4px;color:var(--text);background:transparent;text-align:left;font-size:11px}.menu button:hover{background:var(--soft)}.menu hr{border:0;border-top:1px solid var(--line);margin:6px 0}.menu label{display:grid;gap:4px;margin:6px;color:var(--muted);font-size:10px}.menu select{width:100%;padding:6px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font-size:11px}
   :host([data-pi-theme="dark"]) .logo,:host([data-pi-theme="dark"]) .trigger-logo{filter:brightness(0) invert(1)}:host([data-pi-theme="dark"]) .title{color:#d6deea}:host([data-pi-theme="dark"]) .view-button.active{color:#e4e5ff;background:#273246}:host([data-pi-theme="dark"]) .segment{background:linear-gradient(145deg,rgba(31,41,55,.9),rgba(24,33,47,.72))}:host([data-pi-theme="dark"]) .action{color:#e8edf6;background:#202938;border-color:#465269}:host([data-pi-theme="dark"]) .primary{background:#5b6ee1}:host([data-pi-theme="dark"]) .copy-action{color:#a5b4fc;background:transparent;border-color:#465269}:host([data-pi-theme="dark"]) .warning{color:#f1d68e;background:#463b20}:host([data-pi-theme="dark"]) .error{color:#ff9aa4;background:#32171d}:host([data-pi-theme="dark"]) .cache-badge{color:#8de7f7;background:transparent}
   :host([data-pi-theme="dark"]) .live-badge{color:#8de7f7;background:#173b44}:host([data-pi-theme="dark"]) .notice{color:#f1d68e;background:#3c321c;border-color:#655326}
-  button:focus-visible,select:focus-visible,input:focus-visible,.segment:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
+  button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.segment:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
   @media(max-width:620px){.sidebar{top:calc(var(--pi-viewport-top) + 8px)!important;right:calc(var(--pi-viewport-right) + 8px)!important;bottom:calc(var(--pi-viewport-bottom) + 8px)!important;left:calc(var(--pi-viewport-left) + 8px)!important;width:auto!important}.sidebar-resizer{display:none}.segment-actions{opacity:1}}
   @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
 `;
@@ -141,16 +146,44 @@ export interface TranslationOverlayOptions {
   normalizeFormulaPresentation?: boolean;
 }
 
-interface ErrorDisplay { message: string; showSettings: boolean; }
+interface ErrorDisplay {
+  message: string;
+  showSettings: boolean;
+  retryable?: boolean;
+  settingsFocus?: SettingsFocus;
+  settingsLabel?: string;
+}
 interface OverlayProgressState {
   partialText?: string;
   completedChunks: number;
   totalChunks: number;
 }
+export interface TranslationAdjustmentRequest {
+  kind: Exclude<TranslationRevisionKind, 'manual'>;
+  label: string;
+  instruction: string;
+  scope: TranslationRevisionScope;
+}
+export type OverlayRetryTarget =
+  | { kind: 'failed' }
+  | {
+      kind: 'result';
+      result: TranslateResult;
+      intent: 'repeat' | 'language-change';
+    };
 interface OverlayActions {
   onTranslate: () => void;
-  onRetry: () => void;
+  onRetry: (target: OverlayRetryTarget) => void;
   onTranslateText: (text: string) => void;
+  onAdjustTranslation?: (
+    result: TranslateResult,
+    adjustment: TranslationAdjustmentRequest,
+  ) => void;
+  onSaveTranslationEdit?: (
+    result: TranslateResult,
+    translatedText: string,
+    scope: TranslationRevisionScope,
+  ) => Promise<{ result: TranslateResult; history: TranslationHistoryEntry[] }>;
   onAdjustPdfRegion?: () => void;
   onNavigateToPdfRegion?: (sourceLocation: PdfSourceLocation) => void;
   canMarkSource?: (result: TranslateResult, segment?: TranslationSegment) => boolean;
@@ -173,7 +206,7 @@ interface OverlayActions {
   onRemoveDocumentTerm?: (termId: string) => Promise<DocumentMemorySnapshot>;
   onDismissDocumentTermCandidate?: (candidateId: string) => Promise<DocumentMemorySnapshot>;
   onClearDocumentMemory?: () => Promise<DocumentMemorySnapshot>;
-  onOpenSettings: () => void;
+  onOpenSettings: (focus?: SettingsFocus) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
@@ -212,6 +245,7 @@ export class TranslationOverlay {
   private history: TranslationHistoryEntry[] = [];
   private historyIndex = -1;
   private alignedView = false;
+  private readonly resultVersions = new Map<string, TranslateResult[]>();
   private readonly latexViewOverrides = new Map<string, boolean>();
   private markedOnly = false;
   private themeObserver?: MutationObserver;
@@ -272,6 +306,7 @@ export class TranslationOverlay {
 
   showResult(result:TranslateResult,rect?:ViewportRect,history:TranslationHistoryEntry[]=[],alignedByDefault=false):void {
     this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
+    this.rememberResultVersion(result);
     this.historyIndex=history.findIndex(entry=>entry.requestId===result.requestId);this.alignedView=alignedByDefault&&Boolean(result.alignedSegments?.length);
     if(this.sidebarActive)this.sidebarCollapsed=false;this.renderResult(result);
   }
@@ -281,13 +316,50 @@ export class TranslationOverlay {
     this.historyIndex=this.currentResult
       ? history.findIndex(entry=>entry.requestId===this.currentResult?.requestId)
       : -1;
+    if(this.currentResult&&!this.progressState&&this.isShowingCard()){
+      const scrollTop=this.root.querySelector<HTMLElement>('.surface')?.scrollTop??0;
+      this.renderResult(this.currentResult);
+      const surface=this.root.querySelector<HTMLElement>('.surface');if(surface)surface.scrollTop=scrollTop;
+    }
+  }
+
+  private resultRootRequestId(result:TranslateResult):string {
+    return result.revision?.rootRequestId??result.requestId;
+  }
+
+  private rememberResultVersion(result:TranslateResult):void {
+    const rootRequestId=this.resultRootRequestId(result);
+    const versions=this.resultVersions.get(rootRequestId)??[];
+    this.resultVersions.delete(rootRequestId);
+    this.resultVersions.set(rootRequestId,[
+      result,
+      ...versions.filter(version=>version.requestId!==result.requestId),
+    ].slice(0,3));
+    while(this.resultVersions.size>12){const oldest=this.resultVersions.keys().next().value as string|undefined;if(!oldest)break;this.resultVersions.delete(oldest)}
+  }
+
+  private versionsFor(result:TranslateResult):TranslateResult[] {
+    return this.resultVersions.get(this.resultRootRequestId(result))??[result];
+  }
+
+  private navigateVersion(result:TranslateResult,delta:number):void {
+    const versions=this.versionsFor(result);
+    const current=Math.max(0,versions.findIndex(version=>version.requestId===result.requestId));
+    const next=current+delta;
+    if(next<0||next>=versions.length)return;
+    this.alignedView=false;
+    this.renderResult(versions[next]!);
   }
 
   showError(error:ErrorDisplay,rect?:ViewportRect):void {
     this.progressState=undefined;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const surface=this.surface('翻译失败');
     const body=document.createElement('div');body.className='error';body.textContent=error.message;surface.append(body);const footer=document.createElement('div');footer.className='footer';
-    const retry=this.button('重试','action primary');retry.addEventListener('click',this.actions.onRetry);footer.append(retry);
-    if(error.showSettings){const settings=this.button('打开设置','action');settings.addEventListener('click',this.actions.onOpenSettings);footer.append(settings)}surface.append(footer);this.showSurface(surface);
+    const showRetry=error.retryable??true;if(showRetry){const retry=this.button('重试','action primary');retry.addEventListener('click',()=>this.actions.onRetry({kind:'failed'}));footer.append(retry)}
+    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry?'':' primary'}`);this.bindSettingsButton(settings,error.settingsFocus);footer.append(settings)}if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
+  }
+
+  private bindSettingsButton(button:HTMLButtonElement,focus?:SettingsFocus):void {
+    const originalLabel=button.textContent??'打开设置';button.addEventListener('click',()=>{button.disabled=true;void this.actions.onOpenSettings(focus).then((opened)=>{button.disabled=false;if(opened){button.textContent=originalLabel;return}button.textContent='无法打开，请从扩展菜单进入';button.title='请从 Edge 扩展菜单打开 Pi Translator 设置'}).catch(()=>{button.disabled=false;button.textContent='无法打开，请从扩展菜单进入';button.title='请从 Edge 扩展菜单打开 Pi Translator 设置'})});
   }
 
   hide():void { this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.clear();this.setView('hidden'); }
@@ -411,6 +483,7 @@ export class TranslationOverlay {
     result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
     if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
+    const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);if(tools&&versions.length>1&&versionIndex>=0){const older=this.button('‹','icon','查看上一版译文');older.disabled=versionIndex>=versions.length-1;older.addEventListener('click',()=>this.navigateVersion(result,1));const counter=document.createElement('span');counter.className='counter version-counter';counter.textContent=`v${versionIndex+1}/${versions.length}`;const newer=this.button('›','icon','查看下一版译文');newer.disabled=versionIndex<=0;newer.addEventListener('click',()=>this.navigateVersion(result,-1));tools.prepend(older,counter,newer)}
     if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const older=this.button('‹','icon','上一条翻译（Alt+↑）');older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=document.createElement('span');counter.className='counter';counter.textContent=`${this.historyIndex+1}/${navigationHistory.length}`;const newer=this.button('›','icon','下一条翻译（Alt+↓）');newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));tools.prepend(older,counter,newer)}
     const topLine=document.createElement('div');topLine.className='result-topline';const meta=document.createElement('div');meta.className='meta';if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text'){const sourceKind=document.createElement('span');sourceKind.className='source-badge';sourceKind.textContent=result.sourceKind==='image-region'?'图像识别':'文字提取';meta.append(sourceKind)}if(result.sourceHost){const host=document.createElement('span');host.textContent=result.sourceHost;meta.append(host)}if(result.sourceLocation&&this.actions.onNavigateToPdfRegion){const location=this.button(`第 ${result.sourceLocation.pageNumber} 页`,'source-location','返回 PDF 原选区');location.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(result.sourceLocation!));meta.append(location)}if(result.completedAt){const time=document.createElement('span');time.className='meta-dot';time.textContent=new Date(result.completedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});meta.append(time)}if(result.latencyMs){const latency=document.createElement('span');latency.className='meta-dot';latency.textContent=`${result.latencyMs} ms`;meta.append(latency)}if(result.cached){const cache=document.createElement('span');cache.className='cache-badge';cache.textContent='会话缓存';meta.append(cache)}if(result.contextUsed){const context=document.createElement('span');context.className='cache-badge';context.textContent='含上下文';meta.append(context)}if((result.chunkCount??1)>1){const chunks=document.createElement('span');chunks.className='meta-dot';chunks.textContent=`${result.chunkCount} 段`;meta.append(chunks)}if(meta.childElementCount)topLine.append(meta);
     if(result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label','译文显示方式');const full=this.button('全文',`view-button${this.alignedView?'':' active'}`,'显示完整译文');const aligned=this.button('逐句',`view-button${this.alignedView?' active':''}`,'显示逐句对照');full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.renderResult(result)});switcher.append(full,aligned);topLine.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?'源码':'公式',`view-button formula-view${rendered?' active':''}`,rendered?'显示可编辑的 LaTeX 源码':'渲染译文中的 LaTeX 公式');formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResult(result)});topLine.append(formulaView)}if(topLine.childElementCount)surface.append(topLine);
@@ -452,13 +525,38 @@ export class TranslationOverlay {
 
   private moreMenu(result:TranslateResult):HTMLElement {
     const details=document.createElement('details');details.className='more';const summary=document.createElement('summary');summary.textContent='•••';summary.title='更多操作';summary.ariaLabel='更多翻译操作';const menu=document.createElement('div');menu.className='menu';
-    if(result.requestId===this.latestRequestId){if(result.sourceKind==='image-region')menu.append(this.menuButton('重新识别此区域',this.actions.onRetry));else menu.append(this.menuButton('重新翻译',this.actions.onRetry));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}
+    const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);
+    if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation&&this.actions.onSaveTranslationEdit)menu.append(this.menuButton('调整译文…',()=>this.openTranslationAdjustment(result)));const repeatLabel=result.sourceKind==='image-region'?'重新识别此区域':'重新翻译';menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton('采用当前版本',()=>this.adoptTranslationVersion(result)))}
     const markerCount=this.actions.getSourceMarkSummaries?.().length??0;if(markerCount&&this.actions.canPersistSourceMarks?.())menu.append(this.menuButton(`查看本文标记（${markerCount}）`,()=>this.openMarkerNavigator()));
     if(this.actions.hasAnySourceMarks?.()&&this.actions.onCopyMarkedNotes){menu.append(this.menuButton('复制标记笔记',()=>{void this.actions.onCopyMarkedNotes?.().then((count)=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)button.textContent=`已复制 ${count} 条标记`})}));const exportButton=menu.lastElementChild;if(exportButton instanceof HTMLElement)exportButton.dataset.markExport='true'}
     if(this.actions.canPersistSourceMarks?.()&&this.actions.onSetSourceMarkPersistence){const enabled=Boolean(this.actions.isSourceMarkPersistenceEnabled?.());const markCurrent=!enabled&&Boolean(this.actions.canMarkSource?.(result))&&!Boolean(this.actions.isSourceMarked?.(result));menu.append(this.menuButton(enabled?'停止保存本文标记':markCurrent?'标记当前译句并保存':'保存本文标记',()=>{if(markCurrent)this.actions.onToggleSourceMark?.(result);void this.actions.onSetSourceMarkPersistence?.(!enabled).then(()=>this.renderResult(result))}));if((this.actions.hasAnySourceMarks?.()||this.actions.hasStoredSourceMarks?.())&&this.actions.onClearSourceMarks)menu.append(this.menuButton('清除本文标记',()=>{void this.actions.onClearSourceMarks?.().then(()=>this.renderResult(result))}))}
     const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const [value,label] of LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
-    language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry()});
-    if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface())));menu.append(this.menuButton('完整设置',this.actions.onOpenSettings));details.append(summary,menu);details.addEventListener('toggle',()=>{if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
+    language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
+    if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface())));const settings=this.menuButton('完整设置',()=>undefined);this.bindSettingsButton(settings);menu.append(settings);details.append(summary,menu);details.addEventListener('toggle',()=>{if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
+  }
+
+  private openTranslationAdjustment(result:TranslateResult):void {
+    if(!this.actions.onAdjustTranslation||!this.actions.onSaveTranslationEdit)return;
+    const surface=this.surface('调整译文');const panel=document.createElement('div');panel.className='revision-panel';
+    const editLabel=document.createElement('label');editLabel.className='revision-label';editLabel.textContent='直接修改译文';const editor=document.createElement('textarea');editor.className='revision-editor';editor.value=normalizeLatexForClipboard(result.translatedText);editor.maxLength=24000;editor.setAttribute('aria-label','直接修改译文');editLabel.append(editor);panel.append(editLabel);
+    const note=document.createElement('p');note.className='revision-note';note.textContent='直接保存不会调用 API；模型调整会发送原文和当前译稿。已有标记会同步更新。';panel.append(note);
+    const scopeLabel=document.createElement('label');scopeLabel.className='revision-scope';const scopeText=document.createElement('span');scopeText.textContent='作用范围';const scope=document.createElement('select');scope.ariaLabel='译文调整作用范围';for(const [value,label] of [['current','仅本次'],['document','用于本文']] as const){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option)}scopeLabel.append(scopeText,scope);panel.append(scopeLabel);const selectedScope=()=>scope.value as TranslationRevisionScope;
+    const editActions=document.createElement('div');editActions.className='revision-actions';const cancel=this.button('取消','action');cancel.addEventListener('click',()=>this.renderResult(result));const save=this.button('保存修改','action primary');const saveStatus=document.createElement('span');saveStatus.className='revision-status';editActions.append(saveStatus,cancel,save);panel.append(editActions);
+    const divider=document.createElement('div');divider.className='revision-divider';divider.textContent='或让模型重新调整';panel.append(divider);
+    const choices=document.createElement('div');choices.className='revision-choices';const run=(adjustment:Omit<TranslationAdjustmentRequest,'scope'>)=>{this.actions.onAdjustTranslation?.(result,{...adjustment,scope:selectedScope()})};
+    const faithful=this.button('更忠实原文','revision-choice');faithful.addEventListener('click',()=>run({kind:'faithful',label:'更忠实',instruction:'Keep the translation especially faithful to the source meaning, logical relations, qualifiers, and technical detail. Avoid paraphrasing or adding information.'}));
+    const natural=this.button('更自然简洁','revision-choice');natural.addEventListener('click',()=>run({kind:'natural',label:'更自然',instruction:'Use natural, concise target-language phrasing while preserving every technical claim and qualification in the source.'}));
+    const terminology=this.button('修正术语与公式','revision-choice');terminology.addEventListener('click',()=>run({kind:'terminology-formula',label:'术语与公式',instruction:'Prioritize consistent academic terminology and exact preservation of every protected formula, symbol, variable, equation number, and LaTeX structure.'}));
+    const customToggle=this.button('自定义调整要求…','revision-choice');choices.append(faithful,natural,terminology,customToggle);panel.append(choices);
+    const custom=document.createElement('div');custom.className='revision-custom';custom.hidden=true;const customInput=document.createElement('textarea');customInput.maxLength=500;customInput.placeholder='例如：将 sensing 统一译为“感知”，语气更正式';customInput.setAttribute('aria-label','自定义调整要求');const customCount=document.createElement('span');customCount.textContent='0/500';const customApply=this.button('按要求重译','action primary');custom.append(customInput,customCount,customApply);panel.append(custom);
+    customToggle.addEventListener('click',()=>{custom.hidden=!custom.hidden;if(!custom.hidden)queueMicrotask(()=>customInput.focus())});customInput.addEventListener('input',()=>{customCount.textContent=`${customInput.value.length}/500`});customApply.addEventListener('click',()=>{const instruction=customInput.value.trim();if(!instruction){customInput.focus();return}run({kind:'custom',label:'自定义调整',instruction})});
+    save.addEventListener('click',()=>{const translatedText=editor.value.trim();if(!translatedText){editor.focus();return}if(normalizeLatexForClipboard(result.translatedText).trim()===translatedText){saveStatus.textContent='译文没有变化';return}save.disabled=true;cancel.disabled=true;scope.disabled=true;saveStatus.textContent='正在保存…';void this.actions.onSaveTranslationEdit!(result,translatedText,selectedScope()).then(({result:updated,history})=>{this.showResult(updated,undefined,history,false)}).catch((error:unknown)=>{save.disabled=false;cancel.disabled=false;scope.disabled=false;saveStatus.textContent=error instanceof Error?error.message:'保存失败，请重试'})});
+    surface.append(panel);this.showSurface(surface);queueMicrotask(()=>{editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)});
+  }
+
+  private adoptTranslationVersion(result:TranslateResult):void {
+    if(!this.actions.onSaveTranslationEdit)return;
+    void this.actions.onSaveTranslationEdit(result,result.translatedText,'current').then(({result:updated,history})=>{this.showResult(updated,undefined,history,false)}).catch((error:unknown)=>{this.showError({message:error instanceof Error?error.message:'无法采用此版本',showSettings:false,retryable:false})});
   }
 
   private recognizedSource(result:TranslateResult,label:string):HTMLElement {
@@ -471,7 +569,7 @@ export class TranslationOverlay {
 
   private beginPdfRegionAdjustment():void { if(this.sidebarActive)this.collapseSidebar();else{this.clear();this.setView('hidden')}this.actions.onAdjustPdfRegion?.() }
 
-  private placeMoreMenu(details:HTMLElement,menu:HTMLElement):void { const surface=details.closest<HTMLElement>('.surface');if(!surface)return;menu.classList.remove('opens-down');menu.style.removeProperty('max-height');const anchorRect=details.getBoundingClientRect();const gap=6,margin=8;const above=Math.max(0,anchorRect.top-gap-margin);const below=Math.max(0,innerHeight-anchorRect.bottom-gap-margin);const desired=Math.min(menu.scrollHeight,280);const opensDown=below>=desired||below>=above;menu.classList.toggle('opens-down',opensDown);menu.style.maxHeight=`${Math.max(1,opensDown?below:above)}px`; }
+  private placeMoreMenu(details:HTMLElement,menu:HTMLElement):void { const surface=details.closest<HTMLElement>('.surface');if(!surface)return;menu.classList.remove('opens-down');menu.style.removeProperty('max-height');const anchorRect=details.getBoundingClientRect();const surfaceRect=surface.getBoundingClientRect();const headerBottom=surface.querySelector<HTMLElement>(':scope > .header')?.getBoundingClientRect().bottom??surfaceRect.top;const gap=6,margin=8;const visibleTop=Math.max(surfaceRect.top,headerBottom,margin);const visibleBottom=Math.min(surfaceRect.bottom,innerHeight-margin);const above=Math.max(0,anchorRect.top-gap-visibleTop);const below=Math.max(0,visibleBottom-anchorRect.bottom-gap);const desired=Math.min(menu.scrollHeight,280);const opensDown=below>=desired||below>=above;const available=opensDown?below:above;menu.classList.toggle('opens-down',opensDown);menu.style.maxHeight=`${Math.max(1,Math.min(desired,available))}px`; }
 
   private surface(titleText:string):HTMLDivElement {
     const docked=this.sidebarActive||this.markerNavigatorActive||this.documentMemoryActive;const surface=document.createElement('div');surface.className=`surface ${docked?'sidebar '+this.preferences.sidebarSide:'card'}`;surface.setAttribute('role',docked?'complementary':'dialog');surface.setAttribute('aria-label',`Pi Translator ${titleText}`);if(docked)surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);

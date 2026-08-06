@@ -6,6 +6,8 @@ import {
   findUniqueNormalizedSegmentRange,
   mergeMarkerRects,
   markerTextStillMatches,
+  persistedPdfMarkerKey,
+  restorePersistedPdfTranslationMarker,
 } from '../core/content/session-translation-markers';
 
 describe('session translation marker text matching', () => {
@@ -123,5 +125,51 @@ describe('session translation marker text matching', () => {
     expect(markdown).toContain('> Original sentence.');
     expect(markdown).toContain('[查看来源](https://example.com/paper)');
     expect(markdown).toContain('## paper.pdf · 第 4 页');
+  });
+
+  it('keeps a stable persisted marker identity when only the translation changes', () => {
+    const anchor = {
+      kind: 'text-quote' as const,
+      pageNumber: 2,
+      sourceText: 'Stable source sentence.',
+      prefix: 'Before. ',
+      suffix: ' After.',
+    };
+    const content = {
+      originalText: 'Stable source sentence.',
+      translatedText: '初始译文。',
+      sourceTitle: 'paper.pdf',
+      pageNumber: 2,
+    };
+    expect(persistedPdfMarkerKey(anchor, content)).toBe(
+      persistedPdfMarkerKey(anchor, { ...content, translatedText: '修订后的译文。' }),
+    );
+  });
+
+  it('restores the original request root for full and sentence markers', () => {
+    const base = {
+      anchor: {
+        kind: 'text-quote' as const,
+        pageNumber: 1,
+        sourceText: 'Stable source.',
+        prefix: '',
+        suffix: '',
+      },
+      content: {
+        originalText: 'Stable source.',
+        translatedText: '稳定译文。',
+        sourceTitle: 'paper.pdf',
+        pageNumber: 1,
+      },
+      createdAt: 1,
+    };
+    expect(restorePersistedPdfTranslationMarker({
+      ...base,
+      markerId: 'root-request::full',
+    }, 'document').result.requestId).toBe('root-request');
+    expect(restorePersistedPdfTranslationMarker({
+      ...base,
+      markerId: 'root-request::segment:C1S1',
+    }, 'document').result.requestId).toBe('root-request');
   });
 });

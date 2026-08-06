@@ -38,6 +38,18 @@ describe('runtime message guard', () => {
         term: { source: 'ROI', target: '感兴趣区域' },
       },
     })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: {
+          requestId: 'edited-1',
+          originalText: 'Source.',
+          translatedText: '修订译文。',
+          warnings: [],
+        },
+      },
+    })).toBe(true);
   });
 
   it('accepts batched local MathML rendering', () => {

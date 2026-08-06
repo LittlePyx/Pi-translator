@@ -100,6 +100,80 @@ describe('document translation memory', () => {
     expect(context!.length).toBeLessThanOrEqual(500);
   });
 
+  it('replaces an earlier translation of the same source with the adopted revision', async () => {
+    await rememberDocumentTranslation(identity, {
+      requestId: 'draft-request',
+      originalText: 'The estimator is stable under perturbations.',
+      translatedText: '该估计器是稳定的。',
+      warnings: [],
+      completedAt: 10,
+    });
+    const memory = await rememberDocumentTranslation(identity, {
+      requestId: 'revision-request',
+      originalText: 'The estimator is stable under perturbations.',
+      translatedText: '该估计器在扰动下保持稳定。',
+      warnings: [],
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'draft-request',
+        kind: 'manual',
+        label: '手动修改',
+        scope: 'document',
+      },
+    });
+
+    expect(memory.recentTranslations).toHaveLength(1);
+    expect(memory.recentTranslations[0]).toMatchObject({
+      requestId: 'revision-request',
+      translatedText: '该估计器在扰动下保持稳定。',
+    });
+    expect(buildDocumentReferenceContext(
+      'This estimator remains stable.',
+      undefined,
+      memory,
+    )).toContain('该估计器在扰动下保持稳定。');
+  });
+
+  it('replaces stale OCR text when re-recognition changes the source wording', async () => {
+    await rememberDocumentTranslation(identity, {
+      requestId: 'ocr-root',
+      originalText: 'The stale OCR source texl.',
+      translatedText: '旧的识别译文。',
+      warnings: [],
+      sourceKind: 'image-region',
+      completedAt: 10,
+    });
+    const memory = await rememberDocumentTranslation(identity, {
+      requestId: 'ocr-revision',
+      originalText: 'The corrected OCR source text.',
+      translatedText: '修正后的识别译文。',
+      warnings: [],
+      sourceKind: 'image-region',
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'ocr-root',
+        kind: 'custom',
+        label: '重新识别',
+        scope: 'document',
+      },
+    });
+
+    expect(memory.recentTranslations).toHaveLength(1);
+    expect(memory.recentTranslations[0]).toMatchObject({
+      requestId: 'ocr-revision',
+      rootRequestId: 'ocr-root',
+      originalText: 'The corrected OCR source text.',
+      translatedText: '修正后的识别译文。',
+    });
+    const context = buildDocumentReferenceContext(
+      'The corrected OCR source remains important.',
+      undefined,
+      memory,
+    );
+    expect(context).toContain('The corrected OCR source text.');
+    expect(context).not.toContain('stale OCR');
+  });
+
   it('enforces document and per-document storage budgets', async () => {
     for (let index = 0; index < 25; index += 1) {
       await rememberDocumentTranslation(identity, {

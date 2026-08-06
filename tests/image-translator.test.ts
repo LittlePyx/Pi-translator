@@ -610,10 +610,10 @@ describe('image region translator', () => {
     expect(result.formulaNeedsReview).toBeUndefined();
   });
 
-  it('keeps the first usable LaTeX result without a hidden corrective request', async () => {
+  it('recovers an omitted validated LaTeX formula without a hidden corrective request', async () => {
     const invalid = JSON.stringify({
       translation: '译文缺少公式',
-      recognizedText: 'Source $R=\\frac{a+b}{c}$',
+      recognizedText: 'Source\n\\[R=\\frac{a+b}{c}\\]',
       formulaLatex: ['R=\\frac{a+b}{c}'],
       uncertainSpans: [],
     });
@@ -629,9 +629,10 @@ describe('image region translator', () => {
       new AbortController().signal,
     );
     expect(result).toMatchObject({
-      translatedText: '译文缺少公式',
-      formulaNeedsReview: true,
+      translatedText: '译文缺少公式\n\\[R=\\frac{a+b}{c}\\]',
+      formulaLatex: ['R=\\frac{a+b}{c}'],
     });
+    expect(result.formulaNeedsReview).toBeUndefined();
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -673,19 +674,20 @@ describe('image region translator', () => {
       .mockRejectedValueOnce(new TypeError('temporary connection failure'));
     vi.stubGlobal('fetch', fetchMock);
 
-    await expect(new OpenAiCompatibleTranslator().translateImageRegion(
+    const result = await new OpenAiCompatibleTranslator().translateImageRegion(
       input,
       options,
       { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' },
       new AbortController().signal,
-    )).resolves.toMatchObject({
+    );
+    expect(result).toMatchObject({
       translatedText: '译文缺少公式',
       formulaNeedsReview: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('keeps the usable translation with a local review flag', async () => {
+  it('keeps an inline omission visible for local review', async () => {
     const invalid = JSON.stringify({
       translation: '译文缺少公式',
       recognizedText: 'Source $x+y$',
@@ -696,12 +698,13 @@ describe('image region translator', () => {
       choices: [{ message: { content: invalid } }],
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
 
-    await expect(new OpenAiCompatibleTranslator().translateImageRegion(
+    const result = await new OpenAiCompatibleTranslator().translateImageRegion(
       input,
       options,
       { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' },
       new AbortController().signal,
-    )).resolves.toMatchObject({
+    );
+    expect(result).toMatchObject({
       translatedText: '译文缺少公式',
       formulaNeedsReview: true,
     });

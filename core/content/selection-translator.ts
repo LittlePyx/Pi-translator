@@ -4,10 +4,13 @@ import type {
   DocumentMemoryResponse,
   DocumentMemoryLocator,
   RuntimeMessage,
+  RuntimeResponse,
   TranslateRuntimeResponse,
+  UpdateTranslationResultResponse,
 } from '../messaging/messages';
 import {
   runtimeConnectionErrorMessage,
+  translationErrorRecovery,
   translationErrorMessage,
 } from '../messaging/user-facing-error';
 import { captureSelectionSnapshot } from '../selection/generic-selection';
@@ -21,6 +24,8 @@ import type {
   PdfSourceLocation,
   TranslateResult,
   TranslationHistoryEntry,
+  TranslationRevisionRequest,
+  TranslationRevisionScope,
   TranslationSegment,
 } from '../translation/types';
 import {
@@ -41,6 +46,8 @@ import {
 } from './session-translation-markers';
 import {
   TranslationOverlay,
+  type OverlayRetryTarget,
+  type TranslationAdjustmentRequest,
   type ViewportInsetsProvider,
 } from '../../ui/translation-overlay';
 
@@ -99,6 +106,24 @@ export interface PdfRegionTextTranslationCapture {
   sourceLabel?: string;
   sourceLocation: PdfSourceLocation;
 }
+
+type TextTranslationMetadata = {
+  sourceLabel?: string;
+  sourceLocation?: PdfSourceLocation;
+};
+
+type TranslationRetryContext =
+  | {
+      kind: 'text';
+      snapshot: SelectionSnapshot;
+      metadata?: TextTranslationMetadata;
+      revision?: TranslationRevisionRequest;
+    }
+  | {
+      kind: 'image';
+      capture: ImageRegionTranslationCapture;
+      revision?: TranslationRevisionRequest;
+    };
 
 export interface SelectionTranslatorController {
   translateImageRegion(capture: ImageRegionTranslationCapture): Promise<void>;
@@ -172,10 +197,9 @@ export async function startSelectionTranslator(
   let activeSelection: SelectionSnapshot | undefined;
   let activeImageRegion: ImageRegionTranslationCapture | undefined;
   let activePdfRegionLocation: PdfSourceLocation | undefined;
-  let activeTextMetadata: {
-    sourceLabel?: string;
-    sourceLocation?: PdfSourceLocation;
-  } | undefined;
+  let activeTextMetadata: TextTranslationMetadata | undefined;
+  let activeRetryContext: TranslationRetryContext | undefined;
+  const resultRetryContexts = new Map<string, TranslationRetryContext>();
   let inFlightRequestId: string | undefined;
   let completedEarlyRequestId: string | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
@@ -209,6 +233,31 @@ export async function startSelectionTranslator(
     };
   }
 
+  function documentLocatorForResult(result: TranslateResult): DocumentMemoryLocator {
+    const context = retryContextForResult(result);
+    const current = currentDocumentLocator();
+    const contextPageUrl = context?.kind === 'image'
+      ? context.capture.pageUrl
+      : context?.snapshot.pageUrl;
+    const contextSourceLabel = context?.kind === 'image'
+      ? context.capture.sourceLabel
+      : context?.metadata?.sourceLabel;
+    const contextSourceLocation = context?.kind === 'image'
+      ? context.capture.selectionReference
+      : context?.metadata?.sourceLocation;
+    const sourceLabel = contextSourceLabel ?? result.sourceHost;
+    const sourceLocation = result.sourceLocation ?? contextSourceLocation;
+    return {
+      ...current,
+      pageUrl: contextPageUrl ?? current.pageUrl,
+      ...(result.documentId ? { documentId: result.documentId } : {}),
+      ...(sourceLabel && !current.sourceLabel
+        ? { sourceLabel }
+        : {}),
+      ...(sourceLocation ? { sourceLocation } : {}),
+    };
+  }
+
   async function documentMemoryRequest(
     message: Extract<RuntimeMessage, {
       type:
@@ -232,6 +281,7 @@ export async function startSelectionTranslator(
     activeImageRegion = undefined;
     activePdfRegionLocation = undefined;
     activeTextMetadata = undefined;
+    activeRetryContext = undefined;
     if (!requestId) return;
     void browser.runtime
       .sendMessage({
@@ -241,13 +291,19 @@ export async function startSelectionTranslator(
       .catch(() => undefined);
   }
 
+  async function openSettingsPage(focus?: import('../messaging/user-facing-error').SettingsFocus):Promise<boolean>{
+    try{
+      const response=await browser.runtime.sendMessage({type:'OPEN_OPTIONS_PAGE',...(focus?{payload:{focus}}:{})} satisfies RuntimeMessage) as RuntimeResponse<{opened:true}>;
+      return response.ok;
+    }catch{return false}
+  }
+
   const overlay = new TranslationOverlay({
     onTranslate: () => {
       if (latestSelection) void translateSelection(latestSelection);
     },
-    onRetry: () => {
-      if (activeImageRegion) void translateImageRegion(activeImageRegion, true);
-      else if (activeSelection) void translate(activeSelection, true, activeTextMetadata);
+    onRetry: (target) => {
+      void retryTranslation(target);
     },
     onTranslateText: (text) => {
       const imageRegion = activeImageRegion;
@@ -287,6 +343,11 @@ export async function startSelectionTranslator(
           }
         : undefined);
     },
+    onAdjustTranslation: (result, adjustment) => {
+      void adjustTranslation(result, adjustment);
+    },
+    onSaveTranslationEdit: (result, translatedText, scope) =>
+      saveTranslationEdit(result, translatedText, scope),
     ...(options.onAdjustPdfRegion
       ? {
           onAdjustPdfRegion: () => {
@@ -376,11 +437,7 @@ export async function startSelectionTranslator(
       type: 'CLEAR_DOCUMENT_MEMORY',
       payload: currentDocumentLocator(),
     }),
-    onOpenSettings: () => {
-      void browser.runtime.sendMessage({
-        type: 'OPEN_OPTIONS_PAGE',
-      } satisfies RuntimeMessage);
-    },
+    onOpenSettings: openSettingsPage,
     ...(options.allowSitePause === false
       ? {}
       : {
@@ -433,7 +490,10 @@ export async function startSelectionTranslator(
         false,
       );
     },
-    onChange: (entries) => queuePersistentMarkerSave(entries),
+    onChange: (entries) => {
+      persistedMarkerHistory = markerHistoryFromEntries(entries);
+      queuePersistentMarkerSave(entries);
+    },
     onTooltipUnmark: () => overlay.refreshSourceMarkState(),
   });
 
@@ -576,6 +636,14 @@ export async function startSelectionTranslator(
   ): string | undefined {
     const directId = markerIdForTarget(result, segment);
     if (markerManager?.isMarked(directId)) return directId;
+    const rootRequestId = revisionRootRequestId(result);
+    const targetSource = (segment?.originalText ?? result.originalText).trim();
+    const revised = markerManager?.entries().find((entry) => (
+      revisionRootRequestId(entry.result) === rootRequestId &&
+      entry.content.originalText.trim() === targetSource &&
+      (segment ? entry.markerId.includes('::segment:') : !entry.markerId.includes('::segment:'))
+    ))?.markerId;
+    if (revised) return revised;
     const target = persistedMarkerForTarget(result, segment);
     if (!target) return undefined;
     const targetKey = persistedPdfMarkerKey(target.anchor, target.content);
@@ -673,8 +741,12 @@ export async function startSelectionTranslator(
     });
     markerManager?.remove(markerId);
     persistentStoredMarkerCount = storedPersistentMarkers.length;
+    const removedHistoryIds = new Set([
+      `pdf-marker:${markerId}`,
+      ...[...removedStoredIds].map((id) => `pdf-marker:${id}`),
+    ]);
     persistedMarkerHistory = persistedMarkerHistory.filter((entry) => (
-      entry.requestId !== markerId && !removedStoredIds.has(entry.requestId)
+      !removedHistoryIds.has(entry.historyId)
     ));
     const adapter = options.pdfMarkerPersistence;
     if (!adapter?.isAvailable() || (!removedStoredIds.size && !persistentMarkersEnabled)) return;
@@ -964,10 +1036,305 @@ export async function startSelectionTranslator(
     scheduleRefresh();
   }
 
+  function revisionRootRequestId(result: TranslateResult): string {
+    return result.revision?.rootRequestId ?? result.requestId;
+  }
+
+  function rememberResultRetryContext(
+    result: TranslateResult,
+    context: TranslationRetryContext | undefined,
+  ): void {
+    if (!context) return;
+    resultRetryContexts.delete(result.requestId);
+    resultRetryContexts.set(result.requestId, context);
+    while (resultRetryContexts.size > 18) {
+      const oldest = resultRetryContexts.keys().next().value as string | undefined;
+      if (!oldest) break;
+      resultRetryContexts.delete(oldest);
+    }
+  }
+
+  function retryContextForResult(result: TranslateResult): TranslationRetryContext | undefined {
+    return resultRetryContexts.get(result.requestId) ??
+      resultRetryContexts.get(revisionRootRequestId(result));
+  }
+
+  function revisionRequestForResult(
+    result: TranslateResult,
+    adjustment: TranslationAdjustmentRequest,
+  ): TranslationRevisionRequest {
+    return {
+      rootRequestId: revisionRootRequestId(result),
+      kind: adjustment.kind,
+      label: adjustment.label,
+      instruction: adjustment.instruction.slice(0, 500),
+      previousTranslation: result.translatedText,
+      scope: adjustment.scope,
+      ...(result.sourceKind ? { sourceKind: result.sourceKind } : {}),
+      ...(result.formulaLatex?.length ? { formulaLatex: [...result.formulaLatex] } : {}),
+      ...(result.uncertainSpans?.length ? { uncertainSpans: [...result.uncertainSpans] } : {}),
+      ...(result.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
+    };
+  }
+
+  function cloneSnapshotForRetry(snapshot: SelectionSnapshot): SelectionSnapshot {
+    const requestId = crypto.randomUUID();
+    const anchor = markerAnchors.get(snapshot.requestId);
+    if (anchor) markerAnchors.set(requestId, anchor);
+    return {
+      ...snapshot,
+      requestId,
+      capturedAt: Date.now(),
+      selectionHash: `${requestId}:${snapshot.normalizedText.length}`,
+    };
+  }
+
+  async function replayRetryContext(context: TranslationRetryContext): Promise<void> {
+    if (context.kind === 'image') {
+      await translateImageRegion(context.capture, true, context.revision);
+      return;
+    }
+    await translate(
+      cloneSnapshotForRetry(context.snapshot),
+      true,
+      context.metadata,
+      context.revision,
+    );
+  }
+
+  async function retryTranslation(target: OverlayRetryTarget): Promise<void> {
+    if (target.kind === 'failed') {
+      if (activeRetryContext) await replayRetryContext(activeRetryContext);
+      return;
+    }
+    const context = retryContextForResult(target.result);
+    if (
+      target.intent === 'repeat' &&
+      target.result.sourceKind === 'image-region' &&
+      context?.kind === 'image'
+    ) {
+      const imageRevision = revisionRequestForResult(
+        target.result,
+        {
+          kind: 'custom',
+          label: '重新识别',
+          instruction: 'Recognize the same image region again and regenerate the translation.',
+          // Re-recognition corrects the source extraction rather than merely
+          // offering an alternate wording. Replace the cached/document copy
+          // so reopening the same region cannot resurrect stale OCR text.
+          scope: 'document',
+        },
+      );
+      delete imageRevision.formulaLatex;
+      delete imageRevision.uncertainSpans;
+      delete imageRevision.formulaNeedsReview;
+      await translateImageRegion(context.capture, true, imageRevision);
+      return;
+    }
+    await adjustTranslation(target.result, {
+      kind: 'custom',
+      label: target.intent === 'language-change' ? '切换目标语言' : '重新翻译',
+      instruction: target.intent === 'language-change'
+        ? 'Translate the source into the newly selected target language while preserving all technical details and formulas.'
+        : 'Regenerate the current translation while preserving deliberate terminology and formula corrections.',
+      scope: 'current',
+    });
+  }
+
+  function carryRevisionAnchor(result: TranslateResult, requestId: string): void {
+    const rootRequestId = revisionRootRequestId(result);
+    const markerEntry = markerManager?.entries().find((entry) => (
+      entry.markerId === result.requestId ||
+      entry.result.requestId === result.requestId ||
+      revisionRootRequestId(entry.result) === rootRequestId
+    ));
+    const anchor = markerAnchors.get(result.requestId) ??
+      markerAnchors.get(rootRequestId) ??
+      markerEntry?.anchor;
+    if (anchor) markerAnchors.set(requestId, anchor);
+  }
+
+  function syncRevisionMarkers(result: TranslateResult): void {
+    const revision = result.revision;
+    if (!revision) return;
+    carryRevisionAnchor(result, result.requestId);
+    let updated = markerManager?.updateResult(revision.rootRequestId, result) ?? 0;
+    const target = persistedMarkerForTarget(result);
+    const targetKey = target
+      ? persistedPdfMarkerKey(target.anchor, target.content)
+      : undefined;
+    if (!updated && targetKey) {
+      const matchingRoots = new Set(
+        (markerManager?.entries() ?? []).flatMap((entry) => {
+          const persisted = persistPdfTranslationMarker(entry);
+          if (!persisted || persistedPdfMarkerKey(persisted.anchor, persisted.content) !== targetKey) {
+            return [];
+          }
+          return [revisionRootRequestId(entry.result)];
+        }),
+      );
+      for (const rootRequestId of matchingRoots) {
+        updated += markerManager?.updateResult(rootRequestId, result) ?? 0;
+      }
+    }
+    const entries = markerManager?.entries() ?? [];
+    persistedMarkerHistory = markerHistoryFromEntries(entries);
+    if (persistentMarkersEnabled || (!updated && !targetKey)) return;
+    const adapter = options.pdfMarkerPersistence;
+    if (!adapter?.isAvailable() || !storedPersistentMarkers.length) return;
+    const activeById = new Map(
+      entries.flatMap((entry) => {
+        const persisted = persistPdfTranslationMarker(entry);
+        return persisted ? [[persisted.markerId, persisted] as const] : [];
+      }),
+    );
+    let changed = false;
+    const nextStored = storedPersistentMarkers.map((stored) => {
+      const replacement = activeById.get(stored.markerId);
+      if (replacement) {
+        changed ||= (
+          replacement.content.originalText !== stored.content.originalText ||
+          replacement.content.translatedText !== stored.content.translatedText
+        );
+        return replacement;
+      }
+      const storedRootRequestId = stored.markerId.replace(
+        /::(?:full|segment:[^:]+)$/u,
+        '',
+      );
+      if (storedRootRequestId === revision.rootRequestId) {
+        const segmentId = stored.markerId.match(/::segment:(.+)$/u)?.[1];
+        const segment = segmentId
+          ? result.alignedSegments?.find((candidate) => candidate.id === segmentId)
+          : undefined;
+        if (segmentId && !segment) return stored;
+        const originalText = segment?.originalText ?? result.originalText;
+        const translatedText = segment?.translatedText ?? result.translatedText;
+        changed ||= (
+          stored.content.originalText !== originalText ||
+          stored.content.translatedText !== translatedText
+        );
+        return {
+          ...stored,
+          content: { ...stored.content, originalText, translatedText },
+          createdAt: result.completedAt ?? stored.createdAt,
+        };
+      }
+      if (
+        targetKey &&
+        persistedPdfMarkerKey(stored.anchor, stored.content) === targetKey
+      ) {
+        changed ||= stored.content.translatedText !== result.translatedText;
+        return {
+          ...stored,
+          content: { ...stored.content, translatedText: result.translatedText },
+          createdAt: result.completedAt ?? stored.createdAt,
+        };
+      }
+      return stored;
+    });
+    if (!changed) return;
+    storedPersistentMarkers = nextStored;
+    const revisionNumber = persistenceRevision;
+    void enqueuePersistenceWrite(async () => {
+      if (revisionNumber !== persistenceRevision || !adapter.isAvailable()) return;
+      await adapter.save(nextStored);
+      persistentStoredMarkerCount = nextStored.length;
+    });
+  }
+
+  async function saveTranslationEdit(
+    result: TranslateResult,
+    translatedText: string,
+    scope: TranslationRevisionScope,
+  ): Promise<{ result: TranslateResult; history: TranslationHistoryEntry[] }> {
+    const requestId = crypto.randomUUID();
+    const rootRequestId = revisionRootRequestId(result);
+    carryRevisionAnchor(result, requestId);
+    const edited: TranslateResult = {
+      ...result,
+      requestId,
+      translatedText: translatedText.trim(),
+      completedAt: Date.now(),
+      cached: false,
+      latencyMs: 0,
+      revision: {
+        rootRequestId,
+        kind: 'manual',
+        label: '手动修改',
+        scope,
+      },
+    };
+    delete edited.alignedSegments;
+    const response = await browser.runtime.sendMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        ...documentLocatorForResult(result),
+        result: edited,
+        rememberForDocument: scope === 'document',
+      },
+    } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
+    if (!response.ok) {
+      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+    }
+    overlayHistory = response.data.history;
+    rememberResultRetryContext(response.data.result, retryContextForResult(result));
+    syncRevisionMarkers(response.data.result);
+    return {
+      result: response.data.result,
+      history: combinedOverlayHistory(),
+    };
+  }
+
+  async function adjustTranslation(
+    result: TranslateResult,
+    adjustment: TranslationAdjustmentRequest,
+  ): Promise<void> {
+    const text = result.originalText.trim();
+    if (!text) return;
+    const requestId = crypto.randomUUID();
+    carryRevisionAnchor(result, requestId);
+    const sourceContext = retryContextForResult(result);
+    const contextSnapshot = sourceContext?.kind === 'text'
+      ? sourceContext.snapshot
+      : undefined;
+    const activeBasis = activeSelection &&
+      activeSelection.normalizedText.trim() === text &&
+      (
+        activeSelection.requestId === result.requestId ||
+        activeSelection.requestId === revisionRootRequestId(result)
+      )
+      ? activeSelection
+      : undefined;
+    const basis = contextSnapshot?.normalizedText.trim() === text
+      ? contextSnapshot
+      : activeBasis;
+    const locator = documentLocatorForResult(result);
+    const resultRect = sourceContext?.kind === 'image'
+      ? sourceContext.capture.rect
+      : basis?.rect;
+    const snapshot: SelectionSnapshot = {
+      requestId,
+      sourceText: text,
+      normalizedText: text,
+      source: basis?.source ?? 'window-selection',
+      pageUrl: locator.pageUrl,
+      capturedAt: Date.now(),
+      selectionHash: `${requestId}:${text.length}`,
+      ...(basis?.contextText ? { contextText: basis.contextText } : {}),
+      ...(resultRect ? { rect: resultRect } : {}),
+    };
+    await translate(snapshot, true, {
+      ...(locator.sourceLabel ? { sourceLabel: locator.sourceLabel } : {}),
+      ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
+    }, revisionRequestForResult(result, adjustment));
+  }
+
   async function translate(
     snapshot: SelectionSnapshot,
     bypassCache = false,
-    metadata?: { sourceLabel?: string; sourceLocation?: PdfSourceLocation },
+    metadata?: TextTranslationMetadata,
+    revision?: TranslationRevisionRequest,
   ): Promise<void> {
     if (inFlightRequestId && inFlightRequestId !== snapshot.requestId) {
       const previousRequestId = inFlightRequestId;
@@ -976,12 +1343,17 @@ export async function startSelectionTranslator(
         payload: { requestId: previousRequestId },
       } satisfies RuntimeMessage).catch(() => undefined);
     }
-    const isRetry = activeSelection?.requestId === snapshot.requestId;
-    if (!isRetry) overlay.resetCardPosition();
+    if (!bypassCache) overlay.resetCardPosition();
     activeImageRegion = undefined;
     activePdfRegionLocation = metadata?.sourceLocation;
     activeTextMetadata = metadata;
     activeSelection = snapshot;
+    activeRetryContext = {
+      kind: 'text',
+      snapshot,
+      ...(metadata ? { metadata } : {}),
+      ...(revision ? { revision } : {}),
+    };
     inFlightRequestId = snapshot.requestId;
     completedEarlyRequestId = undefined;
     if (pendingSelectionMarkerRequestId === snapshot.requestId) {
@@ -1017,6 +1389,7 @@ export async function startSelectionTranslator(
           ...(requestContext ? { contextText: requestContext } : {}),
           ...(bypassCache ? { bypassCache: true } : {}),
           ...(metadata?.sourceLocation ? { sourceLocation: metadata.sourceLocation } : {}),
+          ...(revision ? { revision } : {}),
         },
       } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
 
@@ -1024,6 +1397,8 @@ export async function startSelectionTranslator(
       const alreadyRendered = completedEarlyRequestId === snapshot.requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        rememberResultRetryContext(response.data.result, activeRetryContext);
+        syncRevisionMarkers(response.data.result);
         const responseRequestId = response.data.result.requestId;
         const anchor = markerAnchors.get(snapshot.requestId);
         if (anchor && responseRequestId !== snapshot.requestId) {
@@ -1047,15 +1422,18 @@ export async function startSelectionTranslator(
         response.error.code,
         response.error.message,
       );
+      const recovery = translationErrorRecovery(
+        response.error.code,
+        response.error.retryable,
+        'text',
+      );
       overlay.showError(
         {
           message,
-          showSettings:
-            response.error.code === 'NO_API_KEY' ||
-            response.error.code === 'AUTH_FAILED' ||
-            response.error.code === 'PAYMENT_REQUIRED' ||
-            response.error.code === 'MODEL_NOT_FOUND' ||
-            response.error.code === 'API_PERMISSION_REQUIRED',
+          showSettings: Boolean(recovery.settingsFocus),
+          retryable: recovery.showRetry,
+          ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
+          ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
         },
         selectionRect(snapshot),
       );
@@ -1067,6 +1445,7 @@ export async function startSelectionTranslator(
         {
           message: runtimeConnectionErrorMessage(error),
           showSettings: false,
+          retryable: true,
         },
         selectionRect(snapshot),
       );
@@ -1097,7 +1476,7 @@ export async function startSelectionTranslator(
       const message = snapshot.source === 'window-selection'
         ? '检测到选区中包含公式，但没有成功获取 PDF 页面截图。为了避免破坏公式，本次没有降级到文字 API。请重新划选后重试，或使用“框选翻译”。'
         : '检测到选中内容包含公式，但右键菜单打开后无法安全获取原选区截图。请关闭菜单后重新划选并点击浮动按钮，或使用“框选翻译”。';
-      overlay.showError({ message, showSettings: false }, selectionRect(snapshot));
+      overlay.showError({ message, showSettings: false, retryable: false }, selectionRect(snapshot));
       return;
     }
     await translate(snapshot);
@@ -1106,6 +1485,7 @@ export async function startSelectionTranslator(
   async function translateImageRegion(
     capture: ImageRegionTranslationCapture,
     isRetry = false,
+    revision?: TranslationRevisionRequest,
   ): Promise<void> {
     const requestId = crypto.randomUUID();
     if (inFlightRequestId) {
@@ -1120,6 +1500,11 @@ export async function startSelectionTranslator(
     activeImageRegion = capture;
     activePdfRegionLocation = capture.selectionReference;
     activeTextMetadata = undefined;
+    activeRetryContext = {
+      kind: 'image',
+      capture,
+      ...(revision ? { revision } : {}),
+    };
     inFlightRequestId = requestId;
     completedEarlyRequestId = undefined;
     if (capture.selectionReference) {
@@ -1148,12 +1533,15 @@ export async function startSelectionTranslator(
           ...(capture.selectionReference
             ? { sourceLocation: capture.selectionReference }
             : {}),
+          ...(revision ? { revision } : {}),
         },
       } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
       if (inFlightRequestId !== requestId && completedEarlyRequestId !== requestId) return;
       const alreadyRendered = completedEarlyRequestId === requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        rememberResultRetryContext(response.data.result, activeRetryContext);
+        syncRevisionMarkers(response.data.result);
         overlayHistory = response.data.history;
         if (alreadyRendered) {
           overlay.updateHistory(combinedOverlayHistory());
@@ -1168,17 +1556,18 @@ export async function startSelectionTranslator(
         );
         return;
       }
+      const recovery = translationErrorRecovery(
+        response.error.code,
+        response.error.retryable,
+        'vision',
+      );
       overlay.showError(
         {
           message: translationErrorMessage(response.error.code, response.error.message),
-          showSettings:
-            response.error.code === 'NO_API_KEY' ||
-            response.error.code === 'AUTH_FAILED' ||
-            response.error.code === 'PAYMENT_REQUIRED' ||
-            response.error.code === 'MODEL_NOT_FOUND' ||
-            response.error.code === 'API_PERMISSION_REQUIRED' ||
-            response.error.code === 'VISION_NOT_CONFIGURED' ||
-            response.error.code === 'VISION_MODEL_UNSUPPORTED',
+          showSettings: Boolean(recovery.settingsFocus),
+          retryable: recovery.showRetry,
+          ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
+          ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
         },
         capture.rect,
       );
@@ -1187,7 +1576,7 @@ export async function startSelectionTranslator(
       if (completedEarlyRequestId === requestId) return;
       inFlightRequestId = undefined;
       overlay.showError(
-        { message: runtimeConnectionErrorMessage(error), showSettings: false },
+        { message: runtimeConnectionErrorMessage(error), showSettings: false, retryable: true },
         capture.rect,
       );
     }
@@ -1219,6 +1608,8 @@ export async function startSelectionTranslator(
       if (typed.payload.requestId === inFlightRequestId) {
         if (typed.payload.result) {
           const result = typed.payload.result;
+          rememberResultRetryContext(result, activeRetryContext);
+          syncRevisionMarkers(result);
           const snapshot = activeSelection;
           const anchor = markerAnchors.get(typed.payload.requestId);
           if (anchor && result.requestId !== typed.payload.requestId) {
@@ -1271,9 +1662,7 @@ export async function startSelectionTranslator(
       } else {
         cancelActiveTranslation();
         overlay.hide();
-        void browser.runtime.sendMessage({
-          type: 'OPEN_OPTIONS_PAGE',
-        } satisfies RuntimeMessage);
+        void openSettingsPage().then((opened)=>{if(!opened)overlay.showError({message:'无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。',showSettings:false,retryable:false})});
       }
     }
     if (typed.type === 'CONTEXT_MENU_TRANSLATE') {
@@ -1328,6 +1717,8 @@ export async function startSelectionTranslator(
     segmentMarkerAnchors.clear();
     pendingSelectionMarkerRequestId = undefined;
     activeImageRegion = undefined;
+    activeRetryContext = undefined;
+    resultRetryContexts.clear();
   });
 
   return {
@@ -1354,6 +1745,8 @@ export async function startSelectionTranslator(
       latestSelection = undefined;
       activePdfRegionLocation = undefined;
       activeTextMetadata = undefined;
+      activeRetryContext = undefined;
+      resultRetryContexts.clear();
       overlayHistory = [];
       persistedMarkerHistory = [];
       markerManager?.clear();

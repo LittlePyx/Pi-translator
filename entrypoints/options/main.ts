@@ -38,6 +38,7 @@ import type {
 } from '../../core/settings/schema';
 import { getAutoInjectionPatterns, normalizeSiteAllowlist } from '../../core/settings/site-access';
 import { normalizePdfRegionShortcutKey } from '../../core/pdf/region-shortcuts';
+import { supportsQwenCoordinateOcr } from '../../core/pdf/qwen-endpoint';
 import { formatGlossaryEntries, parseGlossaryText } from '../../core/translation/glossary';
 import type { TranslationStyle } from '../../core/translation/types';
 
@@ -158,9 +159,7 @@ function currentProfile():ApiProfile|undefined{return profiles.find(profile=>pro
 function activeTextProfile():ApiProfile|undefined{return profiles.find(profile=>profile.id===activeTextProfileId)}
 function officialQwenPreset(){return API_PRESETS.find(preset=>preset.id==='qwen')}
 function isOfficialQwenProfile(profile:ApiProfile|undefined):boolean{
-  const preset=officialQwenPreset();
-  if(!profile||!preset)return false;
-  try{return normalizeApiBaseUrl(profile.apiBaseUrl)===normalizeApiBaseUrl(preset.apiBaseUrl)}catch{return false}
+  return Boolean(profile&&supportsQwenCoordinateOcr(profile.apiBaseUrl));
 }
 function setDirty():void{formDirty=true;saveState.textContent='有未保存的更改';saveState.classList.add('unsaved')}
 function setSaved():void{formDirty=false;nonConnectionDirty=false;saveState.textContent='所有设置已保存';saveState.classList.remove('unsaved')}
@@ -201,6 +200,7 @@ async function finishOnboarding():Promise<void>{
   onboardingApiKey.value='';
   onboardingDialog.close();
   await load();
+  if(requestedFocusDeferred)await applyRequestedSettingsFocus();
   setStatus(visionSupported
     ? `首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`
     : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
@@ -392,7 +392,8 @@ window.addEventListener('beforeunload',event=>{if(!formDirty)return;event.preven
 
 onboardingPreset.addEventListener('change',applyOnboardingPreset);
 onboardingBack.addEventListener('click',()=>showOnboardingStep(onboardingStep-1));
-onboardingSkip.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();await saveSettings({...settings,onboardingCompleted:true});onboardingDialog.close();await load();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
+onboardingSkip.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();await saveSettings({...settings,onboardingCompleted:true});onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
+onboardingDialog.addEventListener('cancel',()=>{setTimeout(()=>{if(requestedFocusDeferred)void applyRequestedSettingsFocus()},0)});
 onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingStep===1){showOnboardingStep(2);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在验证 Key 并读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingAvailableModels=response.data.models;onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?`连接成功，已自动推荐文字模型 ${onboardingModel.value}；下一步会检测图片输入能力。`:'Key 验证成功，但接口未返回模型列表，请手动填写模型 ID。'}else{onboardingAvailableModels=[];message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步核对并手动填写模型。`;error=true}showOnboardingStep(3);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
 
 apiBaseUrl.addEventListener('input',()=>{apiPreset.value='custom';connectionAdvanced.open=true;connectionSummary.hidden=true;refreshProviderHint();void refreshApiPermissionState()});generalPageMode.addEventListener('change',refreshPageModeFields);
@@ -562,4 +563,37 @@ exportSettingsButton.addEventListener('click',()=>{void(async()=>{const settings
 importSettingsButton.addEventListener('click',()=>importSettingsFile.click());
 importSettingsFile.addEventListener('change',()=>{const file=importSettingsFile.files?.[0];if(!file)return;void(async()=>{const current=await getSettings();const next=importSettingsConfiguration(await file.text(),current);await clearApiKey();await saveSettings(next);await load();setSupportStatus('配置已导入。出于安全考虑，所有 API Key 已清除；请重新填写 Key 并保存以授权接口域名。')})().catch((error:unknown)=>setSupportStatus(error instanceof Error?error.message:'导入配置失败。',true)).finally(()=>{importSettingsFile.value=''})});
 copyDiagnosticReportButton.addEventListener('click',()=>{void(async()=>{const response=await browser.runtime.sendMessage({type:'GET_LOCAL_DIAGNOSTIC_REPORT'} satisfies RuntimeMessage) as LocalDiagnosticReportResponse;if(!response.ok)throw new Error(response.error.message);await navigator.clipboard.writeText(response.data.report);setSupportStatus('诊断报告已复制；不包含 API Key、选区、译文或网站名称。')})().catch(()=>setSupportStatus('复制诊断报告失败，请检查剪贴板权限。',true))});
-void load().catch(()=>setStatus('读取设置失败，请重新加载页面。',true));
+let requestedFocusDeferred=false;
+async function applyRequestedSettingsFocus():Promise<void>{
+  if(onboardingDialog.open){requestedFocusDeferred=true;return}
+  requestedFocusDeferred=false;
+  const focus=new URLSearchParams(location.search).get('focus');
+  if(focus==='vision-ocr'){
+    showSettingsSection('connection');visionSetupDetails.open=true;setupQwenButton.scrollIntoView({block:'center'});queueMicrotask(()=>setupQwenButton.focus());return;
+  }
+  if(focus==='vision'||focus==='vision-model'||focus==='vision-permission'){
+    showSettingsSection('connection');visionSetupDetails.open=true;
+    if(visionProfileId&&profiles.some(profile=>profile.id===visionProfileId)){
+      if(currentProfileId!==visionProfileId)await loadProfile(visionProfileId);
+      const target=focus==='vision-model'
+        ? visionModel
+        : focus==='vision-permission'
+          ? testVisionCapabilityButton
+          : apiKeyInput;
+      target.scrollIntoView({block:'center'});queueMicrotask(()=>target.focus());return;
+    }
+    visionSetupDetails.scrollIntoView({block:'center'});queueMicrotask(()=>setupQwenButton.focus());return;
+  }
+  if(focus==='support'){
+    showSettingsSection('support');const disclosure=copyDiagnosticReportButton.closest<HTMLDetailsElement>('details');if(disclosure)disclosure.open=true;copyDiagnosticReportButton.scrollIntoView({block:'center'});queueMicrotask(()=>copyDiagnosticReportButton.focus());return;
+  }
+  if(focus==='api'||focus==='api-model'||focus==='api-permission'){
+    const target=focus==='api-model'
+      ? modelInput
+      : focus==='api-permission'
+        ? testButton
+        : apiKeyInput;
+    showSettingsSection('connection');queueMicrotask(()=>{target.scrollIntoView({block:'center'});target.focus()});
+  }
+}
+void load().then(()=>applyRequestedSettingsFocus()).catch(()=>setStatus('读取设置失败，请重新加载页面。',true));

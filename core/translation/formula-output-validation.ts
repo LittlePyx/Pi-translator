@@ -23,9 +23,11 @@ function normalizeFormula(value: string): string {
 
 function extractDelimitedFormulae(text: string): {
   formulae: string[];
+  snippets: string[];
   balanced: boolean;
 } {
   const formulae: string[] = [];
+  const snippets: string[] = [];
   let balanced = true;
   for (let index = 0; index < text.length;) {
     if (text.startsWith('\\[', index) || text.startsWith('\\(', index)) {
@@ -37,6 +39,7 @@ function extractDelimitedFormulae(text: string): {
         break;
       }
       formulae.push(text.slice(index + 2, end));
+      snippets.push(text.slice(index, end + 2));
       index = end + 2;
       continue;
     }
@@ -61,12 +64,45 @@ function extractDelimitedFormulae(text: string): {
         break;
       }
       formulae.push(text.slice(index + delimiter.length, end));
+      snippets.push(text.slice(index, end + delimiter.length));
       index = end + delimiter.length;
       continue;
     }
     index += 1;
   }
-  return { formulae, balanced };
+  return { formulae, snippets, balanced };
+}
+
+function appendRecognizedFormulaSnippets(text: string, snippets: string[]): string {
+  return snippets.reduce((output, snippet) => {
+    const display = snippet.startsWith('\\[') || snippet.startsWith('$$');
+    return `${output}${display ? '\n' : ' '}${snippet}`;
+  }, text.trimEnd());
+}
+
+function isSafeTrailingDisplayFormulaOmission(
+  recognizedText: string,
+  translatedText: string,
+  formulae: string[],
+  snippets: string[],
+): boolean {
+  if (formulae.length !== 1 || snippets.length !== 1) return false;
+  const [formula] = formulae;
+  const [snippet] = snippets;
+  if (!formula || !snippet || !(snippet.startsWith('\\[') || snippet.startsWith('$$'))) {
+    return false;
+  }
+  const trimmedSource = recognizedText.trimEnd();
+  const snippetIndex = trimmedSource.lastIndexOf(snippet);
+  if (snippetIndex < 0 || snippetIndex + snippet.length !== trimmedSource.length) return false;
+  const before = trimmedSource.slice(0, snippetIndex);
+  if (before && !/\n[\t ]*$/u.test(before)) return false;
+
+  // Do not append a second copy when the provider rendered the formula as
+  // plain characters but forgot only the TeX delimiters.
+  const compactFormula = normalizeFormula(formula).replaceAll(/\s+/gu, '');
+  const compactTranslation = normalizeFormula(translatedText).replaceAll(/\s+/gu, '');
+  return compactFormula.length >= 2 && !compactTranslation.includes(compactFormula);
 }
 
 function replaceDelimitedFormulae(text: string, replacements: string[]): string | undefined {
@@ -423,6 +459,31 @@ export function reconcileImageFormulaResult(
   const repaired = repairImageFormulaResult(result);
   const recognized = extractDelimitedFormulae(repaired.recognizedText);
   const translated = extractDelimitedFormulae(repaired.translatedText);
+  const recognizedFormulaeAreSafe = (
+    recognized.balanced &&
+    recognized.formulae.length > 0 &&
+    recognized.formulae.every((formula) => structuralIssues(formula).length === 0)
+  );
+  if (
+    recognizedFormulaeAreSafe &&
+    translated.balanced &&
+    translated.formulae.length === 0 &&
+    isSafeTrailingDisplayFormulaOmission(
+      repaired.recognizedText,
+      repaired.translatedText,
+      recognized.formulae,
+      recognized.snippets,
+    )
+  ) {
+    return {
+      ...repaired,
+      translatedText: appendRecognizedFormulaSnippets(
+        repaired.translatedText,
+        recognized.snippets,
+      ),
+      formulaLatex: recognized.formulae.map((formula) => formula.trim()),
+    };
+  }
   if (
     !recognized.balanced ||
     !translated.balanced ||

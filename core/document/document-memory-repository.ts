@@ -30,6 +30,8 @@ export interface DocumentTermCandidate extends GlossaryEntry {
 export interface DocumentMemoryTranslation {
   id: string;
   requestId: string;
+  /** Stable lineage for replacing an earlier OCR/translation revision. */
+  rootRequestId?: string;
   originalText: string;
   translatedText: string;
   completedAt: number;
@@ -193,6 +195,7 @@ export async function rememberDocumentTranslation(
     const entry: DocumentMemoryTranslation = {
       id: stableId('translation', `${result.requestId}:${result.originalText}`),
       requestId: result.requestId,
+      rootRequestId: result.revision?.rootRequestId ?? result.requestId,
       originalText: compactText(result.originalText),
       translatedText: compactText(result.translatedText),
       completedAt: result.completedAt ?? now,
@@ -223,7 +226,11 @@ export async function rememberDocumentTranslation(
       recentTranslations: [
         entry,
         ...memory.recentTranslations.filter(
-          (previous) => normalizedTerm(previous.originalText) !== normalizedTerm(entry.originalText),
+          (previous) => (
+            normalizedTerm(previous.originalText) !== normalizedTerm(entry.originalText) &&
+            previous.requestId !== entry.rootRequestId &&
+            previous.rootRequestId !== entry.rootRequestId
+          ),
         ),
       ].slice(0, MAX_TRANSLATIONS),
     };

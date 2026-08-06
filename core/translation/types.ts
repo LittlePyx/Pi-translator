@@ -27,6 +27,36 @@ export interface TranslateRequest {
   contextText?: string;
   bypassCache?: boolean;
   sourceLocation?: PdfSourceLocation;
+  revision?: TranslationRevisionRequest;
+}
+
+export type TranslationRevisionKind =
+  | 'faithful'
+  | 'natural'
+  | 'terminology-formula'
+  | 'custom'
+  | 'manual';
+
+export interface TranslationRevisionRequest {
+  rootRequestId: string;
+  kind: Exclude<TranslationRevisionKind, 'manual'>;
+  label: string;
+  instruction: string;
+  previousTranslation?: string;
+  scope?: TranslationRevisionScope;
+  sourceKind?: 'text' | 'pdf-region-text' | 'image-region';
+  formulaLatex?: string[];
+  uncertainSpans?: string[];
+  formulaNeedsReview?: boolean;
+}
+
+export type TranslationRevisionScope = 'current' | 'document';
+
+export interface TranslationRevision {
+  rootRequestId: string;
+  kind: TranslationRevisionKind;
+  label: string;
+  scope?: TranslationRevisionScope;
 }
 
 export interface TranslateImageRegionRequest {
@@ -42,6 +72,7 @@ export interface TranslateImageRegionRequest {
   style: TranslationStyle;
   bypassCache?: boolean;
   sourceLocation?: PdfSourceLocation;
+  revision?: TranslationRevisionRequest;
 }
 
 export type TranslationWarningCode =
@@ -56,6 +87,8 @@ export interface TranslationWarning {
 
 export interface TranslateResult {
   requestId: string;
+  /** Stable local-only identity used to keep later revisions attached to the source document. */
+  documentId?: string;
   originalText: string;
   translatedText: string;
   detectedLanguage?: string;
@@ -75,6 +108,7 @@ export interface TranslateResult {
   formulaLatex?: string[];
   formulaNeedsReview?: boolean;
   termCandidates?: GlossaryEntry[];
+  revision?: TranslationRevision;
 }
 
 export interface ProviderImageTranslationResult {
@@ -139,6 +173,8 @@ export interface PreparedTranslationInput {
   segments?: Array<{ id: string; text: string }>;
   contextText?: string;
   strictPlaceholderPreservation?: boolean;
+  adjustmentInstruction?: string;
+  previousTranslation?: string;
 }
 
 export interface TranslationCallbacks {

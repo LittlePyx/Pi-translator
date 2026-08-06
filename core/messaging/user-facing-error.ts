@@ -1,5 +1,22 @@
 import type { TranslationErrorCode } from './errors';
 
+export type SettingsFocus =
+  | 'api'
+  | 'api-model'
+  | 'api-permission'
+  | 'vision'
+  | 'vision-model'
+  | 'vision-permission'
+  | 'vision-ocr'
+  | 'support';
+export type TranslationProviderRole = 'text' | 'vision';
+
+export interface TranslationErrorRecovery {
+  showRetry: boolean;
+  settingsFocus?: SettingsFocus;
+  settingsLabel?: string;
+}
+
 const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   EMPTY_SELECTION: '请先选中需要翻译的文本。',
   SELECTION_TOO_LONG: '选中的文本过长，请缩小选择范围。',
@@ -57,4 +74,77 @@ export function runtimeConnectionErrorMessage(error: unknown): string {
     return '扩展后台已重启，请重新触发翻译。';
   }
   return '无法连接扩展后台，请刷新网页；若仍失败，请在扩展管理页重新加载 Pi Translator。';
+}
+
+export function translationErrorRecovery(
+  code: TranslationErrorCode,
+  retryable: boolean,
+  role: TranslationProviderRole = 'text',
+): TranslationErrorRecovery {
+  const providerSettings: { settingsFocus: SettingsFocus; settingsLabel: string } =
+    role === 'vision'
+      ? { settingsFocus: 'vision', settingsLabel: '检查图像 API' }
+      : { settingsFocus: 'api', settingsLabel: '检查 API 配置' };
+  if (code === 'NO_API_KEY') {
+    return {
+      showRetry: true,
+      settingsFocus: providerSettings.settingsFocus,
+      settingsLabel: role === 'vision' ? '配置图像 API' : '配置 API',
+    };
+  }
+  if (code === 'API_PERMISSION_REQUIRED') {
+    return {
+      showRetry: true,
+      settingsFocus: role === 'vision' ? 'vision-permission' : 'api-permission',
+      settingsLabel: '重新授权 API',
+    };
+  }
+  if (code === 'MODEL_NOT_FOUND') {
+    return {
+      showRetry: true,
+      settingsFocus: role === 'vision' ? 'vision-model' : 'api-model',
+      settingsLabel: '检查模型',
+    };
+  }
+  if (['AUTH_FAILED', 'PAYMENT_REQUIRED'].includes(code)) {
+    return { showRetry: true, ...providerSettings };
+  }
+  if (code === 'VISION_NOT_CONFIGURED') {
+    return { showRetry: true, settingsFocus: 'vision', settingsLabel: '配置 PDF 图像' };
+  }
+  if (code === 'OCR_NOT_SUPPORTED') {
+    return { showRetry: true, settingsFocus: 'vision-ocr', settingsLabel: '配置 Qwen OCR' };
+  }
+  if (code === 'VISION_MODEL_UNSUPPORTED') {
+    return { showRetry: true, settingsFocus: 'vision-model', settingsLabel: '检查视觉模型' };
+  }
+  if (['PROVIDER_ERROR', 'INVALID_RESPONSE', 'EMPTY_RESPONSE'].includes(code)) {
+    return {
+      // Provider-level automatic retryability and a user explicitly trying
+      // again are different decisions. A fresh request can recover from a
+      // malformed/empty generation even when the provider retry loop stopped.
+      showRetry: true,
+      ...providerSettings,
+    };
+  }
+  if (['REQUEST_TIMEOUT', 'NETWORK_ERROR'].includes(code)) {
+    return { showRetry: true, ...providerSettings };
+  }
+  if ([
+    'RATE_LIMITED',
+    'LATEX_VALIDATION_FAILED',
+    'OCR_INVALID_RESPONSE',
+  ].includes(code)) {
+    return { showRetry: true };
+  }
+  if (code === 'IMAGE_REGION_INVALID') {
+    return { showRetry: false };
+  }
+  if (['EMPTY_SELECTION', 'UNSUPPORTED_PAGE', 'REQUEST_ABORTED'].includes(code)) {
+    return { showRetry: false };
+  }
+  if (code === 'UNKNOWN_ERROR') {
+    return { showRetry: true, settingsFocus: 'support', settingsLabel: '查看诊断' };
+  }
+  return { showRetry: retryable };
 }

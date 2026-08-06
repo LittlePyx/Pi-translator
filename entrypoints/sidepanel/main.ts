@@ -3,7 +3,11 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
 } from '../../core/messaging/messages';
-import { translationErrorMessage } from '../../core/messaging/user-facing-error';
+import {
+  translationErrorMessage,
+  translationErrorRecovery,
+  type SettingsFocus,
+} from '../../core/messaging/user-facing-error';
 import {
   edgePdfSourceUrl,
   parsePdfSourceUrl,
@@ -189,7 +193,9 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   sourceText.textContent = presentationText(session, session.sourceText);
   const pdfSource = parsePdfSourceUrl(session.pageUrl);
   const pageNumber = session.pageNumber ?? pdfInitialPage(session.pageUrl);
-  readerHintText.textContent = pdfSource
+  readerHintText.textContent = session.providerContext?.role === 'vision'
+    ? `Edge 原生阅读器未提供选区图像；本次只传递选中文字。复杂公式可用 Pi 打开后截图识别${pageNumber ? `，并定位到第 ${pageNumber} 页` : ''}。`
+    : pdfSource
     ? pageNumber
       ? `将直接继承当前 PDF，并定位到第 ${pageNumber} 页。`
       : '将直接继承当前 PDF，并在打开后收起此侧边栏。'
@@ -201,6 +207,9 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   const isTranslating = session.status === 'translating';
   progressTrack.hidden = !isTranslating;
   errorActions.hidden = session.status !== 'error';
+  retry.hidden = false;
+  errorSettings.hidden = false;
+  errorSettings.textContent = '检查设置';
   copy.disabled = session.status !== 'complete' || !session.result?.translatedText;
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle('error', session.status === 'error');
@@ -228,6 +237,16 @@ function render(session: PdfSidePanelSession | null | undefined): void {
       exactPdfMessage && session.error.message
         ? session.error.message
         : translationErrorMessage(session.error.code, session.error.message);
+    const recovery = translationErrorRecovery(
+      session.error.code,
+      session.error.retryable,
+      session.providerContext?.role ?? 'text',
+    );
+    retry.hidden = !recovery.showRetry;
+    errorSettings.hidden = !recovery.settingsFocus;
+    errorSettings.textContent = recovery.settingsLabel ?? '检查设置';
+    errorSettings.dataset.settingsFocus = recovery.settingsFocus ?? '';
+    errorActions.hidden = !recovery.showRetry && !recovery.settingsFocus;
     const providerContext = providerErrorContext(session);
     translationText.textContent = providerContext
       ? `${message}\n\n${providerContext}`
@@ -292,12 +311,21 @@ function activeSession(): PdfSidePanelSession | undefined {
   return undefined;
 }
 
-function openFullSettings(): void {
-  void browser.runtime.sendMessage({ type: 'OPEN_OPTIONS_PAGE' } satisfies RuntimeMessage);
+function openFullSettings(focus?: SettingsFocus): void {
+  void (async () => {
+    const response = await browser.runtime.sendMessage({
+      type: 'OPEN_OPTIONS_PAGE',
+      ...(focus ? { payload: { focus } } : {}),
+    } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
+    if (!response.ok) setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置');
+  })().catch(() => setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置'));
 }
 
-openSettings.addEventListener('click', openFullSettings);
-errorSettings.addEventListener('click', openFullSettings);
+openSettings.addEventListener('click', () => openFullSettings());
+errorSettings.addEventListener('click', () => {
+  const focus = errorSettings.dataset.settingsFocus as SettingsFocus | undefined;
+  openFullSettings(focus || undefined);
+});
 formulaView.addEventListener('click', () => {
   if (!currentSession?.result?.translatedText) return;
   const rendered = formulaRenderOverride ?? autoRenderLatex;
