@@ -60,9 +60,30 @@ function renderTranslationText(text: string, renderLatex: boolean): void {
 }
 
 function presentationText(session: PdfSidePanelSession, text: string): string {
-  return session.result?.sourceKind === 'image-region'
+  return session.result?.sourceKind === 'image-region' || session.providerContext?.role === 'vision'
     ? normalizeVisionLatexText(text)
     : text;
+}
+
+function providerErrorContext(session: PdfSidePanelSession): string | undefined {
+  const context = session.providerContext;
+  const providerError = session.error && [
+    'NO_API_KEY',
+    'API_PERMISSION_REQUIRED',
+    'AUTH_FAILED',
+    'PAYMENT_REQUIRED',
+    'MODEL_NOT_FOUND',
+    'RATE_LIMITED',
+    'REQUEST_TIMEOUT',
+    'NETWORK_ERROR',
+    'PROVIDER_ERROR',
+    'EMPTY_RESPONSE',
+    'INVALID_RESPONSE',
+    'LATEX_VALIDATION_FAILED',
+  ].includes(session.error.code);
+  if (!context || !providerError) return undefined;
+  const role = context.role === 'vision' ? 'PDF 公式 API' : '文字 API';
+  return `本次使用：${role}「${context.profileName}」 · ${context.model}`;
 }
 
 function setStatus(message: string): void {
@@ -203,10 +224,14 @@ function render(session: PdfSidePanelSession | null | undefined): void {
       'REQUEST_ABORTED',
       'UNSUPPORTED_PAGE',
     ].includes(session.error.code);
-    translationText.textContent =
+    const message =
       exactPdfMessage && session.error.message
         ? session.error.message
         : translationErrorMessage(session.error.code, session.error.message);
+    const providerContext = providerErrorContext(session);
+    translationText.textContent = providerContext
+      ? `${message}\n\n${providerContext}`
+      : message;
     return;
   }
 

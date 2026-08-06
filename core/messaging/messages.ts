@@ -73,6 +73,11 @@ export interface PdfSidePanelSession {
   partialText?: string;
   completedChunks?: number;
   totalChunks?: number;
+  providerContext?: {
+    role: 'text' | 'vision';
+    profileName: string;
+    model: string;
+  };
   result?: TranslateResult;
   error?: {
     code: TranslationErrorCode;

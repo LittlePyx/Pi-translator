@@ -149,6 +149,15 @@ export function mapHttpError(
   retryAfter: string | null,
   providerMessage?: string,
 ): TranslationError {
+  const providerDetails = providerMessage ?? '';
+  const explicitlyInvalidCredentials =
+    /(?:(?:api[\s_-]*key|(?:access[\s_-]*|bearer[\s_-]*)?token|credential)s?).{0,32}(?:invalid|not valid|incorrect|bad|expired|revoked|malformed|missing)|(?:invalid|not valid|incorrect|bad|expired|revoked|malformed|missing).{0,32}(?:(?:api[\s_-]*key|(?:access[\s_-]*|bearer[\s_-]*)?token|credential)s?)|authentication.{0,24}(?:failed|required|invalid)|(?:身份验证|认证).{0,16}(?:失败|无效|过期)|(?:API[\s_-]*Key|令牌|凭证).{0,16}(?:无效|错误|过期|撤销|缺失)/i.test(
+      providerDetails,
+    );
+  const modelAccessDenied =
+    /(?:model|deployment).{0,64}(?:not (?:found|available|allowed|authorized|enabled|included)|unavailable|does not exist|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan)|(?:not (?:allowed|authorized|enabled|included)|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan).{0,64}(?:model|deployment)|(?:access|permission).{0,32}(?:to|for).{0,16}(?:the )?(?:requested )?(?:model|deployment)|(?:模型|部署).{0,32}(?:无权限|未授权|不可用|不存在|未开通|无权访问)/i.test(
+      providerDetails,
+    );
   if (
     status === 429 &&
     /insufficient[_\s-]*(?:quota|balance|credit)|exceeded.{0,40}(?:current|monthly|spend).{0,40}(?:quota|limit)|(?:quota|credits?).{0,24}(?:exhausted|depleted|run out)|run out of credits|billing|payment required|maximum monthly spend/i.test(
@@ -205,7 +214,7 @@ export function mapHttpError(
       status,
     );
   }
-  if (status === 401 || status === 403) {
+  if (status === 401 || (status === 403 && explicitlyInvalidCredentials)) {
     return new TranslationError(
       'AUTH_FAILED',
       providerMessage ? `The API rejected the credentials: ${providerMessage}` : 'The API rejected the credentials.',
@@ -228,8 +237,11 @@ export function mapHttpError(
     );
   }
   if (
-    (status === 400 || status === 404 || status === 422) &&
-    /model|deployment|模型/i.test(providerMessage ?? '')
+    (
+      (status === 400 || status === 404 || status === 422) &&
+      /model|deployment|模型/i.test(providerDetails)
+    ) ||
+    (status === 403 && modelAccessDenied)
   ) {
     return new TranslationError(
       'MODEL_NOT_FOUND',

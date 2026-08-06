@@ -163,20 +163,44 @@ describe('vision formula output validation', () => {
     expect(normalizeVisionLatexText(source)).toBe(source);
   });
 
-  it('repairs a missing optimization lower-limit marker only for a clear domain', () => {
-    const source = String.raw`\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}`;
-    expect(repairCommonVisionLatex(source)).toBe(
+  it.each([
+    [
+      String.raw`\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}`,
       String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}`,
-    );
+    ],
+    [
+      String.raw`\operatorname{argmin}P\in P(V,\Omega)\left\{KL(P\|Q)\right\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in P(V,\Omega)}\left\{KL(P\|Q)\right\}`,
+    ],
+    [
+      String.raw`\mathrm{arg\,min} P\in\mathcal P(V,\Omega)\bigl\{F(P)\bigr\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}\bigl\{F(P)\bigr\}`,
+    ],
+    [
+      String.raw`\text{argmax}x∈\mathbb{R}\{f(x)\}`,
+      String.raw`\operatorname*{arg\,max}_{x∈\mathbb{R}}\{f(x)\}`,
+    ],
+    [
+      String.raw`argmin P\in\mathcal{P}(V,\Omega) \{F(P)\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} \{F(P)\}`,
+    ],
+  ])('repairs a missing optimization lower limit in %s', (source, expected) => {
+    expect(repairCommonVisionLatex(source)).toBe(expected);
   });
 
   it('preserves an existing optimization lower limit and an ambiguous expression', () => {
     const correct = String.raw`\arg\min_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
     const canonical = String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const wrapped = String.raw`\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
     const ambiguous = String.raw`\arg\min P+Q`;
+    const missingObjective = String.raw`\operatorname{argmin}P\in\mathcal{P}(V,\Omega)`;
+    const prose = String.raw`margin P\in\mathcal{P}(V,\Omega)\{F(P)\}`;
     expect(repairCommonVisionLatex(correct)).toBe(canonical);
+    expect(repairCommonVisionLatex(wrapped)).toBe(canonical);
     expect(repairCommonVisionLatex(canonical)).toBe(canonical);
     expect(repairCommonVisionLatex(ambiguous)).toBe(ambiguous);
+    expect(repairCommonVisionLatex(missingObjective)).toBe(missingObjective);
+    expect(repairCommonVisionLatex(prose)).toBe(prose);
   });
 
   it('normalizes promoted numbered optimization formulae idempotently', () => {

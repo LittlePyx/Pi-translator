@@ -81,7 +81,7 @@ describe('LaTeX result display', () => {
   it('renders a promoted standalone optimizer with its limit underneath', () => {
     const normalized = normalizeVisionLatexText([
       'before',
-      String.raw`$\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}$ (8)`,
+      String.raw`$Q^{\Pi^*}=\operatorname{argmin}P\in P(V,\Omega)\left\{KL(P\|Q)\right\}$ (8)`,
       'after',
     ].join('\n'));
     const formula = splitLatexDisplaySegments(normalized).find(

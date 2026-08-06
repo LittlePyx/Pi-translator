@@ -255,33 +255,48 @@ function repairVisionRomanDifferential(formula: string): string {
 }
 
 function repairVisionOptimizationOperator(formula: string): string {
+  const operatorBody = String.raw`arg\s*(?:\\,\s*)?(min|max)`;
+  const wrappedOperator = String.raw`\\(?:operatorname\*?|mathrm|text)\s*\{\s*${operatorBody}\s*\}`;
+  const commandOperator = String.raw`\\arg\s*\\(min|max)`;
+  const mathAtom = String.raw`(?:[A-Za-z]|\\(?:boldsymbol|mathbf|mathbb|mathcal|mathrm)\s*\{[^{}]+\})`;
+  const atomScripts = String.raw`(?:\s*[_^]\s*(?:\{[^{}]+\}|[A-Za-z0-9]|\\[A-Za-z]+))*`;
+  const domain = String.raw`${mathAtom}${atomScripts}\s*(?:\\in|∈)\s*${mathAtom}${atomScripts}(?:\s*\([^()]*\))?`;
+  const objectiveBrace = String.raw`(?=\s*(?:\\(?:left|bigl|Bigl|biggl|Biggl|big|Big|bigg|Bigg)\s*)?(?:\\\{|\{))`;
+  const canonical = (kind: string, lowerLimit?: string): string =>
+    `\\operatorname*{arg\\,${kind}}${lowerLimit ? `_{${lowerLimit.trim()}}` : ''}`;
+
   const canonicalOperator = formula
     .replace(
-      /\\operatorname\*?\s*\{\s*arg\s*(min|max)\s*\}(?=\s*_)/gu,
-      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
+      new RegExp(`${wrappedOperator}(?=\\s*_)`, 'gu'),
+      (_match, kind: string) => canonical(kind),
     )
     .replace(
-      /\\mathrm\s*\{\s*arg\s*(min|max)\s*\}(?=\s*_)/gu,
-      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
-    )
-    .replace(
-      /\\arg\s*\\(min|max)(?=\s*_)/gu,
-      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
+      new RegExp(`${commandOperator}(?=\\s*_)`, 'gu'),
+      (_match, kind: string) => canonical(kind),
     )
     .replace(
       /(^|[^A-Za-z0-9\\])arg\s*(min|max)(?=\s*_)/gu,
       (_match, prefix: string, kind: string) =>
-        `${prefix}\\operatorname*{arg\\,${kind}}`,
+        `${prefix}${canonical(kind)}`,
     );
 
   // OCR occasionally drops only the `_ { ... }` around an optimization
   // domain. Repair the narrow, high-confidence shape where a membership
   // condition is immediately followed by the objective's visible left brace.
-  return canonicalOperator.replace(
-    /\\arg\s*\\(min|max)\s+(?![_^])((?:[A-Za-z]|\\(?:boldsymbol|mathbf|mathbb|mathcal)\s*\{[^{}]+\})\s*\\in\s*(?:[A-Za-z]|\\(?:mathcal|mathbb|mathbf|mathrm)\s*\{[^{}]+\})(?:\s*\([^()]*\))?)(?=\s*(?:\\left\s*)?(?:\\\{|\{))/gu,
-    (_match, kind: string, domain: string) =>
-      `\\operatorname*{arg\\,${kind}}_{${domain.trim()}}`,
-  );
+  return canonicalOperator
+    .replace(
+      new RegExp(`${wrappedOperator}(?!\\s*[_^])\\s*(${domain})${objectiveBrace}`, 'gu'),
+      (_match, kind: string, lowerLimit: string) => canonical(kind, lowerLimit),
+    )
+    .replace(
+      new RegExp(`${commandOperator}(?!\\s*[_^])\\s*(${domain})${objectiveBrace}`, 'gu'),
+      (_match, kind: string, lowerLimit: string) => canonical(kind, lowerLimit),
+    )
+    .replace(
+      new RegExp(`(^|[^A-Za-z0-9\\\\])arg\\s*(min|max)\\s+(?![_^])(${domain})${objectiveBrace}`, 'gu'),
+      (_match, prefix: string, kind: string, lowerLimit: string) =>
+        `${prefix}${canonical(kind, lowerLimit)}`,
+    );
 }
 
 /** Repairs a small set of deterministic pseudo-TeX forms emitted by OCR. */

@@ -78,6 +78,10 @@ import {
   shouldOpenEdgePdfSidePanelImmediately,
 } from '../core/pdf/source';
 import { normalizePdfSelectionText } from '../core/pdf/text-normalizer';
+import {
+  resolveNativePdfTranslationProvider,
+  type NativePdfTranslationProvider,
+} from '../core/pdf/native-translation-profile';
 import { recognizeQwenPdfPage } from '../core/pdf/qwen-coordinate-ocr';
 import type { RecognizePdfPageRequest } from '../core/pdf/ocr-text-layer';
 import { documentIdentity } from '../core/document/document-identity';
@@ -342,6 +346,25 @@ async function beginPdfSidePanelTranslation(
   if (!session || (expectedRequestId && session.requestId !== expectedRequestId)) return;
   try {
     const settings = await getSettings();
+    const visionApiKeyConfigured = settings.visionApiProfileId
+      ? Boolean(await getApiKey(settings.visionApiProfileId))
+      : false;
+    const provider = resolveNativePdfTranslationProvider(
+      settings,
+      session.sourceText,
+      visionApiKeyConfigured,
+    );
+    if (!provider) {
+      throw new TranslationError('NO_API_KEY', 'Configure a translation API profile first.');
+    }
+    const providerContext = {
+      role: provider.role,
+      profileName: provider.profileName,
+      model: provider.model,
+    } as const;
+    const pending = pdfSidePanelSessions.get(tabId);
+    if (pending?.requestId !== session.requestId) return;
+    publishPdfSidePanelSession({ ...pending, providerContext }, false);
     const response = await translate({
       requestId: session.requestId,
       text: normalizePdfSelectionText(session.sourceText),
@@ -351,7 +374,7 @@ async function beginPdfSidePanelTranslation(
       sourceLanguage: settings.sourceLanguage,
       style: settings.style,
       contentMode: settings.contentMode,
-    }, tabId);
+    }, tabId, 'tab', provider);
     const current = pdfSidePanelSessions.get(tabId);
     if (current?.requestId !== session.requestId) return;
     if (response.ok) {
@@ -692,6 +715,7 @@ function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ 
   delete nextSession.partialText;
   delete nextSession.result;
   delete nextSession.error;
+  delete nextSession.providerContext;
   publishPdfSidePanelSession(nextSession);
   void beginPdfSidePanelTranslation(tabId, nextSession.requestId);
   return Promise.resolve({ ok: true, data: { started: true } });
@@ -818,6 +842,7 @@ async function translate(
   request: TranslateRequest,
   tabId: number,
   progressTarget: TranslationProgressTarget = 'tab',
+  providerOverride?: NativePdfTranslationProvider,
 ): Promise<TranslateRuntimeResponse> {
   const text = request.text.trim();
   if (!text) {
@@ -833,6 +858,23 @@ async function translate(
   try {
     const settings = await getSettings();
     assertActiveRequest(tabId, request.requestId, controller);
+    const provider = providerOverride ?? (() => {
+      const profile = settings.apiProfiles.find(
+        (candidate) => candidate.id === settings.activeApiProfileId,
+      ) ?? settings.apiProfiles[0];
+      return profile
+        ? {
+            profileId: profile.id,
+            profileName: profile.name,
+            apiBaseUrl: profile.apiBaseUrl,
+            model: profile.model,
+            role: 'text' as const,
+          }
+        : undefined;
+    })();
+    if (!provider) {
+      throw new TranslationError('NO_API_KEY', 'Configure a translation API profile first.');
+    }
     const identity = documentIdentity(request);
     const documentMemory = await getDocumentMemory(identity);
     assertActiveRequest(tabId, request.requestId, controller);
@@ -846,8 +888,8 @@ async function translate(
       ? { ...request, contextText }
       : request;
     const cacheKey = translationCacheKey(effectiveRequest, {
-      apiBaseUrl: settings.apiBaseUrl,
-      model: settings.model,
+      apiBaseUrl: provider.apiBaseUrl,
+      model: provider.model,
       glossary,
     });
     const chunks = splitLongTranslationText(text);
@@ -885,12 +927,12 @@ async function translate(
       }
     }
 
-    const apiKey = await getApiKey(settings.activeApiProfileId);
+    const apiKey = await getApiKey(provider.profileId);
     assertActiveRequest(tabId, request.requestId, controller);
     if (!apiKey) {
       throw new TranslationError('NO_API_KEY', 'Configure an API Key first.');
     }
-    const apiPermission = apiOriginPattern(settings.apiBaseUrl);
+    const apiPermission = apiOriginPattern(provider.apiBaseUrl);
     const permissionGranted = await browser.permissions.contains({ origins: [apiPermission] });
     assertActiveRequest(tabId, request.requestId, controller);
     if (!permissionGranted) {
@@ -994,13 +1036,13 @@ async function translate(
         translator,
         preparedInput,
         {
-          model: settings.model,
+          model: provider.model,
           sourceLanguage: request.sourceLanguage,
           targetLanguage: request.targetLanguage,
           style: request.style,
           glossary,
         },
-        { apiKey, apiBaseUrl: settings.apiBaseUrl },
+        { apiKey, apiBaseUrl: provider.apiBaseUrl },
         controller.signal,
         protectedLatex,
         callbacks,

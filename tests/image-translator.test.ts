@@ -148,6 +148,30 @@ describe('image region translator', () => {
 
   it('distinguishes credentials, balance, and non-vision model failures', () => {
     expect(mapHttpError(401, null, 'Invalid API key')).toMatchObject({ code: 'AUTH_FAILED' });
+    expect(mapHttpError(401, null, 'Unauthorized')).toMatchObject({ code: 'AUTH_FAILED' });
+    expect(mapHttpError(403, null, 'The supplied API key is invalid.')).toMatchObject({
+      code: 'AUTH_FAILED',
+    });
+    expect(mapHttpError(403, null, 'Authentication failed: the access token has expired.')).toMatchObject({
+      code: 'AUTH_FAILED',
+    });
+    expect(mapHttpError(403, null, 'Invalid token.')).toMatchObject({
+      code: 'AUTH_FAILED',
+    });
+    expect(mapHttpError(403, null, 'This API key does not have access to model qwen-plus.')).toMatchObject({
+      code: 'MODEL_NOT_FOUND',
+    });
+    expect(mapHttpError(403, null, 'The requested deployment is not included in your plan.')).toMatchObject({
+      code: 'MODEL_NOT_FOUND',
+    });
+    expect(mapHttpError(403, null, 'Forbidden by provider policy.')).toMatchObject({
+      code: 'PROVIDER_ERROR',
+      httpStatus: 403,
+    });
+    expect(mapHttpError(403, null)).toMatchObject({
+      code: 'PROVIDER_ERROR',
+      httpStatus: 403,
+    });
     expect(mapHttpError(403, null, 'The account is in arrears.')).toMatchObject({
       code: 'PAYMENT_REQUIRED',
     });

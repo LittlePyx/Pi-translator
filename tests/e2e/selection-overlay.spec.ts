@@ -2400,6 +2400,11 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     partialText: '流式译文应当',
     completedChunks: 0,
     totalChunks: 1,
+    providerContext: {
+      role: 'vision',
+      profileName: 'Qwen formula',
+      model: 'qwen-vision-test-model',
+    },
   } as const;
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
@@ -2467,7 +2472,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
             '**h-Transform**',
             '\\[Q^{\\Pi^*}(dZ)=\\pi^*(Z_\\tau)Q(dZ),\\tag{8}\\]',
             '**命题 2.8**',
-            '\\[Q^{\\Pi^*}=\\arg\\min_{P\\in\\mathcal{P}(V,\\Omega)} \\left\\{KL(P\\Vert Q):=E_P\\left[\\log \\frac{dP}{dQ}(Z_\\tau)\\right]\\right\\},\\quad \\mathrm{s.t.}\\ P_\\Omega=\\Pi^*,\\tag{12}\\]',
+            '\\[Q^{\\Pi^*}=\\operatorname{argmin}P\\in P(V,\\Omega) \\left\\{KL(P\\Vert Q):=E_P\\left[\\log \\frac{dP}{dQ}(Z_\\tau)\\right]\\right\\},\\quad \\mathrm{s.t.}\\ P_\\Omega=\\Pi^*,\\tag{12}\\]',
             '\\[KL(P\\Vert Q^{\\Pi^*})=KL(P\\Vert Q)-E_P[\\log\\pi^*(Z_\\tau)],\\tag{13}\\]',
           ].join('\\n'),
           warnings: [],
@@ -2570,12 +2575,19 @@ test('clears native PDF side-panel actions as soon as the active tab changes', a
         sourceLabel: 'previous.pdf',
         status: 'error',
         startedAt: Date.now(),
+        providerContext: {
+          role: 'text',
+          profileName: 'DeepSeek text',
+          model: 'deepseek-test-model',
+        },
         error: { code: 'NETWORK_ERROR', message: 'Retry me.', retryable: true },
       },
     });
   }, tabId);
   await expect(sidePanel.locator('#session')).toBeVisible();
   await expect(sidePanel.locator('#retry')).toBeVisible();
+  await expect(sidePanel.locator('#translation-text'))
+    .toContainText('本次使用：文字 API「DeepSeek text」 · deepseek-test-model');
 
   const nextTab = await context.newPage();
   await nextTab.goto(`chrome-extension://${extensionId}/popup.html`);
