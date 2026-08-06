@@ -314,6 +314,7 @@ test.beforeAll(async () => {
     const isImageTranslation = Array.isArray(imageMessageContent) && !isVisionProbe;
     const isMultiSentenceSelection = JSON.stringify(body).includes('First important sentence');
     const isDocumentTermSelection = JSON.stringify(body).includes('adaptive sensing');
+    const isPdfOptimizerFallback = JSON.stringify(body).includes('Optimizer fallback fixture');
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
     await route.fulfill({
       contentType: 'application/json',
@@ -324,6 +325,11 @@ test.beforeAll(async () => {
               translation: '自动识别并翻译的图像区域。',
               recognizedText: 'Automatically recognized image text.',
               uncertainSpans: [],
+            } : isPdfOptimizerFallback ? {
+              translation: String.raw`优化目标为 \[Q^{\Pi^*}=\operatorname{argmin}P\in P(V,\Omega)\left\{KL(P\Vert Q)\right\},\tag{12}\]`,
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isMultiSentenceSelection ? {
               translation: '第一句重要译文。第二句补充译文。',
               detectedLanguage: 'en',
@@ -2029,6 +2035,41 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   await pdfPage.close();
 });
 
+test('never falls back to the text API when a Pi PDF formula screenshot is unavailable', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'formula-capture-required.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('Energy E = mc^2 is invariant.'),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  const textSpan = firstPage.locator('.textLayer span')
+    .filter({ hasText: 'Energy E = mc^2 is invariant.' });
+  await expect(textSpan).toBeVisible();
+  const initialTextRequests = textRequests.length;
+  const initialVisionRequests = visionRequests.length;
+
+  await textSpan.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  const overlay = pdfPage.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await firstPage.locator('canvas').evaluate((canvas) => canvas.remove());
+  await overlay.locator('.trigger').click();
+
+  await expect(overlay.locator('.error')).toContainText('本次没有降级到文字 API');
+  expect(textRequests).toHaveLength(initialTextRequests);
+  expect(visionRequests).toHaveLength(initialVisionRequests);
+  await pdfPage.close();
+});
+
 test('canonicalizes over-escaped vision LaTeX before rendering and source display', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
@@ -2072,6 +2113,45 @@ test('canonicalizes over-escaped vision LaTeX before rendering and source displa
   const formulaSource = await overlay.locator('.formula-latex').textContent() ?? '';
   expect(formulaSource).toContain(String.raw`\mathbb{Q}_\Omega`);
   expect(formulaSource).not.toContain(String.raw`\\mathbb`);
+  await pdfPage.close();
+});
+
+test('normalizes optimizer limits when Pi PDF falls back to text translation', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'optimizer-fallback.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('Optimizer fallback fixture.'),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  const textSpan = firstPage.locator('.textLayer span')
+    .filter({ hasText: 'Optimizer fallback fixture.' });
+  await expect(textSpan).toBeVisible();
+  const initialTextRequests = textRequests.length;
+  const initialVisionRequests = visionRequests.length;
+
+  await textSpan.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  const overlay = pdfPage.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+
+  await expect.poll(() => textRequests.length).toBe(initialTextRequests + 1);
+  expect(visionRequests).toHaveLength(initialVisionRequests);
+  await expect(overlay.locator('.body .pi-math-scroll math munder')).toBeVisible();
+  await expect(overlay.locator('.pi-equation-tag')).toHaveText('(12)');
+
+  await overlay.locator('.pin-action').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.body .pi-math-scroll math munder')).toBeVisible();
   await pdfPage.close();
 });
 

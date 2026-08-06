@@ -19,6 +19,9 @@ describe('rendered formula detection', () => {
   it('uses vision for rendered mathematical symbols and damaged glyphs', () => {
     expect(shouldUseVisionForRenderedFormula('The loss is ∑ᵢ ‖xᵢ − x̂ᵢ‖².')).toBe(true);
     expect(shouldUseVisionForRenderedFormula('Reconstruction \uFFFD = Ax + b')).toBe(true);
+    expect(shouldUseVisionForRenderedFormula(
+      'Q = arg min P in P(V, Omega) { KL(P || Q) }, s.t. P = Pi.',
+    )).toBe(true);
   });
 
   it('does not send ordinary academic prose to the vision model', () => {

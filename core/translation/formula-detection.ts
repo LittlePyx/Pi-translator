@@ -7,6 +7,7 @@ const GREEK_CHARACTER = /[Α-Ωα-ωϑϕϖϵ]/gu;
 const REPLACEMENT_CHARACTER = /[\uFFFD\uE000-\uF8FF]/u;
 const EQUATION = /(?:^|[\s(])(?:[A-Za-zΑ-Ωα-ω][\wΑ-Ωα-ω]*(?:\([^)]{1,80}\))?)\s*(?:=|≈|≠|≤|≥|<|>)\s*\S/u;
 const MATH_OPERATOR = /[=+\-−*/×÷^_<>≤≥≈≠]/gu;
+const STRUCTURED_RENDERED_MATH = /(?:\barg\s*(?:min|max)\b|\bKL\s*\([^\n)]{1,120}\)|\bd[A-Za-zΑ-Ωα-ω]\s*\/\s*d[A-Za-zΑ-Ωα-ω]\b|\bs\.?\s*t\.?\s*[:.]?\s*[A-Za-zΑ-Ωα-ω])/iu;
 
 export function containsExplicitLatex(text: string): boolean {
   return EXPLICIT_LATEX.test(text) || TEX_COMMAND.test(text) || TEX_SCRIPT.test(text);
@@ -21,6 +22,7 @@ export function shouldUseVisionForRenderedFormula(text: string): boolean {
   if (!normalized || containsExplicitLatex(normalized)) return false;
   if (REPLACEMENT_CHARACTER.test(normalized)) return true;
   if (STRONG_MATH_SYMBOL.test(normalized) || SCRIPT_CHARACTER.test(normalized)) return true;
+  if (STRUCTURED_RENDERED_MATH.test(normalized)) return true;
 
   const greekCount = normalized.match(GREEK_CHARACTER)?.length ?? 0;
   const operatorCount = normalized.match(MATH_OPERATOR)?.length ?? 0;

@@ -14,6 +14,7 @@ import { captureSelectionSnapshot } from '../selection/generic-selection';
 import type { SelectionSnapshot, ViewportRect } from '../selection/types';
 import { isLikelyTargetLanguage } from '../language/target-language';
 import { normalizePdfSelectionText } from '../pdf/text-normalizer';
+import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
 import type { SidebarSide } from '../settings/schema';
 import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
 import type {
@@ -417,6 +418,7 @@ export async function startSelectionTranslator(
     onDismiss: cancelActiveTranslation,
   }, {
     ...(options.viewportInsets ? { viewportInsets: options.viewportInsets } : {}),
+    ...(surface === 'pdf' ? { normalizeFormulaPresentation: true } : {}),
   });
 
   markerManager = new SessionTranslationMarkerManager({
@@ -1072,6 +1074,9 @@ export async function startSelectionTranslator(
   }
 
   async function translateSelection(snapshot: SelectionSnapshot): Promise<void> {
+    const requiresPdfVision = surface === 'pdf' && shouldUseVisionForPdfFormula(
+      normalizePdfSelectionText(snapshot.normalizedText),
+    );
     if (options.captureVisualSelection && snapshot.source === 'window-selection') {
       try {
         const capture = await options.captureVisualSelection(snapshot);
@@ -1080,9 +1085,20 @@ export async function startSelectionTranslator(
           return;
         }
       } catch {
-        // Visual formula recognition is an enhancement. If capture is not
-        // available, retain the selectable-text translation path.
+        // Formula selections are handled below. Plain text may still use the
+        // selectable PDF text layer when visual capture is unavailable.
       }
+    }
+    if (requiresPdfVision) {
+      activeSelection = snapshot;
+      activeImageRegion = undefined;
+      activePdfRegionLocation = undefined;
+      activeTextMetadata = undefined;
+      const message = snapshot.source === 'window-selection'
+        ? '检测到选区中包含公式，但没有成功获取 PDF 页面截图。为了避免破坏公式，本次没有降级到文字 API。请重新划选后重试，或使用“框选翻译”。'
+        : '检测到选中内容包含公式，但右键菜单打开后无法安全获取原选区截图。请关闭菜单后重新划选并点击浮动按钮，或使用“框选翻译”。';
+      overlay.showError({ message, showSettings: false }, selectionRect(snapshot));
+      return;
     }
     await translate(snapshot);
   }

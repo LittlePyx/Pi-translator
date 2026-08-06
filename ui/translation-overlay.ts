@@ -28,8 +28,11 @@ import {
   normalizeLatexForClipboard,
 } from './latex-copy';
 
-function normalizeVisionResultForPresentation(result: TranslateResult): TranslateResult {
-  if (result.sourceKind !== 'image-region') return result;
+function normalizeResultForPresentation(
+  result: TranslateResult,
+  normalizeFormulaPresentation: boolean,
+): TranslateResult {
+  if (result.sourceKind !== 'image-region' && !normalizeFormulaPresentation) return result;
   const normalized: TranslateResult = {
     ...result,
     originalText: normalizeLatexForClipboard(result.originalText),
@@ -47,7 +50,7 @@ function normalizeVisionResultForPresentation(result: TranslateResult): Translat
         }
       : {}),
   };
-  if (!normalized.formulaNeedsReview) return normalized;
+  if (result.sourceKind !== 'image-region' || !normalized.formulaNeedsReview) return normalized;
   const validation = validateImageFormulaResult({
     recognizedText: normalized.originalText,
     translatedText: normalized.translatedText,
@@ -135,6 +138,7 @@ export type ViewportInsetsProvider = () => Partial<ViewportInsets>;
 
 export interface TranslationOverlayOptions {
   viewportInsets?: ViewportInsetsProvider;
+  normalizeFormulaPresentation?: boolean;
 }
 
 interface ErrorDisplay { message: string; showSettings: boolean; }
@@ -214,6 +218,7 @@ export class TranslationOverlay {
   private colorSchemeQuery?: MediaQueryList;
   private themeTimer?: ReturnType<typeof setTimeout>;
   private readonly viewportInsetsProvider: ViewportInsetsProvider | undefined;
+  private readonly normalizeFormulaPresentation: boolean;
   private viewportInsets: ViewportInsets = {top:0,right:0,bottom:0,left:0};
   private surfaceResizeObserver: ResizeObserver | undefined;
   private reflowFrame: number | undefined;
@@ -224,6 +229,7 @@ export class TranslationOverlay {
     options: TranslationOverlayOptions = {},
   ) {
     this.viewportInsetsProvider=options.viewportInsets;
+    this.normalizeFormulaPresentation=options.normalizeFormulaPresentation === true;
     this.host.id = 'tex-selection-translator-root';
     this.root = this.host.attachShadow({mode:'open'});
     const style=document.createElement('style');style.textContent=STYLES;this.root.append(style);
@@ -402,7 +408,7 @@ export class TranslationOverlay {
   }
 
   private renderResult(result:TranslateResult):void {
-    result=normalizeVisionResultForPresentation(result);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
+    result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
     if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
     if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const older=this.button('‹','icon','上一条翻译（Alt+↑）');older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=document.createElement('span');counter.className='counter';counter.textContent=`${this.historyIndex+1}/${navigationHistory.length}`;const newer=this.button('›','icon','下一条翻译（Alt+↓）');newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));tools.prepend(older,counter,newer)}
