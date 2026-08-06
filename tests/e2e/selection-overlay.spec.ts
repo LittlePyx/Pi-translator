@@ -2447,6 +2447,10 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     .toHaveText('流式译文应当显示在原生 PDF 阅读器旁边，其中 $E=mc^2$。');
   await expect(sidePanel.locator('#formula-view')).toHaveText('公式');
   await sidePanel.locator('#formula-view').click();
+  // Exercise the same constrained width as Edge's native side panel. The
+  // formula itself may scroll, but its equation number must remain in the
+  // numbered row instead of wrapping below the expression.
+  await sidePanel.setViewportSize({ width: 390, height: 820 });
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
       chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
@@ -2463,7 +2467,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
             '**h-Transform**',
             '\\[Q^{\\Pi^*}(dZ)=\\pi^*(Z_\\tau)Q(dZ),\\tag{8}\\]',
             '**命题 2.8**',
-            '\\[Q^{\\Pi^*}=\\arg\\min_{P\\in\\mathcal{P}(V,\\Omega)} KL(P\\Vert Q),\\tag{12}\\]',
+            '\\[Q^{\\Pi^*}=\\arg\\min_{P\\in\\mathcal{P}(V,\\Omega)} \\left\\{KL(P\\Vert Q):=E_P\\left[\\log \\frac{dP}{dQ}(Z_\\tau)\\right]\\right\\},\\quad \\mathrm{s.t.}\\ P_\\Omega=\\Pi^*,\\tag{12}\\]',
             '\\[KL(P\\Vert Q^{\\Pi^*})=KL(P\\Vert Q)-E_P[\\log\\pi^*(Z_\\tau)],\\tag{13}\\]',
           ].join('\\n'),
           warnings: [],
@@ -2482,7 +2486,49 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     '(12)',
     '(13)',
   ]);
+  const optimizerEquation = sidePanel
+    .locator('#translation-text .pi-math-display.pi-math-numbered')
+    .nth(1);
+  const optimizerScroll = optimizerEquation.locator('.pi-math-scroll');
+  const optimizerTag = optimizerEquation.locator('.pi-equation-tag');
+  await expect(optimizerScroll.locator('math munder')).toBeVisible();
+  await expect(optimizerTag).toBeVisible();
+  const optimizerLayout = await optimizerEquation.evaluate((equation) => {
+    const scroll = equation.querySelector<HTMLElement>('.pi-math-scroll');
+    const tag = equation.querySelector<HTMLElement>('.pi-equation-tag');
+    if (!scroll || !tag) return undefined;
+    const scrollRect = scroll.getBoundingClientRect();
+    const tagBeforeScroll = tag.getBoundingClientRect();
+    scroll.scrollLeft = scroll.scrollWidth;
+    const tagAfterScroll = tag.getBoundingClientRect();
+    const scrolledDistance = scroll.scrollLeft;
+    scroll.scrollLeft = 0;
+    return {
+      overflowX: getComputedStyle(scroll).overflowX,
+      clientWidth: scroll.clientWidth,
+      scrollWidth: scroll.scrollWidth,
+      scrollLeft: scrolledDistance,
+      verticalOverlap: Math.min(scrollRect.bottom, tagBeforeScroll.bottom)
+        - Math.max(scrollRect.top, tagBeforeScroll.top),
+      tagLeftBeforeScroll: tagBeforeScroll.left,
+      tagLeftAfterScroll: tagAfterScroll.left,
+      tagRight: tagAfterScroll.right,
+      viewportWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(optimizerLayout).toBeDefined();
+  expect(optimizerLayout!.overflowX).toMatch(/auto|scroll/);
+  expect(optimizerLayout!.scrollWidth).toBeGreaterThan(optimizerLayout!.clientWidth + 1);
+  expect(optimizerLayout!.scrollLeft).toBeGreaterThan(0);
+  expect(optimizerLayout!.verticalOverlap).toBeGreaterThan(0);
+  expect(Math.abs(
+    optimizerLayout!.tagLeftAfterScroll - optimizerLayout!.tagLeftBeforeScroll,
+  )).toBeLessThan(1);
+  expect(optimizerLayout!.tagRight).toBeLessThanOrEqual(optimizerLayout!.viewportWidth + 1);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel.png') });
+  }
   const inheritedReaderPromise = context.waitForEvent('page');
   await sidePanel.locator('#open-pi-reader').click();
   const inheritedReader = await inheritedReaderPromise;
@@ -2494,10 +2540,6 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     .toBe('https://www.overleaf.com/native-reader.pdf');
   expect(inheritedUrl.searchParams.get('page')).toBe('6');
   await inheritedReader.close();
-  if (process.env.PI_VISUAL_QA) {
-    await sidePanel.setViewportSize({ width: 390, height: 820 });
-    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel.png') });
-  }
   await messageSender.close();
   await sidePanel.close();
 });

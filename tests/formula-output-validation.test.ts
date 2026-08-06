@@ -140,6 +140,58 @@ describe('vision formula output validation', () => {
     expect(result.formulaLatex).toEqual([String.raw`x=y\tag{8}`]);
   });
 
+  it.each([
+    [String.raw`$x=y$`, String.raw`\[x=y\]`],
+    [String.raw`$$x=y$$`, String.raw`\[x=y\]`],
+    [String.raw`\(x=y\)`, String.raw`\[x=y\]`],
+  ])('promotes a standalone %s formula to display math', (source, expected) => {
+    expect(normalizeVisionLatexText(`before\n${source}\nafter`))
+      .toBe(`before\n${expected}\nafter`);
+  });
+
+  it.each([
+    [String.raw`$x=y$ ( 8 )`, String.raw`\[x=y\tag{8}\]`],
+    ['$$x=y$$\n\uFF08 8 \uFF09', String.raw`\[x=y\tag{8}\]`],
+    ['\\(x=y\\) \uFF08 8 \uFF09', String.raw`\[x=y\tag{8}\]`],
+  ])('absorbs a spaced ASCII or fullwidth equation number from %s', (source, expected) => {
+    expect(normalizeVisionLatexText(`before\n${source}\nafter`))
+      .toBe(`before\n${expected}\nafter`);
+  });
+
+  it('leaves an inline prose formula inline', () => {
+    const source = String.raw`The objective is $x=y$ in this sentence.`;
+    expect(normalizeVisionLatexText(source)).toBe(source);
+  });
+
+  it('repairs a missing optimization lower-limit marker only for a clear domain', () => {
+    const source = String.raw`\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}`;
+    expect(repairCommonVisionLatex(source)).toBe(
+      String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}`,
+    );
+  });
+
+  it('preserves an existing optimization lower limit and an ambiguous expression', () => {
+    const correct = String.raw`\arg\min_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const canonical = String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const ambiguous = String.raw`\arg\min P+Q`;
+    expect(repairCommonVisionLatex(correct)).toBe(canonical);
+    expect(repairCommonVisionLatex(canonical)).toBe(canonical);
+    expect(repairCommonVisionLatex(ambiguous)).toBe(ambiguous);
+  });
+
+  it('normalizes promoted numbered optimization formulae idempotently', () => {
+    const source = [
+      'before',
+      String.raw`$\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}$`,
+      '\uFF08 8 \uFF09',
+      'after',
+    ].join('\n');
+    const normalized = normalizeVisionLatexText(source);
+    expect(normalized).toContain(String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}`);
+    expect(normalized).toContain(String.raw`\tag{8}`);
+    expect(normalizeVisionLatexText(normalized)).toBe(normalized);
+  });
+
   it('accepts matching, structurally valid LaTeX', () => {
     expect(validateImageFormulaResult({
       recognizedText: 'Energy is $E=mc^2$ and \\[R=\\frac{a+b}{c}.\\]',

@@ -254,6 +254,36 @@ function repairVisionRomanDifferential(formula: string): string {
     .replace(/(^|[^A-Za-z0-9\\])mathrm\s+d(?![A-Za-z])/gu, '$1\\mathrm{d}');
 }
 
+function repairVisionOptimizationOperator(formula: string): string {
+  const canonicalOperator = formula
+    .replace(
+      /\\operatorname\*?\s*\{\s*arg\s*(min|max)\s*\}(?=\s*_)/gu,
+      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
+    )
+    .replace(
+      /\\mathrm\s*\{\s*arg\s*(min|max)\s*\}(?=\s*_)/gu,
+      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
+    )
+    .replace(
+      /\\arg\s*\\(min|max)(?=\s*_)/gu,
+      (_match, kind: string) => `\\operatorname*{arg\\,${kind}}`,
+    )
+    .replace(
+      /(^|[^A-Za-z0-9\\])arg\s*(min|max)(?=\s*_)/gu,
+      (_match, prefix: string, kind: string) =>
+        `${prefix}\\operatorname*{arg\\,${kind}}`,
+    );
+
+  // OCR occasionally drops only the `_ { ... }` around an optimization
+  // domain. Repair the narrow, high-confidence shape where a membership
+  // condition is immediately followed by the objective's visible left brace.
+  return canonicalOperator.replace(
+    /\\arg\s*\\(min|max)\s+(?![_^])((?:[A-Za-z]|\\(?:boldsymbol|mathbf|mathbb|mathcal)\s*\{[^{}]+\})\s*\\in\s*(?:[A-Za-z]|\\(?:mathcal|mathbb|mathbf|mathrm)\s*\{[^{}]+\})(?:\s*\([^()]*\))?)(?=\s*(?:\\left\s*)?(?:\\\{|\{))/gu,
+    (_match, kind: string, domain: string) =>
+      `\\operatorname*{arg\\,${kind}}_{${domain.trim()}}`,
+  );
+}
+
 /** Repairs a small set of deterministic pseudo-TeX forms emitted by OCR. */
 export function repairCommonVisionLatex(formula: string): string {
   const escaped = repairOverescapedVisionCommands(formula)
@@ -275,7 +305,60 @@ export function repairCommonVisionLatex(formula: string): string {
     (value, command) => repairVisionFontCommand(value, command),
     escaped,
   );
-  return repairVisionRomanDifferential(repairedFonts);
+  return repairVisionOptimizationOperator(
+    repairVisionRomanDifferential(repairedFonts),
+  );
+}
+
+const VISIBLE_EQUATION_NUMBER = '[A-Za-z]?\\d+(?:[.-]\\d+)*[A-Za-z]?';
+const TRAILING_EQUATION_NUMBER = String.raw`[\t ]*(?:\r?\n[\t ]*)?[\(（][\t ]*(${VISIBLE_EQUATION_NUMBER})[\t ]*[\)）]`;
+
+function formulaWithVisibleTag(formula: string, tag: string): string | undefined {
+  const normalizedTag = tag.trim();
+  const existingTag = /\\tag\s*\{\s*(?:\(\s*)?([^(){}]+?)(?:\s*\))?\s*\}/u.exec(formula)?.[1]
+    ?.trim();
+  if (!existingTag) return `${formula.trim()}\\tag{${normalizedTag}}`;
+  return existingTag === normalizedTag ? formula.trim() : undefined;
+}
+
+/** Promotes only formulae that occupy their complete logical line. */
+function promoteStandaloneVisionFormulae(text: string): string {
+  const promote = (
+    match: string,
+    prefix: string,
+    formula: string,
+    tag: string | undefined,
+  ): string => {
+    const body = tag ? formulaWithVisibleTag(formula, tag) : formula.trim();
+    if (!body) return match;
+    return `${prefix}\\[${body}\\]`;
+  };
+  return text
+    .replace(
+      new RegExp(String.raw`(^|\r?\n)[\t ]*\$\$([^\r\n]+?)\$\$(?:${TRAILING_EQUATION_NUMBER})?[\t ]*(?=\r?\n|$)`, 'gu'),
+      (match, prefix: string, formula: string, tag: string | undefined) =>
+        promote(match, prefix, formula, tag),
+    )
+    .replace(
+      new RegExp(String.raw`(^|\r?\n)[\t ]*\$(?!\$)([^$\r\n]+?)\$(?:${TRAILING_EQUATION_NUMBER})?[\t ]*(?=\r?\n|$)`, 'gu'),
+      (match, prefix: string, formula: string, tag: string | undefined) =>
+        promote(match, prefix, formula, tag),
+    )
+    .replace(
+      new RegExp(String.raw`(^|\r?\n)[\t ]*\\\(([^\r\n]+?)\\\)(?:${TRAILING_EQUATION_NUMBER})?[\t ]*(?=\r?\n|$)`, 'gu'),
+      (match, prefix: string, formula: string, tag: string | undefined) =>
+        promote(match, prefix, formula, tag),
+    );
+}
+
+function attachVisibleEquationNumbers(text: string): string {
+  return text.replace(
+    new RegExp(String.raw`\\\[([\s\S]*?)\\\]${TRAILING_EQUATION_NUMBER}`, 'gu'),
+    (match, formula: string, tag: string) => {
+      const tagged = formulaWithVisibleTag(formula, tag);
+      return tagged ? `\\[${tagged}\\]` : match;
+    },
+  );
 }
 
 /**
@@ -285,16 +368,8 @@ export function repairCommonVisionLatex(formula: string): string {
  */
 export function normalizeVisionLatexText(text: string): string {
   const delimited = repairOverescapedVisionDelimiters(text);
-  const numbered = delimited.replace(
-    /\\\[([\s\S]*?)\\\]\s*\(([A-Za-z]?\d+(?:[.-]\d+)*[A-Za-z]?)\)/gu,
-    (match, formula: string, tag: string) => (
-      (() => {
-        const existingTag = /\\tag\s*\{\s*(?:\(\s*)?([^(){}]+?)(?:\s*\))?\s*\}/u.exec(formula)?.[1]
-          ?.trim();
-        if (!existingTag) return `\\[${formula.trim()}\\tag{${tag}}\\]`;
-        return existingTag === tag ? `\\[${formula.trim()}\\]` : match;
-      })()
-    ),
+  const numbered = attachVisibleEquationNumbers(
+    promoteStandaloneVisionFormulae(delimited),
   );
   const parsed = extractDelimitedFormulae(numbered);
   if (!parsed.balanced || !parsed.formulae.length) return numbered;

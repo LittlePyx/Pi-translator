@@ -78,6 +78,26 @@ describe('LaTeX result display', () => {
     expect(untrusted).not.toMatch(/\shref\s*=|<script/iu);
   });
 
+  it('renders a promoted standalone optimizer with its limit underneath', () => {
+    const normalized = normalizeVisionLatexText([
+      'before',
+      String.raw`$\arg\min P\in\mathcal{P}(V,\Omega)\left\{KL(P\|Q)\right\}$ (8)`,
+      'after',
+    ].join('\n'));
+    const formula = splitLatexDisplaySegments(normalized).find(
+      (segment) => segment.kind === 'math',
+    );
+    expect(formula).toMatchObject({ kind: 'math', displayMode: true });
+    if (formula?.kind !== 'math') throw new Error('Expected math segment.');
+
+    const parts = latexRenderParts(formula.tex, formula.displayMode);
+    expect(parts.equationTag).toBe('8');
+    const rendered = renderLatexMathMl(parts.tex, formula.displayMode) ?? '';
+    expect(rendered).toContain('display="block"');
+    expect(rendered).toContain('<munder>');
+    expect(rendered).not.toContain('<msub>');
+  });
+
   it('renders deterministic over-escaped commands while preserving the source string', () => {
     const source = String.raw`\\mathbb{Q}_\\Omega\\`;
     const rendered = renderLatexMathMl(source, false) ?? '';

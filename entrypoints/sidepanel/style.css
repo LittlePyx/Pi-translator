@@ -148,11 +148,52 @@ main {
 .translation-text.error { color: #b4233b; font-size: 12px; }
 .translation-text .pi-rich-strong { font-weight: 700; }
 .translation-text .pi-math-inline { display: inline-flex; max-width: 100%; vertical-align: -.14em; white-space: normal; }
-.translation-text .pi-math-display { display: block; width: 100%; margin: .6em 0; overflow-x: auto; text-align: center; white-space: normal; }
-.translation-text .pi-math-display.pi-math-numbered { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: 8px; overflow: visible; }
-.translation-text .pi-math-scroll { min-width: 0; overflow-x: auto; text-align: center; scrollbar-width: thin; }
-.translation-text .pi-equation-tag { align-self: center; white-space: nowrap; font-family: "Cambria Math", "STIX Two Math", serif; }
-.translation-text .pi-math math { color: inherit; }
+.translation-text .pi-math-display {
+  display: block;
+  width: 100%;
+  margin: .72em 0;
+  padding: .08em 0 .12em;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  line-height: 1.28;
+  white-space: normal;
+}
+.translation-text .pi-math-display.pi-math-numbered {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) max-content;
+  grid-template-rows: auto;
+  align-items: center;
+  column-gap: 6px;
+  overflow: visible;
+}
+.translation-text .pi-math-numbered .pi-math-scroll {
+  grid-row: 1;
+  grid-column: 1;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  text-align: center;
+  overscroll-behavior-inline: contain;
+  scrollbar-width: thin;
+}
+.translation-text .pi-equation-tag {
+  grid-row: 1;
+  grid-column: 2;
+  align-self: center;
+  font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif;
+  font-size: .9em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+}
+.translation-text .pi-math math {
+  color: inherit;
+  font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif;
+  font-synthesis: none;
+}
+.translation-text .pi-math-display math { font-size: 1.06em; }
 
 .progress-track { height: 2px; margin-top: 12px; overflow: hidden; background: #e4e6ef; }
 .progress-track i { display: block; width: 32%; height: 100%; background: #5b4be0; animation: progress 1.15s ease-in-out infinite; }
