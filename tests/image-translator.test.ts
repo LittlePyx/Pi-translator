@@ -230,7 +230,7 @@ describe('image region translator', () => {
     };
     expect(body.model).toBe('qwen3.7-plus');
     expect(body.enable_thinking).toBe(false);
-    expect(body.response_format).toEqual({ type: 'json_object' });
+    expect(body.response_format).toBeUndefined();
     expect(body.messages[0]?.content).toEqual(expect.arrayContaining([
       expect.objectContaining({
         type: 'image_url',
@@ -271,10 +271,11 @@ describe('image region translator', () => {
         controller.close();
       },
     });
-    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(stream, {
       status: 200,
       headers: { 'Content-Type': 'text/event-stream' },
-    })));
+    }));
+    vi.stubGlobal('fetch', fetchMock);
     const partials: string[] = [];
 
     const result = await new OpenAiCompatibleTranslator().translateImageRegion(
@@ -289,6 +290,65 @@ describe('image region translator', () => {
     expect(partials.at(-1)).toBe('正在翻译');
     expect(result.recognizedText).toBe('Source');
     expect(result.translatedText).toBe('正在翻译');
+    const body = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    expect(body.stream).toBe(true);
+    expect(body.response_format).toBeUndefined();
+  });
+
+  it('retries an error-only SSE response without an incompatible JSON response format', async () => {
+    const encoder = new TextEncoder();
+    const failedStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(`data: ${JSON.stringify({
+          error: {
+            code: 'invalid_parameter_error',
+            type: 'invalid_request_error',
+            message: '<400> InternalError.Algo.InvalidParameter: Model output became abnormal while generating a JSON response for response_format. The generation was aborted.',
+          },
+        })}\n\n`));
+        controller.close();
+      },
+    });
+    const content = JSON.stringify({
+      translation: '兼容模式译文',
+      recognizedText: 'Compatible source',
+      formulaLatex: [],
+      uncertainSpans: [],
+    });
+    const successfulStream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(encoder.encode(
+          `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\ndata: [DONE]\n\n`,
+        ));
+        controller.close();
+      },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(failedStream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }))
+      .mockResolvedValueOnce(new Response(successfulStream, {
+        status: 200,
+        headers: { 'Content-Type': 'text/event-stream' },
+      }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(new OpenAiCompatibleTranslator().translateImageRegion(
+      input,
+      options,
+      { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' },
+      new AbortController().signal,
+      { onPartialText: () => undefined },
+    )).resolves.toMatchObject({
+      translatedText: '兼容模式译文',
+      recognizedText: 'Compatible source',
+    });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const bodies = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)));
+    expect(bodies[0]?.response_format).toEqual({ type: 'json_object' });
+    expect(bodies[1]?.response_format).toBeUndefined();
   });
 
   it('never replays or downgrades an image request after an SSE event was received', async () => {
@@ -485,6 +545,26 @@ describe('image region translator', () => {
     });
     expect(() => parseImageTranslation('{"translation":"译文"}'))
       .toThrow(/recognizedText/i);
+  });
+
+  it('extracts one complete image-result object from provider commentary', () => {
+    const wrapped = [
+      'Here is the requested JSON result:',
+      '```json',
+      JSON.stringify({
+        translation: '译文包含 {花括号}',
+        recognizedText: 'Source with {braces}',
+        formulaLatex: [],
+        uncertainSpans: [],
+      }),
+      '```',
+    ].join('\n');
+    expect(parseImageTranslation(wrapped)).toMatchObject({
+      translatedText: '译文包含 {花括号}',
+      recognizedText: 'Source with {braces}',
+    });
+    expect(() => parseImageTranslation('Only ordinary prose, no JSON object.'))
+      .toThrow(/invalid JSON/i);
   });
 
   it('repairs single JSON backslashes in common LaTeX commands locally', () => {

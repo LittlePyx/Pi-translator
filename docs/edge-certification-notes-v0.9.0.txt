@@ -1,0 +1,23 @@
+Pi Translator has no publisher-operated account, login, subscription, or backend. It is a bring-your-own-API-key client. To make all core features testable, the following temporary review-only credentials will remain active during certification.
+
+TEXT TRANSLATION (DeepSeek)
+Base URL: https://api.deepseek.com/v1
+Model: [TEXT MODEL]
+API Key: [PASTE TEMPORARY DEEPSEEK REVIEW KEY]
+
+PDF IMAGE/OCR (Qwen / Alibaba Cloud Model Studio)
+Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+Model: [VISION MODEL]
+API Key: [PASTE TEMPORARY QWEN REVIEW KEY]
+
+Expiration: [DATE AFTER REVIEW WINDOW]
+
+Test steps:
+1. Install the extension; its settings page opens automatically.
+2. Under “文字翻译 API（必需）”, select DeepSeek, paste the text Key, and click “连接并保存”.
+3. Open any public HTTPS article, select an English sentence, and choose “使用 Pi Translator 翻译选中文本” from the context menu. Verify streamed translation, copy, full/aligned views, and “固定侧栏”.
+4. Return to settings, click “配置 Qwen”, paste the Qwen Key, and click “连接并保存”. The text API remains DeepSeek.
+5. Open “PDF 阅读器”, choose any local PDF, and translate selectable text. For a scanned page or formula, use “框选翻译”; for a scanned page, “识别本页” is also available.
+6. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result streams in Edge’s side panel.
+
+No Microsoft, Overleaf, or Pi Translator account is needed. API requests go directly to the selected provider. Keys are entered only in extension settings, are not bundled in the ZIP, and are not exposed to webpages. The extension executes no remote code.

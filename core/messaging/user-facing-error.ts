@@ -11,7 +11,7 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   RATE_LIMITED: 'API 请求过于频繁，请稍后再试。',
   REQUEST_TIMEOUT: 'API 响应超时，请检查接口地址和网络后重试。',
   NETWORK_ERROR: '无法连接所配置的 API，请检查接口地址、网络、代理或权限。',
-  PROVIDER_ERROR: 'API 拒绝了本次请求，请确认接口地址和模型名称可用。',
+  PROVIDER_ERROR: 'API 拒绝了本次请求，请查看接口详情，并检查模型或请求参数兼容性。',
   EMPTY_RESPONSE: 'API 返回了空结果，请重试。',
   INVALID_RESPONSE: 'API 返回格式异常，请重试或切换模型。',
   LATEX_VALIDATION_FAILED: '模型没有完整保留 LaTeX 结构，结果已被拦截。',

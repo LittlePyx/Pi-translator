@@ -7,6 +7,8 @@ import {
 describe('user-facing errors', () => {
   it('provides actionable provider errors', () => {
     expect(translationErrorMessage('PROVIDER_ERROR')).toContain('模型');
+    expect(translationErrorMessage('PROVIDER_ERROR')).toContain('请求参数兼容性');
+    expect(translationErrorMessage('PROVIDER_ERROR')).not.toContain('接口地址和模型名称');
     expect(translationErrorMessage('NETWORK_ERROR')).toContain('网络');
   });
 

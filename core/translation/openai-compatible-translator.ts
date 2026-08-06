@@ -63,9 +63,13 @@ interface ModelListResponse {
   data?: Array<{ id?: string }>;
 }
 
+function isDashScopeCompatibleApi(apiBaseUrl: string): boolean {
+  return /(?:dashscope|maas\.aliyuncs\.com)/i.test(apiBaseUrl);
+}
+
 function directAnswerParameters(apiBaseUrl: string, enabled = true): Record<string, unknown> {
   if (!enabled) return {};
-  if (/(?:dashscope|maas\.aliyuncs\.com)/i.test(apiBaseUrl)) {
+  if (isDashScopeCompatibleApi(apiBaseUrl)) {
     return { enable_thinking: false };
   }
   if (/\/\/(?:[^/]+\.)?deepseek\.com(?:\/|$)/i.test(apiBaseUrl)) {
@@ -88,9 +92,16 @@ function rejectsThinkingControl(error: TranslationError): boolean {
 }
 
 function rejectsJsonResponseFormat(error: TranslationError): boolean {
-  return [400, 415, 422].includes(error.httpStatus ?? 0) &&
+  const explicitParameterFailure =
+    /invalid[_\s-]*(?:parameter|request)|bad request|<\s*400\s*>|internalerror\.algo\.invalidparameter/i
+      .test(error.message);
+  return (
+    [400, 415, 422].includes(error.httpStatus ?? 0) ||
+    (error.httpStatus === undefined && explicitParameterFailure)
+  ) &&
     /response[_\s-]*format|json[_\s-]*(?:mode|object)|structured[_\s-]*output/i.test(error.message) &&
-    /unsupported|not supported|not allowed|unknown (?:field|parameter)|invalid/i.test(error.message);
+    /unsupported|not supported|not allowed|unknown (?:field|parameter)|invalid|abnormal|aborted|failed|requires?|must/i
+      .test(error.message);
 }
 
 const STREAM_EVENT_RECEIVED = Symbol('stream-event-received');
@@ -439,7 +450,7 @@ export async function streamedChatContent(
   let buffer = '';
   let content = '';
   let terminatedCleanly = false;
-  let receivedEvent = false;
+  let receivedOutputText = false;
 
   const readWithIdleTimeout = (): Promise<ReadableStreamReadResult<Uint8Array>> =>
     new Promise((resolve, reject) => {
@@ -475,7 +486,6 @@ export async function streamedChatContent(
     if (!line.startsWith('data:')) return;
     const data = line.slice(5).trim();
     if (!data) return;
-    receivedEvent = true;
     if (data === '[DONE]') {
       terminatedCleanly = true;
       return;
@@ -545,6 +555,7 @@ export async function streamedChatContent(
 
     const delta = choice?.delta?.content ?? choice?.message?.content;
     if (typeof delta === 'string') {
+      if (delta.length > 0) receivedOutputText = true;
       content += delta;
       const partial = extractPartialTranslation(content);
       if (partial) onPartialText(partial);
@@ -581,7 +592,7 @@ export async function streamedChatContent(
     return content;
   } catch (error) {
     const normalized = toTranslationError(error);
-    throw receivedEvent ? markStreamEventReceived(normalized) : normalized;
+    throw receivedOutputText ? markStreamEventReceived(normalized) : normalized;
   }
 }
 
@@ -753,7 +764,13 @@ export class OpenAiCompatibleTranslator implements Translator {
       body: body(stream, jsonMode),
     });
     let content: string;
-    let jsonMode = capabilities.responseFormatJson !== false;
+    // DashScope/Qwen may abort otherwise valid visual generations when
+    // `stream:true` is combined with `response_format`. The prompt and local
+    // parser already enforce the image-result JSON contract, so omit this
+    // provider hint from the first request instead of paying for a failed
+    // compatibility probe or disabling streaming.
+    let jsonMode = capabilities.responseFormatJson !== false &&
+      !isDashScopeCompatibleApi(credentials.apiBaseUrl);
     if (callbacks?.onPartialText && capabilities.imageStreaming !== false) {
       while (true) {
         let receivedEventStream = false;
@@ -784,7 +801,6 @@ export class OpenAiCompatibleTranslator implements Translator {
         } catch (error) {
           const normalized = toTranslationError(error);
           if (signal.aborted) throw normalized;
-          if (streamEventWasReceived(normalized)) throw normalized;
           if (normalized.code === 'VISION_MODEL_UNSUPPORTED') {
             await updateApiModelCapabilities(credentials.apiBaseUrl, options.model, { vision: false });
             throw normalized;
@@ -800,9 +816,15 @@ export class OpenAiCompatibleTranslator implements Translator {
             await updateApiModelCapabilities(credentials.apiBaseUrl, options.model, {
               responseFormatJson: false,
             });
+            // A response-format error after visible output may already have
+            // consumed tokens. Remember the incompatibility, but never replay
+            // that image automatically. Error-only SSE events are safe to
+            // retry once with the unsupported parameter removed.
+            if (streamEventWasReceived(normalized)) throw normalized;
             jsonMode = false;
             continue;
           }
+          if (streamEventWasReceived(normalized)) throw normalized;
           if (rejectsStreaming(normalized)) {
             await updateApiModelCapabilities(credentials.apiBaseUrl, options.model, {
               imageStreaming: false,
@@ -1082,6 +1104,51 @@ export function repairJsonLatexEscapes(json: string): string {
   return output;
 }
 
+function embeddedJsonObjectCandidates(text: string): string[] {
+  const candidates: string[] = [];
+  for (let start = text.indexOf('{'); start >= 0; start = text.indexOf('{', start + 1)) {
+    let depth = 0;
+    let inString = false;
+    let escaped = false;
+    for (let index = start; index < text.length; index += 1) {
+      const character = text[index]!;
+      if (inString) {
+        if (escaped) escaped = false;
+        else if (character === '\\') escaped = true;
+        else if (character === '"') inString = false;
+        continue;
+      }
+      if (character === '"') {
+        inString = true;
+        continue;
+      }
+      if (character === '{') depth += 1;
+      else if (character === '}') {
+        depth -= 1;
+        if (depth === 0) {
+          candidates.push(text.slice(start, index + 1));
+          break;
+        }
+      }
+    }
+    if (candidates.length >= 16) break;
+  }
+  return candidates;
+}
+
+function parseImageJsonPayload(normalized: string): unknown {
+  let lastError: unknown;
+  const candidates = [normalized, ...embeddedJsonObjectCandidates(normalized)];
+  for (const candidate of [...new Set(candidates)]) {
+    try {
+      return JSON.parse(repairJsonLatexEscapes(candidate));
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError ?? new SyntaxError('No complete JSON object was returned.');
+}
+
 export function parseImageTranslation(content: string): ProviderImageTranslationResult {
   const normalized = content
     .trim()
@@ -1090,7 +1157,7 @@ export function parseImageTranslation(content: string): ProviderImageTranslation
     .trim();
   let value: unknown;
   try {
-    value = JSON.parse(repairJsonLatexEscapes(normalized));
+    value = parseImageJsonPayload(normalized);
   } catch (error) {
     throw new TranslationError('INVALID_RESPONSE', 'The vision API returned invalid JSON.', true, {
       cause: error,

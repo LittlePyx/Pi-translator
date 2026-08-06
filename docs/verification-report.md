@@ -1,5 +1,28 @@
 # Pi Translator 发布验收报告
 
+## v0.9.0 正式发布（2026-08-06）
+
+本版本强化 PDF 阅读、扫描页 OCR、公式识别与 LaTeX 渲染，并修复 DashScope/Qwen 流式接口在结构化输出模式下可能返回 400 的兼容性问题。发布门禁如下：
+
+| 检查项 | 结果 |
+| --- | --- |
+| TypeScript 类型检查 | 通过 |
+| Vitest 单元测试 | 321/321 通过 |
+| Microsoft Edge 扩展端到端测试 | 54/54 通过 |
+| Edge MV3 生产构建 | 通过（2.73 MB） |
+| 生产依赖安全审计 | 0 个漏洞 |
+| API Key 与私钥模式扫描 | 源码及 ZIP 均未发现 |
+| ZIP 文件结构 | 32 项；`manifest.json` 位于根目录；无 `.env`、`.git`、`node_modules` 或 source map |
+| ZIP Manifest 版本 | `0.9.0` |
+
+安装包：`.output/tex-selection-translator-0.9.0-edge.zip`（887,159 bytes）
+
+SHA-256：
+
+```text
+828E0E6E0D7E2B93F9F5194D408374856F01742F36C99B570FE93B95776B24C2
+```
+
 ## v0.8.2 正式发布（2026-08-04）
 
 本版本面向 Microsoft Edge 商店重新审核，简化 API 配置流程并更新审核与商店材料。发布门禁如下：
