@@ -16,6 +16,7 @@ import {
 } from '../../core/pdf/sidepanel-session';
 import { getSettings } from '../../core/settings/repository';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
+import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import { renderTranslationContent } from '../../ui/translation-content';
 
 function element<T extends HTMLElement>(id: string): T {
@@ -56,6 +57,12 @@ const sessionLoadGate = createLatestRequestGate();
 
 function renderTranslationText(text: string, renderLatex: boolean): void {
   renderTranslationContent(translationText, text, renderLatex);
+}
+
+function presentationText(session: PdfSidePanelSession, text: string): string {
+  return session.result?.sourceKind === 'image-region'
+    ? normalizeVisionLatexText(text)
+    : text;
 }
 
 function setStatus(message: string): void {
@@ -158,7 +165,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
 
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
-  sourceText.textContent = session.sourceText;
+  sourceText.textContent = presentationText(session, session.sourceText);
   const pdfSource = parsePdfSourceUrl(session.pageUrl);
   const pageNumber = session.pageNumber ?? pdfInitialPage(session.pageUrl);
   readerHintText.textContent = pdfSource
@@ -208,7 +215,10 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     : session.result?.latencyMs
       ? `${(session.result.latencyMs / 1000).toFixed(1)} 秒`
       : '已完成';
-  const translatedText = session.result?.translatedText ?? session.partialText ?? '';
+  const translatedText = presentationText(
+    session,
+    session.result?.translatedText ?? session.partialText ?? '',
+  );
   const hasLatex = containsRenderableLatex(translatedText);
   const renderLatex = formulaRenderOverride ?? autoRenderLatex;
   formulaView.hidden = !hasLatex;
@@ -286,9 +296,10 @@ retry.addEventListener('click', () => {
 });
 
 copy.addEventListener('click', () => {
-  const text = currentSession?.result?.translatedText;
-  if (!text) return;
-  void navigator.clipboard.writeText(text)
+  const session = currentSession;
+  const text = session?.result?.translatedText;
+  if (!session || !text) return;
+  void navigator.clipboard.writeText(presentationText(session, text))
     .then(() => setStatus('已复制'))
     .catch(() => setStatus('复制失败'));
 });

@@ -368,8 +368,11 @@ test.beforeAll(async () => {
       content?: Array<{ type?: string; text?: string }>;
     }> | undefined)?.[0]?.content?.find((item) => item.type === 'text')?.text ?? '';
     const isEnergyFormula = imagePrompt.includes('Energy E = mc^2');
+    const isEscapedFormula = imagePrompt.includes('Escaped distribution');
     const isRenderedFormula = imagePrompt.includes('∑ᵢ xᵢ²');
-    const formulaLatex = isEnergyFormula
+    const formulaLatex = isEscapedFormula
+      ? String.raw`\\mathbb{Q}_\\Omega\\`
+      : isEnergyFormula
       ? 'E=mc^2'
       : isRenderedFormula
         ? '\\sum_i x_i^2 \\ge 0'
@@ -382,14 +385,18 @@ test.beforeAll(async () => {
         choices: [{
           message: {
             content: JSON.stringify({
-              translation: isEnergyFormula
+              translation: isEscapedFormula
+                ? String.raw`退出分布 $\\mathbb{Q}_\\Omega\\$ 与目标匹配，另有 $mathbbQ_\\Omega$。`
+                : isEnergyFormula
                 ? '能量关系式 $E=mc^2$ 保持不变。'
                 : isRenderedFormula
                   ? '该量满足 $\\sum_i x_i^2 \\ge 0$。'
                 : '图像区域的学术翻译结果。',
               recognizedText: shouldEcho
                 ? requestImage
-                : isEnergyFormula
+                : isEscapedFormula
+                  ? String.raw`Escaped distribution $\\mathbb{Q}_\\Omega\\$ is invariant, plus $mathbbQ_\\Omega$.`
+                  : isEnergyFormula
                   ? 'Energy $E=mc^2$ is invariant.'
                   : isRenderedFormula
                     ? 'The quantity $\\sum_i x_i^2 \\ge 0$ is nonnegative.'
@@ -2019,6 +2026,52 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   await expect(overlay.locator('.source-badge')).toHaveText('图像识别');
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.formula-latex')).toHaveText('E=mc^2');
+  await pdfPage.close();
+});
+
+test('canonicalizes over-escaped vision LaTeX before rendering and source display', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'escaped-formula.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf(String.raw`Escaped distribution Q_\Omega is invariant.`),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  const textSpan = firstPage.locator('.textLayer span')
+    .filter({ hasText: 'Escaped distribution' });
+  await expect(textSpan).toBeVisible();
+  const initialVisionRequests = visionRequests.length;
+
+  await textSpan.evaluate((element) => {
+    const range = document.createRange();
+    range.selectNodeContents(element);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  const overlay = pdfPage.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+
+  await expect.poll(() => visionRequests.length).toBe(initialVisionRequests + 1);
+  await expect(overlay.locator('.uncertain-note')).toHaveCount(0);
+  await expect(overlay.locator('.body .pi-math-inline math')).toHaveCount(2);
+  await expect(overlay.locator('.body math [mathvariant="double-struck"]').first())
+    .toHaveText('Q');
+
+  await overlay.locator('.formula-view').click();
+  const sourceText = await overlay.locator('.body').textContent() ?? '';
+  expect(sourceText).toContain(String.raw`$\mathbb{Q}_\Omega$`);
+  expect(sourceText).not.toContain(String.raw`$\\mathbb`);
+  expect(sourceText).not.toContain('mathbbQ');
+
+  await overlay.locator('.recognized-source summary').click();
+  const formulaSource = await overlay.locator('.formula-latex').textContent() ?? '';
+  expect(formulaSource).toContain(String.raw`\mathbb{Q}_\Omega`);
+  expect(formulaSource).not.toContain(String.raw`\\mathbb`);
   await pdfPage.close();
 });
 

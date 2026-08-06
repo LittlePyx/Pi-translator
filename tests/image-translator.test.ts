@@ -470,6 +470,33 @@ describe('image region translator', () => {
     expect(result.translatedText).toBe('line 1\nline 2 $x$');
   });
 
+  it('returns copy-ready single-backslash LaTeX when vision JSON is double escaped', async () => {
+    const overescaped = JSON.stringify({
+      translation: String.raw`其中 $\\mathbb{Q}_\\Omega\\$ 与 $Z_\\tau=x$ 匹配，另有 $mathbbQ_\\Omega$。`,
+      recognizedText: String.raw`where $\\mathbb{Q}_\\Omega\\$ matches $Z_\\tau=x$, plus $mathbbQ_\\Omega$.`,
+      formulaLatex: [String.raw`\\mathbb{Q}_\\Omega\\`, String.raw`Z_\\tau`, String.raw`mathbbQ_\\Omega`],
+      uncertainSpans: [],
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: overescaped } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+
+    const result = await new OpenAiCompatibleTranslator().translateImageRegion(
+      input,
+      options,
+      { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' },
+      new AbortController().signal,
+    );
+
+    expect(result.translatedText)
+      .toBe(String.raw`其中 $\mathbb{Q}_\Omega$ 与 $Z_\tau=x$ 匹配，另有 $\mathbb{Q}_\Omega$。`);
+    expect(result.recognizedText)
+      .toBe(String.raw`where $\mathbb{Q}_\Omega$ matches $Z_\tau=x$, plus $\mathbb{Q}_\Omega$.`);
+    expect(result.formulaLatex)
+      .toEqual([String.raw`\mathbb{Q}_\Omega`, String.raw`Z_\tau=x`, String.raw`\mathbb{Q}_\Omega`]);
+    expect(result.formulaNeedsReview).toBeUndefined();
+  });
+
   it('keeps the first usable LaTeX result without a hidden corrective request', async () => {
     const invalid = JSON.stringify({
       translation: '译文缺少公式',

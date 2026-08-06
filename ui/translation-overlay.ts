@@ -13,6 +13,7 @@ import type {
 } from '../core/document/document-memory-repository';
 import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
+import { validateImageFormulaResult } from '../core/translation/formula-output-validation';
 import {
   renderTranslationContent,
   renderTranslationContents,
@@ -22,6 +23,46 @@ import type {
   TranslationMarkerLocationState,
   TranslationMarkerSummary,
 } from '../core/content/session-translation-markers';
+import {
+  normalizeFormulaLatexForClipboard,
+  normalizeLatexForClipboard,
+} from './latex-copy';
+
+function normalizeVisionResultForPresentation(result: TranslateResult): TranslateResult {
+  if (result.sourceKind !== 'image-region') return result;
+  const normalized: TranslateResult = {
+    ...result,
+    originalText: normalizeLatexForClipboard(result.originalText),
+    translatedText: normalizeLatexForClipboard(result.translatedText),
+    ...(result.formulaLatex
+      ? { formulaLatex: result.formulaLatex.map(normalizeFormulaLatexForClipboard) }
+      : {}),
+    ...(result.alignedSegments
+      ? {
+          alignedSegments: result.alignedSegments.map((segment) => ({
+            ...segment,
+            originalText: normalizeLatexForClipboard(segment.originalText),
+            translatedText: normalizeLatexForClipboard(segment.translatedText),
+          })),
+        }
+      : {}),
+  };
+  if (!normalized.formulaNeedsReview) return normalized;
+  const validation = validateImageFormulaResult({
+    recognizedText: normalized.originalText,
+    translatedText: normalized.translatedText,
+    formulaLatex: normalized.formulaLatex ?? [],
+    uncertainSpans: normalized.uncertainSpans ?? [],
+  });
+  if (!validation.valid) return normalized;
+  return {
+    ...normalized,
+    formulaNeedsReview: false,
+    uncertainSpans: normalized.uncertainSpans?.filter(
+      (span) => !span.startsWith('公式 LaTeX 未通过自动校验'),
+    ) ?? [],
+  };
+}
 
 const STYLES = `
   :host {
@@ -278,7 +319,7 @@ export class TranslationOverlay {
     surface.append(toolbar);
     if(!summaries.length){const empty=document.createElement('div');empty.className='idle';const title=document.createElement('strong');title.textContent='本文暂无标记';const text=document.createElement('p');text.textContent='轻标记重要译句后，会按页码显示在这里。';empty.append(title,text);surface.append(empty);this.showSurface(surface);return}
     const list=document.createElement('div');list.className='marker-notes-list';
-    for(const summary of summaries){const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;const main=this.button('','marker-note-main',summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文');const meta=document.createElement('div');meta.className='marker-note-meta';const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);if(summary.locationState==='missing'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='原文位置已变化';meta.append(status)}else if(summary.locationState==='pending'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='点击定位';meta.append(status)}const source=document.createElement('div');source.className='marker-note-source';source.textContent=summary.originalText;const target=document.createElement('div');target.className='marker-note-target';renderTranslationContent(target,summary.translatedText,false);main.append(meta,source,target);main.addEventListener('click',()=>{void this.actions.onNavigateSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});const actions=document.createElement('div');actions.className='marker-note-actions';const copy=this.button('复制','', '复制这条标记');copy.addEventListener('click',()=>{void navigator.clipboard.writeText(`> ${summary.originalText.replace(/\r?\n/gu,'\n> ')}\n\n${summary.translatedText}`).then(()=>{copy.textContent='已复制';copy.title='已复制'})});const remove=this.button('删除','', '删除这条标记');remove.addEventListener('click',()=>{void this.actions.onRemoveSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});actions.append(copy,remove);item.append(main,actions);list.append(item)}
+    for(const summary of summaries){const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;const main=this.button('','marker-note-main',summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文');const meta=document.createElement('div');meta.className='marker-note-meta';const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);if(summary.locationState==='missing'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='原文位置已变化';meta.append(status)}else if(summary.locationState==='pending'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='点击定位';meta.append(status)}const source=document.createElement('div');source.className='marker-note-source';source.textContent=summary.originalText;const target=document.createElement('div');target.className='marker-note-target';renderTranslationContent(target,summary.translatedText,false);main.append(meta,source,target);main.addEventListener('click',()=>{void this.actions.onNavigateSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});const actions=document.createElement('div');actions.className='marker-note-actions';const copy=this.button('复制','', '复制这条标记');copy.addEventListener('click',()=>{const sourceText=normalizeLatexForClipboard(summary.originalText).replace(/\r?\n/gu,'\n> ');const targetText=normalizeLatexForClipboard(summary.translatedText);void navigator.clipboard.writeText(`> ${sourceText}\n\n${targetText}`).then(()=>{copy.textContent='已复制';copy.title='已复制'})});const remove=this.button('删除','', '删除这条标记');remove.addEventListener('click',()=>{void this.actions.onRemoveSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});actions.append(copy,remove);item.append(main,actions);list.append(item)}
     surface.append(list);this.showSurface(surface);
   }
 
@@ -361,7 +402,7 @@ export class TranslationOverlay {
   }
 
   private renderResult(result:TranslateResult):void {
-    this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
+    result=normalizeVisionResultForPresentation(result);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
     if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
     if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const older=this.button('‹','icon','上一条翻译（Alt+↑）');older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=document.createElement('span');counter.className='counter';counter.textContent=`${this.historyIndex+1}/${navigationHistory.length}`;const newer=this.button('›','icon','下一条翻译（Alt+↓）');newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));tools.prepend(older,counter,newer)}
@@ -382,7 +423,7 @@ export class TranslationOverlay {
         renderTargets.push({container:target,text:segment.translatedText,renderLatex});
         pair.append(source,target);
         const actions=document.createElement('div');actions.className='segment-actions';
-        const copy=this.button('复制本句','mini');copy.addEventListener('click',()=>void navigator.clipboard.writeText(segment.translatedText));
+        const copy=this.button('复制本句','mini');copy.addEventListener('click',()=>void navigator.clipboard.writeText(normalizeLatexForClipboard(segment.translatedText)));
         const retry=this.button('仅翻译此句','mini');retry.addEventListener('click',()=>this.actions.onTranslateText(segment.originalText));
         actions.append(copy,retry);
         if(this.actions.canMarkSource?.(result,segment)){
@@ -400,7 +441,7 @@ export class TranslationOverlay {
     }else{surface.append(this.translatedTextElement(result.translatedText,'body',renderLatex))}
     if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?'公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。':`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;surface.append(uncertain)}
     if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent='部分 LaTeX 使用了保守保护策略，请复制后检查。';surface.append(warning)}
-    const footer=document.createElement('div');footer.className='footer';const copy=this.button('复制','action copy-action','复制译文');copy.addEventListener('click',async()=>{await navigator.clipboard.writeText(result.translatedText);copy.textContent='已复制'});footer.append(copy);if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}footer.append(this.moreMenu(result));surface.append(footer);this.showSurface(surface);
+    const footer=document.createElement('div');footer.className='footer';const copy=this.button('复制','action copy-action','复制译文（保留标准 LaTeX）');copy.addEventListener('click',async()=>{await navigator.clipboard.writeText(normalizeLatexForClipboard(result.translatedText));copy.textContent='已复制'});footer.append(copy);if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}footer.append(this.moreMenu(result));surface.append(footer);this.showSurface(surface);
   }
 
   private moreMenu(result:TranslateResult):HTMLElement {
@@ -415,10 +456,10 @@ export class TranslationOverlay {
   }
 
   private recognizedSource(result:TranslateResult,label:string):HTMLElement {
-    const recognized=document.createElement('details');recognized.className='recognized-source';const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='recognized-content';const source=document.createElement('div');source.className='recognized-text';source.textContent=result.originalText;const actions=document.createElement('div');actions.className='recognized-actions';const copy=this.button('复制原文','');const edit=this.button('编辑后重译','');actions.append(copy,edit);content.append(source,actions);recognized.append(summary,content);
-    if(result.formulaLatex?.length){const formulas=document.createElement('pre');formulas.className='formula-latex';formulas.textContent=result.formulaLatex.join('\n\n');content.insertBefore(formulas,actions);const copyFormula=this.button('复制公式 LaTeX','');copyFormula.addEventListener('click',async()=>{await navigator.clipboard.writeText(result.formulaLatex!.join('\n\n'));copyFormula.textContent='已复制 LaTeX'});actions.prepend(copyFormula)}
-    copy.addEventListener('click',async()=>{await navigator.clipboard.writeText(result.originalText);copy.textContent='已复制'});
-    edit.addEventListener('click',()=>{const editor=document.createElement('textarea');editor.className='recognized-editor';editor.value=result.originalText;editor.setAttribute('aria-label','编辑识别原文');source.replaceWith(editor);actions.replaceChildren();const commit=this.button('用修正文本重译','commit');const cancel=this.button('取消编辑','');actions.append(commit,cancel);commit.addEventListener('click',()=>{const text=editor.value.trim();if(!text){editor.focus();return}this.actions.onTranslateText(text)});cancel.addEventListener('click',()=>this.renderResult(result));queueMicrotask(()=>{editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)})});
+    const recognizedText=normalizeLatexForClipboard(result.originalText);const recognized=document.createElement('details');recognized.className='recognized-source';const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='recognized-content';const source=document.createElement('div');source.className='recognized-text';source.textContent=recognizedText;const actions=document.createElement('div');actions.className='recognized-actions';const copy=this.button('复制原文','');const edit=this.button('编辑后重译','');actions.append(copy,edit);content.append(source,actions);recognized.append(summary,content);
+    if(result.formulaLatex?.length){const formulaSource=result.formulaLatex.map(normalizeFormulaLatexForClipboard).join('\n\n');const formulas=document.createElement('pre');formulas.className='formula-latex';formulas.textContent=formulaSource;content.insertBefore(formulas,actions);const copyFormula=this.button('复制公式 LaTeX','');copyFormula.title='复制标准单反斜杠 LaTeX';copyFormula.addEventListener('click',async()=>{await navigator.clipboard.writeText(formulaSource);copyFormula.textContent='已复制 LaTeX'});actions.prepend(copyFormula)}
+    copy.addEventListener('click',async()=>{await navigator.clipboard.writeText(recognizedText);copy.textContent='已复制'});
+    edit.addEventListener('click',()=>{const editor=document.createElement('textarea');editor.className='recognized-editor';editor.value=recognizedText;editor.setAttribute('aria-label','编辑识别原文');source.replaceWith(editor);actions.replaceChildren();const commit=this.button('用修正文本重译','commit');const cancel=this.button('取消编辑','');actions.append(commit,cancel);commit.addEventListener('click',()=>{const text=editor.value.trim();if(!text){editor.focus();return}this.actions.onTranslateText(text)});cancel.addEventListener('click',()=>this.renderResult(result));queueMicrotask(()=>{editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)})});
     return recognized;
   }
 

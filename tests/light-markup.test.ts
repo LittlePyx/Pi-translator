@@ -43,4 +43,11 @@ describe('light result markup', () => {
       { kind: 'text', text: '公式 $a**b**c$ 不应触发加粗' },
     ]);
   });
+
+  it('protects strong markers inside double-escaped display delimiters', () => {
+    expect(splitLightMarkup(String.raw`正文 \\[a**b**c\\] **结论**`)).toEqual([
+      { kind: 'text', text: String.raw`正文 \\[a**b**c\\] ` },
+      { kind: 'strong', text: '结论' },
+    ]);
+  });
 });

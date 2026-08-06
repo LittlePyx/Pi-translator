@@ -1,8 +1,10 @@
 import katex from 'katex';
+import { containsLatexRowStructure } from './latex-structure';
 
-const NESTED_ROW_ENVIRONMENT_PATTERN =
-  /\\begin\s*\{(?:cases|aligned|alignedat|array|matrix|pmatrix|bmatrix|vmatrix|Vmatrix|gathered|split)\}/u;
 const NESTED_TAG_PATTERN = /\\tag\s*\{([^{}]{1,40})\}/gu;
+const OVERESCAPED_COMMAND_PATTERN = /(^|[^\\])(\\{2,})([A-Za-z]{2,}\*?)/gu;
+const PSEUDO_FONT_COMMAND_PATTERN =
+  /(^|[^A-Za-z\\])(mathbb|mathbf|mathrm|mathcal|mathsf|mathtt|mathit|boldsymbol)([A-Za-z])(?=[^A-Za-z]|$)/gu;
 const MATHML_CACHE_LIMIT = 256;
 const mathMlCache = new Map<string, string | null>();
 
@@ -35,21 +37,59 @@ function renderMathMl(tex: string, displayMode: boolean): string | undefined {
   }
 }
 
+function unwrapOverescapedMathDelimiter(tex: string): string {
+  const trimmed = tex.trim();
+  const wrapped = /^(\\{2,})([[(])([\s\S]*)(\\{2,})([\])])$/u.exec(trimmed);
+  if (wrapped) {
+    const [, openerSlashes, opener, body, closerSlashes, closer] = wrapped;
+    const matchingBrackets = (opener === '[' && closer === ']') ||
+      (opener === '(' && closer === ')');
+    if (matchingBrackets && openerSlashes?.length === closerSlashes?.length) {
+      return body?.trim() ?? '';
+    }
+  }
+  return tex;
+}
+
 /**
- * KaTeX rejects `\tag` inside row environments such as `cases`. Vision models
- * still produce this form fairly often when transcribing numbered equations.
- * This normalization is used only for the rendered copy; the translation text
- * kept for copying/exporting remains untouched.
+ * Repairs only the rendered copy of a math segment. Two backslashes before a
+ * multi-letter command are a common vision/JSON double-escaping artefact. A
+ * real row separator followed by a TeX command has three backslashes (`\\` +
+ * `\command`), so exactly two can be collapsed without changing aligned/cases
+ * row breaks. Bare `mathbbQ`-style pseudo commands are repaired here, inside an
+ * already delimited math segment, and never in ordinary prose.
  */
-function createCompatibleDisplayCopy(tex: string): string | undefined {
-  if (!NESTED_ROW_ENVIRONMENT_PATTERN.test(tex) || !NESTED_TAG_PATTERN.test(tex)) {
-    NESTED_TAG_PATTERN.lastIndex = 0;
-    return undefined;
+function createCompatibleMathCopy(tex: string, displayMode: boolean): string | undefined {
+  let compatible = unwrapOverescapedMathDelimiter(tex);
+  const hasRowEnvironment = containsLatexRowStructure(compatible);
+  compatible = compatible.replace(
+    OVERESCAPED_COMMAND_PATTERN,
+    (match, prefix: string, slashes: string, command: string) => {
+      if (hasRowEnvironment && slashes.length !== 2) return match;
+      return `${prefix}\\${command}`;
+    },
+  );
+  compatible = compatible.replace(
+    PSEUDO_FONT_COMMAND_PATTERN,
+    (_match, prefix: string, command: string, value: string) =>
+      `${prefix}\\${command}{${value}}`,
+  );
+
+  if (!hasRowEnvironment) {
+    compatible = compatible.replace(/\\{2,}\s*$/u, '').trim();
   }
 
+  if (
+    displayMode &&
+    containsLatexRowStructure(compatible) &&
+    NESTED_TAG_PATTERN.test(compatible)
+  ) {
+    NESTED_TAG_PATTERN.lastIndex = 0;
+    compatible = compatible.replace(NESTED_TAG_PATTERN, (_match, tag: string) =>
+      `\\qquad\\text{(${tag.trim()})}`);
+  }
   NESTED_TAG_PATTERN.lastIndex = 0;
-  return tex.replace(NESTED_TAG_PATTERN, (_match, tag: string) =>
-    `\\qquad\\text{(${tag.trim()})}`);
+  return compatible === tex ? undefined : compatible;
 }
 
 export function renderLatexMathMl(tex: string, displayMode: boolean): string | undefined {
@@ -57,13 +97,18 @@ export function renderLatexMathMl(tex: string, displayMode: boolean): string | u
   const cached = cachedMathMl(cacheKey);
   if (cached !== null) return cached;
   const exact = renderMathMl(tex, displayMode);
-  if (exact || !displayMode) {
+  if (exact) {
     cacheMathMl(cacheKey, exact);
     return exact;
   }
-
-  const compatibleCopy = createCompatibleDisplayCopy(tex);
-  const rendered = compatibleCopy ? renderMathMl(compatibleCopy, displayMode) : undefined;
-  cacheMathMl(cacheKey, rendered);
-  return rendered;
+  const compatibleCopy = createCompatibleMathCopy(tex, displayMode);
+  const compatible = compatibleCopy
+    ? renderMathMl(compatibleCopy, displayMode)
+    : undefined;
+  if (compatible) {
+    cacheMathMl(cacheKey, compatible);
+    return compatible;
+  }
+  cacheMathMl(cacheKey, undefined);
+  return undefined;
 }

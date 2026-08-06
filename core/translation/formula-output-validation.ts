@@ -1,4 +1,5 @@
 import type { ProviderImageTranslationResult } from './types';
+import { containsLatexRowStructure } from './latex-structure';
 
 export interface FormulaValidationResult {
   valid: boolean;
@@ -162,17 +163,129 @@ function sameFormulae(left: string[], right: string[]): boolean {
 
 const GREEK_COMMAND_NAME = '(?:Alpha|Beta|Gamma|Delta|Epsilon|Zeta|Eta|Theta|Iota|Kappa|Lambda|Mu|Nu|Xi|Omicron|Pi|Rho|Sigma|Tau|Upsilon|Phi|Chi|Psi|Omega|alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|omicron|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega)';
 
+const KNOWN_VISION_COMMAND = new RegExp(
+  `^(?:${GREEK_COMMAND_NAME}|begin|end|frac|dfrac|tfrac|sqrt|sum|prod|coprod|int|iint|iiint|oint|lim|limsup|liminf|arg|min|max|sup|inf|log|ln|exp|sin|cos|tan|cot|sec|csc|det|gcd|Pr|operatorname|mathop|mathrm|mathbf|mathbb|mathcal|mathsf|mathtt|mathit|boldsymbol|text|textbf|textit|textstyle|displaystyle|scriptstyle|scriptscriptstyle|tag|left|right|middle|big|Big|bigg|Bigg|cdot|times|pm|mp|le|leq|ge|geq|neq|approx|sim|simeq|equiv|propto|in|notin|ni|subset|subseteq|supset|supseteq|cup|cap|setminus|forall|exists|nabla|partial|infty|ell|hbar|hat|widehat|bar|overline|underline|tilde|widetilde|vec|dot|ddot|overbrace|underbrace|overset|underset|stackrel|langle|rangle|lVert|rVert|vert|Vert|mid|quad|qquad)\\*?$`,
+  'u',
+);
+
+/**
+ * Some vision providers apply JSON escaping twice, so a command that should
+ * reach us as `\mathbb` arrives as `\\mathbb`. Only repair this form inside a
+ * known formula body. In row-bearing structures, two slashes before a named
+ * command can be reduced, while three (`\\` plus `\command`) and bare row
+ * separators remain untouched.
+ */
+function repairOverescapedVisionCommands(formula: string): string {
+  const hasRowStructure = containsLatexRowStructure(formula);
+  const commandRuns = [...formula.matchAll(/(?<!\\)(\\{2,})([A-Za-z@]{2,}\*?)/gu)];
+  const hasExtraEscapeLayer = commandRuns.some((match) => (
+    match[1]?.length === 2 && KNOWN_VISION_COMMAND.test(match[2] ?? '')
+  ));
+  const normalizedRows = hasRowStructure && hasExtraEscapeLayer
+    ? formula.replace(
+        /(?<!\\)\\{4,}/gu,
+        (slashes) => '\\'.repeat(Math.ceil(slashes.length / 2)),
+      )
+    : formula;
+  return normalizedRows
+    .replace(
+      /(?<!\\)(\\{2,})([A-Za-z@]{2,}\*?)/gu,
+      (match: string, slashes: string, command: string) => {
+        if (
+          hasRowStructure &&
+          (slashes.length !== 2 || !KNOWN_VISION_COMMAND.test(command))
+        ) return match;
+        return `\\${command}`;
+      },
+    )
+    // A trailing row break is not meaningful outside a multiline environment.
+    // Vision models commonly produce it by escaping the closing `$` as `\\$`.
+    .replace(/(?<!\\)\\{2,}(?=\s*$)/u, '');
+}
+
+/**
+ * Normalize paired display delimiters only when the whole pair is visible.
+ * This intentionally does not rewrite standalone `\\[4pt]`, which is a valid
+ * optional-spacing form after a LaTeX row break.
+ */
+function repairOverescapedVisionDelimiters(text: string): string {
+  return text
+    // Some providers wrap a display delimiter in an additional dollar pair.
+    // Consume both outer dollars together; removing only the trailing dollar
+    // leaves an unmatched opener and makes otherwise valid LaTeX fail review.
+    .replace(
+      /(?<!\\)\$(\\{2,})\[([\s\S]*?)(?<!\\)(\\{2,})\]\$(?!\$)/gu,
+      (_match, _opener: string, body: string, _closer: string) => `\\[${body}\\]`,
+    )
+    .replace(
+      /(?<!\\)\$(\\{2,})\(([\s\S]*?)(?<!\\)(\\{2,})\)\$(?!\$)/gu,
+      (_match, _opener: string, body: string, _closer: string) => `\\(${body}\\)`,
+    )
+    .replace(
+      /(?<!\\)(\\{2,})\[([\s\S]*?)(?<!\\)(\\{2,})\](?!\\)(?:\$(?!\$))?/gu,
+      (_match, _opener: string, body: string, _closer: string) => `\\[${body}\\]`,
+    )
+    .replace(
+      /(?<!\\)(\\{2,})\(([\s\S]*?)(?<!\\)(\\{2,})\)(?!\\)(?:\$(?!\$))?/gu,
+      (_match, _opener: string, body: string, _closer: string) => `\\(${body}\\)`,
+    );
+}
+
+function repairVisionFontCommand(
+  formula: string,
+  command: 'mathbb' | 'mathbf' | 'mathrm' | 'mathcal' | 'mathsf' | 'mathtt' | 'mathit' | 'boldsymbol',
+): string {
+  const escaped = new RegExp(`\\\\${command}\\s*(?:\\{\\s*([^{}]+?)\\s*\\}|([A-Za-z]))`, 'gu');
+  const bare = new RegExp(`(^|[^A-Za-z0-9\\\\])${command}\\s*(?:\\{\\s*([^{}]+?)\\s*\\}|([A-Za-z]))`, 'gu');
+  return formula
+    .replace(escaped, (_match, group: string, letter: string) => (
+      `\\${command}{${(group ?? letter).trim()}}`
+    ))
+    .replace(bare, (_match, prefix: string, group: string, letter: string) => (
+      `${prefix}\\${command}{${(group ?? letter).trim()}}`
+    ));
+}
+
+function repairVisionRomanDifferential(formula: string): string {
+  return formula
+    .replace(/\\mathrm\s*\{\s*d\s*\}/gu, '\\mathrm{d}')
+    .replace(/\\mathrm\s+d(?![A-Za-z])/gu, '\\mathrm{d}')
+    .replace(/(^|[^A-Za-z0-9\\])mathrm\s*\{\s*d\s*\}/gu, '$1\\mathrm{d}')
+    .replace(/(^|[^A-Za-z0-9\\])mathrm\s+d(?![A-Za-z])/gu, '$1\\mathrm{d}');
+}
+
 /** Repairs a small set of deterministic pseudo-TeX forms emitted by OCR. */
 export function repairCommonVisionLatex(formula: string): string {
-  return formula
+  const escaped = repairOverescapedVisionCommands(formula)
     .replace(/\\textbb\s*(?:\{([^{}]+)\}|([A-Za-z]))/gu, (_match, group: string, letter: string) =>
       `\\mathbb{${group ?? letter}}`)
     .replace(new RegExp(`\\\\text\\s*\\{\\s*(${GREEK_COMMAND_NAME})\\s*\\}`, 'gu'), '\\$1')
     .replace(new RegExp(`\\\\text(${GREEK_COMMAND_NAME})(?![A-Za-z])`, 'gu'), '\\$1');
+  const fontCommands = [
+    'mathbb',
+    'mathbf',
+    'mathrm',
+    'mathcal',
+    'mathsf',
+    'mathtt',
+    'mathit',
+    'boldsymbol',
+  ] as const;
+  const repairedFonts = fontCommands.reduce(
+    (value, command) => repairVisionFontCommand(value, command),
+    escaped,
+  );
+  return repairVisionRomanDifferential(repairedFonts);
 }
 
-function repairDelimitedVisionLatex(text: string): string {
-  const numbered = text.replace(
+/**
+ * Repairs only delimited mathematical regions in a mixed OCR/translation
+ * passage. Plain prose and path-like backslashes outside those regions remain
+ * byte-for-byte unchanged, so this is also safe for legacy cached results.
+ */
+export function normalizeVisionLatexText(text: string): string {
+  const delimited = repairOverescapedVisionDelimiters(text);
+  const numbered = delimited.replace(
     /\\\[([\s\S]*?)\\\]\s*\(([A-Za-z]?\d+(?:[.-]\d+)*[A-Za-z]?)\)/gu,
     (match, formula: string, tag: string) => (
       (() => {
@@ -193,8 +306,8 @@ function repairImageFormulaResult(
 ): ProviderImageTranslationResult {
   return {
     ...result,
-    recognizedText: repairDelimitedVisionLatex(result.recognizedText),
-    translatedText: repairDelimitedVisionLatex(result.translatedText),
+    recognizedText: normalizeVisionLatexText(result.recognizedText),
+    translatedText: normalizeVisionLatexText(result.translatedText),
     formulaLatex: result.formulaLatex.map(repairCommonVisionLatex),
   };
 }
