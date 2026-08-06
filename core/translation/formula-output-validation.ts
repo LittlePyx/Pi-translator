@@ -257,7 +257,19 @@ function repairVisionRomanDifferential(formula: string): string {
 function repairVisionOptimizationOperator(formula: string): string {
   const operatorBody = String.raw`arg\s*(?:\\,\s*)?(min|max)`;
   const wrappedOperator = String.raw`\\(?:operatorname\*?|mathrm|text)\s*\{\s*${operatorBody}\s*\}`;
-  const commandOperator = String.raw`\\arg\s*\\(min|max)`;
+  // KaTeX accepts both the compact `\argmin` command and the split
+  // `\arg\min` spelling. Vision models emit both forms.
+  const commandOperator = String.raw`\\arg\s*\\?(min|max)(?![A-Za-z])`;
+  const mathopRomanOperator = String.raw`\\mathop\s*\{\s*\\rm\s+${operatorBody}\s*\}`;
+  const mathopWrappedOperator = String.raw`\\mathop\s*\{\s*\\(?:operatorname\*?|mathrm|text)\s*\{\s*${operatorBody}\s*\}\s*\}`;
+  const legacyRomanOperator = String.raw`\{\s*\\rm\s+${operatorBody}\s*\}`;
+  const operatorPatterns = [
+    mathopRomanOperator,
+    mathopWrappedOperator,
+    wrappedOperator,
+    commandOperator,
+    legacyRomanOperator,
+  ];
   const mathAtom = String.raw`(?:[A-Za-z]|\\(?:boldsymbol|mathbf|mathbb|mathcal|mathrm)\s*\{[^{}]+\})`;
   const atomScripts = String.raw`(?:\s*[_^]\s*(?:\{[^{}]+\}|[A-Za-z0-9]|\\[A-Za-z]+))*`;
   const domain = String.raw`${mathAtom}${atomScripts}\s*(?:\\in|∈)\s*${mathAtom}${atomScripts}(?:\s*\([^()]*\))?`;
@@ -265,15 +277,13 @@ function repairVisionOptimizationOperator(formula: string): string {
   const canonical = (kind: string, lowerLimit?: string): string =>
     `\\operatorname*{arg\\,${kind}}${lowerLimit ? `_{${lowerLimit.trim()}}` : ''}`;
 
-  const canonicalOperator = formula
-    .replace(
-      new RegExp(`${wrappedOperator}(?=\\s*_)`, 'gu'),
+  const canonicalOperator = operatorPatterns.reduce(
+    (value, pattern) => value.replace(
+      new RegExp(`${pattern}(?=\\s*_)`, 'gu'),
       (_match, kind: string) => canonical(kind),
-    )
-    .replace(
-      new RegExp(`${commandOperator}(?=\\s*_)`, 'gu'),
-      (_match, kind: string) => canonical(kind),
-    )
+    ),
+    formula,
+  )
     .replace(
       /(^|[^A-Za-z0-9\\])arg\s*(min|max)(?=\s*_)/gu,
       (_match, prefix: string, kind: string) =>
@@ -283,15 +293,13 @@ function repairVisionOptimizationOperator(formula: string): string {
   // OCR occasionally drops only the `_ { ... }` around an optimization
   // domain. Repair the narrow, high-confidence shape where a membership
   // condition is immediately followed by the objective's visible left brace.
-  return canonicalOperator
-    .replace(
-      new RegExp(`${wrappedOperator}(?!\\s*[_^])\\s*(${domain})${objectiveBrace}`, 'gu'),
+  return operatorPatterns.reduce(
+    (value, pattern) => value.replace(
+      new RegExp(`${pattern}(?!\\s*[_^])\\s*(${domain})${objectiveBrace}`, 'gu'),
       (_match, kind: string, lowerLimit: string) => canonical(kind, lowerLimit),
-    )
-    .replace(
-      new RegExp(`${commandOperator}(?!\\s*[_^])\\s*(${domain})${objectiveBrace}`, 'gu'),
-      (_match, kind: string, lowerLimit: string) => canonical(kind, lowerLimit),
-    )
+    ),
+    canonicalOperator,
+  )
     .replace(
       new RegExp(`(^|[^A-Za-z0-9\\\\])arg\\s*(min|max)\\s+(?![_^])(${domain})${objectiveBrace}`, 'gu'),
       (_match, prefix: string, kind: string, lowerLimit: string) =>

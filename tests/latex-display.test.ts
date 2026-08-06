@@ -151,10 +151,99 @@ describe('LaTeX result display', () => {
   it('separates one top-level equation number from a scrolling display body', () => {
     const source = String.raw`\arg\min_x f(x),\qquad \text{s.t. }g(x)=0,\tag{8}`;
     expect(latexRenderParts(source, true)).toEqual({
-      tex: String.raw`\arg\min_x f(x),\qquad \text{s.t. }g(x)=0,`,
+      tex: String.raw`\operatorname*{arg\,min}_x f(x),\qquad \text{s.t. }g(x)=0,`,
       equationTag: '8',
     });
+    expect(source).toBe(String.raw`\arg\min_x f(x),\qquad \text{s.t. }g(x)=0,\tag{8}`);
     expect(latexRenderParts(source, false)).toEqual({ tex: source });
+  });
+
+  it('infers display mode for tagged and high-confidence optimization formulae', () => {
+    const taggedSource = String.raw`Prose $x=y\tag{8}$ continues.`;
+    const tagged = splitLatexDisplaySegments(taggedSource).find(
+      (segment) => segment.kind === 'math',
+    );
+    expect(tagged).toMatchObject({
+      kind: 'math',
+      tex: String.raw`x=y\tag{8}`,
+      raw: String.raw`$x=y\tag{8}$`,
+      displayMode: true,
+    });
+
+    const optimizerSource = String.raw`Prose $Q^{\Pi^*}=\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}$ continues.`;
+    const optimizer = splitLatexDisplaySegments(optimizerSource).find(
+      (segment) => segment.kind === 'math',
+    );
+    expect(optimizer).toMatchObject({ kind: 'math', displayMode: true });
+    if (optimizer?.kind !== 'math') throw new Error('Expected math segment.');
+    const parts = latexRenderParts(optimizer.tex, optimizer.displayMode);
+    expect(parts.tex).toContain(String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}`);
+    const rendered = renderLatexMathMl(parts.tex, optimizer.displayMode) ?? '';
+    expect(rendered).toContain('<munder>');
+    expect(rendered).not.toContain('<msub>');
+    expect(optimizerSource).toContain(String.raw`\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)}`);
+  });
+
+  it('preserves blackboard-bold symbols while placing a legacy mathop limit underneath', () => {
+    const source = String.raw`$\mathbb{Q}^{\Pi^*}=\mathop{\rm argmin}_{\mathbb{P}\in\mathcal{P}(V,\Omega)}\left\{\mathrm{KL}(\mathbb{P}\Vert\mathbb{Q}):=\mathbb{E}_{\mathbb{P}}\left[\log\frac{\mathrm{d}\mathbb{P}}{\mathrm{d}\mathbb{Q}}(Z)\right]\right\}$`;
+    const formula = splitLatexDisplaySegments(source).find(
+      (segment) => segment.kind === 'math',
+    );
+    expect(formula).toMatchObject({ kind: 'math', displayMode: true });
+    if (formula?.kind !== 'math') throw new Error('Expected math segment.');
+
+    const parts = latexRenderParts(formula.tex, formula.displayMode);
+    expect(parts.tex).toContain(
+      String.raw`\operatorname*{arg\,min}_{\mathbb{P}\in\mathcal{P}(V,\Omega)}`,
+    );
+    const rendered = renderLatexMathMl(parts.tex, formula.displayMode) ?? '';
+    expect(rendered).toContain('<munder>');
+    expect(rendered).toMatch(
+      /<munder>[\s\S]*?arg[^<]*min[\s\S]*?mathvariant="double-struck">P<\/mi>[\s\S]*?<\/munder>/u,
+    );
+    expect(rendered).toContain('mathvariant="double-struck"');
+    expect(rendered).toContain('>P</mi>');
+    expect(rendered).toContain('>Q</mi>');
+    expect(rendered).toContain('>E</mi>');
+    expect(source).toContain(String.raw`\mathop{\rm argmin}`);
+  });
+
+  it('promotes multiline standalone formulae but leaves ordinary prose inline', () => {
+    const multiline = [
+      'before',
+      String.raw`$Q^{\Pi^*}=`,
+      String.raw`\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}$`,
+      'after',
+    ].join('\n');
+    const formula = splitLatexDisplaySegments(multiline).find(
+      (segment) => segment.kind === 'math',
+    );
+    expect(formula).toMatchObject({ kind: 'math', displayMode: true });
+
+    const wrappedSource = [
+      'before',
+      String.raw`**$\frac{a_1+a_2+a_3+a_4}{b_1+b_2+b_3+b_4}=c_1+c_2+c_3$**`,
+      'after',
+    ].join('\n');
+    const wrappedStart = wrappedSource.indexOf('$');
+    const wrappedEnd = wrappedSource.lastIndexOf('$') + 1;
+    const wrappedRaw = wrappedSource.slice(wrappedStart, wrappedEnd);
+    expect(splitLatexDisplaySegments(wrappedRaw, {
+      sourceText: wrappedSource,
+      sourceOffset: wrappedStart,
+    })).toEqual([{
+      kind: 'math',
+      tex: String.raw`\frac{a_1+a_2+a_3+a_4}{b_1+b_2+b_3+b_4}=c_1+c_2+c_3`,
+      raw: wrappedRaw,
+      displayMode: true,
+    }]);
+
+    expect(splitLatexDisplaySegments('Ordinary prose $x+y$ continues.')).toContainEqual({
+      kind: 'math',
+      tex: 'x+y',
+      raw: '$x+y$',
+      displayMode: false,
+    });
   });
 
   it('keeps one aligned equation number fixed and normalizes existing parentheses', () => {

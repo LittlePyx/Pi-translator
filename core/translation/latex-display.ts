@@ -1,4 +1,5 @@
 import { containsLatexRowStructure } from './latex-structure';
+import { repairCommonVisionLatex } from './formula-output-validation';
 
 export type LatexDisplaySegment =
   | { kind: 'text'; text: string }
@@ -10,6 +11,74 @@ export interface LatexRenderParts {
 }
 
 const SIMPLE_DISPLAY_TAG = /(\\+)tag\s*\{([^{}]{1,40})\}/gu;
+const STRONG_EDGE_MARKERS = ['***', '___', '**', '__'] as const;
+const STANDALONE_EQUATION_NUMBER = /^[\(\uFF08\[]\s*[A-Za-z]?\d+(?:[.-]\d+)*[A-Za-z]?\s*[\)\uFF09\]]$/u;
+const POTENTIAL_OPTIMIZATION_OPERATOR = /(?:\\(?:operatorname\*?|mathrm|text)\s*\{\s*arg|\\arg\s*(?:\\(?:min|max)|(?:min|max))|(?:^|[^A-Za-z0-9\\])arg\s*(?:min|max))/u;
+const CANONICAL_OPTIMIZATION_OPERATOR = /\\operatorname\*\s*\{\s*arg\s*(?:\\,\s*)?(?:min|max)\s*\}\s*_\s*(?:\{|[A-Za-z0-9\\])/u;
+const STRUCTURED_OPTIMIZATION_OBJECTIVE = /(?:^|[^\\])=|\\(?:left|bigl|Bigl|biggl|Biggl)\s*\\\{|\\(?:frac|sum|int|mathbb|mathcal|mathbf)\b|KL\s*\(/u;
+const LONG_STANDALONE_FORMULA_MIN_LENGTH = 32;
+
+export interface LatexDisplayContext {
+  /** Complete untouched result string used only to infer presentation. */
+  sourceText: string;
+  /** Offset of `text` inside `sourceText`. */
+  sourceOffset: number;
+}
+
+function displayTags(tex: string): RegExpMatchArray[] {
+  const hasRowEnvironment = containsLatexRowStructure(tex);
+  const tags = [...tex.matchAll(SIMPLE_DISPLAY_TAG)].filter((match) => {
+    const slashCount = match[1]?.length ?? 0;
+    return slashCount <= 2 || !hasRowEnvironment;
+  });
+  SIMPLE_DISPLAY_TAG.lastIndex = 0;
+  return tags;
+}
+
+function stripStrongEdgeMarkers(value: string): string {
+  let remainder = value.trim();
+  let changed = true;
+  while (changed && remainder) {
+    changed = false;
+    for (const marker of STRONG_EDGE_MARKERS) {
+      if (remainder.startsWith(marker)) {
+        remainder = remainder.slice(marker.length).trim();
+        changed = true;
+        break;
+      }
+      if (remainder.endsWith(marker)) {
+        remainder = remainder.slice(0, -marker.length).trim();
+        changed = true;
+        break;
+      }
+    }
+  }
+  return remainder;
+}
+
+function occupiesLogicalLines(
+  sourceText: string,
+  start: number,
+  end: number,
+): boolean {
+  const lineStart = sourceText.lastIndexOf('\n', Math.max(0, start - 1)) + 1;
+  const foundLineEnd = sourceText.indexOf('\n', end);
+  const lineEnd = foundLineEnd < 0 ? sourceText.length : foundLineEnd;
+  const prefix = stripStrongEdgeMarkers(sourceText.slice(lineStart, start));
+  const suffix = stripStrongEdgeMarkers(sourceText.slice(end, lineEnd));
+  return !prefix && (!suffix || STANDALONE_EQUATION_NUMBER.test(suffix));
+}
+
+function displayOptimizationCopy(tex: string): string | undefined {
+  if (!POTENTIAL_OPTIMIZATION_OPERATOR.test(tex)) return undefined;
+  const compatible = repairCommonVisionLatex(tex);
+  if (
+    compatible.length < LONG_STANDALONE_FORMULA_MIN_LENGTH ||
+    !CANONICAL_OPTIMIZATION_OPERATOR.test(compatible) ||
+    !STRUCTURED_OPTIMIZATION_OBJECTIVE.test(compatible)
+  ) return undefined;
+  return compatible;
+}
 function normalizedEquationTag(value: string): string {
   const trimmed = value.trim();
   const parenthesized = /^\(\s*([^()]*)\s*\)$/u.exec(trimmed);
@@ -22,18 +91,14 @@ function normalizedEquationTag(value: string): string {
  */
 export function latexRenderParts(tex: string, displayMode: boolean): LatexRenderParts {
   if (!displayMode) return { tex };
-  const hasRowEnvironment = containsLatexRowStructure(tex);
-  const tags = [...tex.matchAll(SIMPLE_DISPLAY_TAG)].filter((match) => {
-    const slashCount = match[1]?.length ?? 0;
-    return slashCount <= 2 || !hasRowEnvironment;
-  });
-  SIMPLE_DISPLAY_TAG.lastIndex = 0;
-  if (tags.length !== 1) return { tex };
+  const renderedTex = displayOptimizationCopy(tex) ?? tex;
+  const tags = displayTags(renderedTex);
+  if (tags.length !== 1) return { tex: renderedTex };
   const match = tags[0]!;
   const equationTag = normalizedEquationTag(match[2] ?? '');
-  if (!equationTag || match.index === undefined) return { tex };
+  if (!equationTag || match.index === undefined) return { tex: renderedTex };
   return {
-    tex: `${tex.slice(0, match.index)}${tex.slice(match.index + match[0].length)}`.trim(),
+    tex: `${renderedTex.slice(0, match.index)}${renderedTex.slice(match.index + match[0].length)}`.trim(),
     equationTag,
   };
 }
@@ -101,8 +166,13 @@ function delimiterAt(text: string, index: number): LatexDelimiterPair | undefine
   return undefined;
 }
 
-export function splitLatexDisplaySegments(text: string): LatexDisplaySegment[] {
+export function splitLatexDisplaySegments(
+  text: string,
+  context?: LatexDisplayContext,
+): LatexDisplaySegment[] {
   const segments: LatexDisplaySegment[] = [];
+  const sourceText = context?.sourceText ?? text;
+  const sourceOffset = context?.sourceOffset ?? 0;
   let textStart = 0;
   for (let index = 0; index < text.length;) {
     const delimiter = delimiterAt(text, index);
@@ -123,13 +193,28 @@ export function splitLatexDisplaySegments(text: string): LatexDisplaySegment[] {
       continue;
     }
     if (index > textStart) segments.push({ kind: 'text', text: text.slice(textStart, index) });
+    const rawEnd = end + delimiter.closer.length;
+    const globalStart = sourceOffset + index;
+    const globalEnd = sourceOffset + rawEnd;
+    const isStandalone = (
+      globalStart >= 0 &&
+      globalEnd <= sourceText.length &&
+      occupiesLogicalLines(sourceText, globalStart, globalEnd)
+    );
+    const displayMode = delimiter.displayMode ||
+      displayTags(tex).length > 0 ||
+      displayOptimizationCopy(tex) !== undefined ||
+      (isStandalone && (
+        tex.length >= LONG_STANDALONE_FORMULA_MIN_LENGTH ||
+        text.slice(index, rawEnd).includes('\n')
+      ));
     segments.push({
       kind: 'math',
       tex,
-      raw: text.slice(index, end + delimiter.closer.length),
-      displayMode: delimiter.displayMode,
+      raw: text.slice(index, rawEnd),
+      displayMode,
     });
-    index = end + delimiter.closer.length;
+    index = rawEnd;
     textStart = index;
   }
   if (textStart < text.length) segments.push({ kind: 'text', text: text.slice(textStart) });

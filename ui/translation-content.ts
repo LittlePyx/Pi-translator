@@ -6,7 +6,7 @@ import {
   latexRenderParts,
   splitLatexDisplaySegments,
 } from '../core/translation/latex-display';
-import { splitLightMarkup } from '../core/translation/light-markup';
+import { splitLightMarkupWithRanges } from '../core/translation/light-markup';
 
 interface MathRenderJob {
   element: HTMLElement;
@@ -84,9 +84,12 @@ export function renderTranslationContents(targets: TranslationContentTarget[]): 
   const jobs: MathRenderJob[] = [];
   for (const target of targets) {
     target.container.replaceChildren();
-    for (const markup of splitLightMarkup(target.text)) {
+    for (const markup of splitLightMarkupWithRanges(target.text)) {
       const isStrong = markup.kind === 'strong';
-      for (const segment of splitLatexDisplaySegments(markup.text)) {
+      for (const segment of splitLatexDisplaySegments(markup.text, {
+        sourceText: target.text,
+        sourceOffset: markup.sourceStart,
+      })) {
         if (segment.kind === 'text') {
           appendStyledText(target.container, segment.text, isStrong);
           continue;

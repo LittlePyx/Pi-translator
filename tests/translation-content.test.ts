@@ -102,4 +102,56 @@ describe('shared translation content renderer', () => {
     expect(numbered.className).toContain('pi-math-numbered');
     expect((numbered.children[1] as FakeElement).textContent).toBe('(8)');
   });
+
+  it('uses one effective display mode through strong markup, DOM, tags, and MathML jobs', async () => {
+    installFakeDom();
+    const sendMessage = vi.fn(async (message: {
+      payload: { items: Array<{ tex: string; displayMode: boolean }> };
+    }) => ({
+      ok: true,
+      data: { html: message.payload.items.map((_item, index) => `<math>${index}</math>`) },
+    }));
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const display = new FakeElement('div');
+    const inline = new FakeElement('div');
+    const source = String.raw`**$Q^{\Pi^*}=\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}\tag{8}$**`;
+
+    renderTranslationContents([
+      {
+        container: display as unknown as HTMLElement,
+        text: source,
+        renderLatex: true,
+      },
+      {
+        container: inline as unknown as HTMLElement,
+        text: 'Ordinary **$x+y$** prose.',
+        renderLatex: true,
+      },
+    ]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(sendMessage).toHaveBeenCalledTimes(1);
+    expect(sendMessage.mock.calls[0]?.[0]).toMatchObject({
+      type: 'RENDER_LATEX_MATHML_BATCH',
+      payload: {
+        items: [
+          {
+            tex: String.raw`Q^{\Pi^*}=\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}\left\{KL(P\|Q)\right\}`,
+            displayMode: true,
+          },
+          { tex: 'x+y', displayMode: false },
+        ],
+      },
+    });
+    const numbered = display.children[0] as FakeElement;
+    expect(numbered.tagName).toBe('div');
+    expect(numbered.className).toContain('pi-math-display');
+    expect(numbered.className).toContain('pi-rich-strong');
+    expect(numbered.className).toContain('pi-math-numbered');
+    expect((numbered.children[1] as FakeElement).textContent).toBe('(8)');
+    expect((inline.children[1] as FakeElement).tagName).toBe('span');
+    expect((inline.children[1] as FakeElement).className).toContain('pi-math-inline');
+    expect(source).toContain(String.raw`\operatorname{argmin}_`);
+  });
 });

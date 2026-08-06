@@ -184,6 +184,22 @@ describe('vision formula output validation', () => {
       String.raw`argmin P\in\mathcal{P}(V,\Omega) \{F(P)\}`,
       String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} \{F(P)\}`,
     ],
+    [
+      String.raw`\argmin P\in P(V,\Omega)\left\{F(P)\right\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in P(V,\Omega)}\left\{F(P)\right\}`,
+    ],
+    [
+      String.raw`\mathop{\rm argmin}P\in P(V,\Omega)\left\{F(P)\right\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in P(V,\Omega)}\left\{F(P)\right\}`,
+    ],
+    [
+      String.raw`\mathop{\mathrm{argmax}}x∈\mathbb{R}\biggl\{F(x)\biggr\}`,
+      String.raw`\operatorname*{arg\,max}_{x∈\mathbb{R}}\biggl\{F(x)\biggr\}`,
+    ],
+    [
+      String.raw`{\rm argmin}P\in\mathcal{P}(V,\Omega)\{F(P)\}`,
+      String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)}\{F(P)\}`,
+    ],
   ])('repairs a missing optimization lower limit in %s', (source, expected) => {
     expect(repairCommonVisionLatex(source)).toBe(expected);
   });
@@ -192,13 +208,24 @@ describe('vision formula output validation', () => {
     const correct = String.raw`\arg\min_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
     const canonical = String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
     const wrapped = String.raw`\operatorname{argmin}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const compact = String.raw`\argmin_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const mathop = String.raw`\mathop{\rm argmin}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const mathopCanonical = String.raw`\operatorname*{arg\,min}_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const explicitLimits = String.raw`\mathop{\rm argmin}\limits_{P\in\mathcal{P}(V,\Omega)} KL(P\|Q)`;
+    const underset = String.raw`\underset{P\in\mathcal{P}(V,\Omega)}{\operatorname{argmin}} KL(P\|Q)`;
     const ambiguous = String.raw`\arg\min P+Q`;
+    const compactAmbiguous = String.raw`\argmin P+Q`;
     const missingObjective = String.raw`\operatorname{argmin}P\in\mathcal{P}(V,\Omega)`;
     const prose = String.raw`margin P\in\mathcal{P}(V,\Omega)\{F(P)\}`;
     expect(repairCommonVisionLatex(correct)).toBe(canonical);
     expect(repairCommonVisionLatex(wrapped)).toBe(canonical);
+    expect(repairCommonVisionLatex(compact)).toBe(canonical);
+    expect(repairCommonVisionLatex(mathop)).toBe(mathopCanonical);
+    expect(repairCommonVisionLatex(explicitLimits)).toBe(explicitLimits);
+    expect(repairCommonVisionLatex(underset)).toBe(underset);
     expect(repairCommonVisionLatex(canonical)).toBe(canonical);
     expect(repairCommonVisionLatex(ambiguous)).toBe(ambiguous);
+    expect(repairCommonVisionLatex(compactAmbiguous)).toBe(compactAmbiguous);
     expect(repairCommonVisionLatex(missingObjective)).toBe(missingObjective);
     expect(repairCommonVisionLatex(prose)).toBe(prose);
   });

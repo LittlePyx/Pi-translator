@@ -4,6 +4,11 @@ export type LightMarkupSegment =
   | { kind: 'text'; text: string }
   | { kind: 'strong'; text: string };
 
+export type RangedLightMarkupSegment = LightMarkupSegment & {
+  sourceStart: number;
+  sourceEnd: number;
+};
+
 const STRONG_MARKERS = ['***', '___', '**', '__'] as const;
 
 function isEscaped(text: string, index: number): boolean {
@@ -58,8 +63,8 @@ function closingMarker(
  * Parses only the two common Markdown strong markers. Result text never becomes
  * HTML, so model output cannot inject markup or scripts into the extension UI.
  */
-export function splitLightMarkup(text: string): LightMarkupSegment[] {
-  const segments: LightMarkupSegment[] = [];
+export function splitLightMarkupWithRanges(text: string): RangedLightMarkupSegment[] {
+  const segments: RangedLightMarkupSegment[] = [];
   const ranges = latexRanges(text);
   let plainStart = 0;
   for (let cursor = 0; cursor < text.length - 1;) {
@@ -80,17 +85,36 @@ export function splitLightMarkup(text: string): LightMarkupSegment[] {
       continue;
     }
     if (cursor > plainStart) {
-      segments.push({ kind: 'text', text: text.slice(plainStart, cursor) });
+      segments.push({
+        kind: 'text',
+        text: text.slice(plainStart, cursor),
+        sourceStart: plainStart,
+        sourceEnd: cursor,
+      });
     }
     segments.push({
       kind: 'strong',
       text: text.slice(cursor + marker.length, end),
+      sourceStart: cursor + marker.length,
+      sourceEnd: end,
     });
     cursor = end + marker.length;
     plainStart = cursor;
   }
   if (plainStart < text.length) {
-    segments.push({ kind: 'text', text: text.slice(plainStart) });
+    segments.push({
+      kind: 'text',
+      text: text.slice(plainStart),
+      sourceStart: plainStart,
+      sourceEnd: text.length,
+    });
   }
   return segments;
+}
+
+export function splitLightMarkup(text: string): LightMarkupSegment[] {
+  return splitLightMarkupWithRanges(text).map(({ kind, text: value }) => ({
+    kind,
+    text: value,
+  }));
 }

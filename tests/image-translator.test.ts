@@ -238,8 +238,17 @@ describe('image region translator', () => {
       }),
       expect.objectContaining({ type: 'text' }),
     ]));
-    expect(JSON.stringify(body)).toContain('不得猜测');
-    expect(JSON.stringify(body)).toContain('可编译的 LaTeX 源码');
+    const promptPart = body.messages[0]?.content.find((item) => item.type === 'text');
+    const promptText = String(promptPart?.text ?? '');
+    expect(promptText).toContain('不得猜测');
+    expect(promptText).toContain('可编译的 LaTeX 源码');
+    expect(promptText).toContain('图像像素是符号、字体和版式的最终依据');
+    expect(promptText).toContain('双线体/黑板粗体使用 \\mathbb{}');
+    expect(promptText).toContain('普通 P、Q、E 不得因其语义擅自升级');
+    expect(promptText).toContain('可见的 ℙ、ℚ、𝔼 降级为普通字母');
+    expect(promptText).toContain('\\operatorname*{arg\\,min}_{约束}');
+    expect(promptText).toContain('视觉上独立成行或较长的公式必须使用 \\[...\\]');
+    expect(fetchMock).toHaveBeenCalledOnce();
   });
 
   it('streams the translation field while retaining the final recognized text', async () => {
