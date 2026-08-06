@@ -19,6 +19,7 @@ const textRequests: Array<Record<string, unknown>> = [];
 let echoVisionPayloadOnce = false;
 let failNextRevisionRequest = false;
 let returnRevisedVisionResultOnce = false;
+let returnPendingVisionReviewOnce = false;
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -406,6 +407,8 @@ test.beforeAll(async () => {
     echoVisionPayloadOnce = false;
     const shouldReturnRevisedRecognition = returnRevisedVisionResultOnce;
     returnRevisedVisionResultOnce = false;
+    const shouldReturnPendingReview = returnPendingVisionReviewOnce;
+    returnPendingVisionReviewOnce = false;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -431,9 +434,11 @@ test.beforeAll(async () => {
                     ? 'The quantity $\\sum_i x_i^2 \\ge 0$ is nonnegative.'
                     : shouldReturnRevisedRecognition
                       ? 'Re-recognized academic source text.'
-                    : 'Scanned academic source text.',
+                      : 'Scanned academic source text.',
               formulaLatex: formulaLatex ? [formulaLatex] : [],
-              uncertainSpans: [],
+              uncertainSpans: shouldReturnPendingReview
+                ? ['The formula subscript is not fully legible.']
+                : [],
             }),
           },
         }],
@@ -476,6 +481,7 @@ test.afterEach(() => {
   echoVisionPayloadOnce = false;
   failNextRevisionRequest = false;
   returnRevisedVisionResultOnce = false;
+  returnPendingVisionReviewOnce = false;
 });
 
 test('exposes the native Edge side panel API to the service worker', async () => {
@@ -1932,6 +1938,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   expect(visionRequests).toHaveLength(requestCount);
 
   const overlay = pdfPage.locator('#tex-selection-translator-root');
+  returnPendingVisionReviewOnce = true;
   await firstPage.locator('.region-confirm .confirm').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await expect(overlay.locator('.error')).toHaveCount(0);
@@ -1969,6 +1976,23 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await expect(overlay.locator('.source-badge')).toHaveText('图像识别');
   await expect(overlay.locator('.body')).toHaveText('图像区域的学术翻译结果。');
   await expect(overlay.locator('.recognized-source')).not.toHaveAttribute('open', '');
+  await expect.poll(() => pdfPage.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+    }).chrome;
+    const stored = await api.storage.local.get('documentTranslationMemoryV1');
+    return JSON.stringify(stored.documentTranslationMemoryV1 ?? {}).includes(
+      'The formula subscript is not fully legible.',
+    );
+  })).toBe(true);
+  const serializedPendingMemory = await pdfPage.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+    }).chrome;
+    return JSON.stringify(await api.storage.local.get('documentTranslationMemoryV1'));
+  });
+  expect(serializedPendingMemory).not.toContain('data:image/');
+  expect(serializedPendingMemory).not.toContain(image?.image_url?.url?.slice(-80) ?? 'never-match');
   await overlay.getByRole('button', { name: '返回 PDF 原选区' }).click();
   await expect(firstPage.locator('.region-source-highlight')).toBeVisible();
 
@@ -1982,11 +2006,29 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   const sourceMarker = pdfPage.locator('#pi-translation-marker-layer .marker').first();
   await expect(sourceMarker).toBeVisible();
 
+  await overlay.getByTitle('固定到连续翻译侧栏').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  const documentButton = overlay.locator('.document-memory-action');
+  await expect(documentButton).toHaveText('本文 · 待核对 1');
+  await documentButton.click();
+  const pendingSection = overlay.locator('.document-section').filter({ hasText: '待核对' });
+  await expect(pendingSection).toBeVisible();
+  await expect(pendingSection).toContainText('Scanned academic source text.');
+  await expect(pendingSection.getByText('返回区域', { exact: true })).toBeVisible();
+  await expect(pendingSection.getByText('打开结果', { exact: true })).toBeVisible();
+  await expect(pendingSection.getByText('重新识别', { exact: true })).toBeVisible();
+  await expect(pendingSection.getByText('已核对', { exact: true })).toBeVisible();
+
   returnRevisedVisionResultOnce = true;
-  await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '重新识别此区域' }).click();
+  await pendingSection.getByText('重新识别', { exact: true }).click();
   await expect.poll(() => visionRequests.length).toBe(requestCount + 2);
   await expect(overlay.locator('.body')).toHaveText('重新识别后修正的学术翻译结果。');
+  const cleanDocumentButton = overlay.locator('.document-memory-action');
+  await expect(cleanDocumentButton).toHaveText('本文');
+  await cleanDocumentButton.click();
+  await expect(overlay.locator('.document-section').filter({ hasText: '待核对' }))
+    .toHaveCount(0);
+  await overlay.getByTitle('返回翻译结果').click();
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.recognized-text')).toHaveText('Re-recognized academic source text.');
   await overlay.locator('.recognized-source summary').click();
@@ -2050,7 +2092,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
 
   await overlay.locator('details.more > summary').click();
   await overlay.getByRole('button', { name: '调整原选区' }).click();
-  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
   await expect(firstPage.locator('.region-selection-box')).toBeVisible();
   const restoredSelection = await firstPage.locator('.region-selection-box').boundingBox();
   const restoredPageBox = await firstPage.boundingBox();

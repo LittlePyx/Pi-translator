@@ -9,9 +9,10 @@ import type {
   PdfSourceLocation,
 } from '../core/translation/types';
 import type { SidebarSide } from '../core/settings/schema';
-import type {
-  DocumentMemorySnapshot,
-  DocumentMemoryTranslation,
+import {
+  documentMemoryTranslationResult,
+  type DocumentMemorySnapshot,
+  type DocumentMemoryTranslation,
 } from '../core/document/document-memory-repository';
 import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
@@ -107,6 +108,7 @@ const STYLES = `
   .marker-notes-list{display:grid;margin-top:4px}.marker-note{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:9px 1px;border-bottom:1px solid var(--line)}.marker-note-main{display:grid;gap:3px;min-width:0;padding:0;border:0;color:var(--text);background:transparent;text-align:left}.marker-note-main:hover .marker-note-source{color:var(--accent)}.marker-note-meta{display:flex;align-items:center;gap:6px;color:var(--accent);font-size:9px;font-weight:700}.marker-note-status{color:#9a6b17;font-weight:550}.marker-note-source,.marker-note-target{display:-webkit-box;min-width:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow-wrap:anywhere}.marker-note-source{font-size:11px;line-height:1.5}.marker-note-target{color:var(--muted);font-size:10px;line-height:1.45}.marker-note.missing .marker-note-main{cursor:default}.marker-note.missing .marker-note-source,.marker-note.missing .marker-note-target{opacity:.62}.marker-note-actions{display:flex;align-items:flex-start;gap:1px}.marker-note-actions button{width:24px;height:24px;padding:0;border:0;border-radius:4px;color:var(--muted);background:transparent;font-size:10px}.marker-note-actions button:hover{color:var(--accent);background:var(--soft)}
   .document-action{height:24px;padding:0 5px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:10px;font-weight:680}.document-action:hover{color:var(--accent);background:var(--soft)}
   .document-meta{margin-top:8px;padding-bottom:8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:10px}.document-section{margin-top:14px}.document-section-head{display:flex;align-items:center;gap:8px;padding-bottom:5px;border-bottom:1px solid var(--line)}.document-section-head strong{margin-right:auto;color:var(--text);font-size:11px}.document-section-head span{color:var(--muted);font-size:9px}.document-list{display:grid}.document-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:7px;padding:9px 1px;border-bottom:1px solid var(--line)}.document-pair{display:grid;gap:3px;min-width:0}.document-source{color:var(--text);font-size:11px;line-height:1.45;overflow-wrap:anywhere}.document-target{color:var(--muted);font-size:10px;line-height:1.45;overflow-wrap:anywhere}.document-row-actions{display:flex;align-items:start;gap:2px}.document-row-actions button,.document-clear{padding:3px 5px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px}.document-row-actions button:hover,.document-clear:hover{color:var(--accent);background:var(--soft)}.document-translation{width:100%;padding:9px 1px;border:0;border-bottom:1px solid var(--line);color:var(--text);background:transparent;text-align:left}.document-translation:hover .document-source{color:var(--accent)}.document-translation .document-source,.document-translation .document-target{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2}.document-edit{display:grid;grid-template-columns:1fr 1fr auto;gap:5px;align-items:center}.document-edit input{min-width:0;padding:5px 6px;border:1px solid var(--line);border-radius:3px;color:var(--text);background:var(--soft);font:10px/1.4 inherit}.document-candidate-edit{grid-template-columns:minmax(0,1fr) auto}.document-candidate-edit .document-source{grid-column:1/-1}.document-edit-actions{display:flex;gap:2px}.document-edit-actions button{padding:3px 5px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px}.document-edit-actions button:first-child{color:var(--accent);font-weight:680}.document-edit-actions button:hover{background:var(--soft)}.document-empty{padding:12px 1px;color:var(--muted);font-size:10px}.document-footer{display:flex;justify-content:flex-end;margin-top:14px;padding-top:7px;border-top:1px solid var(--line)}
+  .document-memory-action.has-review{color:#9a6b17}.document-review-list{display:grid}.document-review-row{display:grid;gap:5px;padding:9px 1px;border-bottom:1px solid var(--line)}.document-review-meta{display:flex;align-items:center;gap:6px;color:var(--muted);font-size:9px}.document-review-meta strong{color:#9a6b17;font-size:9px}.document-review-source{display:-webkit-box;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:2;color:var(--text);font-size:11px;line-height:1.48;overflow-wrap:anywhere}.document-review-actions{display:flex;align-items:center;gap:2px}.document-review-actions button{padding:3px 5px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px}.document-review-actions button:hover{color:var(--accent);background:var(--soft)}.document-review-actions .review-resolve{margin-left:auto;color:#6e7b91}
   .aligned-list{display:grid;gap:9px;margin-top:10px}.segment{position:relative;display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;padding:10px;border:1px solid var(--line);border-radius:13px;background:linear-gradient(145deg,rgba(248,250,252,.9),rgba(244,247,252,.64));transition:.15s border-color,.15s box-shadow}.segment:hover,.segment:focus-within{border-color:#aeb9f3;box-shadow:0 5px 18px rgba(73,78,160,.1)}
   .segment-number{display:grid;place-items:center;align-self:start;width:23px;height:23px;border-radius:8px;color:#fff;background:linear-gradient(135deg,var(--accent),#7c5ce5);font-size:10px;font-weight:800}.segment-pair{display:grid;gap:6px;min-width:0}.segment-source{color:var(--muted);font-size:12px;line-height:1.55;white-space:pre-wrap;overflow-wrap:anywhere}.segment-target{padding-top:6px;border-top:1px dashed var(--line);font-size:14px;line-height:1.65;white-space:pre-wrap;overflow-wrap:anywhere}
   .segment-actions{display:flex;gap:5px;margin-top:7px;opacity:0;transition:.15s opacity}.segment:hover .segment-actions,.segment:focus-within .segment-actions{opacity:1}.mini{padding:3px 7px;border:0;border-radius:6px;color:var(--muted);background:var(--soft);font-size:10px}.mini:hover{color:var(--accent)}
@@ -119,6 +121,7 @@ const STYLES = `
   details.more{position:relative;margin-left:auto}details.more>summary{display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);cursor:pointer;list-style:none;font-size:12px;font-weight:800}details.more>summary:hover{background:var(--soft)}details.more>summary::-webkit-details-marker{display:none}.menu{position:absolute;z-index:5;right:0;bottom:30px;width:220px;max-height:calc(100vh - 32px);padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 16px 40px rgba(15,23,42,.2);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}.menu.opens-down{top:30px;bottom:auto}.sidebar.left .menu{left:0;right:auto}.menu button{width:100%;padding:7px 9px;border:0;border-radius:4px;color:var(--text);background:transparent;text-align:left;font-size:11px}.menu button:hover{background:var(--soft)}.menu hr{border:0;border-top:1px solid var(--line);margin:6px 0}.menu label{display:grid;gap:4px;margin:6px;color:var(--muted);font-size:10px}.menu select{width:100%;padding:6px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font-size:11px}
   :host([data-pi-theme="dark"]) .logo,:host([data-pi-theme="dark"]) .trigger-logo{filter:brightness(0) invert(1)}:host([data-pi-theme="dark"]) .title{color:#d6deea}:host([data-pi-theme="dark"]) .view-button.active{color:#e4e5ff;background:#273246}:host([data-pi-theme="dark"]) .segment{background:linear-gradient(145deg,rgba(31,41,55,.9),rgba(24,33,47,.72))}:host([data-pi-theme="dark"]) .action{color:#e8edf6;background:#202938;border-color:#465269}:host([data-pi-theme="dark"]) .primary{background:#5b6ee1}:host([data-pi-theme="dark"]) .copy-action{color:#a5b4fc;background:transparent;border-color:#465269}:host([data-pi-theme="dark"]) .warning{color:#f1d68e;background:#463b20}:host([data-pi-theme="dark"]) .error{color:#ff9aa4;background:#32171d}:host([data-pi-theme="dark"]) .cache-badge{color:#8de7f7;background:transparent}
   :host([data-pi-theme="dark"]) .live-badge{color:#8de7f7;background:#173b44}:host([data-pi-theme="dark"]) .notice{color:#f1d68e;background:#3c321c;border-color:#655326}
+  :host([data-pi-theme="dark"]) .document-memory-action.has-review,:host([data-pi-theme="dark"]) .document-review-meta strong{color:#f1d68e}:host([data-pi-theme="dark"]) .document-review-actions .review-resolve{color:var(--muted)}
   button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.segment:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
   @media(max-width:620px){.sidebar{top:calc(var(--pi-viewport-top) + 8px)!important;right:calc(var(--pi-viewport-right) + 8px)!important;bottom:calc(var(--pi-viewport-bottom) + 8px)!important;left:calc(var(--pi-viewport-left) + 8px)!important;width:auto!important}.sidebar-resizer{display:none}.segment-actions{opacity:1}}
   @media(prefers-reduced-motion:reduce){*,*::before,*::after{scroll-behavior:auto!important;animation-duration:.01ms!important;animation-iteration-count:1!important;transition-duration:.01ms!important}}
@@ -205,6 +208,9 @@ interface OverlayActions {
   onUpsertDocumentTerm?: (term: { id?: string; source: string; target: string }) => Promise<DocumentMemorySnapshot>;
   onRemoveDocumentTerm?: (termId: string) => Promise<DocumentMemorySnapshot>;
   onDismissDocumentTermCandidate?: (candidateId: string) => Promise<DocumentMemorySnapshot>;
+  onResolveDocumentReview?: (reviewId: string) => Promise<DocumentMemorySnapshot>;
+  canRetryDocumentReview?: (entry: DocumentMemoryTranslation) => boolean;
+  onRetryDocumentReview?: (entry: DocumentMemoryTranslation) => void;
   onClearDocumentMemory?: () => Promise<DocumentMemorySnapshot>;
   onOpenSettings: (focus?: SettingsFocus) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
@@ -233,6 +239,7 @@ export class TranslationOverlay {
   private documentMemoryActive = false;
   private documentMemory?: DocumentMemorySnapshot;
   private documentMemoryError: string | undefined = undefined;
+  private documentMemoryRequestRevision = 0;
   private clearDocumentMemoryArmed = false;
   private editingDocumentTermId: string | 'new' | undefined = undefined;
   private editingDocumentCandidateId: string | undefined = undefined;
@@ -287,6 +294,7 @@ export class TranslationOverlay {
   openSidebar(): void {
     this.markerNavigatorActive=false;this.documentMemoryActive=false;this.sidebarActive=true;this.sidebarCollapsed=false;this.actions.onSidebarChange(true);
     if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();
+    this.refreshDocumentMemory(true);
   }
 
   showTrigger(rect:ViewportRect):void {
@@ -306,9 +314,26 @@ export class TranslationOverlay {
 
   showResult(result:TranslateResult,rect?:ViewportRect,history:TranslationHistoryEntry[]=[],alignedByDefault=false):void {
     this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
+    if(result.documentId&&this.documentMemory?.documentId!==result.documentId)delete this.documentMemory;
     this.rememberResultVersion(result);
     this.historyIndex=history.findIndex(entry=>entry.requestId===result.requestId);this.alignedView=alignedByDefault&&Boolean(result.alignedSegments?.length);
     if(this.sidebarActive)this.sidebarCollapsed=false;this.renderResult(result);
+  }
+
+  refreshDocumentMemory(force=false):void {
+    if(!this.actions.onGetDocumentMemory)return;
+    if(!force&&!this.sidebarActive&&!this.documentMemoryActive)return;
+    const requestRevision=++this.documentMemoryRequestRevision;
+    void this.actions.onGetDocumentMemory().then((memory)=>{
+      if(requestRevision!==this.documentMemoryRequestRevision)return;
+      const currentDocumentId=this.currentResult?.documentId;
+      if(currentDocumentId&&memory.documentId!==currentDocumentId)return;
+      this.documentMemory=memory;this.documentMemoryError=undefined;
+      if(this.documentMemoryActive)this.renderDocumentMemory();else this.updateDocumentMemoryButton();
+    }).catch((error:unknown)=>{
+      if(requestRevision!==this.documentMemoryRequestRevision||!this.documentMemoryActive)return;
+      this.documentMemoryError=error instanceof Error?error.message:'无法读取本文记忆';this.renderDocumentMemory();
+    });
   }
 
   updateHistory(history:TranslationHistoryEntry[]):void {
@@ -363,6 +388,9 @@ export class TranslationOverlay {
   }
 
   hide():void { this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.clear();this.setView('hidden'); }
+  resetSession():void {
+    this.documentMemoryRequestRevision+=1;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.sidebarActive=false;this.sidebarCollapsed=false;this.history=[];this.historyIndex=-1;this.resultVersions.clear();this.latexViewOverrides.clear();delete this.currentResult;delete this.latestRequestId;delete this.documentMemory;this.documentMemoryError=undefined;this.clear();this.setView('hidden');
+  }
   hideTrigger():void { if(this.view==='trigger')this.hide(); }
   resetCardPosition():void { this.cardPosition=undefined; }
   keepCardInViewport():void { this.reflowVisibleSurface(); }
@@ -405,12 +433,31 @@ export class TranslationOverlay {
     if(!this.actions.onGetDocumentMemory)return;
     this.markerNavigatorActive=false;this.documentMemoryActive=true;this.sidebarCollapsed=false;this.documentMemoryError=undefined;this.clearDocumentMemoryArmed=false;
     this.renderDocumentMemory();
-    void this.actions.onGetDocumentMemory().then((memory)=>{this.documentMemory=memory;if(this.documentMemoryActive)this.renderDocumentMemory()}).catch((error:unknown)=>{this.documentMemoryError=error instanceof Error?error.message:'无法读取本文记忆';if(this.documentMemoryActive)this.renderDocumentMemory()});
+    this.refreshDocumentMemory(true);
   }
 
   private updateDocumentMemory(task:Promise<DocumentMemorySnapshot>):void {
-    this.documentMemoryError=undefined;
-    void task.then((memory)=>{this.documentMemory=memory;if(this.documentMemoryActive)this.renderDocumentMemory()}).catch((error:unknown)=>{this.documentMemoryError=error instanceof Error?error.message:'操作失败';if(this.documentMemoryActive)this.renderDocumentMemory()});
+    this.documentMemoryError=undefined;const requestRevision=++this.documentMemoryRequestRevision;
+    void task.then((memory)=>{if(requestRevision!==this.documentMemoryRequestRevision)return;this.documentMemory=memory;if(this.documentMemoryActive)this.renderDocumentMemory();else this.updateDocumentMemoryButton()}).catch((error:unknown)=>{if(requestRevision!==this.documentMemoryRequestRevision)return;this.documentMemoryError=error instanceof Error?error.message:'操作失败';if(this.documentMemoryActive)this.renderDocumentMemory()});
+  }
+
+  private pendingDocumentReviews(memory=this.documentMemory):DocumentMemoryTranslation[] {
+    return memory?.recentTranslations.filter((entry)=>entry.review&&!entry.review.reviewedAt)??[];
+  }
+
+  private documentMemoryButtonLabel():string {
+    const count=this.pendingDocumentReviews().length;
+    return count?`本文 · 待核对 ${count}`:'本文';
+  }
+
+  private updateDocumentMemoryButton():void {
+    const button=this.root.querySelector<HTMLButtonElement>('.document-memory-action');
+    if(!button)return;
+    const count=this.pendingDocumentReviews().length;
+    button.textContent=this.documentMemoryButtonLabel();
+    button.ariaLabel=this.documentMemoryButtonLabel();
+    button.classList.toggle('has-review',count>0);
+    button.title=count?`有 ${count} 条图像识别结果待核对`:'查看本文术语和最近翻译';
   }
 
   private documentTermEditor(
@@ -436,7 +483,7 @@ export class TranslationOverlay {
 
   private openDocumentTranslation(entry:DocumentMemoryTranslation):void {
     this.documentMemoryActive=false;this.alignedView=false;
-    const result:TranslateResult={requestId:entry.requestId,originalText:entry.originalText,translatedText:entry.translatedText,warnings:[],...(this.documentMemory?.label?{sourceHost:this.documentMemory.label}:{}),...(entry.targetLanguage?{targetLanguage:entry.targetLanguage}:{}),...(entry.style?{style:entry.style}:{}),...(entry.sourceKind?{sourceKind:entry.sourceKind}:{}),...(entry.sourceLocation?{sourceLocation:entry.sourceLocation}:{}),completedAt:entry.completedAt,cached:true};
+    const result=[this.currentResult,...this.history].find((candidate)=>candidate?.requestId===entry.requestId)??documentMemoryTranslationResult(entry,this.documentMemory?.label);
     this.currentResult=result;this.renderResult(result);
   }
 
@@ -445,6 +492,9 @@ export class TranslationOverlay {
     const meta=document.createElement('div');meta.className='document-meta';meta.textContent=this.documentMemory?`${this.documentMemory.label} · 仅保存在本机`:'正在读取本文记忆…';surface.append(meta);
     if(this.documentMemoryError){const error=document.createElement('div');error.className='error';error.textContent=this.documentMemoryError;surface.append(error)}
     const memory=this.documentMemory;if(!memory){this.showSurface(surface);return}
+
+    const pendingReviews=this.pendingDocumentReviews(memory);
+    if(pendingReviews.length){const reviews=document.createElement('section');reviews.className='document-section document-review-section';const head=document.createElement('div');head.className='document-section-head';const title=document.createElement('strong');title.textContent='待核对';const count=document.createElement('span');count.textContent=String(pendingReviews.length);head.append(title,count);reviews.append(head);const list=document.createElement('div');list.className='document-review-list';for(const entry of pendingReviews){const review=entry.review!;const row=document.createElement('article');row.className='document-review-row';const meta=document.createElement('div');meta.className='document-review-meta';const page=document.createElement('span');page.textContent=entry.sourceLocation?`第 ${entry.sourceLocation.pageNumber} 页`:'PDF 选区';const reason=document.createElement('strong');const reasons=[review.formulaNeedsReview?'公式结构待核对':'',review.uncertainSpans.length?`${review.uncertainSpans.length} 处内容待核对`:''].filter(Boolean);reason.textContent=reasons.join(' · ');const time=document.createElement('span');time.textContent=new Date(review.updatedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});meta.append(page,reason,time);const source=document.createElement('div');source.className='document-review-source';source.textContent=entry.originalText;const actions=document.createElement('div');actions.className='document-review-actions';if(entry.sourceLocation&&this.actions.onNavigateToPdfRegion){const locate=this.button('返回区域','','返回 PDF 原选区');locate.ariaLabel='返回区域';locate.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(entry.sourceLocation!));actions.append(locate)}const open=this.button('打开结果','','查看待核对译文');open.ariaLabel='打开结果';open.addEventListener('click',()=>this.openDocumentTranslation(entry));actions.append(open);if(this.actions.canRetryDocumentReview?.(entry)&&this.actions.onRetryDocumentReview){const retry=this.button('重新识别','','重新截图识别这个区域');retry.ariaLabel='重新识别';retry.addEventListener('click',()=>this.actions.onRetryDocumentReview?.(entry));actions.append(retry)}if(this.actions.onResolveDocumentReview){const resolve=this.button('已核对','review-resolve','标记为已人工核对');resolve.ariaLabel='已核对';resolve.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onResolveDocumentReview!(review.id)));actions.append(resolve)}row.append(meta,source,actions);list.append(row)}reviews.append(list);surface.append(reviews)}
 
     const confirmed=document.createElement('section');confirmed.className='document-section';const confirmedHead=document.createElement('div');confirmedHead.className='document-section-head';const confirmedTitle=document.createElement('strong');confirmedTitle.textContent='固定译法';const confirmedCount=document.createElement('span');confirmedCount.textContent=String(memory.confirmedTerms.length);const add=this.button('＋添加','document-action','添加本文术语');add.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId='new';this.renderDocumentMemory()});confirmedHead.append(confirmedTitle,confirmedCount,add);confirmed.append(confirmedHead);const confirmedList=document.createElement('div');
     if(this.editingDocumentTermId==='new')confirmedList.append(this.documentTermEditor('',''));
@@ -574,7 +624,7 @@ export class TranslationOverlay {
   private surface(titleText:string):HTMLDivElement {
     const docked=this.sidebarActive||this.markerNavigatorActive||this.documentMemoryActive;const surface=document.createElement('div');surface.className=`surface ${docked?'sidebar '+this.preferences.sidebarSide:'card'}`;surface.setAttribute('role',docked?'complementary':'dialog');surface.setAttribute('aria-label',`Pi Translator ${titleText}`);if(docked)surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);
     const header=document.createElement('div');header.className='header';const titleWrap=document.createElement('div');titleWrap.className='title-wrap';const title=document.createElement('div');title.className='title';title.textContent=titleText;titleWrap.append(this.logo('logo'),title);if(this.sidebarActive&&!this.markerNavigatorActive&&!this.documentMemoryActive){const live=document.createElement('span');live.className='live-badge';live.textContent='自动翻译中';titleWrap.append(live)}const tools=document.createElement('div');tools.className='header-tools';
-    if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const documentButton=this.button('本文','document-action','查看本文术语和最近翻译');documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const pin=this.button('固定侧栏','pin-action','固定到连续翻译侧栏');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}
+    if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewCount=this.pendingDocumentReviews().length;const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewCount?' has-review':''}`,reviewCount?`有 ${reviewCount} 条图像识别结果待核对`:'查看本文术语和最近翻译');documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const pin=this.button('固定侧栏','pin-action','固定到连续翻译侧栏');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}
     const close=this.button('×','icon','关闭');close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
     if(docked)this.makeResizable(surface);else this.makeDraggable(surface,header);return surface;
   }

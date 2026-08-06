@@ -51,12 +51,15 @@ export function documentIdentity(input: DocumentIdentityInput): DocumentIdentity
   const explicitDocumentId = input.documentId?.trim();
   const explicitPdfId = input.sourceLocation?.documentId.trim();
   const basis = explicitDocumentId
-    ? undefined
+    ? `explicit:${explicitDocumentId}`
     : explicitPdfId
       ? `pdf:${explicitPdfId}`
       : `url:${normalizedDocumentUrl(input.pageUrl)}`;
+  const documentId = explicitDocumentId && /^doc-[a-z0-9]{1,8}$/u.test(explicitDocumentId)
+    ? explicitDocumentId
+    : `doc-${stableHash(basis!)}`;
   return {
-    documentId: explicitDocumentId ?? `doc-${stableHash(basis!)}`,
+    documentId,
     label: labelForDocument(input),
   };
 }

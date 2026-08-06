@@ -1514,7 +1514,10 @@ async function restorePdfRegionSelection(reference: PdfSourceLocation): Promise<
 }
 
 async function navigateToPdfRegion(reference: PdfSourceLocation): Promise<void> {
-  const pageElement = await pageForSourceLocation(reference);
+  const pageElement = await pageForSourceLocation({
+    ...reference,
+    documentId: currentDocumentSessionId,
+  });
   if (!pageElement) return;
   clearSourceRegionHighlight();
   const region = regionFromSourceLocation(reference, pageElement);
@@ -2247,6 +2250,7 @@ const selectionTranslator = startSelectionTranslator(
   {
     pageUrl: () => currentSourceUrl,
     sourceLabel: () => currentSourceLabel,
+    documentId: () => currentReadingIdentity,
     allowSitePause: false,
     viewportInsets: () => ({ top: toolbar.getBoundingClientRect().bottom }),
     onSidebarLayoutChange: applyPdfSidebarLayout,

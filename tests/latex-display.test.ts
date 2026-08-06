@@ -285,4 +285,25 @@ describe('LaTeX result display', () => {
     expect(source).toContain('\\tag{3}');
     expect(source).toContain('\\tag{4}');
   });
+
+  it('renders the live Qwen multi-row arg-min result with symbols and row numbers intact', () => {
+    const source = String.raw`\begin{aligned}
+\mathbb{Q}^{\Pi^*} &= \operatorname*{arg\,min}_{\mathbb{P} \in \mathcal{P}(V, \Omega)}
+\left\{ \mathcal{KL}(\mathbb{P} \mid\mid \mathbb{Q}) := \mathbb{E}_{\mathbb{P}}
+\left[ \log \frac{\mathrm{d}\mathbb{P}}{\mathrm{d}\mathbb{Q}}(Z) \right],
+\quad \text{s.t.} \quad \mathbb{P}_\Omega = \Pi^* \right\} \tag{12} \\
+&= \operatorname*{arg\,min}_{\mathbb{P} \in \mathcal{P}(V, \Omega)}
+\left\{ \mathcal{KL}(\mathbb{P} \mid\mid \mathbb{Q}^{\Pi^*})
+\equiv \mathcal{KL}(\mathbb{P} \mid\mid \mathbb{Q})
+- \mathbb{E}_{\mathbb{P}}[\log \pi^*(Z_\tau)] \right\}, \tag{13}
+\end{aligned}`;
+
+    const rendered = renderLatexMathMl(source, true) ?? '';
+    expect(rendered).toContain('<math');
+    expect(rendered).toContain('<munder>');
+    expect(rendered).toContain('mathvariant="double-struck">P</mi>');
+    expect(rendered).toContain('mathvariant="double-struck">Q</mi>');
+    expect(rendered).toContain('<mtext>(12)</mtext>');
+    expect(rendered).toContain('<mtext>(13)</mtext>');
+  });
 });

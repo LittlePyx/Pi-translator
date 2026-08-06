@@ -94,6 +94,7 @@ import {
   mergeDocumentGlossary,
   rememberDocumentTranslation,
   removeDocumentTerm,
+  resolveDocumentReview,
   upsertDocumentTerm,
 } from '../core/document/document-memory-repository';
 import {
@@ -2415,6 +2416,14 @@ export default defineBackground(() => {
         return dismissDocumentTermCandidate(
           documentIdentity(message.payload),
           message.payload.candidateId,
+        ).then((memory) => ({ ok: true as const, data: { memory } }))
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'RESOLVE_DOCUMENT_REVIEW') {
+        return resolveDocumentReview(
+          documentIdentity(message.payload),
+          message.payload.reviewId,
         ).then((memory) => ({ ok: true as const, data: { memory } }))
           .catch((error: unknown) => errorResponse(error));
       }

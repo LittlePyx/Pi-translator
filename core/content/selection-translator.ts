@@ -19,7 +19,11 @@ import { isLikelyTargetLanguage } from '../language/target-language';
 import { normalizePdfSelectionText } from '../pdf/text-normalizer';
 import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
 import type { SidebarSide } from '../settings/schema';
-import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
+import {
+  documentMemoryTranslationResult,
+  type DocumentMemorySnapshot,
+  type DocumentMemoryTranslation,
+} from '../document/document-memory-repository';
 import type {
   PdfSourceLocation,
   TranslateResult,
@@ -60,6 +64,7 @@ type TranslationSurface = 'overleaf' | 'general' | 'pdf';
 interface SelectionTranslatorOptions {
   pageUrl?: () => string;
   sourceLabel?: () => string | undefined;
+  documentId?: () => string | undefined;
   allowSitePause?: boolean;
   viewportInsets?: ViewportInsetsProvider;
   onSidebarLayoutChange?: (layout: SelectionTranslatorSidebarLayout) => void;
@@ -226,8 +231,10 @@ export async function startSelectionTranslator(
     const sourceLabel = activeImageRegion?.sourceLabel ??
       activeTextMetadata?.sourceLabel ??
       options.sourceLabel?.();
+    const documentId = options.documentId?.();
     return {
       pageUrl: activeImageRegion?.pageUrl ?? options.pageUrl?.() ?? location.href,
+      ...(documentId ? { documentId } : {}),
       ...(sourceLabel ? { sourceLabel } : {}),
       ...(sourceLocation ? { sourceLocation } : {}),
     };
@@ -266,6 +273,7 @@ export async function startSelectionTranslator(
         | 'UPSERT_DOCUMENT_TERM'
         | 'REMOVE_DOCUMENT_TERM'
         | 'DISMISS_DOCUMENT_TERM_CANDIDATE'
+        | 'RESOLVE_DOCUMENT_REVIEW'
         | 'CLEAR_DOCUMENT_MEMORY';
     }>,
   ): Promise<DocumentMemorySnapshot> {
@@ -433,6 +441,20 @@ export async function startSelectionTranslator(
       type: 'DISMISS_DOCUMENT_TERM_CANDIDATE',
       payload: { ...currentDocumentLocator(), candidateId },
     }),
+    onResolveDocumentReview: (reviewId) => documentMemoryRequest({
+      type: 'RESOLVE_DOCUMENT_REVIEW',
+      payload: { ...currentDocumentLocator(), reviewId },
+    }),
+    canRetryDocumentReview: (entry: DocumentMemoryTranslation) => {
+      if (entry.sourceKind !== 'image-region') return false;
+      return Boolean(retryContextForResult(
+        documentMemoryTranslationResult(entry, options.sourceLabel?.()),
+      ));
+    },
+    onRetryDocumentReview: (entry: DocumentMemoryTranslation) => {
+      const result = documentMemoryTranslationResult(entry, options.sourceLabel?.());
+      void retryTranslation({ kind: 'result', result, intent: 'repeat' });
+    },
     onClearDocumentMemory: () => documentMemoryRequest({
       type: 'CLEAR_DOCUMENT_MEMORY',
       payload: currentDocumentLocator(),
@@ -1366,6 +1388,7 @@ export async function startSelectionTranslator(
     );
     overlay.showLoading(selectionRect(snapshot));
     const sourceLabel = metadata?.sourceLabel ?? options.sourceLabel?.();
+    const documentId = options.documentId?.();
     const requestText = surface === 'pdf'
       ? normalizePdfSelectionText(snapshot.normalizedText)
       : snapshot.normalizedText;
@@ -1379,6 +1402,7 @@ export async function startSelectionTranslator(
         type: 'TRANSLATE_SELECTION',
         payload: {
           requestId: snapshot.requestId,
+          ...(documentId ? { documentId } : {}),
           text: requestText,
           pageUrl: options.pageUrl?.() ?? snapshot.pageUrl,
           ...(sourceLabel ? { sourceLabel } : {}),
@@ -1399,6 +1423,7 @@ export async function startSelectionTranslator(
       if (response.ok) {
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
+        overlay.refreshDocumentMemory();
         const responseRequestId = response.data.result.requestId;
         const anchor = markerAnchors.get(snapshot.requestId);
         if (anchor && responseRequestId !== snapshot.requestId) {
@@ -1513,11 +1538,13 @@ export async function startSelectionTranslator(
       rememberMarkerAnchor(requestId, capture.sourceSelection.normalizedText);
     }
     overlay.showLoading(capture.rect);
+    const documentId = options.documentId?.();
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'TRANSLATE_IMAGE_REGION',
         payload: {
           requestId,
+          ...(documentId ? { documentId } : {}),
           imageDataUrl: capture.imageDataUrl,
           imageWidth: capture.imageWidth,
           imageHeight: capture.imageHeight,
@@ -1542,6 +1569,7 @@ export async function startSelectionTranslator(
       if (response.ok) {
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
+        overlay.refreshDocumentMemory();
         overlayHistory = response.data.history;
         if (alreadyRendered) {
           overlay.updateHistory(combinedOverlayHistory());
@@ -1758,7 +1786,7 @@ export async function startSelectionTranslator(
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
       pdfSelectionPointerId = undefined;
       pdfSelectionInProgress = false;
-      overlay.hide();
+      overlay.resetSession();
     },
   };
 }

@@ -31,9 +31,25 @@ describe('document identity', () => {
   });
 
   it('keeps an explicit local document identity across later page navigation', () => {
-    expect(documentIdentity({
+    const first = documentIdentity({
       pageUrl: 'https://new.example/another-page',
-      documentId: 'doc-original-page',
-    }).documentId).toBe('doc-original-page');
+      documentId: 'local:paper.pdf:12000:1700000000',
+    }).documentId;
+    expect(first).toMatch(/^doc-[a-z0-9]+$/u);
+    expect(documentIdentity({
+      pageUrl: 'https://new.example/third-page',
+      documentId: first,
+    }).documentId).toBe(first);
+  });
+
+  it('hashes explicit PDF source identities before persistence', () => {
+    const sourceUrl = 'https://example.com/private-paper.pdf?token=secret';
+    const documentId = documentIdentity({
+      pageUrl: 'chrome-extension://reader/pdf.html',
+      documentId: sourceUrl,
+    }).documentId;
+    expect(documentId).toMatch(/^doc-[a-z0-9]+$/u);
+    expect(documentId).not.toContain('private-paper');
+    expect(documentId).not.toContain('secret');
   });
 });

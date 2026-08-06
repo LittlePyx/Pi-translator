@@ -17,6 +17,8 @@ export interface PdfSourceLocation {
 
 export interface TranslateRequest {
   requestId: string;
+  /** Stable local identity for document-scoped memory; never sent to the provider. */
+  documentId?: string;
   text: string;
   pageUrl: string;
   sourceLabel?: string;
@@ -61,6 +63,8 @@ export interface TranslationRevision {
 
 export interface TranslateImageRegionRequest {
   requestId: string;
+  /** Stable local identity for document-scoped memory; never sent to the provider. */
+  documentId?: string;
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;

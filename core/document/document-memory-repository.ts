@@ -27,6 +27,15 @@ export interface DocumentTermCandidate extends GlossaryEntry {
   createdAt: number;
 }
 
+export interface DocumentTranslationReview {
+  /** Stable per-region identifier; revisions of the same box replace this item. */
+  id: string;
+  formulaNeedsReview: boolean;
+  uncertainSpans: string[];
+  updatedAt: number;
+  reviewedAt?: number;
+}
+
 export interface DocumentMemoryTranslation {
   id: string;
   requestId: string;
@@ -39,6 +48,7 @@ export interface DocumentMemoryTranslation {
   style?: TranslationStyle;
   sourceKind?: TranslateResult['sourceKind'];
   sourceLocation?: PdfSourceLocation;
+  review?: DocumentTranslationReview;
 }
 
 export interface DocumentMemorySnapshot {
@@ -82,6 +92,126 @@ function stableId(prefix: string, value: string): string {
   return `${prefix}-${(hash >>> 0).toString(36)}`;
 }
 
+function sourceLocationKey(location: PdfSourceLocation): string {
+  return [
+    location.pageNumber,
+    location.leftRatio.toFixed(5),
+    location.topRatio.toFixed(5),
+    location.widthRatio.toFixed(5),
+    location.heightRatio.toFixed(5),
+  ].join(':');
+}
+
+function sameImageRegion(
+  left: DocumentMemoryTranslation,
+  right: DocumentMemoryTranslation,
+): boolean {
+  return Boolean(
+    left.sourceKind === 'image-region' &&
+    right.sourceKind === 'image-region' &&
+    left.sourceLocation &&
+    right.sourceLocation &&
+    sourceLocationKey(left.sourceLocation) === sourceLocationKey(right.sourceLocation),
+  );
+}
+
+function sameTranslationSubject(
+  previous: DocumentMemoryTranslation,
+  next: DocumentMemoryTranslation,
+): boolean {
+  const nextRoot = next.rootRequestId ?? next.requestId;
+  const previousRoot = previous.rootRequestId ?? previous.requestId;
+  if (
+    previous.requestId === nextRoot ||
+    previousRoot === nextRoot ||
+    previousRoot === next.requestId
+  ) return true;
+  if (sameImageRegion(previous, next)) return true;
+  if (previous.sourceKind === 'image-region' || next.sourceKind === 'image-region') return false;
+  return normalizedTerm(previous.originalText) === normalizedTerm(next.originalText);
+}
+
+function compactUncertainSpans(values: readonly string[]): string[] {
+  const seen = new Set<string>();
+  const output: string[] = [];
+  for (const value of values) {
+    const clean = compactText(value, 180);
+    const key = normalizedTerm(clean);
+    if (!clean || seen.has(key)) continue;
+    seen.add(key);
+    output.push(clean);
+    if (output.length >= 6) break;
+  }
+  return output;
+}
+
+function reviewForResult(
+  result: TranslateResult,
+  updatedAt: number,
+): DocumentTranslationReview | undefined {
+  if (result.sourceKind !== 'image-region' || !result.sourceLocation) return undefined;
+  const formulaNeedsReview = Boolean(result.formulaNeedsReview);
+  const uncertainSpans = compactUncertainSpans(result.uncertainSpans ?? []);
+  if (!formulaNeedsReview && !uncertainSpans.length) return undefined;
+  return {
+    id: stableId('review', sourceLocationKey(result.sourceLocation)),
+    formulaNeedsReview,
+    uncertainSpans,
+    updatedAt,
+  };
+}
+
+function sameReviewEvidence(
+  previous: DocumentMemoryTranslation | undefined,
+  originalText: string,
+  translatedText: string,
+  review: DocumentTranslationReview,
+): boolean {
+  const earlier = previous?.review;
+  if (!previous || !earlier) return false;
+  return (
+    normalizedTerm(previous.originalText) === normalizedTerm(originalText) &&
+    normalizedTerm(previous.translatedText) === normalizedTerm(translatedText) &&
+    earlier.formulaNeedsReview === review.formulaNeedsReview &&
+    earlier.uncertainSpans.length === review.uncertainSpans.length &&
+    earlier.uncertainSpans.every((span, index) => (
+      normalizedTerm(span) === normalizedTerm(review.uncertainSpans[index] ?? '')
+    ))
+  );
+}
+
+function sanitizeReview(value: unknown): DocumentTranslationReview | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const review = value as Partial<DocumentTranslationReview>;
+  if (typeof review.id !== 'string' || !review.id.trim()) return undefined;
+  const formulaNeedsReview = review.formulaNeedsReview === true;
+  const uncertainSpans = Array.isArray(review.uncertainSpans)
+    ? compactUncertainSpans(review.uncertainSpans.filter(
+        (span): span is string => typeof span === 'string',
+      ))
+    : [];
+  if (!formulaNeedsReview && !uncertainSpans.length) return undefined;
+  return {
+    id: compactText(review.id, 80),
+    formulaNeedsReview,
+    uncertainSpans,
+    updatedAt: typeof review.updatedAt === 'number' ? review.updatedAt : 0,
+    ...(typeof review.reviewedAt === 'number' && Number.isFinite(review.reviewedAt)
+      ? { reviewedAt: review.reviewedAt }
+      : {}),
+  };
+}
+
+function retainRecentTranslations(
+  entries: DocumentMemoryTranslation[],
+): DocumentMemoryTranslation[] {
+  const pending = entries.filter((entry) => entry.review && !entry.review.reviewedAt).slice(0, 12);
+  const others = entries.filter((entry) => !entry.review || Boolean(entry.review.reviewedAt));
+  return [...pending, ...others.slice(0, MAX_TRANSLATIONS - pending.length)]
+    .sort((left, right) => right.completedAt - left.completedAt)
+    .slice(0, MAX_TRANSLATIONS);
+}
+
 function emptyMemory(identity: DocumentIdentity): StoredDocumentMemory {
   return {
     schemaVersion: SCHEMA_VERSION,
@@ -122,7 +252,11 @@ function sanitizeMemory(value: unknown, identity: DocumentIdentity): StoredDocum
       ? record.candidateTerms.slice(0, MAX_CANDIDATE_TERMS)
       : [],
     recentTranslations: Array.isArray(record.recentTranslations)
-      ? record.recentTranslations.slice(0, MAX_TRANSLATIONS)
+      ? record.recentTranslations.slice(0, MAX_TRANSLATIONS).map((entry) => {
+          const review = sanitizeReview(entry.review);
+          const { review: _review, ...translation } = entry;
+          return review ? { ...translation, review } : translation;
+        })
       : [],
     dismissedTermKeys: Array.isArray(record.dismissedTermKeys)
       ? record.dismissedTermKeys.filter((item): item is string => typeof item === 'string').slice(0, MAX_DISMISSED_TERMS)
@@ -192,7 +326,7 @@ export async function rememberDocumentTranslation(
 ): Promise<DocumentMemorySnapshot> {
   return mutate(identity, (memory) => {
     const now = Date.now();
-    const entry: DocumentMemoryTranslation = {
+    const baseEntry: DocumentMemoryTranslation = {
       id: stableId('translation', `${result.requestId}:${result.originalText}`),
       requestId: result.requestId,
       rootRequestId: result.revision?.rootRequestId ?? result.requestId,
@@ -204,6 +338,21 @@ export async function rememberDocumentTranslation(
       ...(result.sourceKind ? { sourceKind: result.sourceKind } : {}),
       ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
     };
+    const previous = memory.recentTranslations.find((candidate) => (
+      sameTranslationSubject(candidate, baseEntry)
+    ));
+    const proposedReview = reviewForResult(result, now);
+    const review = proposedReview && sameReviewEvidence(
+      previous,
+      baseEntry.originalText,
+      baseEntry.translatedText,
+      proposedReview,
+    ) && previous?.review?.reviewedAt
+      ? { ...proposedReview, reviewedAt: previous.review.reviewedAt }
+      : proposedReview;
+    const entry: DocumentMemoryTranslation = review
+      ? { ...baseEntry, review }
+      : baseEntry;
     const candidateKeys = new Set(memory.candidateTerms.map((term) => termKey(term.source, term.target)));
     const confirmedSources = new Set(memory.confirmedTerms.map((term) => normalizedTerm(term.source)));
     const dismissed = new Set(memory.dismissedTermKeys);
@@ -223,18 +372,68 @@ export async function rememberDocumentTranslation(
       label: identity.label,
       updatedAt: now,
       candidateTerms: candidates.slice(0, MAX_CANDIDATE_TERMS),
-      recentTranslations: [
+      recentTranslations: retainRecentTranslations([
         entry,
-        ...memory.recentTranslations.filter(
-          (previous) => (
-            normalizedTerm(previous.originalText) !== normalizedTerm(entry.originalText) &&
-            previous.requestId !== entry.rootRequestId &&
-            previous.rootRequestId !== entry.rootRequestId
-          ),
-        ),
-      ].slice(0, MAX_TRANSLATIONS),
+        ...memory.recentTranslations.filter((candidate) => (
+          !sameTranslationSubject(candidate, entry)
+        )),
+      ]),
     };
   });
+}
+
+export async function resolveDocumentReview(
+  identity: DocumentIdentity,
+  reviewId: string,
+): Promise<DocumentMemorySnapshot> {
+  return mutate(identity, (memory) => {
+    let changed = false;
+    const reviewedAt = Date.now();
+    const recentTranslations = memory.recentTranslations.map((entry) => {
+      if (entry.review?.id !== reviewId) return entry;
+      changed = true;
+      return {
+        ...entry,
+        review: { ...entry.review, reviewedAt, updatedAt: reviewedAt },
+      };
+    });
+    if (!changed) return memory;
+    return { ...memory, updatedAt: Date.now(), recentTranslations };
+  });
+}
+
+export function documentMemoryTranslationResult(
+  entry: DocumentMemoryTranslation,
+  sourceHost?: string,
+): TranslateResult {
+  const uncertainSpans = entry.review?.uncertainSpans ?? [];
+  return {
+    requestId: entry.requestId,
+    originalText: entry.originalText,
+    translatedText: entry.translatedText,
+    warnings: [],
+    ...(sourceHost ? { sourceHost } : {}),
+    ...(entry.targetLanguage ? { targetLanguage: entry.targetLanguage } : {}),
+    ...(entry.style ? { style: entry.style } : {}),
+    ...(entry.sourceKind ? { sourceKind: entry.sourceKind } : {}),
+    ...(entry.sourceLocation ? { sourceLocation: entry.sourceLocation } : {}),
+    ...(entry.review?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
+    ...(uncertainSpans.length
+      ? { uncertainSpans: [...uncertainSpans] }
+      : {}),
+    ...(entry.rootRequestId && entry.rootRequestId !== entry.requestId
+      ? {
+          revision: {
+            rootRequestId: entry.rootRequestId,
+            kind: 'custom',
+            label: '本文记录',
+            scope: 'document',
+          },
+        }
+      : {}),
+    completedAt: entry.completedAt,
+    cached: true,
+  };
 }
 
 export async function confirmDocumentTerm(
@@ -352,6 +551,7 @@ export function buildDocumentReferenceContext(
   if (explicitContext?.trim()) parts.push(compactText(explicitContext, Math.floor(maximum * 0.55)));
   const selectedTokens = tokens(selectedText);
   const relevant = memory.recentTranslations
+    .filter((entry) => !entry.review || Boolean(entry.review.reviewedAt))
     .filter((entry) => normalizedTerm(entry.originalText) !== normalizedTerm(selectedText))
     .map((entry) => ({
       entry,

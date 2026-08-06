@@ -112,6 +112,7 @@ export type RuntimeMessage =
     }
   | { type: 'REMOVE_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { termId: string } }
   | { type: 'DISMISS_DOCUMENT_TERM_CANDIDATE'; payload: DocumentMemoryLocator & { candidateId: string } }
+  | { type: 'RESOLVE_DOCUMENT_REVIEW'; payload: DocumentMemoryLocator & { reviewId: string } }
   | { type: 'CLEAR_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
   | {
       type: 'UPDATE_TRANSLATION_RESULT';
@@ -219,6 +220,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'UPSERT_DOCUMENT_TERM' ||
     type === 'REMOVE_DOCUMENT_TERM' ||
     type === 'DISMISS_DOCUMENT_TERM_CANDIDATE' ||
+    type === 'RESOLVE_DOCUMENT_REVIEW' ||
     type === 'CLEAR_DOCUMENT_MEMORY' ||
     type === 'UPDATE_TRANSLATION_RESULT' ||
     type === 'RENDER_LATEX_MATHML' ||

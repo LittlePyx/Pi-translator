@@ -1,13 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   buildDocumentReferenceContext,
+  clearDocumentMemory,
   confirmDocumentTerm,
   dismissDocumentTermCandidate,
+  documentMemoryTranslationResult,
   getDocumentMemory,
   mergeDocumentGlossary,
   rememberDocumentTranslation,
+  resolveDocumentReview,
   upsertDocumentTerm,
 } from '../core/document/document-memory-repository';
+import type { TranslateResult } from '../core/translation/types';
 
 const storage: Record<string, unknown> = {};
 const identity = { documentId: 'doc-test', label: 'paper.pdf' };
@@ -172,6 +176,204 @@ describe('document translation memory', () => {
     );
     expect(context).toContain('The corrected OCR source text.');
     expect(context).not.toContain('stale OCR');
+  });
+
+  it('keeps one pending review per image region without persisting capture data', async () => {
+    const sourceLocation = {
+      documentId: 'pdf-session-review',
+      pageNumber: 3,
+      leftRatio: 0.12,
+      topRatio: 0.24,
+      widthRatio: 0.31,
+      heightRatio: 0.08,
+    };
+    const captureDataUrl = 'data:image/png;base64,private-capture-bytes';
+    const resultWithCapture = {
+      requestId: 'review-root',
+      originalText: 'The uncertain source contains $x+y$.',
+      translatedText: '待核对的译文。',
+      warnings: [],
+      sourceKind: 'image-region',
+      sourceLocation,
+      formulaNeedsReview: true,
+      uncertainSpans: ['公式结构需要核对', ' 公式结构需要核对 '],
+      completedAt: 10,
+      imageDataUrl: captureDataUrl,
+    } satisfies TranslateResult & { imageDataUrl: string };
+
+    let memory = await rememberDocumentTranslation(identity, resultWithCapture);
+    expect(memory.recentTranslations).toHaveLength(1);
+    expect(memory.recentTranslations[0]).toMatchObject({
+      requestId: 'review-root',
+      review: {
+        formulaNeedsReview: true,
+        uncertainSpans: ['公式结构需要核对'],
+      },
+    });
+    const reviewId = memory.recentTranslations[0]!.review!.id;
+    expect(JSON.stringify(storage)).not.toContain('data:image/');
+    expect(JSON.stringify(storage)).not.toContain('private-capture-bytes');
+
+    memory = await rememberDocumentTranslation(identity, {
+      requestId: 'review-repeat',
+      originalText: 'The corrected OCR still contains $x+y$.',
+      translatedText: '仍需核对的新译文。',
+      warnings: [],
+      sourceKind: 'image-region',
+      sourceLocation,
+      formulaNeedsReview: true,
+      uncertainSpans: ['新的公式问题'],
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'review-root',
+        kind: 'custom',
+        label: '重新识别',
+        scope: 'document',
+      },
+    });
+    expect(memory.recentTranslations).toHaveLength(1);
+    expect(memory.recentTranslations[0]).toMatchObject({
+      requestId: 'review-repeat',
+      review: {
+        id: reviewId,
+        uncertainSpans: ['新的公式问题'],
+      },
+    });
+
+    memory = await rememberDocumentTranslation(identity, {
+      requestId: 'review-clean',
+      originalText: 'The corrected OCR contains $x+y$.',
+      translatedText: '已经核对通过的译文。',
+      warnings: [],
+      sourceKind: 'image-region',
+      sourceLocation: { ...sourceLocation, documentId: 'pdf-session-after-reopen' },
+      uncertainSpans: [],
+      completedAt: 30,
+      revision: {
+        rootRequestId: 'review-root',
+        kind: 'custom',
+        label: '重新识别',
+        scope: 'document',
+      },
+    });
+    expect(memory.recentTranslations).toHaveLength(1);
+    expect(memory.recentTranslations[0]).toMatchObject({ requestId: 'review-clean' });
+    expect(memory.recentTranslations[0]?.review).toBeUndefined();
+  });
+
+  it('isolates resolved reviews and reopens them only when the evidence changes', async () => {
+    const otherIdentity = { documentId: 'doc-other', label: 'other.pdf' };
+    const sourceLocation = {
+      documentId: 'pdf-session-isolation',
+      pageNumber: 2,
+      leftRatio: 0.1,
+      topRatio: 0.2,
+      widthRatio: 0.4,
+      heightRatio: 0.1,
+    };
+    const reviewResult = {
+      requestId: 'isolated-review',
+      originalText: 'The formula $a=b$ needs review.',
+      translatedText: '公式需要核对。',
+      warnings: [],
+      sourceKind: 'image-region' as const,
+      sourceLocation,
+      formulaNeedsReview: true,
+      uncertainSpans: ['等式两侧可能不一致'],
+      completedAt: 10,
+    };
+
+    const first = await rememberDocumentTranslation(identity, reviewResult);
+    await rememberDocumentTranslation(otherIdentity, {
+      ...reviewResult,
+      requestId: 'other-review',
+    });
+    const reviewId = first.recentTranslations[0]!.review!.id;
+    const resolved = await resolveDocumentReview(identity, reviewId);
+    const reviewedAt = resolved.recentTranslations[0]!.review!.reviewedAt;
+    expect(reviewedAt).toEqual(expect.any(Number));
+    expect((await getDocumentMemory(otherIdentity)).recentTranslations[0]?.review?.reviewedAt)
+      .toBeUndefined();
+
+    const repeated = await rememberDocumentTranslation(identity, {
+      ...reviewResult,
+      requestId: 'identical-review-repeat',
+      revision: {
+        rootRequestId: 'isolated-review',
+        kind: 'custom',
+        label: '重新识别',
+        scope: 'document',
+      },
+    });
+    expect(repeated.recentTranslations).toHaveLength(1);
+    expect(repeated.recentTranslations[0]?.review?.reviewedAt).toBe(reviewedAt);
+
+    const changed = await rememberDocumentTranslation(identity, {
+      ...reviewResult,
+      requestId: 'changed-review-repeat',
+      uncertainSpans: ['检测到新的公式不一致'],
+      revision: {
+        rootRequestId: 'isolated-review',
+        kind: 'custom',
+        label: '重新识别',
+        scope: 'document',
+      },
+    });
+    expect(changed.recentTranslations).toHaveLength(1);
+    expect(changed.recentTranslations[0]?.review).toMatchObject({
+      id: reviewId,
+      uncertainSpans: ['检测到新的公式不一致'],
+    });
+    expect(changed.recentTranslations[0]?.review?.reviewedAt).toBeUndefined();
+  });
+
+  it('keeps pending reviews out of context and clears them with document memory', async () => {
+    const sourceLocation = {
+      documentId: 'pdf-session-context',
+      pageNumber: 1,
+      leftRatio: 0.2,
+      topRatio: 0.3,
+      widthRatio: 0.35,
+      heightRatio: 0.12,
+    };
+    let memory = await rememberDocumentTranslation(identity, {
+      requestId: 'context-review',
+      originalText: 'The adaptive sensing formula remains uncertain.',
+      translatedText: '自适应感知公式仍需核对。',
+      warnings: [],
+      sourceKind: 'image-region',
+      sourceLocation,
+      formulaNeedsReview: true,
+      uncertainSpans: ['公式分隔符没有闭合'],
+      completedAt: 10,
+    });
+    expect(buildDocumentReferenceContext(
+      'This adaptive sensing formula is reused.',
+      undefined,
+      memory,
+    )).toBeUndefined();
+
+    const entry = memory.recentTranslations[0]!;
+    expect(documentMemoryTranslationResult(entry, 'paper.pdf')).toMatchObject({
+      requestId: 'context-review',
+      sourceHost: 'paper.pdf',
+      sourceKind: 'image-region',
+      sourceLocation,
+      formulaNeedsReview: true,
+      uncertainSpans: ['公式分隔符没有闭合'],
+      cached: true,
+    });
+
+    memory = await resolveDocumentReview(identity, entry.review!.id);
+    expect(buildDocumentReferenceContext(
+      'This adaptive sensing formula is reused.',
+      undefined,
+      memory,
+    )).toContain('自适应感知公式仍需核对。');
+
+    memory = await clearDocumentMemory(identity);
+    expect(memory.recentTranslations).toHaveLength(0);
+    expect((await getDocumentMemory(identity)).recentTranslations).toHaveLength(0);
   });
 
   it('enforces document and per-document storage budgets', async () => {

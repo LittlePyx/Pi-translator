@@ -39,6 +39,14 @@ describe('runtime message guard', () => {
       },
     })).toBe(true);
     expect(isRuntimeMessage({
+      type: 'RESOLVE_DOCUMENT_REVIEW',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        documentId: 'document-1',
+        reviewId: 'review-1',
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
       type: 'UPDATE_TRANSLATION_RESULT',
       payload: {
         pageUrl: 'https://example.com/paper',
