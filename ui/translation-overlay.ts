@@ -18,6 +18,7 @@ import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
 import { validateImageFormulaResult } from '../core/translation/formula-output-validation';
 import type { SettingsFocus } from '../core/messaging/user-facing-error';
+import type { SettingsRecoveryRequest } from '../core/messaging/messages';
 import {
   renderTranslationContent,
   renderTranslationContents,
@@ -155,6 +156,7 @@ interface ErrorDisplay {
   retryable?: boolean;
   settingsFocus?: SettingsFocus;
   settingsLabel?: string;
+  settingsRecovery?: SettingsRecoveryRequest;
 }
 interface OverlayProgressState {
   partialText?: string;
@@ -212,7 +214,10 @@ interface OverlayActions {
   canRetryDocumentReview?: (entry: DocumentMemoryTranslation) => boolean;
   onRetryDocumentReview?: (entry: DocumentMemoryTranslation) => void;
   onClearDocumentMemory?: () => Promise<DocumentMemorySnapshot>;
-  onOpenSettings: (focus?: SettingsFocus) => Promise<boolean>;
+  onOpenSettings: (
+    focus?: SettingsFocus,
+    recovery?: SettingsRecoveryRequest,
+  ) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
@@ -380,11 +385,71 @@ export class TranslationOverlay {
     this.progressState=undefined;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const surface=this.surface('翻译失败');
     const body=document.createElement('div');body.className='error';body.textContent=error.message;surface.append(body);const footer=document.createElement('div');footer.className='footer';
     const showRetry=error.retryable??true;if(showRetry){const retry=this.button('重试','action primary');retry.addEventListener('click',()=>this.actions.onRetry({kind:'failed'}));footer.append(retry)}
-    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry?'':' primary'}`);this.bindSettingsButton(settings,error.settingsFocus);footer.append(settings)}if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
+    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry?'':' primary'}`);this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
   }
 
-  private bindSettingsButton(button:HTMLButtonElement,focus?:SettingsFocus):void {
-    const originalLabel=button.textContent??'打开设置';button.addEventListener('click',()=>{button.disabled=true;void this.actions.onOpenSettings(focus).then((opened)=>{button.disabled=false;if(opened){button.textContent=originalLabel;return}button.textContent='无法打开，请从扩展菜单进入';button.title='请从 Edge 扩展菜单打开 Pi Translator 设置'}).catch(()=>{button.disabled=false;button.textContent='无法打开，请从扩展菜单进入';button.title='请从 Edge 扩展菜单打开 Pi Translator 设置'})});
+  showSettingsRecoveryConfirmation(partialText?:string,rect?:ViewportRect):void {
+    this.progressState=undefined;
+    if(rect)this.lastRect=rect;
+    if(this.sidebarActive)this.sidebarCollapsed=false;
+    const surface=this.surface('配置已完成');
+    const notice=document.createElement('div');
+    notice.className='notice';
+    notice.setAttribute('role','status');
+    notice.setAttribute('aria-live','polite');
+    const title=document.createElement('strong');
+    title.textContent=partialText?'已保留收到的部分译文':'请确认是否重新翻译';
+    const text=document.createElement('span');
+    text.textContent=partialText
+      ?'为避免重复计费，扩展没有自动再次请求 API。你可以保留下面的内容，或明确选择重新翻译。'
+      :'配置已经通过验证。此次错误不适合静默重试，请确认后再重新发送。';
+    notice.append(title,text);
+    surface.append(notice);
+    if(partialText){
+      const preview=document.createElement('div');
+      preview.className='stream-preview';
+      preview.textContent=partialText;
+      surface.append(preview);
+    }
+    const footer=document.createElement('div');
+    footer.className='footer';
+    const retry=this.button('重新翻译（会再次请求 API）','action primary');
+    const keep=this.button(partialText?'保留部分结果':'暂不重试','action');
+    retry.addEventListener('click',()=>{
+      retry.disabled=true;
+      keep.disabled=true;
+      this.actions.onRetry({kind:'failed'});
+    });
+    keep.addEventListener('click',()=>{
+      retry.remove();
+      keep.remove();
+      text.textContent=partialText
+        ?'已保留当前部分译文，没有再次调用 API。'
+        :'当前任务已保留，不会自动调用 API。';
+      footer.remove();
+    });
+    footer.append(retry,keep);
+    surface.append(footer);
+    this.showSurface(surface);
+  }
+
+  private bindSettingsButton(button:HTMLButtonElement,focus?:SettingsFocus,recovery?:SettingsRecoveryRequest):void {
+    button.addEventListener('click',()=>{
+      button.disabled=true;
+      void this.actions.onOpenSettings(focus,recovery).then((opened)=>{
+        button.disabled=false;
+        if(opened){
+          button.textContent='设置已打开，完成后将返回';
+          return;
+        }
+        button.textContent='无法打开，请从扩展菜单进入';
+        button.title='请从 Edge 扩展菜单打开 Pi Translator 设置';
+      }).catch(()=>{
+        button.disabled=false;
+        button.textContent='无法打开，请从扩展菜单进入';
+        button.title='请从 Edge 扩展菜单打开 Pi Translator 设置';
+      });
+    });
   }
 
   hide():void { this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.clear();this.setView('hidden'); }

@@ -43,14 +43,16 @@ describe('user-facing errors', () => {
 
   it('routes configuration errors to the exact recovery surface', () => {
     expect(translationErrorRecovery('NO_API_KEY', false)).toEqual({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'api',
       settingsLabel: '配置 API',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('VISION_NOT_CONFIGURED', false)).toEqual({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'vision',
       settingsLabel: '配置 PDF 图像',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('NETWORK_ERROR', false)).toEqual({
       showRetry: true,
@@ -58,9 +60,10 @@ describe('user-facing errors', () => {
       settingsLabel: '检查 API 配置',
     });
     expect(translationErrorRecovery('AUTH_FAILED', false, 'vision')).toEqual({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'vision',
       settingsLabel: '检查图像 API',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('REQUEST_TIMEOUT', false, 'vision')).toEqual({
       showRetry: true,
@@ -72,22 +75,50 @@ describe('user-facing errors', () => {
       settingsFocus: 'api',
     });
     expect(translationErrorRecovery('MODEL_NOT_FOUND', false)).toMatchObject({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'api-model',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('MODEL_NOT_FOUND', false, 'vision')).toMatchObject({
+      showRetry: false,
       settingsFocus: 'vision-model',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('API_PERMISSION_REQUIRED', false, 'vision')).toMatchObject({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'vision-permission',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('OCR_NOT_SUPPORTED', false, 'vision')).toEqual({
-      showRetry: true,
+      showRetry: false,
       settingsFocus: 'vision-ocr',
       settingsLabel: '配置 Qwen OCR',
+      autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('IMAGE_REGION_INVALID', true)).toEqual({ showRetry: false });
     expect(translationErrorRecovery('UNSUPPORTED_PAGE', true)).toEqual({ showRetry: false });
   });
+
+  it.each([
+    ['NO_API_KEY', 'text', 'api'],
+    ['NO_API_KEY', 'vision', 'vision'],
+    ['AUTH_FAILED', 'text', 'api'],
+    ['AUTH_FAILED', 'vision', 'vision'],
+    ['MODEL_NOT_FOUND', 'text', 'api-model'],
+    ['MODEL_NOT_FOUND', 'vision', 'vision-model'],
+    ['API_PERMISSION_REQUIRED', 'text', 'api-permission'],
+    ['API_PERMISSION_REQUIRED', 'vision', 'vision-permission'],
+    ['VISION_NOT_CONFIGURED', 'vision', 'vision'],
+    ['VISION_MODEL_UNSUPPORTED', 'vision', 'vision-model'],
+    ['OCR_NOT_SUPPORTED', 'vision', 'vision-ocr'],
+  ] as const)(
+    'makes blocking %s/%s recovery settings-only and resumable',
+    (code, role, settingsFocus) => {
+      expect(translationErrorRecovery(code, true, role)).toMatchObject({
+        showRetry: false,
+        settingsFocus,
+        autoResumeAfterSettings: true,
+      });
+    },
+  );
 });

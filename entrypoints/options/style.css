@@ -19,6 +19,10 @@
   --summary-hover: #f8f9fb;
   --focus-ring: rgba(99, 102, 241, .16);
   --danger-hover: #fff1f2;
+  --recovery-bg: #f7f8ff;
+  --recovery-line: #cfd3f5;
+  --recovery-text: #303b57;
+  --recovery-muted: #65728a;
 }
 
 .onboarding-dialog {
@@ -121,6 +125,10 @@
     --summary-hover: #171f2c;
     --focus-ring: rgba(129, 140, 248, .2);
     --danger-hover: #3a1b23;
+    --recovery-bg: #151c2b;
+    --recovery-line: #465268;
+    --recovery-text: #e1e7f3;
+    --recovery-muted: #a9b5c7;
   }
   .onboarding-dialog { color-scheme: dark; }
   .onboarding-header img { filter: brightness(0) invert(1); }
@@ -1376,6 +1384,64 @@ button:hover { background: #f1f3f6; }
   .save-dock { background: rgba(14, 19, 29, .96); }
 }
 
+.settings-recovery-banner {
+  display: grid;
+  gap: 7px;
+  margin: 0 0 20px;
+  padding: 12px 14px 11px;
+  border: 1px solid var(--recovery-line);
+  border-left: 3px solid var(--accent);
+  border-radius: 4px;
+  color: var(--recovery-text);
+  background: var(--recovery-bg);
+}
+
+.settings-recovery-banner[hidden] { display: none; }
+
+.settings-recovery-copy {
+  display: grid;
+  grid-template-columns: 19px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+}
+
+.settings-recovery-marker {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+  border: 1px solid var(--recovery-line);
+  border-radius: 2px;
+  color: var(--accent);
+  font-size: 12px;
+  line-height: 1;
+}
+
+.settings-recovery-marker::before { content: "↩"; }
+.settings-recovery-copy strong { display: block; font-size: 12px; line-height: 1.45; }
+
+.settings-recovery-copy p {
+  margin: 3px 0 0;
+  color: var(--recovery-muted);
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+.settings-recovery-status {
+  min-height: 0;
+  margin: 0 0 0 29px;
+  color: var(--recovery-muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.settings-recovery-banner.in-progress { border-left-color: #0ea5e9; }
+.settings-recovery-banner.success { border-left-color: #16804b; }
+.settings-recovery-banner.success .settings-recovery-status { color: #16804b; }
+.settings-recovery-banner.error { border-left-color: #c43d56; }
+.settings-recovery-banner.error .settings-recovery-status { color: #b4233b; }
+
 .connection-flow {
   margin-top: 18px;
   border-top: 1px solid #dfe3e9;
@@ -1565,6 +1631,7 @@ button:hover { background: #f1f3f6; }
 .connection-advanced-content > .text-button { justify-self: start; }
 
 @media (max-width: 640px) {
+  .settings-recovery-banner { padding: 11px 12px 10px; }
   .connection-step { grid-template-columns: 23px minmax(0, 1fr); gap: 8px; }
   .vision-setup-heading { align-items: flex-start; }
 }
@@ -1587,6 +1654,8 @@ button:hover { background: #f1f3f6; }
   .connect-model-button:hover { border-color: #69758a; background: #202938; }
   .connection-advanced > summary { color: #aebbd0; }
   .connection-advanced summary strong { color: #e5e7eb; }
+  .settings-recovery-banner.success .settings-recovery-status { color: #86efac; }
+  .settings-recovery-banner.error .settings-recovery-status { color: #fda4af; }
 }
 
 /* Shared interaction states. Keep these last so later layout refinements cannot

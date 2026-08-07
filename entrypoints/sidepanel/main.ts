@@ -1,12 +1,15 @@
 import type {
+  OpenOptionsPageResponse,
   PdfSidePanelSession,
   RuntimeMessage,
   RuntimeResponse,
+  SettingsRecoveryRequest,
 } from '../../core/messaging/messages';
 import {
   translationErrorMessage,
   translationErrorRecovery,
   type SettingsFocus,
+  type TranslationProviderRole,
 } from '../../core/messaging/user-facing-error';
 import {
   edgePdfSourceUrl,
@@ -58,6 +61,39 @@ let currentSession: PdfSidePanelSession | undefined;
 let autoRenderLatex = true;
 let formulaRenderOverride: boolean | undefined;
 const sessionLoadGate = createLatestRequestGate();
+
+function recoveryRole(session: PdfSidePanelSession): TranslationProviderRole {
+  if (session.providerContext?.role) return session.providerContext.role;
+  return [
+    'VISION_NOT_CONFIGURED',
+    'VISION_MODEL_UNSUPPORTED',
+    'OCR_NOT_SUPPORTED',
+    'OCR_INVALID_RESPONSE',
+    'IMAGE_REGION_INVALID',
+  ].includes(session.error?.code ?? '')
+    ? 'vision'
+    : 'text';
+}
+
+function settingsRecoveryRequest(
+  session: PdfSidePanelSession,
+): SettingsRecoveryRequest | undefined {
+  if (!session.error) return undefined;
+  const recovery = translationErrorRecovery(
+    session.error.code,
+    session.error.retryable,
+    recoveryRole(session),
+  );
+  if (!recovery.settingsFocus) return undefined;
+  return {
+    role: recoveryRole(session),
+    errorCode: session.error.code,
+    failedRequestId: session.requestId,
+    hadPartialOutput: Boolean(session.partialText?.trim()),
+    autoResume: recovery.autoResumeAfterSettings === true,
+    nativePdfTabId: session.tabId,
+  };
+}
 
 function renderTranslationText(text: string, renderLatex: boolean): void {
   renderTranslationContent(translationText, text, renderLatex);
@@ -208,8 +244,14 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   progressTrack.hidden = !isTranslating;
   errorActions.hidden = session.status !== 'error';
   retry.hidden = false;
+  retry.disabled = false;
+  retry.textContent = '重试';
+  retry.title = '';
+  retry.classList.remove('primary');
   errorSettings.hidden = false;
   errorSettings.textContent = '检查设置';
+  errorSettings.classList.remove('primary');
+  errorSettings.classList.add('secondary');
   copy.disabled = session.status !== 'complete' || !session.result?.translatedText;
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle('error', session.status === 'error');
@@ -227,6 +269,22 @@ function render(session: PdfSidePanelSession | null | undefined): void {
 
   if (session.status === 'error' && session.error) {
     formulaView.hidden = true;
+    const waitingForConfirmation =
+      session.settingsRecoveryConfirmation?.failedRequestId === session.requestId;
+    if (waitingForConfirmation) {
+      translationState.textContent = '配置已完成 · 等待确认';
+      retry.hidden = false;
+      retry.textContent = '确认重新翻译';
+      retry.title = '使用刚保存的配置发起一次新的翻译请求';
+      retry.classList.add('primary');
+      errorSettings.hidden = true;
+      errorActions.hidden = false;
+      const preservedPartial = session.partialText?.trim();
+      translationText.textContent = preservedPartial
+        ? `${presentationText(session, preservedPartial)}\n\n配置已完成。上方部分译文已保留；为避免重复调用 API，请确认后再重新翻译。`
+        : '配置已完成。为避免意外调用 API，请确认后再重新翻译。';
+      return;
+    }
     translationState.textContent = '翻译失败';
     const exactPdfMessage = [
       'EMPTY_SELECTION',
@@ -240,12 +298,14 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     const recovery = translationErrorRecovery(
       session.error.code,
       session.error.retryable,
-      session.providerContext?.role ?? 'text',
+      recoveryRole(session),
     );
     retry.hidden = !recovery.showRetry;
     errorSettings.hidden = !recovery.settingsFocus;
     errorSettings.textContent = recovery.settingsLabel ?? '检查设置';
     errorSettings.dataset.settingsFocus = recovery.settingsFocus ?? '';
+    errorSettings.classList.toggle('secondary', recovery.showRetry);
+    errorSettings.classList.toggle('primary', !recovery.showRetry && Boolean(recovery.settingsFocus));
     errorActions.hidden = !recovery.showRetry && !recovery.settingsFocus;
     const providerContext = providerErrorContext(session);
     translationText.textContent = providerContext
@@ -311,20 +371,32 @@ function activeSession(): PdfSidePanelSession | undefined {
   return undefined;
 }
 
-function openFullSettings(focus?: SettingsFocus): void {
+function openFullSettings(
+  focus?: SettingsFocus,
+  recovery?: SettingsRecoveryRequest,
+): void {
   void (async () => {
     const response = await browser.runtime.sendMessage({
       type: 'OPEN_OPTIONS_PAGE',
-      ...(focus ? { payload: { focus } } : {}),
-    } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
+      ...(focus || recovery
+        ? {
+            payload: {
+              ...(focus ? { focus } : {}),
+              ...(recovery ? { recovery } : {}),
+            },
+          }
+        : {}),
+    } satisfies RuntimeMessage) as OpenOptionsPageResponse;
     if (!response.ok) setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置');
   })().catch(() => setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置'));
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
 errorSettings.addEventListener('click', () => {
+  const session = activeSession();
+  if (!session) return;
   const focus = errorSettings.dataset.settingsFocus as SettingsFocus | undefined;
-  openFullSettings(focus || undefined);
+  openFullSettings(focus || undefined, settingsRecoveryRequest(session));
 });
 formulaView.addEventListener('click', () => {
   if (!currentSession?.result?.translatedText) return;
@@ -336,16 +408,24 @@ formulaView.addEventListener('click', () => {
 retry.addEventListener('click', () => {
   const session = activeSession();
   if (!session) return;
+  if (session.settingsRecoveryConfirmation?.failedRequestId === session.requestId) {
+    setStatus('正在使用刚保存的配置重新翻译');
+  }
+  retry.disabled = true;
   void (async () => {
     const response = (await browser.runtime.sendMessage({
       type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION',
-      payload: { tabId: session.tabId },
+      payload: { tabId: session.tabId, expectedRequestId: session.requestId },
     } satisfies RuntimeMessage)) as RuntimeResponse<{ started: true }>;
     if (currentSession?.tabId !== session.tabId || activeTabId !== session.tabId) return;
     if (!response.ok) {
+      retry.disabled = false;
       setStatus(translationErrorMessage(response.error.code, response.error.message));
     }
-  })().catch(() => setStatus('无法重新开始 PDF 翻译'));
+  })().catch(() => {
+    retry.disabled = false;
+    setStatus('无法重新开始 PDF 翻译');
+  });
 });
 
 copy.addEventListener('click', () => {

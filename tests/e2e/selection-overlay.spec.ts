@@ -20,6 +20,10 @@ let echoVisionPayloadOnce = false;
 let failNextRevisionRequest = false;
 let returnRevisedVisionResultOnce = false;
 let returnPendingVisionReviewOnce = false;
+let failNextRecoveryRequestAfterPartial = false;
+let partialRecoveryRequestIndex = 0;
+let releasePartialRecoveryFailure: (() => void) | undefined;
+let partialRecoveryFailureGate: Promise<void> = Promise.resolve();
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -233,6 +237,40 @@ async function clearBrowserSelection(): Promise<void> {
   });
 }
 
+async function selectElementText(selector: string): Promise<void> {
+  await page.evaluate((targetSelector) => {
+    const target = document.querySelector(targetSelector);
+    if (!target) throw new Error(`Missing selection target: ${targetSelector}`);
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  }, selector);
+  await expect
+    .poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
+    .not.toBe('');
+}
+
+async function replaceStoredApiKeys(keys: Record<string, string>): Promise<void> {
+  const extensionPage = await context.newPage();
+  try {
+    await extensionPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    await extensionPage.evaluate(async (nextKeys) => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      await Promise.all([
+        extensionChrome.storage.session.set({ apiKeysByProfile: nextKeys }),
+        extensionChrome.storage.local.set({ apiKeysByProfile: {} }),
+      ]);
+    }, keys);
+  } finally {
+    await extensionPage.close();
+  }
+}
+
 test.beforeAll(async () => {
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-e2e-'));
   const extensionPath = path.resolve('.output/edge-mv3');
@@ -319,7 +357,40 @@ test.beforeAll(async () => {
     const isDocumentTermSelection = JSON.stringify(body).includes('adaptive sensing');
     const isPdfOptimizerFallback = JSON.stringify(body).includes('Optimizer fallback fixture');
     const isTranslationRevision = JSON.stringify(body).includes('translationRevisionPreference');
+    const isPartialRecoverySelection = JSON.stringify(body).includes(
+      'A recovery request may already contain a partial translation.',
+    );
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
+    if (isPartialRecoverySelection && failNextRecoveryRequestAfterPartial) {
+      partialRecoveryRequestIndex += 1;
+      if (partialRecoveryRequestIndex === 1) {
+        const content = JSON.stringify({
+          translation: '已收到的部分译文。',
+          detectedLanguage: 'en',
+          warnings: [],
+          segments: [],
+        });
+        await route.fulfill({
+          status: 200,
+          contentType: 'application/json',
+          body: JSON.stringify({ choices: [{ message: { content } }] }),
+        });
+        return;
+      }
+      await partialRecoveryFailureGate;
+      failNextRecoveryRequestAfterPartial = false;
+      await route.fulfill({
+        status: 401,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: {
+            message: 'Synthetic authentication failure after partial output.',
+            type: 'authentication_error',
+          },
+        }),
+      });
+      return;
+    }
     if (isTranslationRevision && failNextRevisionRequest) {
       failNextRevisionRequest = false;
       await route.fulfill({
@@ -456,6 +527,8 @@ test.beforeAll(async () => {
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
+            <p id="recovery-source">A configured API should resume this selected translation automatically.</p>
+            <p id="partial-recovery-source">A recovery request may already contain a partial translation.</p>
             <p id="math-source">The objective
               <span class="katex" data-tex="\\mathcal{L}=\\sum_i(x_i-y_i)^2">ℒ = Σᵢ(xᵢ − yᵢ)²</span>
               is minimized during training.
@@ -482,6 +555,11 @@ test.afterEach(() => {
   failNextRevisionRequest = false;
   returnRevisedVisionResultOnce = false;
   returnPendingVisionReviewOnce = false;
+  failNextRecoveryRequestAfterPartial = false;
+  partialRecoveryRequestIndex = 0;
+  releasePartialRecoveryFailure?.();
+  releasePartialRecoveryFailure = undefined;
+  partialRecoveryFailureGate = Promise.resolve();
 });
 
 test('exposes the native Edge side panel API to the service worker', async () => {
@@ -582,6 +660,121 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     }
     await options.close();
   }
+});
+
+test('returns to the original selection and resumes after a missing API key is configured', async () => {
+  const sourceText = 'A configured API should resume this selected translation automatically.';
+  await replaceStoredApiKeys({ 'vision-e2e': 'e2e-vision-key' });
+
+  const requestsBefore = textRequests.filter((request) => (
+    JSON.stringify(request).includes(sourceText)
+  )).length;
+  await selectElementText('#recovery-source');
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.error')).toContainText('API Key');
+  await expect(overlay.getByRole('button', { name: '重试' })).toHaveCount(0);
+
+  const optionsPromise = context.waitForEvent('page');
+  await overlay.getByRole('button', { name: '配置 API' }).click();
+  const options = await optionsPromise;
+  await options.waitForLoadState('domcontentloaded');
+  await options.emulateMedia({ colorScheme: 'dark' });
+  const recoveryBanner = options.locator('#settings-recovery-banner');
+  await expect(recoveryBanner).toBeVisible();
+  await expect(options.locator('#settings-recovery-title'))
+    .toHaveText('完成文字 API 配置后继续');
+  await expect(options.locator('#settings-recovery-status')).toHaveAttribute('role', 'status');
+  await expect(options.locator('#settings-recovery-status')).toHaveAttribute('aria-live', 'polite');
+  await expect(options.locator('#api-key')).toBeFocused();
+  await expect.poll(() => recoveryBanner.evaluate((element) => (
+    getComputedStyle(element).backgroundColor
+  ))).not.toBe('rgb(255, 255, 255)');
+  expect(options.url()).not.toContain(sourceText);
+
+  // The opaque recovery token survives a settings-page reload in this tab,
+  // while remaining absent from the visible URL.
+  await options.reload({ waitUntil: 'domcontentloaded' });
+  await expect(options.locator('#settings-recovery-banner')).toBeVisible();
+  await expect(options.locator('#settings-recovery-title'))
+    .toHaveText('完成文字 API 配置后继续');
+  expect(options.url()).not.toContain('recovery=');
+
+  await options.locator('#api-key').fill('e2e-recovery-key');
+  await options.locator('#refresh-models').click();
+
+  await expect(overlay.locator('.body')).toHaveText(
+    '一致的学术翻译能够提升研究论文的可读性。',
+  );
+  await expect.poll(() => textRequests.filter((request) => (
+    JSON.stringify(request).includes(sourceText)
+  )).length).toBe(requestsBefore + 1);
+  await expect(options.locator('#settings-recovery-status'))
+    .toContainText('已返回原页面并继续翻译');
+
+  await options.close();
+  await page.keyboard.press('Escape');
+  await clearBrowserSelection();
+});
+
+test('requires confirmation after partial output and does not automatically repeat the request', async () => {
+  const sourceMarker = 'A recovery request may already contain a partial translation.';
+  const sourceText = `${sourceMarker} `.repeat(130).trim();
+  const matchingRequestCount = () => textRequests.filter((request) => (
+    JSON.stringify(request).includes(sourceMarker)
+  )).length;
+  const requestsBefore = matchingRequestCount();
+  failNextRecoveryRequestAfterPartial = true;
+  partialRecoveryFailureGate = new Promise<void>((resolve) => {
+    releasePartialRecoveryFailure = resolve;
+  });
+
+  await page.locator('#partial-recovery-source').evaluate((element, text) => {
+    element.textContent = text;
+  }, sourceText);
+  await selectElementText('#partial-recovery-source');
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect.poll(matchingRequestCount).toBe(requestsBefore + 2);
+  await expect(overlay.locator('.stream-preview')).toContainText('已收到的部分译文');
+  releasePartialRecoveryFailure?.();
+  await expect(overlay.locator('.error')).toContainText('API');
+
+  const optionsPromise = context.waitForEvent('page');
+  await overlay.getByRole('button', { name: '检查 API 配置' }).click();
+  const options = await optionsPromise;
+  await options.waitForLoadState('domcontentloaded');
+  await expect(options.locator('#settings-recovery-banner')).toBeVisible();
+  await expect(options.locator('#settings-recovery-description'))
+    .toContainText('已经产生部分译文');
+
+  await options.locator('#refresh-models').click();
+
+  await expect(overlay.locator('.notice')).toContainText('已保留收到的部分译文');
+  await expect(overlay.locator('.stream-preview')).toContainText('已收到的部分译文');
+  await expect(overlay.getByRole('button', {
+    name: '重新翻译（会再次请求 API）',
+  })).toBeVisible();
+  await expect(overlay.getByRole('button', { name: '保留部分结果' })).toBeVisible();
+  await page.waitForTimeout(250);
+  expect(matchingRequestCount()).toBe(requestsBefore + 2);
+
+  await overlay.getByRole('button', {
+    name: '重新翻译（会再次请求 API）',
+  }).click();
+  await expect.poll(matchingRequestCount).toBe(requestsBefore + 3);
+  await expect(overlay.locator('.body')).toContainText(
+    '一致的学术翻译能够提升研究论文的可读性。',
+  );
+
+  await options.close();
+  await page.keyboard.press('Escape');
+  await clearBrowserSelection();
+  await page.locator('#partial-recovery-source').evaluate((element) => {
+    element.textContent = 'A recovery request may already contain a partial translation.';
+  });
 });
 
 test('keeps the native PDF side panel disabled on unrelated webpages', async () => {
@@ -1790,9 +1983,11 @@ test('keeps a partial punctuation-free PDF selection instead of expanding to the
   await pdfPage.mouse.down();
   await pdfPage.mouse.move(end.x, end.y, { steps: 12 });
   await pdfPage.mouse.up();
-  const selected = await pdfPage.evaluate(() => (
+  const readSelection = () => pdfPage.evaluate(() => (
     window.getSelection()?.toString().replace(/\s+/gu, ' ').trim() ?? ''
   ));
+  await expect.poll(readSelection).toContain('4 contains academic text');
+  const selected = await readSelection();
   expect(selected).toContain('4 contains academic text');
   expect(selected).toContain('line 5');
   expect(selected).not.toContain('line 1');

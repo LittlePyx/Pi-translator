@@ -3,13 +3,16 @@ import type {
   PublicSettingsResponse,
   DocumentMemoryResponse,
   DocumentMemoryLocator,
+  OpenOptionsPageResponse,
   RuntimeMessage,
-  RuntimeResponse,
+  SettingsRecoveryReadyPayload,
+  SettingsRecoveryRequest,
   TranslateRuntimeResponse,
   UpdateTranslationResultResponse,
 } from '../messaging/messages';
 import {
   runtimeConnectionErrorMessage,
+  type SettingsFocus,
   translationErrorRecovery,
   translationErrorMessage,
 } from '../messaging/user-facing-error';
@@ -130,6 +133,23 @@ type TranslationRetryContext =
       revision?: TranslationRevisionRequest;
     };
 
+interface PendingSettingsRecovery {
+  token: string;
+  context: TranslationRetryContext;
+  failedRequestId: string;
+  partialText?: string;
+  autoResume: boolean;
+  pageUrl: string;
+  targetLanguage: string;
+  style: PublicSettings['style'];
+}
+
+interface SettingsRecoveryAck {
+  handled: boolean;
+  resumed: boolean;
+  requiresConfirmation: boolean;
+}
+
 export interface SelectionTranslatorController {
   translateImageRegion(capture: ImageRegionTranslationCapture): Promise<void>;
   translatePdfRegionText(capture: PdfRegionTextTranslationCapture): Promise<void>;
@@ -204,6 +224,9 @@ export async function startSelectionTranslator(
   let activePdfRegionLocation: PdfSourceLocation | undefined;
   let activeTextMetadata: TextTranslationMetadata | undefined;
   let activeRetryContext: TranslationRetryContext | undefined;
+  let activePartialText: string | undefined;
+  let pendingSettingsRecovery: PendingSettingsRecovery | undefined;
+  const recoveryClientId = crypto.randomUUID();
   const resultRetryContexts = new Map<string, TranslationRetryContext>();
   let inFlightRequestId: string | undefined;
   let completedEarlyRequestId: string | undefined;
@@ -225,6 +248,10 @@ export async function startSelectionTranslator(
   let storedPersistentMarkers: PersistedPdfTranslationMarker[] = [];
   let persistenceRevision = 0;
   let persistenceWriteQueue: Promise<void> = Promise.resolve();
+
+  function hasActivePartialOutput(): boolean {
+    return Boolean(activePartialText?.trim());
+  }
 
   function currentDocumentLocator(): DocumentMemoryLocator {
     const sourceLocation = activePdfRegionLocation ?? activeTextMetadata?.sourceLocation;
@@ -290,6 +317,8 @@ export async function startSelectionTranslator(
     activePdfRegionLocation = undefined;
     activeTextMetadata = undefined;
     activeRetryContext = undefined;
+    activePartialText = undefined;
+    pendingSettingsRecovery = undefined;
     if (!requestId) return;
     void browser.runtime
       .sendMessage({
@@ -299,11 +328,43 @@ export async function startSelectionTranslator(
       .catch(() => undefined);
   }
 
-  async function openSettingsPage(focus?: import('../messaging/user-facing-error').SettingsFocus):Promise<boolean>{
-    try{
-      const response=await browser.runtime.sendMessage({type:'OPEN_OPTIONS_PAGE',...(focus?{payload:{focus}}:{})} satisfies RuntimeMessage) as RuntimeResponse<{opened:true}>;
-      return response.ok;
-    }catch{return false}
+  async function openSettingsPage(
+    focus?: SettingsFocus,
+    recovery?: SettingsRecoveryRequest,
+  ): Promise<boolean> {
+    const context = activeRetryContext;
+    const partialText = activePartialText;
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'OPEN_OPTIONS_PAGE',
+        ...((focus || recovery)
+          ? {
+              payload: {
+                ...(focus ? { focus } : {}),
+                ...(recovery && context ? { recovery } : {}),
+              },
+            }
+          : {}),
+      } satisfies RuntimeMessage) as OpenOptionsPageResponse;
+      if (!response.ok) return false;
+      if (response.data.recoveryToken && recovery && context) {
+        pendingSettingsRecovery = {
+          token: response.data.recoveryToken,
+          context,
+          failedRequestId: recovery.failedRequestId,
+          ...(partialText ? { partialText } : {}),
+          autoResume: recovery.autoResume,
+          pageUrl: context.kind === 'image'
+            ? context.capture.pageUrl
+            : context.snapshot.pageUrl,
+          targetLanguage: temporaryTargetLanguage,
+          style: temporaryStyle,
+        };
+      }
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   const overlay = new TranslationOverlay({
@@ -1107,7 +1168,10 @@ export async function startSelectionTranslator(
       ...snapshot,
       requestId,
       capturedAt: Date.now(),
-      selectionHash: `${requestId}:${snapshot.normalizedText.length}`,
+      // A retry is still tied to the same DOM/PDF selection. Keep the stable
+      // selection hash so a delayed settings refresh does not mistake the new
+      // request id for a changed selection and cancel the recovery request.
+      selectionHash: snapshot.selectionHash,
     };
   }
 
@@ -1126,7 +1190,10 @@ export async function startSelectionTranslator(
 
   async function retryTranslation(target: OverlayRetryTarget): Promise<void> {
     if (target.kind === 'failed') {
-      if (activeRetryContext) await replayRetryContext(activeRetryContext);
+      const context = activeRetryContext;
+      pendingSettingsRecovery = undefined;
+      activePartialText = undefined;
+      if (context) await replayRetryContext(context);
       return;
     }
     const context = retryContextForResult(target.result);
@@ -1358,6 +1425,8 @@ export async function startSelectionTranslator(
     metadata?: TextTranslationMetadata,
     revision?: TranslationRevisionRequest,
   ): Promise<void> {
+    pendingSettingsRecovery = undefined;
+    activePartialText = undefined;
     if (inFlightRequestId && inFlightRequestId !== snapshot.requestId) {
       const previousRequestId = inFlightRequestId;
       void browser.runtime.sendMessage({
@@ -1421,6 +1490,7 @@ export async function startSelectionTranslator(
       const alreadyRendered = completedEarlyRequestId === snapshot.requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        activePartialText = undefined;
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
         overlay.refreshDocumentMemory();
@@ -1459,6 +1529,18 @@ export async function startSelectionTranslator(
           retryable: recovery.showRetry,
           ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
           ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
+          ...(recovery.settingsFocus
+            ? {
+                settingsRecovery: {
+                  role: 'text',
+                  errorCode: response.error.code,
+                  failedRequestId: snapshot.requestId,
+                  hadPartialOutput: hasActivePartialOutput(),
+                  autoResume: Boolean(recovery.autoResumeAfterSettings),
+                  clientId: recoveryClientId,
+                },
+              }
+            : {}),
         },
         selectionRect(snapshot),
       );
@@ -1513,6 +1595,8 @@ export async function startSelectionTranslator(
     revision?: TranslationRevisionRequest,
   ): Promise<void> {
     const requestId = crypto.randomUUID();
+    pendingSettingsRecovery = undefined;
+    activePartialText = undefined;
     if (inFlightRequestId) {
       const previousRequestId = inFlightRequestId;
       void browser.runtime.sendMessage({
@@ -1567,6 +1651,7 @@ export async function startSelectionTranslator(
       const alreadyRendered = completedEarlyRequestId === requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        activePartialText = undefined;
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
         overlay.refreshDocumentMemory();
@@ -1596,6 +1681,18 @@ export async function startSelectionTranslator(
           retryable: recovery.showRetry,
           ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
           ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
+          ...(recovery.settingsFocus
+            ? {
+                settingsRecovery: {
+                  role: 'vision',
+                  errorCode: response.error.code,
+                  failedRequestId: requestId,
+                  hadPartialOutput: hasActivePartialOutput(),
+                  autoResume: Boolean(recovery.autoResumeAfterSettings),
+                  clientId: recoveryClientId,
+                },
+              }
+            : {}),
         },
         capture.rect,
       );
@@ -1629,12 +1726,74 @@ export async function startSelectionTranslator(
     });
   }
 
-  const messageListener = (message: unknown): void => {
+  const messageListener = (
+    message: unknown,
+  ): void | Promise<SettingsRecoveryAck> => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     const typed = message as RuntimeMessage;
+    if (typed.type === 'SETTINGS_RECOVERY_READY') {
+      const payload: SettingsRecoveryReadyPayload = typed.payload;
+      const pending = pendingSettingsRecovery;
+      if (
+        payload.targetKind === 'native-pdf' ||
+        !pending ||
+        payload.token !== pending.token ||
+        payload.failedRequestId !== pending.failedRequestId ||
+        payload.clientId !== recoveryClientId
+      ) {
+        // runtime.sendMessage accepts only one listener response. Non-target
+        // Pi PDF pages must stay silent so they cannot win the response race
+        // against the page that owns this recovery token/client id.
+        return;
+      }
+      const currentPageUrl = options.pageUrl?.() ?? location.href;
+      if (!sameExtensionPage(pending.pageUrl, currentPageUrl)) {
+        pendingSettingsRecovery = undefined;
+        return Promise.resolve({
+          handled: false,
+          resumed: false,
+          requiresConfirmation: true,
+        });
+      }
+      pendingSettingsRecovery = undefined;
+      activeRetryContext = pending.context;
+      temporaryTargetLanguage = pending.targetLanguage;
+      temporaryStyle = pending.style;
+      overlay.setPreferences({
+        targetLanguage: temporaryTargetLanguage,
+        style: temporaryStyle,
+        sidebarSide: settings.sidebarSide,
+        sidebarWidth: settings.sidebarWidth,
+        autoRenderLatex: settings.autoRenderLatex,
+      });
+      const requiresConfirmation = payload.hadPartialOutput ||
+        !payload.autoResume ||
+        Boolean(pending.partialText?.trim());
+      if (requiresConfirmation) {
+        overlay.showSettingsRecoveryConfirmation(
+          pending.partialText,
+          pending.context.kind === 'image'
+            ? pending.context.capture.rect
+            : selectionRect(pending.context.snapshot),
+        );
+        return Promise.resolve({
+          handled: true,
+          resumed: false,
+          requiresConfirmation: true,
+        });
+      }
+      activePartialText = undefined;
+      void replayRetryContext(pending.context);
+      return Promise.resolve({
+        handled: true,
+        resumed: true,
+        requiresConfirmation: false,
+      });
+    }
     if (typed.type === 'TRANSLATION_PROGRESS') {
       if (typed.payload.requestId === inFlightRequestId) {
         if (typed.payload.result) {
+          activePartialText = undefined;
           const result = typed.payload.result;
           rememberResultRetryContext(result, activeRetryContext);
           syncRevisionMarkers(result);
@@ -1652,6 +1811,9 @@ export async function startSelectionTranslator(
             result.sourceKind !== 'image-region' && settings.sentenceAlignmentDefault,
           );
           return;
+        }
+        if (typed.payload.partialText?.trim()) {
+          activePartialText = typed.payload.partialText;
         }
         overlay.showProgress(
           typed.payload.partialText,
@@ -1746,6 +1908,8 @@ export async function startSelectionTranslator(
     pendingSelectionMarkerRequestId = undefined;
     activeImageRegion = undefined;
     activeRetryContext = undefined;
+    activePartialText = undefined;
+    pendingSettingsRecovery = undefined;
     resultRetryContexts.clear();
   });
 
@@ -1774,6 +1938,8 @@ export async function startSelectionTranslator(
       activePdfRegionLocation = undefined;
       activeTextMetadata = undefined;
       activeRetryContext = undefined;
+      activePartialText = undefined;
+      pendingSettingsRecovery = undefined;
       resultRetryContexts.clear();
       overlayHistory = [];
       persistedMarkerHistory = [];

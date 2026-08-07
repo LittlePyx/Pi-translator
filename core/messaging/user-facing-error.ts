@@ -15,6 +15,7 @@ export interface TranslationErrorRecovery {
   showRetry: boolean;
   settingsFocus?: SettingsFocus;
   settingsLabel?: string;
+  autoResumeAfterSettings?: boolean;
 }
 
 const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
@@ -87,36 +88,57 @@ export function translationErrorRecovery(
       : { settingsFocus: 'api', settingsLabel: '检查 API 配置' };
   if (code === 'NO_API_KEY') {
     return {
-      showRetry: true,
+      showRetry: false,
       settingsFocus: providerSettings.settingsFocus,
       settingsLabel: role === 'vision' ? '配置图像 API' : '配置 API',
+      autoResumeAfterSettings: true,
     };
   }
   if (code === 'API_PERMISSION_REQUIRED') {
     return {
-      showRetry: true,
+      showRetry: false,
       settingsFocus: role === 'vision' ? 'vision-permission' : 'api-permission',
       settingsLabel: '重新授权 API',
+      autoResumeAfterSettings: true,
     };
   }
   if (code === 'MODEL_NOT_FOUND') {
     return {
-      showRetry: true,
+      showRetry: false,
       settingsFocus: role === 'vision' ? 'vision-model' : 'api-model',
       settingsLabel: '检查模型',
+      autoResumeAfterSettings: true,
     };
   }
-  if (['AUTH_FAILED', 'PAYMENT_REQUIRED'].includes(code)) {
+  if (code === 'AUTH_FAILED') {
+    return { showRetry: false, ...providerSettings, autoResumeAfterSettings: true };
+  }
+  if (code === 'PAYMENT_REQUIRED') {
     return { showRetry: true, ...providerSettings };
   }
   if (code === 'VISION_NOT_CONFIGURED') {
-    return { showRetry: true, settingsFocus: 'vision', settingsLabel: '配置 PDF 图像' };
+    return {
+      showRetry: false,
+      settingsFocus: 'vision',
+      settingsLabel: '配置 PDF 图像',
+      autoResumeAfterSettings: true,
+    };
   }
   if (code === 'OCR_NOT_SUPPORTED') {
-    return { showRetry: true, settingsFocus: 'vision-ocr', settingsLabel: '配置 Qwen OCR' };
+    return {
+      showRetry: false,
+      settingsFocus: 'vision-ocr',
+      settingsLabel: '配置 Qwen OCR',
+      autoResumeAfterSettings: true,
+    };
   }
   if (code === 'VISION_MODEL_UNSUPPORTED') {
-    return { showRetry: true, settingsFocus: 'vision-model', settingsLabel: '检查视觉模型' };
+    return {
+      showRetry: false,
+      settingsFocus: 'vision-model',
+      settingsLabel: '检查视觉模型',
+      autoResumeAfterSettings: true,
+    };
   }
   if (['PROVIDER_ERROR', 'INVALID_RESPONSE', 'EMPTY_RESPONSE'].includes(code)) {
     return {

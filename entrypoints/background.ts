@@ -19,6 +19,15 @@ import {
   type RuntimeResponse,
   type TranslateRuntimeResponse,
 } from '../core/messaging/messages';
+import {
+  beginSettingsRecoveryDelivery,
+  claimSettingsRecoveryTicket,
+  clearSettingsRecoveryTicketsForTab,
+  createSettingsRecoveryTicket,
+  discardSettingsRecoveryTicket,
+  finishSettingsRecoveryDelivery,
+  type SettingsRecoveryTicket,
+} from '../core/messaging/settings-recovery';
 import { createContextMenuSnapshot } from '../core/selection/generic-selection';
 import { MAX_SELECTION_LENGTH } from '../core/selection/types';
 import { createSerialTaskRunner } from '../core/runtime/serial-task';
@@ -298,23 +307,34 @@ function publishPdfSidePanelSession(
   } satisfies RuntimeMessage).catch(() => undefined);
 }
 
+async function publishPdfSidePanelSessionDurably(
+  session: PdfSidePanelSession,
+): Promise<void> {
+  pdfSidePanelSessions.set(session.tabId, session);
+  await storePdfSidePanelSession(session);
+  void browser.runtime.sendMessage({
+    type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+    payload: session,
+  } satisfies RuntimeMessage).catch(() => undefined);
+}
+
 function publishTranslationProgress(
   tabId: number,
   payload: TranslationProgressPayload,
   target: TranslationProgressTarget = 'tab',
-): void {
+): Promise<void> {
   const message = {
     type: 'TRANSLATION_PROGRESS',
     payload,
   } satisfies RuntimeMessage;
-  if (target === 'runtime') {
-    void browser.runtime.sendMessage(message).catch(() => undefined);
-  } else {
-    void browser.tabs.sendMessage(tabId, message).catch(() => undefined);
-  }
+  const delivery = (target === 'runtime'
+    ? browser.runtime.sendMessage(message)
+    : browser.tabs.sendMessage(tabId, message))
+    .then(() => undefined)
+    .catch(() => undefined);
 
   const session = pdfSidePanelSessions.get(tabId);
-  if (session?.requestId !== payload.requestId) return;
+  if (session?.requestId !== payload.requestId) return delivery;
   if (payload.result) {
     publishPdfSidePanelSession({
       ...session,
@@ -324,7 +344,7 @@ function publishTranslationProgress(
       completedChunks: payload.totalChunks,
       totalChunks: payload.totalChunks,
     });
-    return;
+    return delivery;
   }
   publishPdfSidePanelSession({
     ...session,
@@ -332,6 +352,7 @@ function publishTranslationProgress(
     completedChunks: payload.completedChunks,
     totalChunks: payload.totalChunks,
   }, false);
+  return delivery;
 }
 
 async function settleTranslationFinalization(
@@ -715,11 +736,23 @@ async function disableSidePanelForPiPdfViewer(
   void queuePdfSidePanelOptionsSync().catch(() => undefined);
 }
 
-function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ started: true }>> {
+function retryPdfSidePanelTranslation(
+  tabId: number,
+  expectedRequestId: string,
+): Promise<RuntimeResponse<{ started: true }>> {
   const session = pdfSidePanelSessions.get(tabId);
   if (!session || !session.sourceText.trim()) {
     return Promise.resolve(errorResponse(
       new TranslationError('EMPTY_SELECTION', '请先在 PDF 中选择文字并使用右键翻译。'),
+    ));
+  }
+  if (session.status !== 'error' || session.requestId !== expectedRequestId) {
+    return Promise.resolve(errorResponse(
+      new TranslationError(
+        'REQUEST_ABORTED',
+        '原 PDF 翻译任务已经变化，没有发起新的 API 请求。',
+        false,
+      ),
     ));
   }
   if (session.error?.code === 'UNSUPPORTED_PAGE') {
@@ -739,9 +772,94 @@ function retryPdfSidePanelTranslation(tabId: number): Promise<RuntimeResponse<{ 
   delete nextSession.result;
   delete nextSession.error;
   delete nextSession.providerContext;
+  delete nextSession.settingsRecoveryConfirmation;
   publishPdfSidePanelSession(nextSession);
   void beginPdfSidePanelTranslation(tabId, nextSession.requestId);
   return Promise.resolve({ ok: true, data: { started: true } });
+}
+
+interface SettingsRecoveryAck {
+  handled: boolean;
+  resumed: boolean;
+  requiresConfirmation: boolean;
+}
+
+async function activateSettingsRecoverySource(ticket: SettingsRecoveryTicket): Promise<void> {
+  const tab = await browser.tabs.get(ticket.sourceTabId);
+  if (tab.windowId !== undefined) {
+    await browser.windows.update(tab.windowId, { focused: true }).catch(() => undefined);
+  }
+  await browser.tabs.update(ticket.sourceTabId, { active: true }).catch(() => undefined);
+}
+
+async function deliverSettingsRecovery(
+  ticket: SettingsRecoveryTicket,
+): Promise<SettingsRecoveryAck> {
+  const requiresConfirmation = ticket.hadPartialOutput || !ticket.autoResume;
+  const payload = {
+    token: ticket.token,
+    role: ticket.role,
+    failedRequestId: ticket.failedRequestId,
+    hadPartialOutput: ticket.hadPartialOutput,
+    autoResume: ticket.autoResume,
+    targetKind: ticket.targetKind,
+    sourceTabId: ticket.sourceTabId,
+    ...(ticket.clientId ? { clientId: ticket.clientId } : {}),
+  } as const;
+  if (ticket.targetKind === 'native-pdf') {
+    await initializePdfSidePanelSessions();
+    if (!requiresConfirmation) {
+      const response = await retryPdfSidePanelTranslation(
+        ticket.sourceTabId,
+        ticket.failedRequestId,
+      );
+      if (!response.ok) return { handled: false, resumed: false, requiresConfirmation: false };
+    } else {
+      const session = pdfSidePanelSessions.get(ticket.sourceTabId);
+      if (
+        !session ||
+        session.status !== 'error' ||
+        session.requestId !== ticket.failedRequestId
+      ) {
+        return { handled: false, resumed: false, requiresConfirmation: true };
+      }
+      await publishPdfSidePanelSessionDurably({
+        ...session,
+        settingsRecoveryConfirmation: {
+          failedRequestId: ticket.failedRequestId,
+          hadPartialOutput: ticket.hadPartialOutput,
+        },
+      });
+    }
+    await activateSettingsRecoverySource(ticket);
+    return {
+      handled: true,
+      resumed: !requiresConfirmation,
+      requiresConfirmation,
+    };
+  }
+
+  const message = {
+    type: 'SETTINGS_RECOVERY_READY',
+    payload,
+  } satisfies RuntimeMessage;
+  let ack: SettingsRecoveryAck | undefined;
+  if (ticket.targetKind === 'extension-page') {
+    ack = await browser.runtime.sendMessage(message).catch(() => undefined) as
+      | SettingsRecoveryAck
+      | undefined;
+  } else {
+    ack = await browser.tabs.sendMessage(
+      ticket.sourceTabId,
+      message,
+      ticket.sourceFrameId !== undefined ? { frameId: ticket.sourceFrameId } : undefined,
+    ).catch(() => undefined) as SettingsRecoveryAck | undefined;
+  }
+  if (!ack?.handled) {
+    return { handled: false, resumed: false, requiresConfirmation };
+  }
+  await activateSettingsRecoverySource(ticket);
+  return ack;
 }
 
 async function localDiagnosticReport(): Promise<string> {
@@ -882,6 +1000,11 @@ async function translate(
   }
 
   const controller = beginActiveRequest(tabId, request.requestId);
+  let progressDeliveryTail: Promise<void> = Promise.resolve();
+  const queueProgress = (payload: TranslationProgressPayload): void => {
+    progressDeliveryTail = progressDeliveryTail.then(() =>
+      publishTranslationProgress(tabId, payload, progressTarget));
+  };
   try {
     const settings = await getSettings();
     assertActiveRequest(tabId, request.requestId, controller);
@@ -932,7 +1055,7 @@ async function translate(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
-        publishTranslationProgress(tabId, {
+        await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
           completedChunks: cached.chunkCount ?? 1,
@@ -991,12 +1114,12 @@ async function translate(
     );
 
     if (completedCheckpointChunks.length) {
-      publishTranslationProgress(tabId, {
+      queueProgress({
         requestId: request.requestId,
         partialText: translatedChunks.join('\n\n'),
         completedChunks: completedCheckpointChunks.length,
         totalChunks: chunks.length,
-      }, progressTarget);
+      });
     }
 
     for (
@@ -1029,15 +1152,15 @@ async function translate(
                 : partialText;
               if (!visiblePartial || visiblePartial === lastPartial) return;
               const now = performance.now();
-              if (now - lastProgressAt < 80) return;
+              if (lastProgressAt > 0 && now - lastProgressAt < 80) return;
               lastPartial = visiblePartial;
               lastProgressAt = now;
-              publishTranslationProgress(tabId, {
+              queueProgress({
                 requestId: request.requestId,
                 partialText: `${prefix}${visiblePartial}`,
                 completedChunks: chunkIndex,
                 totalChunks: chunks.length,
-              }, progressTarget);
+              });
             },
           }
         : undefined;
@@ -1153,11 +1276,12 @@ async function translate(
         );
         assertActiveRequest(tabId, request.requestId, controller);
       }
-      publishTranslationProgress(tabId, {
+      queueProgress({
         requestId: request.requestId,
+        partialText: translatedChunks.join('\n\n'),
         completedChunks: chunkIndex + 1,
         totalChunks: chunks.length,
-      }, progressTarget);
+      });
     }
     const sourceHost = sourceHostForRequest(request);
     const result: TranslateResult = {
@@ -1206,13 +1330,14 @@ async function translate(
         : {}),
     };
     assertActiveRequest(tabId, request.requestId, controller);
-    publishTranslationProgress(tabId, {
+    queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
       completedChunks: chunks.length,
       totalChunks: chunks.length,
       result,
-    }, progressTarget);
+    });
+    await progressDeliveryTail;
     if (request.revision?.scope === 'document') {
       await rememberDocumentTranslation(identity, result);
       assertActiveRequest(tabId, request.requestId, controller);
@@ -1237,6 +1362,7 @@ async function translate(
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
+    await progressDeliveryTail.catch(() => undefined);
     await recordLocalDiagnosticError('translate', error);
     return errorResponse(error);
   } finally {
@@ -1390,6 +1516,11 @@ async function translateImageRegion(
 ): Promise<TranslateRuntimeResponse> {
   validateImageRegionRequest(request);
   const controller = beginActiveRequest(tabId, request.requestId);
+  let progressDeliveryTail: Promise<void> = Promise.resolve();
+  const queueProgress = (payload: TranslationProgressPayload): void => {
+    progressDeliveryTail = progressDeliveryTail.then(() =>
+      publishTranslationProgress(tabId, payload, progressTarget));
+  };
   try {
     // A region request represents different source content and cannot resume a
     // text checkpoint. Clear it without ever storing the captured image.
@@ -1434,7 +1565,7 @@ async function translateImageRegion(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
-        publishTranslationProgress(tabId, {
+        await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
           completedChunks: 1,
@@ -1493,15 +1624,15 @@ async function translateImageRegion(
               if (activeRequests.get(tabId)?.controller !== controller) return;
               if (!partialText || partialText === lastPartial) return;
               const now = performance.now();
-              if (now - lastProgressAt < 80) return;
+              if (lastProgressAt > 0 && now - lastProgressAt < 80) return;
               lastPartial = partialText;
               lastProgressAt = now;
-              publishTranslationProgress(tabId, {
+              queueProgress({
                 requestId: request.requestId,
                 partialText,
                 completedChunks: 0,
                 totalChunks: 1,
-              }, progressTarget);
+              });
             },
           }
         : undefined,
@@ -1563,13 +1694,14 @@ async function translateImageRegion(
           }
         : {}),
     };
-    publishTranslationProgress(tabId, {
+    queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
       completedChunks: 1,
       totalChunks: 1,
       result,
-    }, progressTarget);
+    });
+    await progressDeliveryTail;
     assertActiveRequest(tabId, request.requestId, controller);
     if (request.revision?.scope === 'document') {
       await rememberDocumentTranslation(identity, result);
@@ -1593,6 +1725,7 @@ async function translateImageRegion(
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
+    await progressDeliveryTail.catch(() => undefined);
     await recordLocalDiagnosticError('translate-image-region', error);
     return errorResponse(error);
   } finally {
@@ -1864,6 +1997,19 @@ async function sendContextMenuTranslationToWebPage(
 }
 
 export default defineBackground(() => {
+  let configurationInvalidationTail: Promise<void> = Promise.resolve();
+  async function waitForConfigurationInvalidationBarrier(): Promise<void> {
+    // storage.onChanged delivery trails storage.set on some Edge builds. Wait
+    // for a short quiet window so a late invalidation cannot abort the request
+    // that recovery is about to start.
+    for (let attempt = 0; attempt < 4; attempt += 1) {
+      const observedTail = configurationInvalidationTail;
+      await observedTail;
+      await new Promise<void>((resolve) => setTimeout(resolve, 25));
+      if (observedTail === configurationInvalidationTail) return;
+    }
+    await configurationInvalidationTail;
+  }
   void restrictSensitiveStorageAccess();
   void synchronizeContextMenu();
   void initializePdfSidePanelSessions()
@@ -1895,15 +2041,25 @@ export default defineBackground(() => {
   });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
-    void invalidateTranslationStateForApiKeyChange(
-      areaName,
-      changes,
-      () => {
-        for (const active of activeRequests.values()) active.controller.abort();
-        activeRequests.clear();
-      },
-      () => clearTranslationCheckpoint(),
-    ).catch(() => undefined);
+    const behaviorChanged = areaName === 'local' &&
+      'extensionSettings' in changes &&
+      translationBehaviorFingerprint(changes.extensionSettings?.oldValue) !==
+        translationBehaviorFingerprint(changes.extensionSettings?.newValue);
+    configurationInvalidationTail = configurationInvalidationTail.then(async () => {
+      await invalidateTranslationStateForApiKeyChange(
+        areaName,
+        changes,
+        () => {
+          for (const active of activeRequests.values()) active.controller.abort();
+          activeRequests.clear();
+        },
+        () => clearTranslationCheckpoint(),
+      );
+      if (!behaviorChanged) return;
+      for (const active of activeRequests.values()) active.controller.abort();
+      activeRequests.clear();
+      await clearTranslationCheckpoint();
+    }).catch(() => undefined);
     if (areaName === 'local' && 'extensionSettings' in changes) {
       void synchronizeContextMenu();
       scheduleGeneralPageAccessSync();
@@ -1917,14 +2073,6 @@ export default defineBackground(() => {
       if (next?.enableSessionCache === false) {
         void clearTranslationCache();
         void clearImageRegionTranslationCache();
-      }
-      if (
-        translationBehaviorFingerprint(changes.extensionSettings?.oldValue) !==
-        translationBehaviorFingerprint(changes.extensionSettings?.newValue)
-      ) {
-        for (const active of activeRequests.values()) active.controller.abort();
-        activeRequests.clear();
-        void clearTranslationCheckpoint();
       }
     }
     if (areaName === 'session' && 'pausedSiteHosts' in changes) {
@@ -2189,6 +2337,7 @@ export default defineBackground(() => {
       if (activeTabId === tabId) activeTabIdsByWindow.delete(windowId);
     }
     if (lastActiveBrowserTab?.id === tabId) lastActiveBrowserTab = undefined;
+    void clearSettingsRecoveryTicketsForTab(tabId).catch(() => undefined);
     void removeStoredPdfSidePanelSession(tabId).catch(() => undefined);
     void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
@@ -2288,18 +2437,152 @@ export default defineBackground(() => {
 
       if (message.type === 'OPEN_OPTIONS_PAGE') {
         const focus = message.payload?.focus;
-        const suffix = focus === 'support'
-          ? '?focus=support#support'
-          : focus
-            ? `?focus=${encodeURIComponent(focus)}#connection`
-            : '';
-        return browser.tabs
-          .create({
-            url: `${browser.runtime.getURL('/options.html')}${suffix}`,
-            active: true,
-          })
-          .then(() => ({ ok: true as const, data: { opened: true } }))
-          .catch((error: unknown) => errorResponse(error));
+        return (async () => {
+          let ticket: SettingsRecoveryTicket | undefined;
+          const recovery = message.payload?.recovery;
+          if (recovery && focus) {
+            let sourceTabId = sender.tab?.id;
+            let sourceWindowId = sender.tab?.windowId;
+            let targetKind: SettingsRecoveryTicket['targetKind'];
+            if (recovery.nativePdfTabId !== undefined) {
+              await initializePdfSidePanelSessions();
+              const session = pdfSidePanelSessions.get(recovery.nativePdfTabId);
+              if (
+                !session ||
+                session.status !== 'error' ||
+                session.requestId !== recovery.failedRequestId
+              ) {
+                throw new TranslationError(
+                  'REQUEST_ABORTED',
+                  '原 PDF 翻译任务已经失效，请返回 PDF 后重新触发。',
+                  false,
+                );
+              }
+              sourceTabId = recovery.nativePdfTabId;
+              sourceWindowId = (await browser.tabs.get(sourceTabId)).windowId;
+              targetKind = 'native-pdf';
+            } else {
+              if (sourceTabId === undefined) {
+                throw new TranslationError(
+                  'REQUEST_ABORTED',
+                  '原翻译页面已经失效，请返回页面重新选择。',
+                  false,
+                );
+              }
+              targetKind = isExtensionPdfReaderUrl(
+                sender.url ?? sender.tab?.url,
+                PI_PDF_READER_URL,
+              )
+                ? 'extension-page'
+                : 'content-script';
+            }
+            ticket = await createSettingsRecoveryTicket({
+              targetKind,
+              sourceTabId,
+              ...(sourceWindowId !== undefined ? { sourceWindowId } : {}),
+              ...(targetKind === 'content-script' && sender.frameId !== undefined
+                ? { sourceFrameId: sender.frameId }
+                : {}),
+              ...(recovery.clientId ? { clientId: recovery.clientId } : {}),
+              failedRequestId: recovery.failedRequestId,
+              role: recovery.role,
+              focus,
+              errorCode: recovery.errorCode,
+              hadPartialOutput: recovery.hadPartialOutput,
+              autoResume: recovery.autoResume,
+            });
+          }
+          const optionsUrl = new URL(browser.runtime.getURL('/options.html'));
+          if (focus) optionsUrl.searchParams.set('focus', focus);
+          if (ticket) optionsUrl.searchParams.set('recovery', ticket.token);
+          optionsUrl.hash = focus === 'support' ? 'support' : focus ? 'connection' : '';
+          try {
+            await browser.tabs.create({ url: optionsUrl.href, active: true });
+          } catch (error) {
+            if (ticket) await discardSettingsRecoveryTicket(ticket.token);
+            throw error;
+          }
+          return {
+            ok: true as const,
+            data: {
+              opened: true as const,
+              ...(ticket ? { recoveryToken: ticket.token } : {}),
+            },
+          };
+        })().catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'GET_SETTINGS_RECOVERY') {
+        return (async () => {
+          if (sender.tab?.id === undefined || !sender.url?.startsWith(browser.runtime.getURL('/options.html'))) {
+            throw new TranslationError('UNSUPPORTED_PAGE', '恢复信息只能由设置页读取。');
+          }
+          const ticket = await claimSettingsRecoveryTicket(
+            message.payload.token,
+            sender.tab.id,
+          );
+          if (!ticket) {
+            throw new TranslationError(
+              'REQUEST_ABORTED',
+              '恢复任务已过期或已被其他设置页使用。',
+              false,
+            );
+          }
+          return {
+            ok: true as const,
+            data: {
+              recovery: {
+                token: ticket.token,
+                role: ticket.role,
+                focus: ticket.focus,
+                errorCode: ticket.errorCode,
+                hadPartialOutput: ticket.hadPartialOutput,
+                autoResume: ticket.autoResume,
+                expiresAt: ticket.expiresAt,
+              },
+            },
+          };
+        })().catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'COMPLETE_SETTINGS_RECOVERY') {
+        return (async () => {
+          if (sender.tab?.id === undefined || !sender.url?.startsWith(browser.runtime.getURL('/options.html'))) {
+            throw new TranslationError('UNSUPPORTED_PAGE', '恢复任务只能由设置页完成。');
+          }
+          await waitForConfigurationInvalidationBarrier();
+          const ticket = await beginSettingsRecoveryDelivery(
+            message.payload.token,
+            sender.tab.id,
+          );
+          if (!ticket) {
+            throw new TranslationError(
+              'REQUEST_ABORTED',
+              '原翻译任务已过期，请返回页面重新选择。',
+              false,
+            );
+          }
+          let delivered: SettingsRecoveryAck;
+          try {
+            delivered = await deliverSettingsRecovery(ticket);
+          } catch (error) {
+            await finishSettingsRecoveryDelivery(ticket.token, sender.tab.id, false);
+            throw error;
+          }
+          await finishSettingsRecoveryDelivery(
+            ticket.token,
+            sender.tab.id,
+            delivered.handled,
+          );
+          return {
+            ok: true as const,
+            data: {
+              returned: delivered.handled,
+              resumed: delivered.resumed,
+              requiresConfirmation: delivered.requiresConfirmation,
+            },
+          };
+        })().catch((error: unknown) => errorResponse(error));
       }
 
       if (message.type === 'OPEN_PDF_VIEWER') {
@@ -2350,7 +2633,10 @@ export default defineBackground(() => {
 
       if (message.type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION') {
         return initializePdfSidePanelSessions().then(() =>
-          retryPdfSidePanelTranslation(message.payload.tabId));
+          retryPdfSidePanelTranslation(
+            message.payload.tabId,
+            message.payload.expectedRequestId,
+          ));
       }
 
       if (message.type === 'PDF_SIDE_PANEL_SESSION_UPDATED') {

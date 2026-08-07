@@ -63,6 +63,27 @@ describe('native PDF side-panel sessions', () => {
     expect(JSON.stringify(storage)).not.toContain('request-1');
   });
 
+  it('restores a settings-recovery confirmation after the side panel is reopened', async () => {
+    await storePdfSidePanelSession(session({
+      status: 'error',
+      error: { code: 'AUTH_FAILED', message: 'Invalid key.', retryable: false },
+      settingsRecoveryConfirmation: {
+        failedRequestId: 'request-1',
+        hadPartialOutput: true,
+      },
+    }));
+
+    await expect(restorePdfSidePanelSessions([
+      { id: 7, url: 'https://example.com/paper.pdf#page=2' },
+    ])).resolves.toMatchObject([{
+      requestId: 'request-1',
+      settingsRecoveryConfirmation: {
+        failedRequestId: 'request-1',
+        hadPartialOutput: true,
+      },
+    }]);
+  });
+
   it('invalidates out-of-order side-panel loads', () => {
     const gate = createLatestRequestGate();
     const first = gate.begin();

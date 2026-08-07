@@ -75,4 +75,42 @@ describe('runtime message guard', () => {
   it('accepts a top-frame PDF preview source query', () => {
     expect(isRuntimeMessage({ type: 'GET_ACTIVE_PDF_SOURCE' })).toBe(true);
   });
+
+  it('accepts the settings recovery lifecycle messages', () => {
+    expect(isRuntimeMessage({
+      type: 'OPEN_OPTIONS_PAGE',
+      payload: {
+        focus: 'api',
+        recovery: {
+          role: 'text',
+          errorCode: 'NO_API_KEY',
+          failedRequestId: 'request-1',
+          hadPartialOutput: false,
+          autoResume: true,
+          clientId: 'content-client-1',
+        },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'GET_SETTINGS_RECOVERY',
+      payload: { token: 'opaque-recovery-token' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'COMPLETE_SETTINGS_RECOVERY',
+      payload: { token: 'opaque-recovery-token' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'SETTINGS_RECOVERY_READY',
+      payload: {
+        token: 'opaque-recovery-token',
+        role: 'text',
+        failedRequestId: 'request-1',
+        hadPartialOutput: false,
+        autoResume: true,
+        targetKind: 'content-script',
+        sourceTabId: 7,
+        clientId: 'content-client-1',
+      },
+    })).toBe(true);
+  });
 });

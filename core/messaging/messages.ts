@@ -11,7 +11,7 @@ import type {
   TranslationHistoryEntry,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
-import type { SettingsFocus } from './user-facing-error';
+import type { SettingsFocus, TranslationProviderRole } from './user-facing-error';
 import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
 import type { PdfSourceLocation } from '../translation/types';
 import type {
@@ -24,6 +24,37 @@ export interface DocumentMemoryLocator {
   documentId?: string;
   sourceLabel?: string;
   sourceLocation?: PdfSourceLocation;
+}
+
+export interface SettingsRecoveryRequest {
+  role: TranslationProviderRole;
+  errorCode: TranslationErrorCode;
+  failedRequestId: string;
+  hadPartialOutput: boolean;
+  autoResume: boolean;
+  clientId?: string;
+  nativePdfTabId?: number;
+}
+
+export interface SettingsRecoveryDescriptor {
+  token: string;
+  role: TranslationProviderRole;
+  focus: SettingsFocus;
+  errorCode: TranslationErrorCode;
+  hadPartialOutput: boolean;
+  autoResume: boolean;
+  expiresAt: number;
+}
+
+export interface SettingsRecoveryReadyPayload {
+  token: string;
+  role: TranslationProviderRole;
+  failedRequestId: string;
+  hadPartialOutput: boolean;
+  autoResume: boolean;
+  targetKind: 'content-script' | 'extension-page' | 'native-pdf';
+  sourceTabId: number;
+  clientId?: string;
 }
 
 export interface PublicSettings {
@@ -86,6 +117,10 @@ export interface PdfSidePanelSession {
     message: string;
     retryable: boolean;
   };
+  settingsRecoveryConfirmation?: {
+    failedRequestId: string;
+    hadPartialOutput: boolean;
+  };
 }
 
 export type RuntimeMessage =
@@ -95,11 +130,20 @@ export type RuntimeMessage =
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
-  | { type: 'OPEN_OPTIONS_PAGE'; payload?: { focus?: SettingsFocus } }
+  | {
+      type: 'OPEN_OPTIONS_PAGE';
+      payload?: { focus?: SettingsFocus; recovery?: SettingsRecoveryRequest };
+    }
+  | { type: 'GET_SETTINGS_RECOVERY'; payload: { token: string } }
+  | { type: 'COMPLETE_SETTINGS_RECOVERY'; payload: { token: string } }
+  | { type: 'SETTINGS_RECOVERY_READY'; payload: SettingsRecoveryReadyPayload }
   | { type: 'GET_ACTIVE_PDF_SOURCE' }
   | { type: 'OPEN_PDF_VIEWER'; payload?: { url?: string; page?: number } }
   | { type: 'GET_PDF_SIDE_PANEL_SESSION'; payload: { tabId: number } }
-  | { type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION'; payload: { tabId: number } }
+  | {
+      type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION';
+      payload: { tabId: number; expectedRequestId: string };
+    }
   | { type: 'PDF_SIDE_PANEL_SESSION_UPDATED'; payload: PdfSidePanelSession }
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
@@ -190,6 +234,18 @@ export type ActivePdfSourceResponse = RuntimeResponse<{
   detected: boolean;
   sourceUrl?: string;
 }>;
+export type OpenOptionsPageResponse = RuntimeResponse<{
+  opened: true;
+  recoveryToken?: string;
+}>;
+export type SettingsRecoveryResponse = RuntimeResponse<{
+  recovery: SettingsRecoveryDescriptor;
+}>;
+export type CompleteSettingsRecoveryResponse = RuntimeResponse<{
+  returned: boolean;
+  resumed: boolean;
+  requiresConfirmation: boolean;
+}>;
 export type LatexMathMlResponse = RuntimeResponse<{ html?: string }>;
 export type LatexMathMlBatchResponse = RuntimeResponse<{ html: Array<string | null> }>;
 
@@ -207,6 +263,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
     type === 'OPEN_OPTIONS_PAGE' ||
+    type === 'GET_SETTINGS_RECOVERY' ||
+    type === 'COMPLETE_SETTINGS_RECOVERY' ||
+    type === 'SETTINGS_RECOVERY_READY' ||
     type === 'GET_ACTIVE_PDF_SOURCE' ||
     type === 'OPEN_PDF_VIEWER' ||
     type === 'GET_PDF_SIDE_PANEL_SESSION' ||

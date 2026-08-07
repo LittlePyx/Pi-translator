@@ -10,6 +10,7 @@ let storageTail: Promise<void> = Promise.resolve();
 function validSession(value: unknown): value is PdfSidePanelSession {
   if (!value || typeof value !== 'object') return false;
   const session = value as Partial<PdfSidePanelSession>;
+  const recovery = session.settingsRecoveryConfirmation;
   return (
     Number.isSafeInteger(session.tabId) &&
     (session.tabId ?? -1) >= 0 &&
@@ -18,7 +19,12 @@ function validSession(value: unknown): value is PdfSidePanelSession {
     typeof session.pageUrl === 'string' &&
     typeof session.sourceLabel === 'string' &&
     typeof session.startedAt === 'number' &&
-    ['translating', 'complete', 'error'].includes(session.status ?? '')
+    ['translating', 'complete', 'error'].includes(session.status ?? '') &&
+    (recovery === undefined || Boolean(
+      recovery &&
+      typeof recovery.failedRequestId === 'string' &&
+      typeof recovery.hadPartialOutput === 'boolean'
+    ))
   );
 }
 

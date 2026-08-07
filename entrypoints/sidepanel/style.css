@@ -201,6 +201,12 @@ main {
 
 .error-actions { display: flex; gap: 8px; margin-top: 14px; }
 .error-actions .secondary { color: #5f687a; border-color: #d7dbe4; }
+.error-actions .primary {
+  color: #fff;
+  border-color: #5145cd;
+  background: #5b4be0;
+}
+.error-actions .primary:hover { border-color: #4338ca; background: #5145cd; }
 
 footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
 .copy-action:disabled { opacity: .45; cursor: default; }
@@ -246,6 +252,12 @@ button:focus-visible {
     color: #c1bcff;
     background: #1a2230;
   }
+  .error-actions .primary {
+    color: #fff;
+    border-color: #7367ed;
+    background: #6558dc;
+  }
+  .error-actions .primary:hover { border-color: #8d83f2; background: #7468e4; }
   .content-section { border-color: #303846; }
   .content-section h2, .source-section p { color: #a7b0bf; }
   .translation-text { color: #f1f4f8; }

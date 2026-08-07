@@ -107,6 +107,16 @@
 
         <form id="settings-form" class="settings-content">
           <section id="settings-connection" class="card settings-section active" role="tabpanel" data-settings-section="connection">
+            <aside id="settings-recovery-banner" class="settings-recovery-banner" aria-labelledby="settings-recovery-title" hidden>
+              <div class="settings-recovery-copy">
+                <span class="settings-recovery-marker" aria-hidden="true"></span>
+                <div>
+                  <strong id="settings-recovery-title">完成 API 配置后继续翻译</strong>
+                  <p id="settings-recovery-description"></p>
+                </div>
+              </div>
+              <p id="settings-recovery-status" class="settings-recovery-status" role="status" aria-live="polite"></p>
+            </aside>
             <div class="section-heading">
               <div><span class="section-kicker">连接</span><h2>文字翻译 API（必需）</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>

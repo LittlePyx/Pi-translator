@@ -1,11 +1,14 @@
 import type {
   ApiDiagnosticReport,
   ApiDiagnosticResponse,
+  CompleteSettingsRecoveryResponse,
   ConnectionTestResponse,
   VisionCapabilityTestResponse,
   LocalDiagnosticReportResponse,
   ModelListResponse,
   RuntimeMessage,
+  SettingsRecoveryDescriptor,
+  SettingsRecoveryResponse,
 } from '../../core/messaging/messages';
 import { runtimeConnectionErrorMessage, translationErrorMessage } from '../../core/messaging/user-facing-error';
 import { apiOriginPattern, normalizeApiBaseUrl } from '../../core/settings/api-access';
@@ -104,6 +107,10 @@ const testButton=element<HTMLButtonElement>('test-connection');
 const diagnoseButton=element<HTMLButtonElement>('diagnose-api');
 const clearButton=element<HTMLButtonElement>('clear-key');
 const status=element<HTMLParagraphElement>('status');
+const settingsRecoveryBanner=element<HTMLElement>('settings-recovery-banner');
+const settingsRecoveryTitle=element<HTMLElement>('settings-recovery-title');
+const settingsRecoveryDescription=element<HTMLParagraphElement>('settings-recovery-description');
+const settingsRecoveryStatus=element<HTMLParagraphElement>('settings-recovery-status');
 const diagnosticReport=element<HTMLElement>('diagnostic-report');
 const shortcutsButton=element<HTMLButtonElement>('open-shortcuts');
 const onboardingDialog=element<HTMLDialogElement>('onboarding-dialog');
@@ -144,6 +151,9 @@ let onboardingStep=1;
 let onboardingAvailableModels:string[]=[];
 let formDirty=false;
 let nonConnectionDirty=false;
+let activeSettingsRecovery:SettingsRecoveryDescriptor|undefined;
+let settingsRecoveryCompleting=false;
+const SETTINGS_RECOVERY_TOKEN_KEY='piTranslatorSettingsRecoveryToken';
 
 for(const select of [apiPreset,onboardingPreset]){
   for(const preset of API_PRESETS){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.id==='qwen'?`${preset.name}（PDF 图像推荐）`:preset.name;select.append(option)}
@@ -154,6 +164,115 @@ extensionVersion.textContent=browser.runtime.getManifest().version;
 function setStatus(message:string,error=false):void{status.textContent=message;status.classList.toggle('error',error)}
 function setOnboardingStatus(message:string,error=false):void{onboardingStatus.textContent=message;onboardingStatus.classList.toggle('error',error)}
 function setSupportStatus(message:string,error=false):void{supportStatus.textContent=message;supportStatus.classList.toggle('error',error)}
+function setSettingsRecoveryStatus(message:string,state:'idle'|'progress'|'success'|'error'='idle'):void{
+  settingsRecoveryStatus.textContent=message;
+  settingsRecoveryBanner.classList.toggle('in-progress',state==='progress');
+  settingsRecoveryBanner.classList.toggle('success',state==='success');
+  settingsRecoveryBanner.classList.toggle('error',state==='error');
+}
+function clearRecoveryTokenFromUrl():void{
+  const url=new URL(location.href);
+  if(!url.searchParams.has('recovery'))return;
+  url.searchParams.delete('recovery');
+  history.replaceState(null,'',`${url.pathname}${url.search}${url.hash}`);
+}
+function renderSettingsRecovery(recovery:SettingsRecoveryDescriptor):void{
+  settingsRecoveryBanner.hidden=false;
+  settingsRecoveryTitle.textContent=recovery.role==='vision'
+    ? '完成 PDF 图像 API 配置后继续'
+    : '完成文字 API 配置后继续';
+  settingsRecoveryDescription.textContent=recovery.hadPartialOutput
+    ? '刚才的请求已经产生部分译文。验证并保存成功后会返回原页面，由你确认是否重新翻译，避免重复请求。'
+    : recovery.autoResume
+      ? '验证并保存成功后会返回原页面，继续刚才的翻译，无需重新选择内容。'
+      : '刚才的请求可能已经产生部分译文，或需要你确认下一步。验证并保存成功后会返回原页面；扩展不会自动重新发送请求。';
+  const remainingMinutes=Math.max(1,Math.ceil((recovery.expiresAt-Date.now())/60_000));
+  setSettingsRecoveryStatus(`请完成下方连接验证；恢复通道约在 ${remainingMinutes} 分钟后失效。`);
+  refreshModelsButton.textContent='验证、保存并继续';
+}
+async function claimRequestedSettingsRecovery():Promise<void>{
+  const tokenParam=new URLSearchParams(location.search).get('recovery');
+  const storedToken=sessionStorage.getItem(SETTINGS_RECOVERY_TOKEN_KEY);
+  if(tokenParam===null&&storedToken===null)return;
+  const rawToken=(tokenParam??storedToken??'').trim();
+  if(tokenParam!==null&&rawToken)sessionStorage.setItem(SETTINGS_RECOVERY_TOKEN_KEY,rawToken);
+  clearRecoveryTokenFromUrl();
+  if(!rawToken||rawToken.length>256){
+    sessionStorage.removeItem(SETTINGS_RECOVERY_TOKEN_KEY);
+    settingsRecoveryBanner.hidden=false;
+    settingsRecoveryTitle.textContent='无法恢复刚才的翻译';
+    settingsRecoveryDescription.textContent='恢复信息无效。你仍可保存 API 设置，然后回到原页面重新选择内容。';
+    setSettingsRecoveryStatus('恢复信息无效。','error');
+    return;
+  }
+  let response:SettingsRecoveryResponse;
+  try{
+    response=await browser.runtime.sendMessage({
+      type:'GET_SETTINGS_RECOVERY',
+      payload:{token:rawToken},
+    } satisfies RuntimeMessage) as SettingsRecoveryResponse;
+  }catch(error){
+    settingsRecoveryBanner.hidden=false;
+    settingsRecoveryTitle.textContent='无法恢复刚才的翻译';
+    settingsRecoveryDescription.textContent='暂时无法连接扩展后台。你仍可保存 API 设置，然后手动返回原页面。';
+    setSettingsRecoveryStatus(runtimeConnectionErrorMessage(error),'error');
+    return;
+  }
+  if(!response.ok){
+    sessionStorage.removeItem(SETTINGS_RECOVERY_TOKEN_KEY);
+    settingsRecoveryBanner.hidden=false;
+    settingsRecoveryTitle.textContent='无法恢复刚才的翻译';
+    settingsRecoveryDescription.textContent='恢复任务可能已经过期。你仍可保存 API 设置，然后回到原页面重新选择内容。';
+    setSettingsRecoveryStatus(translationErrorMessage(response.error.code,response.error.message),'error');
+    return;
+  }
+  activeSettingsRecovery=response.data.recovery;
+  renderSettingsRecovery(response.data.recovery);
+}
+async function completeSettingsRecovery(validation:{text:boolean;vision:boolean}):Promise<boolean>{
+  const recovery=activeSettingsRecovery;
+  if(!recovery||settingsRecoveryCompleting)return false;
+  const validated=recovery.role==='vision'?validation.vision:validation.text;
+  if(!validated)return false;
+  settingsRecoveryCompleting=true;
+  setSettingsRecoveryStatus(
+    recovery.hadPartialOutput||!recovery.autoResume
+      ? 'API 已验证并保存，正在返回原页面等待你的确认…'
+      : 'API 已验证并保存，正在返回并继续翻译…',
+    'progress',
+  );
+  try{
+    const response=await browser.runtime.sendMessage({
+      type:'COMPLETE_SETTINGS_RECOVERY',
+      payload:{token:recovery.token},
+    } satisfies RuntimeMessage) as CompleteSettingsRecoveryResponse;
+    if(!response.ok){
+      setSettingsRecoveryStatus(translationErrorMessage(response.error.code,response.error.message),'error');
+      return false;
+    }
+    if(!response.data.returned){
+      setSettingsRecoveryStatus('API 已保存，但暂时无法送回原页面。请确认原标签页或 PDF 侧栏仍打开，然后再次点击“验证、保存并继续”。','error');
+      return false;
+    }
+    activeSettingsRecovery=undefined;
+    sessionStorage.removeItem(SETTINGS_RECOVERY_TOKEN_KEY);
+    refreshModelsButton.textContent='连接并保存';
+    setSettingsRecoveryStatus(
+      response.data.requiresConfirmation
+        ? '已返回原页面；请在那里确认是否重新翻译。'
+        : response.data.resumed
+          ? '已返回原页面并继续翻译。'
+          : '已返回原页面，请继续刚才的操作。',
+      'success',
+    );
+    return true;
+  }catch(error){
+    setSettingsRecoveryStatus(runtimeConnectionErrorMessage(error),'error');
+    return false;
+  }finally{
+    settingsRecoveryCompleting=false;
+  }
+}
 function currentApiBaseUrl():string{return normalizeApiBaseUrl(apiBaseUrl.value)}
 function currentProfile():ApiProfile|undefined{return profiles.find(profile=>profile.id===currentProfileId)}
 function activeTextProfile():ApiProfile|undefined{return profiles.find(profile=>profile.id===activeTextProfileId)}
@@ -204,6 +323,7 @@ async function finishOnboarding():Promise<void>{
   setStatus(visionSupported
     ? `首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`
     : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
+  await completeSettingsRecovery({text:true,vision:visionSupported});
 }
 
 function validatedProfiles():ApiProfile[] {
@@ -509,7 +629,10 @@ async function callModels():Promise<void>{
   const diagnostic=await browser.runtime.sendMessage({type:'DIAGNOSE_API',payload:{apiBaseUrl:base,model:suggested,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ApiDiagnosticResponse;
   if(!diagnostic.ok){setStatus(translationErrorMessage(diagnostic.error.code,diagnostic.error.message),true);return}
   let vision:VisionDetectionResult;
-  const configureCurrentForVision=!visionProfileId||visionSetupIntentProfileId===active.id;
+  const guidedTextRecovery=activeSettingsRecovery?.role==='text';
+  const configureCurrentForVision=!guidedTextRecovery&&(
+    activeSettingsRecovery?.role==='vision'||!visionProfileId||visionSetupIntentProfileId===active.id
+  );
   if(!configureCurrentForVision){
     const configuredProfile=profiles.find(profile=>profile.id===visionProfileId);
     const configuredModel=visionModel.value.trim()||configuredProfile?.model;
@@ -526,17 +649,38 @@ async function callModels():Promise<void>{
   const separateText=vision.model&&activeTextProfileId!==active.id?activeTextProfile():undefined;
   const configuredVision=profiles.find(profile=>profile.id===visionProfileId);
   const savedMessage=vision.preserved
-    ? `自动配置完成并已保存：保留现有 PDF 图像配置“${configuredVision?.name??'已配置接口'}”。`
+    ? configuredVision
+      ? `自动配置完成并已保存：保留现有 PDF 图像配置“${configuredVision.name}”。`
+      : `文字模型 ${suggested} 已连接并保存；本次只修复文字翻译，PDF 图像能力可稍后按需配置。`
     : separateText
       ? `自动配置完成并已保存：PDF 图像使用“${active.name}”，文字继续使用“${separateText.name}”。`
       : vision.model
         ? `自动配置完成并已保存：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。`
         : `文字模型 ${suggested} 已连接并保存；普通文字翻译可用。需要扫描件功能时再配置 Qwen。`;
   await persistConnectedApiConfiguration(savedMessage);
+  await completeSettingsRecovery({text:true,vision:Boolean(vision.model)&&!vision.preserved});
 }
 refreshModelsButton.addEventListener('click',()=>void callModels().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{refreshModelsButton.disabled=false}));
 
-testButton.addEventListener('click',()=>{const model=modelInput.value.trim();if(!model){setStatus('请先填写模型名称。',true);return}void(async()=>{const base=currentApiBaseUrl();await requestApiAccess(base);testButton.disabled=true;setStatus('正在测试 API、Key 与模型…');const apiKey=apiKeyInput.value.trim();const response=await browser.runtime.sendMessage({type:'TEST_API_CONNECTION',payload:{apiBaseUrl:base,model,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ConnectionTestResponse;setStatus(response.ok?'连接成功，API Key 与模型可用。':translationErrorMessage(response.error.code,response.error.message),!response.ok)})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{testButton.disabled=false})});
+testButton.addEventListener('click',()=>{
+  const model=modelInput.value.trim();
+  if(!model){setStatus('请先填写模型名称。',true);return}
+  void(async()=>{
+    const base=currentApiBaseUrl();
+    await requestApiAccess(base);
+    testButton.disabled=true;
+    setStatus('正在测试 API、Key 与模型…');
+    const apiKey=apiKeyInput.value.trim();
+    const response=await browser.runtime.sendMessage({type:'TEST_API_CONNECTION',payload:{apiBaseUrl:base,model,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ConnectionTestResponse;
+    if(!response.ok){setStatus(translationErrorMessage(response.error.code,response.error.message),true);return}
+    if(activeSettingsRecovery?.role==='text'){
+      await persistConnectedApiConfiguration('连接成功，API Key 与模型可用，当前配置已保存。');
+      await completeSettingsRecovery({text:true,vision:false});
+      return;
+    }
+    setStatus('连接成功，API Key 与模型可用。');
+  })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{testButton.disabled=false});
+});
 
 testVisionCapabilityButton.addEventListener('click',()=>{void(async()=>{
   updateCurrentProfile();
@@ -549,7 +693,16 @@ testVisionCapabilityButton.addEventListener('click',()=>{void(async()=>{
   setVisionTestStatus('正在验证图片输入、API Key 与模型…');
   const pendingKey=profile.id===currentProfileId?apiKeyInput.value.trim():'';
   const response=await requestVisionCapabilityTest(profile,model,pendingKey);
-  setVisionTestStatus(response.ok?`视觉能力可用 · ${response.data.latencyMs} ms`:translationErrorMessage(response.error.code,response.error.message),response.ok?'success':'error');
+  if(!response.ok){setVisionTestStatus(translationErrorMessage(response.error.code,response.error.message),'error');return}
+  setVisionTestStatus(`视觉能力可用 · ${response.data.latencyMs} ms`,'success');
+  if(activeSettingsRecovery?.role==='vision'){
+    visionProfileId=profile.id;
+    visionModel.value=model;
+    visionSelectionTouched=true;
+    renderVisionProfileSelect();
+    await persistConnectedApiConfiguration('视觉能力验证成功，当前 PDF 图像配置已保存。');
+    await completeSettingsRecovery({text:false,vision:true});
+  }
 })().catch((error:unknown)=>setVisionTestStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),'error')).finally(()=>{testVisionCapabilityButton.disabled=false})});
 
 function diagnosticItem(label:string,value:string):HTMLElement{const item=document.createElement('div');item.className='diagnostic-item';item.textContent=label;const strong=document.createElement('strong');strong.textContent=value;item.append(strong);return item}
@@ -596,4 +749,9 @@ async function applyRequestedSettingsFocus():Promise<void>{
     showSettingsSection('connection');queueMicrotask(()=>{target.scrollIntoView({block:'center'});target.focus()});
   }
 }
-void load().then(()=>applyRequestedSettingsFocus()).catch(()=>setStatus('读取设置失败，请重新加载页面。',true));
+void load()
+  .then(async()=>{
+    await claimRequestedSettingsRecovery();
+    await applyRequestedSettingsFocus();
+  })
+  .catch(()=>setStatus('读取设置失败，请重新加载页面。',true));
