@@ -1,5 +1,28 @@
 # Pi Translator 发布验收报告
 
+## v0.10.0 正式发布（2026-08-07）
+
+本版本强化 PDF 公式与扫描内容识别，并加入仅在结果需要人工确认时出现的轻量“本文待核对”流程。发布门禁如下：
+
+| 检查项 | 结果 |
+| --- | --- |
+| TypeScript 类型检查 | 通过 |
+| Vitest 单元测试 | 347/347 通过 |
+| Microsoft Edge 扩展端到端测试 | 57/57 通过 |
+| Edge MV3 生产构建 | 通过（2.82 MB） |
+| 生产依赖安全审计 | 0 个漏洞 |
+| API Key 与私钥模式扫描 | 源码及 ZIP 均未发现 |
+| ZIP 文件结构 | 32 项；`manifest.json` 位于根目录；无 `.env`、`node_modules`、私钥或 source map |
+| ZIP Manifest 版本 | `0.10.0` |
+
+安装包：`.output/tex-selection-translator-0.10.0-edge.zip`（910,002 bytes）
+
+SHA-256：
+
+```text
+A5E59754354431E5F820C7DBDDF151FA2D90D13E3CDAF1F8BAA866DE81958E22
+```
+
 ## v0.9.0 正式发布（2026-08-06）
 
 本版本强化 PDF 阅读、扫描页 OCR、公式识别与 LaTeX 渲染，并修复 DashScope/Qwen 流式接口在结构化输出模式下可能返回 400 的兼容性问题。发布门禁如下：
@@ -238,7 +261,7 @@ SHA-256：
 
 ## 发布判断
 
-当前 v0.8.2 ZIP 可以作为 Edge 商店和 GitHub Release 发布候选包。若代码、依赖、manifest、图标或商店文案
+当前 v0.10.0 ZIP 可以作为 GitHub Release 发布包。正在审核的 Edge 商店 v0.9.0 保持不变；待其完成审核后，再将 v0.10.0 作为更新提交。若代码、依赖、manifest、图标或商店文案
 发生任何变化，应重新执行：
 
 ```powershell
