@@ -1,11 +1,36 @@
 import { describe, expect, it } from 'vitest';
 import {
   runtimeConnectionErrorMessage,
+  translationCorrectionErrorMessage,
   translationErrorRecovery,
   translationErrorMessage,
 } from '../core/messaging/user-facing-error';
 
 describe('user-facing errors', () => {
+  it('keeps safe Chinese stale-correction details from the background', () => {
+    const detail = '本句译文已变化，请重新打开修正。';
+
+    expect(translationCorrectionErrorMessage('REQUEST_ABORTED', detail)).toBe(detail);
+  });
+
+  it.each([undefined, '', 'The request was replaced by a newer result.'])(
+    'uses a safe correction-specific message for missing or English abort details',
+    (detail) => {
+      const message = translationCorrectionErrorMessage('REQUEST_ABORTED', detail);
+
+      expect(message).toContain('译文已更新');
+      expect(message).toContain('重新打开修正');
+    },
+  );
+
+  it('delegates non-abort errors to the regular translation error mapper', () => {
+    const detail = 'provider returned malformed output';
+
+    expect(translationCorrectionErrorMessage('PROVIDER_ERROR', detail)).toBe(
+      translationErrorMessage('PROVIDER_ERROR', detail),
+    );
+  });
+
   it('provides actionable provider errors', () => {
     expect(translationErrorMessage('PROVIDER_ERROR')).toContain('模型');
     expect(translationErrorMessage('PROVIDER_ERROR')).toContain('请求参数兼容性');

@@ -13,6 +13,7 @@ import type {
 import {
   runtimeConnectionErrorMessage,
   type SettingsFocus,
+  translationCorrectionErrorMessage,
   translationErrorRecovery,
   translationErrorMessage,
 } from '../messaging/user-facing-error';
@@ -1383,7 +1384,9 @@ export async function startSelectionTranslator(
       },
     } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
     if (!response.ok) {
-      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+      throw new Error(
+        translationCorrectionErrorMessage(response.error.code, response.error.message),
+      );
     }
     overlayHistory = response.data.history;
     rememberResultRetryContext(response.data.result, retryContextForResult(result));
@@ -1414,7 +1417,9 @@ export async function startSelectionTranslator(
       },
     } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
     if (!response.ok) {
-      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+      throw new Error(
+        translationCorrectionErrorMessage(response.error.code, response.error.message),
+      );
     }
     overlayHistory = response.data.history;
     rememberResultRetryContext(response.data.result, retryContextForResult(result));
@@ -1448,7 +1453,9 @@ export async function startSelectionTranslator(
       },
     } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
     if (!response.ok) {
-      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+      throw new Error(
+        translationCorrectionErrorMessage(response.error.code, response.error.message),
+      );
     }
     overlayHistory = response.data.history;
     carryRevisionAnchor(result, response.data.result.requestId);

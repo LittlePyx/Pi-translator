@@ -11,6 +11,7 @@ import type {
   TranslationMemoryScope,
 } from '../../core/translation/types';
 import {
+  translationCorrectionErrorMessage,
   translationErrorMessage,
   translationErrorRecovery,
   type SettingsFocus,
@@ -30,6 +31,7 @@ import { getSettings } from '../../core/settings/repository';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import { renderTranslationContent } from '../../ui/translation-content';
+import { normalizeLatexForClipboard } from '../../ui/latex-copy';
 import {
   applyManualCorrection,
   createManualCorrectionDraft,
@@ -562,7 +564,7 @@ function openCorrectionEditor(): void {
           : error.code === 'LATEX_CHANGED'
             ? '公式已锁定，请只修改文字'
             : error.code === 'INVALID_TERM_CANDIDATE'
-              ? '请填写不含公式的简短术语和固定译法'
+              ? '请完整填写不含公式的简短术语和固定译法'
               : '修正内容不完整，请检查'
         : '无法保存修正';
       return;
@@ -590,7 +592,9 @@ function openCorrectionEditor(): void {
       } satisfies RuntimeMessage) as RuntimeResponse<TranslationSessionResult>;
       if (!isSamePdfSidePanelSession(currentSession, session)) return;
       if (!response.ok) {
-        throw new Error(translationErrorMessage(response.error.code, response.error.message));
+        throw new Error(
+          translationCorrectionErrorMessage(response.error.code, response.error.message),
+        );
       }
       currentSession = {
         ...session,
@@ -637,7 +641,9 @@ function undoCurrentCorrection(): void {
     } satisfies RuntimeMessage) as RuntimeResponse<TranslationSessionResult>;
     if (!isSamePdfSidePanelSession(currentSession, session)) return;
     if (!response.ok) {
-      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+      throw new Error(
+        translationCorrectionErrorMessage(response.error.code, response.error.message),
+      );
     }
     const { correctionReceipt: _receipt, ...withoutReceipt } = session;
     currentSession = {
@@ -656,7 +662,7 @@ function undoCurrentCorrection(): void {
     );
   })().catch((error: unknown) => {
     undoCorrection.disabled = false;
-    setStatus(error instanceof Error ? error.message : '撤销失败');
+    setStatus(error instanceof Error ? error.message : '撤销失败', 6_000);
   });
 }
 
@@ -721,9 +727,11 @@ copy.addEventListener('click', () => {
   const session = currentSession;
   const text = session?.result?.translatedText;
   if (!session || !text) return;
-  void navigator.clipboard.writeText(presentationText(session, text))
+  void navigator.clipboard.writeText(
+    normalizeLatexForClipboard(presentationText(session, text)),
+  )
     .then(() => setStatus('已复制'))
-    .catch(() => setStatus('复制失败'));
+    .catch(() => setStatus('复制失败', 4_000));
 });
 correct.addEventListener('click', openCorrectionEditor);
 undoCorrection.addEventListener('click', undoCurrentCorrection);

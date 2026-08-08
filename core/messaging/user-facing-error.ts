@@ -63,6 +63,22 @@ export function translationErrorMessage(
   return base;
 }
 
+/**
+ * Manual corrections use REQUEST_ABORTED for optimistic-concurrency failures as
+ * well as ordinary cancellation. Preserve the background's actionable Chinese
+ * explanation, but never surface an arbitrary/internal English abort message.
+ */
+export function translationCorrectionErrorMessage(
+  code: TranslationErrorCode,
+  fallback?: string,
+): string {
+  if (code !== 'REQUEST_ABORTED') return translationErrorMessage(code, fallback);
+  const detail = fallback?.trim();
+  return detail && /[\u3400-\u9fff]/u.test(detail)
+    ? detail
+    : '当前译文已更新，请重新打开修正。';
+}
+
 export function runtimeConnectionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (/extension context invalidated/i.test(message)) {

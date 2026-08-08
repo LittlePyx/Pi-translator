@@ -208,9 +208,10 @@ main {
 }
 .error-actions .primary:hover { border-color: #4338ca; background: #5145cd; }
 
-footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
+footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 14px; }
 .copy-action:disabled { opacity: .45; cursor: default; }
-#status { color: #748094; font-size: 10px; }
+#status { flex: 1 1 100%; min-width: 0; color: #748094; font-size: 10px; }
+#status:empty { display: none; }
 .correction-action {
   border: 0;
   padding: 5px 2px;

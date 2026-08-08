@@ -1055,9 +1055,29 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
   await overlay.locator('.mark-action').click();
 
-  await overlay.getByRole('button', { name: '修正译文' }).click();
-  const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+  const copyAction = overlay.locator('.copy-action');
+  await copyAction.click();
+  await expect(copyAction).toHaveText('已复制');
+
+  const more = overlay.locator('details.more');
+  const moreSummary = more.locator('summary');
+  await moreSummary.click();
+  await expect(more).toHaveAttribute('open', '');
+  await page.keyboard.press('Escape');
+  await expect(more).not.toHaveAttribute('open', '');
+  await expect(moreSummary).toBeFocused();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+
+  const correctionAction = overlay.getByRole('button', { name: '修正译文' });
+  await correctionAction.click();
+  let editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await expect(editor).toBeVisible();
+  await editor.press('Escape');
+  await expect(editor).toBeHidden();
+  await expect(correctionAction).toBeFocused();
+
+  await correctionAction.click();
+  editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await editor.fill('用户手动修订后的学术译文。');
   const revisionScope = overlay.getByRole('combobox', { name: '修正译文的保存范围' });
   await expect(revisionScope).toHaveValue('current');
@@ -1067,6 +1087,8 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
   expect(textRequests).toHaveLength(requestsBeforeManualSave);
   await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
+  await expect(overlay.getByRole('button', { name: '撤销上次译文修正' }))
+    .toBeFocused();
 
   const markerLayer = page.locator('#pi-translation-marker-layer');
   const marker = markerLayer.locator('.marker').first();
@@ -1105,6 +1127,15 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay.locator('.version-counter')).toHaveText('v2/3');
   await overlay.getByTitle('查看下一版译文').click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await correctionAction.click();
+  editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+  await editor.fill('临时焦点验证译文。');
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+  const undoCorrection = overlay.getByRole('button', { name: '撤销上次译文修正' });
+  await expect(undoCorrection).toBeFocused();
+  await undoCorrection.click();
+  await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await expect(correctionAction).toBeFocused();
   await overlay.locator('.mark-action').click();
   await expect(markerLayer.locator('.marker')).toHaveCount(0);
   await overlay.getByTitle('关闭').click();
@@ -1185,6 +1216,72 @@ test('keeps correction terms explicit and rolls a global term back with the tran
 
   await overlay.getByTitle('关闭').click();
   await clearBrowserSelection();
+});
+
+test('keeps a newer translation when an old correction save is rejected', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+  await editor.fill('不应覆盖较新结果的旧修正。');
+
+  const worker = context.serviceWorkers()[0]!;
+  const storedHead = await worker.evaluate(async (pageUrl) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        tabs: { query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>> };
+        storage: {
+          session: {
+            get(key: string): Promise<Record<string, unknown>>;
+            set(values: Record<string, unknown>): Promise<void>;
+          };
+        };
+      };
+    }).chrome;
+    const tab = (await api.tabs.query({})).find((candidate) => candidate.url === pageUrl);
+    if (tab?.id === undefined) throw new Error('Could not find the translated page tab.');
+    const key = `translationResultHead:${tab.id}`;
+    const original = (await api.storage.session.get(key))[key] as {
+      tabId: number;
+      currentResultRequestId: string;
+      rootRequestId: string;
+      updatedAt: number;
+    } | undefined;
+    if (!original) throw new Error('The translated page has no result head.');
+    await api.storage.session.set({
+      [key]: {
+        ...original,
+        currentResultRequestId: 'newer-result-for-stale-correction-e2e',
+        updatedAt: Date.now(),
+      },
+    });
+    return { key, original };
+  }, page.url());
+
+  try {
+    await overlay.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(overlay.locator('.revision-status'))
+      .toContainText('当前译文已经变化，请重新打开修正');
+    await expect(editor).toBeVisible();
+    await overlay.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  } finally {
+    await worker.evaluate(async ({ key, original }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { set(values: Record<string, unknown>): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.set({ [key]: original });
+    }, storedHead);
+    if (await overlay.getByRole('button', { name: '取消', exact: true }).count()) {
+      await overlay.getByRole('button', { name: '取消', exact: true }).click();
+    }
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await clearBrowserSelection();
+  }
 });
 
 test('adopts an older translation version without an API call and can undo it', async () => {
@@ -1317,7 +1414,15 @@ test('corrects one aligned sentence locally without adding visible controls or A
   )).toBe('1');
   const requestsBeforeCorrection = textRequests.length;
   await first.locator('.segment-correct').click();
-  const sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
+  let sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
+  await expect(sentenceEditor).toBeVisible();
+  await sentenceEditor.getByRole('textbox', { name: '可编辑本句译文第 1 段' })
+    .press('Escape');
+  await expect(sentenceEditor).toBeHidden();
+  await expect(first.locator('.segment-correct')).toBeFocused();
+
+  await first.locator('.segment-correct').click();
+  sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
   await sentenceEditor.getByRole('textbox', { name: '可编辑本句译文第 1 段' })
     .fill('人工修正后的第一句。');
   await sentenceEditor.getByRole('button', { name: '保存' }).click();
@@ -1326,6 +1431,7 @@ test('corrects one aligned sentence locally without adding visible controls or A
   await expect(segments).toHaveCount(2);
   await expect(segments.nth(0).locator('.segment-target')).toHaveText('人工修正后的第一句。');
   await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
+  await expect(segments.nth(0).locator('.segment-correct')).toBeFocused();
   expect(textRequests).toHaveLength(requestsBeforeCorrection);
 
   await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
@@ -1333,6 +1439,7 @@ test('corrects one aligned sentence locally without adding visible controls or A
   await expect(segments).toHaveCount(2);
   await expect(segments.nth(0).locator('.segment-target')).toHaveText('第一句重要译文。');
   await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
+  await expect(segments.nth(0).locator('.segment-correct')).toBeFocused();
   expect(textRequests).toHaveLength(requestsBeforeCorrection);
   await overlay.getByTitle('关闭').click();
   await clearBrowserSelection();
@@ -2539,8 +2646,15 @@ test('translates a confirmed PDF image region without storing the screenshot', a
 
   await overlay.locator('.recognized-source summary').click();
   await overlay.getByRole('button', { name: '编辑后重译' }).click();
-  const recognizedEditor = overlay.getByRole('textbox', { name: '编辑识别原文' });
+  let recognizedEditor = overlay.getByRole('textbox', { name: '编辑识别原文' });
   await expect(recognizedEditor).toHaveValue('Scanned academic source text.');
+  await recognizedEditor.press('Escape');
+  await expect(recognizedEditor).toBeHidden();
+  await expect(overlay.locator('.recognized-source summary')).toBeFocused();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await overlay.locator('.recognized-source summary').click();
+  await overlay.getByRole('button', { name: '编辑后重译' }).click();
+  recognizedEditor = overlay.getByRole('textbox', { name: '编辑识别原文' });
   await recognizedEditor.fill('Corrected academic source text.');
   await overlay.getByRole('button', { name: '用修正文本重译' }).click();
   await expect(overlay.locator('.body')).toHaveText('一致的学术翻译能够提升研究论文的可读性。');
@@ -3444,6 +3558,24 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   )).toBeLessThan(1);
   expect(optimizerLayout!.tagRight).toBeLessThanOrEqual(optimizerLayout!.viewportWidth + 1);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  await sidePanel.locator('#copy').click();
+  await expect(sidePanel.locator('#status')).toHaveText('已复制');
+  await sidePanel.setViewportSize({ width: 360, height: 820 });
+  const footerLayout = await sidePanel.locator('footer').evaluate((footer) => {
+    const rect = footer.getBoundingClientRect();
+    return {
+      clientWidth: footer.clientWidth,
+      scrollWidth: footer.scrollWidth,
+      left: rect.left,
+      right: rect.right,
+      viewportWidth: document.documentElement.clientWidth,
+      pageScrollWidth: document.documentElement.scrollWidth,
+    };
+  });
+  expect(footerLayout.scrollWidth).toBeLessThanOrEqual(footerLayout.clientWidth + 1);
+  expect(footerLayout.left).toBeGreaterThanOrEqual(-1);
+  expect(footerLayout.right).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
+  expect(footerLayout.pageScrollWidth).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
   await sidePanel.locator('#correct').click();
   const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
   await expect(nativeCorrection).toBeVisible();
@@ -3547,6 +3679,9 @@ test('opens the full settings page from the translation card menu', async () => 
   const settingsPagePromise = context.waitForEvent('page');
   await overlay.getByRole('button', { name: '完整设置' }).click();
   const settingsPage = await settingsPagePromise;
+  await settingsPage.waitForURL((url) => (
+    url.protocol === 'chrome-extension:' && url.pathname === '/options.html'
+  ));
   await settingsPage.waitForLoadState('domcontentloaded');
   const settingsUrl = new URL(settingsPage.url());
   expect(settingsUrl.protocol).toBe('chrome-extension:');
@@ -3910,6 +4045,7 @@ test('uses and remembers a visual-capable active API on the first image translat
       globalThis as typeof globalThis & { chrome: TestChromeApi }
     ).chrome;
     const stored = await extensionChrome.storage.local.get('extensionSettings');
+    const configurationRevision = crypto.randomUUID();
     await extensionChrome.storage.local.set({
       extensionSettings: {
         ...(stored.extensionSettings ?? {}),
@@ -3917,7 +4053,21 @@ test('uses and remembers a visual-capable active API on the first image translat
         visionApiProfileId: '',
         visionModel: '',
       },
+      configurationRevision: {
+        id: configurationRevision,
+        committedAt: Date.now(),
+        invalidatesTranslationState: true,
+      },
     });
+    const sessionStorage = (extensionChrome.storage as unknown as {
+      session: { get(key: string): Promise<Record<string, unknown>> };
+    }).session;
+    for (let attempt = 0; attempt < 80; attempt += 1) {
+      const applied = await sessionStorage.get('appliedConfigurationRevision');
+      if (applied.appliedConfigurationRevision === configurationRevision) break;
+      await new Promise((resolve) => window.setTimeout(resolve, 10));
+      if (attempt === 79) throw new Error('Configuration revision was not applied.');
+    }
     const canvas = document.createElement('canvas');
     canvas.width = 16;
     canvas.height = 16;
