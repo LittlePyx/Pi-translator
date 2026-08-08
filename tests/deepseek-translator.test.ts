@@ -339,6 +339,40 @@ describe('DeepSeek translator', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it('does not replay a request explicitly stopped by the user', async () => {
+    const parent = new AbortController();
+    let abortEvents = 0;
+    const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(
+      (_resolve, reject) => {
+        const signal = init?.signal;
+        if (!signal) return;
+        const rejectAbort = (): void => {
+          abortEvents += 1;
+          reject(signal.reason);
+        };
+        if (signal.aborted) rejectAbort();
+        else signal.addEventListener('abort', rejectAbort, { once: true });
+      },
+    ));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const outcome = new DeepSeekTranslator().translate(
+      { text: 'Text', placeholderTokens: [] },
+      options,
+      { apiKey: 'test-key' },
+      parent.signal,
+    ).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+    parent.abort();
+
+    await expect(outcome).resolves.toMatchObject({
+      code: 'REQUEST_ABORTED',
+      retryable: false,
+    } satisfies Partial<TranslationError>);
+    expect(fetchMock).toHaveBeenCalledOnce();
+    expect(abortEvents).toBe(1);
+  });
+
   it('does not replay a timed-out generation request', async () => {
     vi.useFakeTimers();
     const fetchMock = vi.fn((_url: string, init?: RequestInit) => new Promise<Response>(

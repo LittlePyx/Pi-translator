@@ -108,6 +108,34 @@ describe('native PDF side-panel sessions', () => {
     expect(JSON.stringify(storage)).not.toContain('"status":"translating"');
   });
 
+  it('keeps an explicitly stopped session non-retryable with its partial translation', async () => {
+    await storePdfSidePanelSession(session({
+      status: 'error',
+      partialText: '已流式返回的部分译文。',
+      completedChunks: 0,
+      totalChunks: 2,
+      error: {
+        code: 'REQUEST_ABORTED',
+        message: '翻译已停止。',
+        retryable: false,
+      },
+    }));
+
+    await expect(restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }])).resolves.toMatchObject([{
+      requestId: 'request-1',
+      status: 'error',
+      partialText: '已流式返回的部分译文。',
+      error: {
+        code: 'REQUEST_ABORTED',
+        message: '翻译已停止。',
+        retryable: false,
+      },
+    }]);
+  });
+
   it('drops sessions whose tab disappeared or navigated to another document', async () => {
     await storePdfSidePanelSession(session());
     await expect(restorePdfSidePanelSessions([

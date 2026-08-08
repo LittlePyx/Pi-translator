@@ -3705,6 +3705,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
   await expect(sidePanel.locator('#translation-state')).toHaveText('正在流式接收');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
+  await expect(sidePanel.locator('#stop-translation')).toBeVisible();
   await expect(sidePanel.locator('#correct')).toBeHidden();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
@@ -3730,6 +3731,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   }, baseSession);
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('翻译中断 · 已保留部分译文');
+  await expect(sidePanel.locator('#stop-translation')).toBeHidden();
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#error-message')).toContainText('响应超时');
   await expect(sidePanel.locator('#retry')).toBeVisible();
@@ -3737,6 +3739,32 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   await sidePanel.locator('#copy').click();
   await expect(sidePanel.locator('#status')).toHaveText('已复制');
+
+  await messageSender.evaluate(async (session) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload: {
+        ...session,
+        status: 'error',
+        error: {
+          code: 'REQUEST_ABORTED',
+          message: '翻译已停止。',
+          retryable: false,
+        },
+      },
+    });
+  }, baseSession);
+  await expect(sidePanel.locator('#translation-state'))
+    .toHaveText('已停止 · 已保留部分译文');
+  await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
+  await expect(sidePanel.locator('#error-message')).toBeHidden();
+  await expect(sidePanel.locator('#error-actions')).toBeHidden();
+  await expect(sidePanel.locator('#retry')).toBeHidden();
+  await expect(sidePanel.locator('#copy')).toHaveText('复制部分译文');
+  await expect(sidePanel.locator('#copy')).toBeEnabled();
 
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
@@ -3983,7 +4011,7 @@ test('opens the full settings page from the translation card menu', async () => 
   await clearBrowserSelection();
 });
 
-test('keeps streaming output when a translating card is fixed to the sidebar', async () => {
+test('stops a streaming translation without discarding received output', async () => {
   const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-api/**';
   let releaseFirst: (() => void) | undefined;
   let releaseRemaining: (() => void) | undefined;
@@ -4033,6 +4061,9 @@ test('keeps streaming output when a translating card is fixed to the sidebar', a
     await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
     await overlay.locator('.trigger').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(overlay.getByTitle('停止并关闭')).toBeVisible();
+    await expect(overlay.getByRole('button', { name: '停止翻译并保留已收到的译文' }))
+      .toBeVisible();
     const pin = overlay.getByTitle('固定到连续翻译侧栏');
     await expect(pin).toHaveText('固定侧栏');
     await pin.click();
@@ -4045,15 +4076,30 @@ test('keeps streaming output when a translating card is fixed to the sidebar', a
     await expect(overlay.locator('.loading-status')).toContainText('2/2');
     await expect(overlay.locator('.progress')).toBeVisible();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
-    releaseRemaining?.();
-    await expect(overlay.locator('.body')).toContainText('后续译文');
+    const stop = overlay.getByRole('button', {
+      name: '停止翻译并保留已收到的译文',
+    });
+    await stop.focus();
+    await stop.press('Enter');
+    await expect(overlay.locator('.stopped-status'))
+      .toHaveText('已停止 · 已保留部分译文');
+    await expect(overlay.locator('.stream-preview')).toHaveText('已经返回的第一段译文。');
+    const copyPartial = overlay.getByRole('button', { name: '复制部分译文' });
+    await expect(copyPartial).toBeVisible();
+    await expect(copyPartial).toBeFocused();
+    await expect(overlay.getByRole('button', { name: '重试' })).toHaveCount(0);
+    await expect(overlay.locator('.stop-translation')).toHaveCount(0);
+    await page.waitForTimeout(250);
+    expect(requestIndex).toBe(2);
+    await expect(overlay.locator('.stopped-status'))
+      .toHaveText('已停止 · 已保留部分译文');
   } finally {
     releaseFirst?.();
     releaseRemaining?.();
     await context.unroute(apiPattern, streamingHandler);
     const overlay = page.locator('#tex-selection-translator-root');
-    if (await overlay.getByTitle('关闭').count()) {
-      await overlay.getByTitle('关闭').click();
+    if (await overlay.locator('.surface-close').count()) {
+      await overlay.locator('.surface-close').click();
     }
     await page.locator('#source').evaluate((element) => {
       element.textContent = 'A consistent academic translation improves the readability of research papers.';

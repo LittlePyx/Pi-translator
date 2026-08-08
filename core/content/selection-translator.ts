@@ -337,6 +337,21 @@ export async function startSelectionTranslator(
       .catch(() => undefined);
   }
 
+  function stopActiveTranslation(): void {
+    if (!inFlightRequestId) return;
+    const partialText = currentPartialOutput();
+    const rect = activeImageRegion?.rect ??
+      (activeSelection ? selectionRect(activeSelection) : undefined);
+    const selectionHash = activeSelection?.selectionHash;
+    if (autoTranslateTimer) {
+      clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = undefined;
+    }
+    if (selectionHash) lastAutoSelectionHash = selectionHash;
+    cancelActiveTranslation();
+    overlay.showStopped(partialText, rect);
+  }
+
   async function openSettingsPage(
     focus?: SettingsFocus,
     recovery?: SettingsRecoveryRequest,
@@ -572,6 +587,7 @@ export async function startSelectionTranslator(
       temporaryTargetLanguage = preferences.targetLanguage;
       temporaryStyle = preferences.style;
     },
+    onStop: stopActiveTranslation,
     onDismiss: cancelActiveTranslation,
   }, {
     ...(options.viewportInsets ? { viewportInsets: options.viewportInsets } : {}),

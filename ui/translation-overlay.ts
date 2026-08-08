@@ -115,6 +115,7 @@ const STYLES = `
   .correction-editor{display:grid;border-top:1px solid var(--line);border-bottom:1px solid var(--line)}.correction-text-part{display:block;width:100%;min-height:44px;padding:7px 1px;border:0;border-radius:0;color:var(--text);background:transparent;font:12px/1.65 Inter,"Segoe UI",system-ui,sans-serif;resize:vertical}.correction-text-part:focus{background:var(--soft)}.correction-text-part:only-child{min-height:clamp(96px,22vh,180px)}.correction-latex{padding:7px 1px;border-block:1px solid var(--line);color:var(--text);background:transparent;font:11px/1.55 "Cambria Math","STIX Two Math",ui-monospace,monospace;overflow-x:auto;white-space:pre-wrap}.correction-term-disclosure{border-bottom:1px solid var(--line)}.correction-term-disclosure>summary{padding:7px 1px;color:var(--muted);cursor:pointer;font-size:10px;list-style:none}.correction-term-disclosure>summary::-webkit-details-marker{display:none}.correction-term-disclosure>summary:hover{color:var(--accent)}.correction-term-fields{display:grid;grid-template-columns:1fr 1fr;gap:6px;padding:0 0 8px;border:0;margin:0}.correction-term-fields label{display:grid;gap:3px;color:var(--muted);font-size:9px}.correction-term-fields .correction-term-scope{grid-column:1/-1;grid-template-columns:auto minmax(100px,140px);align-items:center;justify-content:space-between}.correction-term-fields input,.correction-term-fields select{min-width:0;padding:6px 1px;border:0;border-bottom:1px solid var(--line);border-radius:0;color:var(--text);background:transparent;font:11px/1.4 Inter,"Segoe UI",system-ui,sans-serif}.correction-action{color:var(--muted);border-color:transparent;background:transparent}.correction-action:hover{color:var(--accent);border-color:var(--line);background:var(--soft)}.correction-undo{display:inline-flex;align-items:center;gap:3px;color:var(--muted);font-size:9.5px}.correction-undo button{padding:3px;border:0;color:var(--accent);background:transparent;font-size:9.5px}.correction-undo button:hover{background:var(--soft)}
   .view-switch{display:inline-flex;flex:0 0 auto;align-items:center;gap:2px;margin-left:auto}.view-button{min-width:30px;height:19px;padding:0 4px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px;font-weight:680;line-height:1}.view-button:hover{color:var(--text);background:var(--soft)}.view-button.active{color:#4338ca;background:var(--soft);box-shadow:inset 0 -1px 0 rgba(79,70,229,.45)}
   .body { margin-top:8px;font-size:14px;line-height:1.78;white-space:pre-wrap;overflow-wrap:anywhere; }.pi-rich-strong{font-weight:700}.pi-math-inline{display:inline-flex;max-width:100%;vertical-align:-.14em;white-space:normal}.pi-math-display{display:block;width:100%;margin:.72em 0;padding:.08em 0 .12em;overflow-x:auto;overflow-y:hidden;text-align:center;line-height:1.28;white-space:normal}.pi-math-display.pi-math-numbered{display:grid;grid-template-columns:minmax(0,1fr) max-content;grid-template-rows:auto;align-items:center;column-gap:6px;overflow:visible}.pi-math-numbered .pi-math-scroll{grid-row:1;grid-column:1;min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;text-align:center;overscroll-behavior-inline:contain;scrollbar-width:thin}.pi-equation-tag{grid-row:1;grid-column:2;align-self:center;white-space:nowrap;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-size:.9em;font-variant-numeric:tabular-nums;line-height:1}.pi-math .katex{color:inherit;font-size:1.02em}.pi-math math{color:inherit;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-synthesis:none}.pi-math-display math{font-size:1.06em}.progress{margin-top:10px}.loading{display:flex;align-items:center;gap:10px;padding:10px 0;color:var(--muted);font-size:12px}.spinner{flex:0 0 auto;width:17px;height:17px;border:2px solid #cdd5e5;border-top-color:var(--accent);border-radius:50%;animation:spin .8s linear infinite}.stream-preview{max-height:300px;margin-top:5px;padding:11px;border-radius:12px;background:var(--soft);font-size:13px;line-height:1.72;white-space:pre-wrap;overflow:auto}.stream-preview[hidden]{display:none}@keyframes spin{to{transform:rotate(360deg)}}
+  .loading-status{min-width:0}.stop-translation{flex:0 0 auto;margin-left:auto;padding:2px 3px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:10px;font-weight:650}.stop-translation:hover{color:#b4233b;background:var(--soft)}.stop-translation:disabled{cursor:default;opacity:.58}.stopped-status{margin-top:10px;padding:6px 1px;color:var(--muted);font-size:11px}
   .idle { display:grid;place-items:center;min-height:240px;padding:30px;text-align:center;color:var(--muted); }.idle img{width:42px;height:37px;opacity:.3}.idle strong{margin-top:16px;color:var(--text);font-size:15px}.idle p{max-width:260px;margin:7px 0 0;font-size:12px;line-height:1.65}
   .marker-notes-toolbar{display:flex;align-items:center;gap:8px;margin-top:8px;padding:7px 0;border-bottom:1px solid var(--line);color:var(--muted);font-size:10px}.marker-notes-toolbar span{margin-right:auto}.marker-notes-toolbar button{padding:3px 5px;border:0;border-radius:3px;color:var(--accent);background:transparent;font-size:10px}.marker-notes-toolbar button:hover{background:var(--soft)}
   .marker-notes-list{display:grid;margin-top:4px}.marker-note{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px;padding:9px 1px;border-bottom:1px solid var(--line)}.marker-note-main{display:grid;gap:3px;min-width:0;padding:0;border:0;color:var(--text);background:transparent;text-align:left}.marker-note-main:hover .marker-note-source{color:var(--accent)}.marker-note-meta{display:flex;align-items:center;gap:6px;color:var(--accent);font-size:9px;font-weight:700}.marker-note-status{color:#9a6b17;font-weight:550}.marker-note-source,.marker-note-target{display:-webkit-box;min-width:0;overflow:hidden;-webkit-box-orient:vertical;-webkit-line-clamp:1;overflow-wrap:anywhere}.marker-note-source{font-size:11px;line-height:1.5}.marker-note-target{color:var(--muted);font-size:10px;line-height:1.45}.marker-note.missing .marker-note-main{cursor:default}.marker-note.missing .marker-note-source,.marker-note.missing .marker-note-target{opacity:.62}.marker-note-actions{display:flex;align-items:flex-start;gap:1px}.marker-note-actions button{width:24px;height:24px;padding:0;border:0;border-radius:4px;color:var(--muted);background:transparent;font-size:10px}.marker-note-actions button:hover{color:var(--accent);background:var(--soft)}
@@ -133,6 +134,7 @@ const STYLES = `
   .mark-action{display:flex;align-items:center;gap:3px;height:27px;padding:0 6px;border:0;border-radius:4px;color:var(--muted);background:transparent;font-size:10px;font-weight:650}.mark-action svg{width:14px;height:14px}.mark-filter svg{width:16px;height:16px}.mark-action:hover:not(:disabled),.mark-filter:hover{color:var(--accent);background:var(--soft)}.mark-action.active,.mark-filter.active{color:var(--accent);background:rgba(99,102,241,.09);box-shadow:inset 0 -2px rgba(89,89,223,.72)}.mark-action:disabled{opacity:.46;cursor:not-allowed}
   details.more{position:relative;margin-left:auto}details.more>summary{display:grid;place-items:center;width:24px;height:24px;border-radius:4px;color:var(--muted);cursor:pointer;list-style:none;font-size:12px;font-weight:800}details.more>summary:hover{background:var(--soft)}details.more>summary::-webkit-details-marker{display:none}.menu{position:absolute;z-index:5;right:0;bottom:30px;width:220px;max-height:calc(100vh - 32px);padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 16px 40px rgba(15,23,42,.2);overflow-y:auto;overscroll-behavior:contain;scrollbar-width:thin}.menu.opens-down{top:30px;bottom:auto}.sidebar.left .menu{left:0;right:auto}.menu button{width:100%;padding:7px 9px;border:0;border-radius:4px;color:var(--text);background:transparent;text-align:left;font-size:11px}.menu button:hover{background:var(--soft)}.menu hr{border:0;border-top:1px solid var(--line);margin:6px 0}.menu label{display:grid;gap:4px;margin:6px;color:var(--muted);font-size:10px}.menu select{width:100%;padding:6px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font-size:11px}
   :host([data-pi-theme="dark"]) .logo,:host([data-pi-theme="dark"]) .trigger-logo{filter:brightness(0) invert(1)}:host([data-pi-theme="dark"]) .title{color:#d6deea}:host([data-pi-theme="dark"]) .view-button.active{color:#e4e5ff;background:#273246}:host([data-pi-theme="dark"]) .segment{background:linear-gradient(145deg,rgba(31,41,55,.9),rgba(24,33,47,.72))}:host([data-pi-theme="dark"]) .action{color:#e8edf6;background:#202938;border-color:#465269}:host([data-pi-theme="dark"]) .primary{background:#5b6ee1}:host([data-pi-theme="dark"]) .copy-action{color:#a5b4fc;background:transparent;border-color:#465269}:host([data-pi-theme="dark"]) .warning{color:#f1d68e;background:#463b20}:host([data-pi-theme="dark"]) .error{color:#ff9aa4;background:#32171d}:host([data-pi-theme="dark"]) .cache-badge{color:#8de7f7;background:transparent}:host([data-pi-theme="dark"]) .correction-action{color:var(--muted);background:transparent;border-color:transparent}:host([data-pi-theme="dark"]) .correction-action:hover,:host([data-pi-theme="dark"]) .correction-undo button:hover{color:#c4c8ff;background:var(--soft)}
+  :host([data-pi-theme="dark"]) .stop-translation:hover{color:#ff9aa4;background:var(--soft)}
   @media(max-width:420px){.correction-term-fields{grid-template-columns:1fr}.revision-actions{position:sticky;bottom:0;padding:6px 0;background:var(--surface)}}
   :host([data-pi-theme="dark"]) .live-badge{color:#8de7f7;background:#173b44}:host([data-pi-theme="dark"]) .notice{color:#f1d68e;background:#3c321c;border-color:#655326}
   :host([data-pi-theme="dark"]) .document-memory-action.has-review,:host([data-pi-theme="dark"]) .document-review-meta strong{color:#f1d68e}:host([data-pi-theme="dark"]) .document-review-actions .review-resolve{color:var(--muted)}
@@ -260,6 +262,7 @@ interface OverlayActions {
   onSidebarWidthChange: (width: number) => void;
   onSidebarLayoutChange: (expanded: boolean, side: SidebarSide, width: number) => void;
   onPreferencesChange: (preferences: Pick<OverlayPreferences, 'targetLanguage' | 'style'>) => void;
+  onStop: () => void;
   onDismiss: () => void;
 }
 
@@ -431,6 +434,43 @@ export class TranslationOverlay {
     if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry?'':' primary'}`);if(!showRetry)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
     if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText)));footer.append(copy)}
     if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
+  }
+
+  showStopped(partialText?:string,rect?:ViewportRect):void {
+    this.progressState=undefined;
+    if(rect)this.lastRect=rect;
+    if(this.sidebarActive)this.sidebarCollapsed=false;
+    const preserved=partialText?.trim();
+    const surface=this.surface('已停止');
+    const status=document.createElement('div');
+    status.className='stopped-status';
+    status.setAttribute('role','status');
+    status.setAttribute('aria-live','polite');
+    status.textContent=preserved?'已停止 · 已保留部分译文':'翻译已停止';
+    surface.append(status);
+    if(preserved){
+      const partial=document.createElement('section');
+      partial.className='partial-result';
+      const preview=document.createElement('div');
+      preview.className='stream-preview';
+      preview.textContent=preserved;
+      partial.append(preview);
+      surface.append(partial);
+      const footer=document.createElement('div');
+      footer.className='footer';
+      const copy=this.button('复制部分译文','action copy-action');
+      copy.dataset.piFocusTarget='true';
+      copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(preserved)));
+      footer.append(copy);
+      surface.append(footer);
+    }
+    this.showSurface(surface);
+    queueMicrotask(()=>{
+      const target=preserved
+        ? this.root.querySelector<HTMLButtonElement>('.copy-action')
+        : this.root.querySelector<HTMLButtonElement>('.surface-close');
+      target?.focus({preventScroll:true});
+    });
   }
 
   showSettingsRecoveryConfirmation(partialText?:string,rect?:ViewportRect):void {
@@ -622,7 +662,7 @@ export class TranslationOverlay {
 
   private progressStatus(progress:OverlayProgressState):string { return progress.totalChunks>1?`正在翻译长文本 ${Math.min(progress.completedChunks+1,progress.totalChunks)}/${progress.totalChunks}…`:progress.partialText?'正在接收译文…':'正在连接翻译 API…' }
 
-  private renderProgress():void { const progressState=this.progressState??{completedChunks:0,totalChunks:1};const surface=this.surface('正在翻译');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
+  private renderProgress():void { const progressState=this.progressState??{completedChunks:0,totalChunks:1};const surface=this.surface('正在翻译');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const stop=this.button('停止','stop-translation','停止翻译并保留已收到的译文');stop.dataset.piFocusKey='stop-translation';stop.addEventListener('pointerdown',event=>event.preventDefault());stop.addEventListener('click',()=>{if(stop.disabled)return;stop.disabled=true;stop.textContent='停止中…';this.actions.onStop()});const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text,stop);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
 
   private resultContainsLatex(result:TranslateResult):boolean {
     return containsRenderableLatex(result.translatedText)||Boolean(
@@ -781,7 +821,7 @@ export class TranslationOverlay {
     const docked=this.sidebarActive||this.markerNavigatorActive||this.documentMemoryActive;const surface=document.createElement('div');surface.className=`surface ${docked?'sidebar '+this.preferences.sidebarSide:'card'}`;surface.setAttribute('role',docked?'complementary':'dialog');surface.setAttribute('aria-label',`Pi Translator ${titleText}`);if(docked)surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);
     const header=document.createElement('div');header.className='header';const titleWrap=document.createElement('div');titleWrap.className='title-wrap';const title=document.createElement('div');title.className='title';title.textContent=titleText;titleWrap.append(this.logo('logo'),title);if(this.sidebarActive&&!this.markerNavigatorActive&&!this.documentMemoryActive){const live=document.createElement('span');live.className='live-badge';live.textContent='自动翻译中';titleWrap.append(live)}const tools=document.createElement('div');tools.className='header-tools';
     if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewCount=this.pendingDocumentReviews().length;const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewCount?' has-review':''}`,reviewCount?`有 ${reviewCount} 条图像识别结果待核对`:'查看本文术语和最近翻译');documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const pin=this.button('固定侧栏','pin-action','固定到连续翻译侧栏');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}
-    const close=this.button('×','icon','关闭');close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
+    const closeLabel=this.progressState?'停止并关闭':'关闭';const close=this.button('×','icon surface-close',closeLabel);close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
     if(docked)this.makeResizable(surface);else this.makeDraggable(surface,header);return surface;
   }
 
@@ -792,7 +832,7 @@ export class TranslationOverlay {
     const moveFocusIntoCard=this.view==='trigger'&&hadOverlayFocus;
     const restoreOverlayFocus=()=>{
       const matchingTarget=previousFocusKey?[...surface.querySelectorAll<HTMLElement>('[data-pi-focus-key]')].find(candidate=>candidate.dataset.piFocusKey===previousFocusKey):undefined;
-      const target=matchingTarget??surface.querySelector<HTMLElement>('[data-pi-focus-target="true"]')??surface.querySelector<HTMLElement>('.header-tools button[aria-label="关闭"]');
+      const target=matchingTarget??surface.querySelector<HTMLElement>('[data-pi-focus-target="true"]')??surface.querySelector<HTMLElement>('.surface-close');
       target?.focus({preventScroll:true});
     };
     this.clear();

@@ -159,6 +159,25 @@ describe('runtime message guard', () => {
     })).toBe(true);
   });
 
+  it('strictly validates native PDF cancellation compare-and-set fields', () => {
+    expect(isRuntimeMessage({
+      type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: 7, expectedRequestId: 'native-pdf-request' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: -1, expectedRequestId: 'native-pdf-request' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: 7, expectedRequestId: '' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: 7 },
+    })).toBe(false);
+  });
+
   it('validates correction receipts including their scope and term rollback', () => {
     expect(isTranslationCorrectionReceipt(correctionReceipt())).toBe(true);
     expect(isTranslationCorrectionReceipt({

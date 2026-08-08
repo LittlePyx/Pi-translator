@@ -153,6 +153,10 @@ export type RuntimeMessage =
       type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION';
       payload: { tabId: number; expectedRequestId: string };
     }
+  | {
+      type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION';
+      payload: { tabId: number; expectedRequestId: string };
+    }
   | { type: 'PDF_SIDE_PANEL_SESSION_UPDATED'; payload: PdfSidePanelSession }
   | { type: 'OPEN_SIDEBAR' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
@@ -495,6 +499,16 @@ function validPdfCorrectionUndoPayload(value: unknown): boolean {
   );
 }
 
+function validPdfSidePanelRequestPayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    Number.isSafeInteger(payload.tabId) &&
+    (payload.tabId as number) >= 0 &&
+    nonEmptyString(payload.expectedRequestId, 256),
+  );
+}
+
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
     return false;
@@ -516,6 +530,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   if (type === 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
     return validPdfCorrectionUndoPayload(message.payload);
+  }
+  if (type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {
+    return validPdfSidePanelRequestPayload(message.payload);
   }
   return (
     type === 'TRANSLATE_SELECTION' ||

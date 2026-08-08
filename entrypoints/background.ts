@@ -379,7 +379,9 @@ function publishTranslationProgress(
     .catch(() => undefined);
 
   const session = pdfSidePanelSessions.get(tabId);
-  if (session?.requestId !== payload.requestId) return delivery;
+  if (session?.requestId !== payload.requestId || session.status !== 'translating') {
+    return delivery;
+  }
   if (payload.result) {
     // The completed native-PDF session is committed durably together with the
     // translation head. Keeping this notification transport-only avoids a
@@ -500,7 +502,11 @@ async function beginPdfSidePanelTranslation(
       model: provider.model,
     } as const;
     const pending = pdfSidePanelSessions.get(tabId);
-    if (!isCurrent() || pending?.requestId !== session.requestId) return;
+    if (
+      !isCurrent() ||
+      pending?.requestId !== session.requestId ||
+      pending.status !== 'translating'
+    ) return;
     publishPdfSidePanelSession({ ...pending, providerContext }, false);
     const response = await translate({
       requestId: session.requestId,
@@ -513,7 +519,11 @@ async function beginPdfSidePanelTranslation(
       contentMode: settings.contentMode,
     }, tabId, 'tab', provider);
     const current = pdfSidePanelSessions.get(tabId);
-    if (!isCurrent() || current?.requestId !== session.requestId) return;
+    if (
+      !isCurrent() ||
+      current?.requestId !== session.requestId ||
+      current.status !== 'translating'
+    ) return;
     if (response.ok) {
       // translate() has already committed the completed session durably with
       // the result head. Do not issue a second best-effort persistence write.
@@ -526,7 +536,11 @@ async function beginPdfSidePanelTranslation(
     });
   } catch (error) {
     const current = pdfSidePanelSessions.get(tabId);
-    if (!isCurrent() || current?.requestId !== session.requestId) return;
+    if (
+      !isCurrent() ||
+      current?.requestId !== session.requestId ||
+      current.status !== 'translating'
+    ) return;
     const normalized = toTranslationError(error);
     publishPdfSidePanelSession({
       ...current,
@@ -926,6 +940,57 @@ async function retryPdfSidePanelTranslation(
   }
 }
 
+async function cancelPdfSidePanelTranslation(
+  tabId: number,
+  expectedRequestId: string,
+): Promise<RuntimeResponse<{ cancelled: boolean }>> {
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrentLifecycle = (): void => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('PDF 标签页已经关闭或跳转，无法停止旧的翻译任务。');
+    }
+  };
+  try {
+    await initializePdfSidePanelSessions();
+    const cancelled = await runTranslationCommit(tabId, async () => {
+      assertCurrentLifecycle();
+      const session = pdfSidePanelSessions.get(tabId);
+      const active = activeRequests.get(tabId);
+      if (
+        !session ||
+        session.status !== 'translating' ||
+        session.requestId !== expectedRequestId ||
+        (active !== undefined && active.requestId !== expectedRequestId)
+      ) {
+        return false;
+      }
+
+      active?.controller.abort();
+      const stoppedSession: PdfSidePanelSession = {
+        ...session,
+        status: 'error',
+        error: {
+          code: 'REQUEST_ABORTED',
+          message: '翻译已停止。',
+          retryable: false,
+        },
+      };
+      delete stoppedSession.result;
+      delete stoppedSession.settingsRecoveryConfirmation;
+      delete stoppedSession.correctionReceipt;
+      await publishPdfSidePanelSessionDurably(stoppedSession, assertCurrentLifecycle);
+      await clearTranslationCheckpoint(tabId).catch((error: unknown) => {
+        void recordLocalDiagnosticError('translate', error);
+      });
+      return true;
+    });
+    return { ok: true, data: { cancelled } };
+  } catch (error) {
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
+  }
+}
+
 interface SettingsRecoveryAck {
   handled: boolean;
   resumed: boolean;
@@ -1166,6 +1231,19 @@ async function translate(
     return errorResponse(staleTranslationMutationError(
       '页面已经关闭或跳转，旧的翻译请求没有启动。',
     ));
+  }
+  if (providerOverride) {
+    const nativePdfSession = pdfSidePanelSessions.get(tabId);
+    if (
+      nativePdfSession?.requestId !== request.requestId ||
+      nativePdfSession.status !== 'translating'
+    ) {
+      return errorResponse(new TranslationError(
+        'REQUEST_ABORTED',
+        'PDF 翻译已停止，没有调用翻译接口。',
+        false,
+      ));
+    }
   }
   const controller = beginActiveRequest(tabId, request.requestId);
   pendingTranslationRequests.set(tabId, request.requestId);
@@ -3621,6 +3699,13 @@ export default defineBackground(() => {
             message.payload.tabId,
             message.payload.expectedRequestId,
           ));
+      }
+
+      if (message.type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {
+        return cancelPdfSidePanelTranslation(
+          message.payload.tabId,
+          message.payload.expectedRequestId,
+        );
       }
 
       if (message.type === 'PDF_SIDE_PANEL_SESSION_UPDATED') {

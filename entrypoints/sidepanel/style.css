@@ -134,6 +134,14 @@ main {
   font-weight: 680;
 }
 .translation-heading-tools button:hover { color: #4f46e5; }
+#stop-translation {
+  padding-inline: 1px;
+  color: #9b5260;
+  font-size: 9px;
+  font-weight: 560;
+}
+#stop-translation:hover { color: #b4233b; }
+#stop-translation:disabled { color: #8a91a0; cursor: wait; }
 #translation-state { color: #7b8498; font-size: 10px; }
 .translation-text {
   min-height: 5em;
@@ -296,6 +304,9 @@ button:focus-visible {
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
   .translation-heading-tools button { color: #a6afbd; }
+  #stop-translation { color: #d68b98; }
+  #stop-translation:hover { color: #ff9aaa; background: transparent; }
+  #stop-translation:disabled { color: #777f8e; }
   .text-action { color: #a6afbd; }
   .empty-mark { border-color: #42436b; color: #a9a1ff; background: #252440; }
   .empty-state p, .reader-hint p { color: #9aa5b5; }
