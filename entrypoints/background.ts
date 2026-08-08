@@ -1,9 +1,13 @@
 import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/protector';
 import {
   getLocalDiagnosticEvents,
+  getLocalPerformanceSamples,
   recordLocalDiagnosticError,
+  recordLocalPerformanceSample,
   type DiagnosticOperation,
+  type PerformancePhase,
 } from '../core/diagnostics/event-log';
+import { buildLocalDiagnosticReport } from '../core/diagnostics/local-report';
 import { toTranslationError, TranslationError } from '../core/messaging/errors';
 import {
   isRuntimeMessage,
@@ -297,6 +301,11 @@ function errorResponse<T = never>(error: unknown): RuntimeResponse<T> {
       retryable: normalized.retryable,
     },
   };
+}
+
+function safePerformanceDuration(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return undefined;
+  return Math.min(30 * 60 * 1_000, Math.max(0, value));
 }
 
 type TranslationProgressPayload = Extract<
@@ -1090,40 +1099,29 @@ async function deliverSettingsRecovery(
 
 async function localDiagnosticReport(): Promise<string> {
   const settings = await getSettings();
-  const [apiKeyConfigured, apiPermissionGranted, recentErrors] = await Promise.all([
+  const [apiKeyConfigured, apiPermissionGranted, recentErrors, recentPerformance] = await Promise.all([
     getApiKey(settings.activeApiProfileId).then(Boolean),
     browser.permissions.contains({ origins: [apiOriginPattern(settings.apiBaseUrl)] }),
     getLocalDiagnosticEvents(),
+    getLocalPerformanceSamples(),
   ]);
   const manifest = browser.runtime.getManifest();
-  return JSON.stringify({
-    product: 'Pi Translator',
+  return buildLocalDiagnosticReport({
     generatedAt: new Date().toISOString(),
     version: manifest.version,
     manifestVersion: manifest.manifest_version,
-    locale: navigator.language,
-    browser: navigator.userAgent,
-    activeApi: {
-      profileName: settings.apiProfiles.find((profile) => profile.id === settings.activeApiProfileId)?.name ?? 'unknown',
+    apiState: {
       profileCount: settings.apiProfiles.length,
-      origin: new URL(settings.apiBaseUrl).origin,
-      model: settings.model,
       apiKeyConfigured,
       apiPermissionGranted,
     },
-    behavior: {
-      generalPageMode: settings.generalPageMode,
-      siteAllowlistCount: settings.siteAllowlist.length,
-      contentMode: settings.contentMode,
-      contextMode: settings.contextMode,
+    performanceContext: {
       streaming: settings.enableStreaming,
-      sensitiveFieldProtection: settings.protectSensitiveFields,
-      historyLimit: settings.historyLimit,
-      sidebarSide: settings.sidebarSide,
+      autoRenderLatex: settings.autoRenderLatex,
     },
     recentErrors,
-    privacy: 'This report excludes API Keys, selected text, translations, page URLs, glossary entries, and site names.',
-  }, null, 2);
+    recentPerformance,
+  });
 }
 
 async function synchronizeContextMenu(): Promise<void> {
@@ -1211,23 +1209,53 @@ async function translate(
   progressTarget: TranslationProgressTarget = 'tab',
   providerOverride?: NativePdfTranslationProvider,
 ): Promise<TranslateRuntimeResponse> {
+  const performanceStartedAt = performance.now();
+  const performanceTimings: Partial<Record<PerformancePhase, number>> = {};
+  const captureMs = safePerformanceDuration(request.clientPerformance?.captureMs);
+  const queueMs = safePerformanceDuration(request.clientPerformance?.queueMs);
+  if (captureMs !== undefined) performanceTimings.captureMs = captureMs;
+  if (queueMs !== undefined) performanceTimings.queueMs = queueMs;
+  let performanceError: unknown;
+  let performanceRecorded = false;
+  const finishPerformance = (): void => {
+    if (performanceRecorded) return;
+    performanceRecorded = true;
+    performanceTimings.totalMs = Math.max(0, performance.now() - performanceStartedAt);
+    void recordLocalPerformanceSample({
+      operation: 'translate-text',
+      timings: performanceTimings,
+      ...(performanceError
+        ? { errorCode: toTranslationError(performanceError).code }
+        : {}),
+    });
+  };
   const text = request.text.trim();
   const revisionInstruction = request.revision?.instruction.trim().slice(0, 500);
   const previousTranslation = request.revision?.previousTranslation
     ?.trim()
     .slice(0, MAX_SELECTION_LENGTH);
   if (!text) {
-    return errorResponse(new TranslationError('EMPTY_SELECTION', 'No text was selected.'));
+    performanceError = new TranslationError('EMPTY_SELECTION', 'No text was selected.');
+    performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+    finishPerformance();
+    return errorResponse(performanceError);
   }
   if (text.length > MAX_SELECTION_LENGTH) {
-    return errorResponse(
-      new TranslationError('SELECTION_TOO_LONG', 'The selected text is too long.'),
+    performanceError = new TranslationError(
+      'SELECTION_TOO_LONG',
+      'The selected text is too long.',
     );
+    performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+    finishPerformance();
+    return errorResponse(performanceError);
   }
 
   const lifecycleToken = tabLifecycles.capture(tabId);
   await runTranslationCommit(tabId, () => undefined);
   if (!tabLifecycles.isCurrent(lifecycleToken)) {
+    performanceError = new TranslationError('REQUEST_ABORTED', 'The source tab changed.', false);
+    performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+    finishPerformance();
     return errorResponse(staleTranslationMutationError(
       '页面已经关闭或跳转，旧的翻译请求没有启动。',
     ));
@@ -1238,6 +1266,9 @@ async function translate(
       nativePdfSession?.requestId !== request.requestId ||
       nativePdfSession.status !== 'translating'
     ) {
+      performanceError = new TranslationError('REQUEST_ABORTED', 'The PDF request was stopped.', false);
+      performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+      finishPerformance();
       return errorResponse(new TranslationError(
         'REQUEST_ABORTED',
         'PDF 翻译已停止，没有调用翻译接口。',
@@ -1309,22 +1340,33 @@ async function translate(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+        const commitStartedAt = performance.now();
         const finalization = startCommittedTask(
           (operation) => runTranslationCommit(tabId, operation),
           async () => {
             assertActiveRequest(tabId, request.requestId, controller);
             await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+            performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
           },
-          () => settleTranslationFinalization(
-            'translate-finalization',
-            settings.rememberRecentTranslations
-              ? addTranslationHistory(tabId, cached, settings.historyLimit)
-              : Promise.resolve([]),
-            [
-              clearTranslationCheckpoint(tabId, cacheKey),
-              rememberDocumentTranslation(identity, cached),
-            ],
-          ),
+          async () => {
+            const maintenanceStartedAt = performance.now();
+            const history = await settleTranslationFinalization(
+              'translate-finalization',
+              settings.rememberRecentTranslations
+                ? addTranslationHistory(tabId, cached, settings.historyLimit)
+                : Promise.resolve([]),
+              [
+                clearTranslationCheckpoint(tabId, cacheKey),
+                rememberDocumentTranslation(identity, cached),
+              ],
+            );
+            performanceTimings.maintenanceMs = Math.max(
+              0,
+              performance.now() - maintenanceStartedAt,
+            );
+            return history;
+          },
         );
         await finalization.committed;
         await publishTranslationProgress(tabId, {
@@ -1355,6 +1397,22 @@ async function translate(
       );
     }
     const startedAt = performance.now();
+    performanceTimings.preflightMs = Math.max(0, startedAt - performanceStartedAt);
+    let providerMs = 0;
+    let firstProviderRequestStartedAt: number | undefined;
+    const timedTranslator = {
+      translate: async (...args: Parameters<typeof translator.translate>) => {
+        const providerStartedAt = performance.now();
+        firstProviderRequestStartedAt ??= providerStartedAt;
+        try {
+          return await translator.translate(...args);
+        } finally {
+          providerMs += Math.max(0, performance.now() - providerStartedAt);
+          performanceTimings.providerMs = providerMs;
+        }
+      },
+    };
+    let latexValidationMs = 0;
     const protect = shouldProtectLatex(request.contentMode, request.pageUrl, text);
     const completedCheckpointChunks: TranslationCheckpointChunk[] =
       checkpoint?.completedChunks.map((chunk) => ({ ...chunk })) ?? [];
@@ -1415,6 +1473,10 @@ async function translate(
                 : partialText;
               if (!visiblePartial || visiblePartial === lastPartial) return;
               const now = performance.now();
+              performanceTimings.providerFirstOutputMs ??= Math.max(
+                0,
+                now - (firstProviderRequestStartedAt ?? now),
+              );
               if (lastProgressAt > 0 && now - lastProgressAt < 80) return;
               lastPartial = visiblePartial;
               lastProgressAt = now;
@@ -1452,8 +1514,9 @@ async function translate(
         ...(revisionInstruction ? { adjustmentInstruction: revisionInstruction } : {}),
         ...(previousTranslationChunk ? { previousTranslation: previousTranslationChunk } : {}),
       };
-      const { providerResult, restored } = await translateWithLatexRetry(
-        translator,
+      const chunkValidationBaseMs = latexValidationMs;
+      const { providerResult, restored, diagnostics } = await translateWithLatexRetry(
+        timedTranslator,
         preparedInput,
         {
           model: provider.model,
@@ -1466,8 +1529,13 @@ async function translate(
         controller.signal,
         protectedLatex,
         callbacks,
+        (diagnostic) => {
+          performanceTimings.latexValidationMs =
+            chunkValidationBaseMs + diagnostic.latexValidationMs;
+        },
       );
       assertActiveRequest(tabId, request.requestId, controller);
+      latexValidationMs += diagnostics.latexValidationMs;
 
       detectedLanguage ??= providerResult.detectedLanguage;
       translatedChunks.push(restored.text);
@@ -1546,6 +1614,7 @@ async function translate(
         totalChunks: chunks.length,
       });
     }
+    performanceTimings.latexValidationMs = latexValidationMs;
     const sourceHost = sourceHostForRequest(request);
     const result: TranslateResult = {
       requestId: request.requestId,
@@ -1593,29 +1662,39 @@ async function translate(
         : {}),
     };
     assertActiveRequest(tabId, request.requestId, controller);
+    const commitStartedAt = performance.now();
     const finalization = startCommittedTask(
       (operation) => runTranslationCommit(tabId, operation),
       async () => {
         assertActiveRequest(tabId, request.requestId, controller);
         await commitTranslationResultState(tabId, result, assertCurrentRequest);
+        performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
       },
-      () => settleTranslationFinalization(
-        'translate-finalization',
-        settings.rememberRecentTranslations
-          ? addTranslationHistory(tabId, result, settings.historyLimit)
-          : Promise.resolve([]),
-        [
-          request.revision
-            ? clearTranslationCache(tabId)
-            : settings.enableSessionCache
-              ? cacheTranslation(tabId, cacheKey, result)
+      async () => {
+        const maintenanceStartedAt = performance.now();
+        const history = await settleTranslationFinalization(
+          'translate-finalization',
+          settings.rememberRecentTranslations
+            ? addTranslationHistory(tabId, result, settings.historyLimit)
+            : Promise.resolve([]),
+          [
+            request.revision
+              ? clearTranslationCache(tabId)
+              : settings.enableSessionCache
+                ? cacheTranslation(tabId, cacheKey, result)
+                : Promise.resolve(),
+            clearTranslationCheckpoint(tabId, cacheKey),
+            !request.revision || request.revision.scope === 'document'
+              ? rememberDocumentTranslation(identity, result)
               : Promise.resolve(),
-          clearTranslationCheckpoint(tabId, cacheKey),
-          !request.revision || request.revision.scope === 'document'
-            ? rememberDocumentTranslation(identity, result)
-            : Promise.resolve(),
-        ],
-      ),
+          ],
+        );
+        performanceTimings.maintenanceMs = Math.max(
+          0,
+          performance.now() - maintenanceStartedAt,
+        );
+        return history;
+      },
     );
     await finalization.committed;
     queueProgress({
@@ -1630,10 +1709,13 @@ async function translate(
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
+    performanceError = error;
+    performanceTimings.preflightMs ??= Math.max(0, performance.now() - performanceStartedAt);
     await progressDeliveryTail.catch(() => undefined);
     await recordLocalDiagnosticError('translate', error);
     return errorResponse(error);
   } finally {
+    finishPerformance();
     const current = activeRequests.get(tabId);
     if (current?.requestId === request.requestId) {
       activeRequests.delete(tabId);
@@ -2434,6 +2516,11 @@ async function recognizePdfPage(
   request: RecognizePdfPageRequest,
   tabId: number,
 ): Promise<RecognizePdfPageResponse> {
+  const performanceStartedAt = performance.now();
+  const performanceTimings: Partial<Record<PerformancePhase, number>> = {};
+  const captureMs = safePerformanceDuration(request.clientPerformance?.captureMs);
+  if (captureMs !== undefined) performanceTimings.captureMs = captureMs;
+  let performanceError: unknown;
   const controller = beginActiveRequest(tabId, request.requestId);
   try {
     validateImagePayload(request);
@@ -2460,18 +2547,39 @@ async function recognizePdfPage(
       throw new TranslationError('API_PERMISSION_REQUIRED', `Permission for ${permission} is required.`);
     }
     assertActiveRequest(tabId, request.requestId, controller);
-    const page = await recognizeQwenPdfPage(
-      request,
-      settings.visionModel.trim() || profile.model,
-      { apiKey, apiBaseUrl: profile.apiBaseUrl },
-      controller.signal,
-    );
+    const providerStartedAt = performance.now();
+    performanceTimings.preflightMs = Math.max(0, providerStartedAt - performanceStartedAt);
+    const page = await (async () => {
+      try {
+        return await recognizeQwenPdfPage(
+          request,
+          settings.visionModel.trim() || profile.model,
+          { apiKey, apiBaseUrl: profile.apiBaseUrl },
+          controller.signal,
+        );
+      } finally {
+        performanceTimings.providerMs = Math.max(
+          0,
+          performance.now() - providerStartedAt,
+        );
+      }
+    })();
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { page } };
   } catch (error) {
+    performanceError = error;
+    performanceTimings.preflightMs ??= Math.max(0, performance.now() - performanceStartedAt);
     await recordLocalDiagnosticError('recognize-pdf-page', error);
     return errorResponse(error);
   } finally {
+    performanceTimings.totalMs = Math.max(0, performance.now() - performanceStartedAt);
+    void recordLocalPerformanceSample({
+      operation: 'recognize-pdf-page',
+      timings: performanceTimings,
+      ...(performanceError
+        ? { errorCode: toTranslationError(performanceError).code }
+        : {}),
+    });
     const current = activeRequests.get(tabId);
     if (current?.requestId === request.requestId) activeRequests.delete(tabId);
   }
@@ -2482,10 +2590,32 @@ async function translateImageRegion(
   tabId: number,
   progressTarget: TranslationProgressTarget,
 ): Promise<TranslateRuntimeResponse> {
-  validateImageRegionRequest(request);
+  const performanceStartedAt = performance.now();
+  const performanceTimings: Partial<Record<PerformancePhase, number>> = {};
+  const captureMs = safePerformanceDuration(request.clientPerformance?.captureMs);
+  const queueMs = safePerformanceDuration(request.clientPerformance?.queueMs);
+  if (captureMs !== undefined) performanceTimings.captureMs = captureMs;
+  if (queueMs !== undefined) performanceTimings.queueMs = queueMs;
+  let performanceError: unknown;
+  let performanceRecorded = false;
+  const finishPerformance = (): void => {
+    if (performanceRecorded) return;
+    performanceRecorded = true;
+    performanceTimings.totalMs = Math.max(0, performance.now() - performanceStartedAt);
+    void recordLocalPerformanceSample({
+      operation: 'translate-image-region',
+      timings: performanceTimings,
+      ...(performanceError
+        ? { errorCode: toTranslationError(performanceError).code }
+        : {}),
+    });
+  };
   const lifecycleToken = tabLifecycles.capture(tabId);
   await runTranslationCommit(tabId, () => undefined);
   if (!tabLifecycles.isCurrent(lifecycleToken)) {
+    performanceError = new TranslationError('REQUEST_ABORTED', 'The source tab changed.', false);
+    performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+    finishPerformance();
     return errorResponse(staleTranslationMutationError(
       '页面已经关闭或跳转，旧的框选翻译没有启动。',
     ));
@@ -2505,6 +2635,7 @@ async function translateImageRegion(
     });
   };
   try {
+    validateImageRegionRequest(request);
     // A region request represents different source content and cannot resume a
     // text checkpoint. Clear it without ever storing the captured image.
     await clearTranslationCheckpoint(tabId);
@@ -2548,19 +2679,30 @@ async function translateImageRegion(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+        const commitStartedAt = performance.now();
         const finalization = startCommittedTask(
           (operation) => runTranslationCommit(tabId, operation),
           async () => {
             assertActiveRequest(tabId, request.requestId, controller);
             await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+            performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
           },
-          () => settleTranslationFinalization(
-            'translate-image-region-finalization',
-            settings.rememberRecentTranslations
-              ? addTranslationHistory(tabId, cached, settings.historyLimit)
-              : Promise.resolve([]),
-            [rememberDocumentTranslation(identity, cached)],
-          ),
+          async () => {
+            const maintenanceStartedAt = performance.now();
+            const history = await settleTranslationFinalization(
+              'translate-image-region-finalization',
+              settings.rememberRecentTranslations
+                ? addTranslationHistory(tabId, cached, settings.historyLimit)
+                : Promise.resolve([]),
+              [rememberDocumentTranslation(identity, cached)],
+            );
+            performanceTimings.maintenanceMs = Math.max(
+              0,
+              performance.now() - maintenanceStartedAt,
+            );
+            return history;
+          },
         );
         await finalization.committed;
         await publishTranslationProgress(tabId, {
@@ -2590,45 +2732,53 @@ async function translateImageRegion(
       );
     }
     const startedAt = performance.now();
+    performanceTimings.preflightMs = Math.max(0, startedAt - performanceStartedAt);
     let lastPartial = '';
     let lastProgressAt = 0;
-    const providerResult = await translator.translateImageRegion(
-      {
-        imageDataUrl: request.imageDataUrl,
-        imageWidth: request.imageWidth,
-        imageHeight: request.imageHeight,
-        ...(request.recognizedTextHint
-          ? { recognizedTextHint: request.recognizedTextHint }
-          : {}),
-      },
-      {
-        model: visionModel,
-        sourceLanguage: request.sourceLanguage,
-        targetLanguage: request.targetLanguage,
-        style: request.style,
-        glossary,
-      },
-      { apiKey, apiBaseUrl: profile.apiBaseUrl },
-      controller.signal,
-      settings.enableStreaming
-        ? {
-            onPartialText: (partialText) => {
-              if (activeRequests.get(tabId)?.controller !== controller) return;
-              if (!partialText || partialText === lastPartial) return;
-              const now = performance.now();
-              if (lastProgressAt > 0 && now - lastProgressAt < 80) return;
-              lastPartial = partialText;
-              lastProgressAt = now;
-              queueProgress({
-                requestId: request.requestId,
-                partialText,
-                completedChunks: 0,
-                totalChunks: 1,
-              });
-            },
-          }
-        : undefined,
-    );
+    const providerResult = await (async () => {
+      try {
+        return await translator.translateImageRegion(
+          {
+            imageDataUrl: request.imageDataUrl,
+            imageWidth: request.imageWidth,
+            imageHeight: request.imageHeight,
+            ...(request.recognizedTextHint
+              ? { recognizedTextHint: request.recognizedTextHint }
+              : {}),
+          },
+          {
+            model: visionModel,
+            sourceLanguage: request.sourceLanguage,
+            targetLanguage: request.targetLanguage,
+            style: request.style,
+            glossary,
+          },
+          { apiKey, apiBaseUrl: profile.apiBaseUrl },
+          controller.signal,
+          settings.enableStreaming
+            ? {
+                onPartialText: (partialText) => {
+                  if (activeRequests.get(tabId)?.controller !== controller) return;
+                  if (!partialText || partialText === lastPartial) return;
+                  const now = performance.now();
+                  performanceTimings.providerFirstOutputMs ??= Math.max(0, now - startedAt);
+                  if (lastProgressAt > 0 && now - lastProgressAt < 80) return;
+                  lastPartial = partialText;
+                  lastProgressAt = now;
+                  queueProgress({
+                    requestId: request.requestId,
+                    partialText,
+                    completedChunks: 0,
+                    totalChunks: 1,
+                  });
+                },
+              }
+            : undefined,
+        );
+      } finally {
+        performanceTimings.providerMs = Math.max(0, performance.now() - startedAt);
+      }
+    })();
     assertActiveRequest(tabId, request.requestId, controller);
     const maintainVisionProfile = (): Promise<void> => autoSelectedVisionProfile
       ? mutateSettings((latestSettings) => {
@@ -2689,27 +2839,37 @@ async function translateImageRegion(
           }
         : {}),
     };
+    const commitStartedAt = performance.now();
     const finalization = startCommittedTask(
       (operation) => runTranslationCommit(tabId, operation),
       async () => {
         assertActiveRequest(tabId, request.requestId, controller);
         await commitTranslationResultState(tabId, result, assertCurrentRequest);
+        performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
       },
-      () => settleTranslationFinalization(
-        'translate-image-region-finalization',
-        settings.rememberRecentTranslations
-          ? addTranslationHistory(tabId, result, settings.historyLimit)
-          : Promise.resolve([]),
-        [
-          settings.enableSessionCache
-            ? cacheImageRegionTranslation(tabId, cacheKey, result)
-            : Promise.resolve(),
-          maintainVisionProfile(),
-          !request.revision || request.revision.scope === 'document'
-            ? rememberDocumentTranslation(identity, result)
-            : Promise.resolve(),
-        ],
-      ),
+      async () => {
+        const maintenanceStartedAt = performance.now();
+        const history = await settleTranslationFinalization(
+          'translate-image-region-finalization',
+          settings.rememberRecentTranslations
+            ? addTranslationHistory(tabId, result, settings.historyLimit)
+            : Promise.resolve([]),
+          [
+            settings.enableSessionCache
+              ? cacheImageRegionTranslation(tabId, cacheKey, result)
+              : Promise.resolve(),
+            maintainVisionProfile(),
+            !request.revision || request.revision.scope === 'document'
+              ? rememberDocumentTranslation(identity, result)
+              : Promise.resolve(),
+          ],
+        );
+        performanceTimings.maintenanceMs = Math.max(
+          0,
+          performance.now() - maintenanceStartedAt,
+        );
+        return history;
+      },
     );
     await finalization.committed;
     queueProgress({
@@ -2725,10 +2885,13 @@ async function translateImageRegion(
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
+    performanceError = error;
+    performanceTimings.preflightMs ??= Math.max(0, performance.now() - performanceStartedAt);
     await progressDeliveryTail.catch(() => undefined);
     await recordLocalDiagnosticError('translate-image-region', error);
     return errorResponse(error);
   } finally {
+    finishPerformance();
     const current = activeRequests.get(tabId);
     if (current?.requestId === request.requestId) activeRequests.delete(tabId);
     if (pendingTranslationRequests.get(tabId) === request.requestId) {
@@ -3476,6 +3639,11 @@ export default defineBackground(() => {
           ok: true as const,
           data: { html: items.map(() => null) },
         }));
+      }
+
+      if (message.type === 'RECORD_LOCAL_PERFORMANCE') {
+        return recordLocalPerformanceSample(message.payload)
+          .then(() => ({ ok: true as const, data: { recorded: true as const } }));
       }
 
       if (message.type === 'GET_LOCAL_DIAGNOSTIC_REPORT') {

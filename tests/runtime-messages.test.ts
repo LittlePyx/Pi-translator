@@ -341,6 +341,38 @@ describe('runtime message guard', () => {
     })).toBe(true);
   });
 
+  it('strictly accepts only content-free local render performance summaries', () => {
+    expect(isRuntimeMessage({
+      type: 'RECORD_LOCAL_PERFORMANCE',
+      payload: {
+        operation: 'render-result',
+        timings: { totalMs: 18, textRenderMs: 3, mathRenderMs: 15 },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'RECORD_LOCAL_PERFORMANCE',
+      payload: {
+        operation: 'render-result',
+        timings: { totalMs: 18, textRenderMs: 3, mathRenderMs: 15 },
+        text: 'private paper text',
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'RECORD_LOCAL_PERFORMANCE',
+      payload: {
+        operation: 'translate-text',
+        timings: { totalMs: 18, textRenderMs: 3, mathRenderMs: 15 },
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'RECORD_LOCAL_PERFORMANCE',
+      payload: {
+        operation: 'render-result',
+        timings: { totalMs: Number.NaN, textRenderMs: 3, mathRenderMs: 15 },
+      },
+    })).toBe(false);
+  });
+
   it('accepts a top-frame PDF preview source query', () => {
     expect(isRuntimeMessage({ type: 'GET_ACTIVE_PDF_SOURCE' })).toBe(true);
   });

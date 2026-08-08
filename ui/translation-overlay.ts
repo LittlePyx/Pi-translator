@@ -28,11 +28,12 @@ import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
 import { validateImageFormulaResult } from '../core/translation/formula-output-validation';
 import type { SettingsFocus } from '../core/messaging/user-facing-error';
-import type { SettingsRecoveryRequest } from '../core/messaging/messages';
+import type { RuntimeMessage, SettingsRecoveryRequest } from '../core/messaging/messages';
 import {
   renderTranslationContent,
   renderTranslationContents,
   type TranslationContentTarget,
+  type TranslationRenderPerformance,
 } from './translation-content';
 import type {
   TranslationMarkerLocationState,
@@ -312,6 +313,7 @@ export class TranslationOverlay {
   private correctionUndo: TranslationCorrectionReceipt | undefined;
   private translationEpoch = 0;
   private readonly buttonFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
+  private readonly recordedRenderPerformance = new Set<string>();
   private cardReturnFocus: HTMLElement | undefined;
 
   constructor(
@@ -674,9 +676,38 @@ export class TranslationOverlay {
     return this.latexViewOverrides.get(result.requestId)??this.preferences.autoRenderLatex;
   }
 
-  private translatedTextElement(text:string,className:string,renderLatex:boolean):HTMLDivElement {
+  private recordResultRenderPerformance(
+    result: TranslateResult,
+    metrics: TranslationRenderPerformance,
+  ): void {
+    if (this.recordedRenderPerformance.has(result.requestId)) return;
+    this.recordedRenderPerformance.add(result.requestId);
+    if (this.recordedRenderPerformance.size > 100) {
+      const oldest = this.recordedRenderPerformance.values().next().value as string | undefined;
+      if (oldest) this.recordedRenderPerformance.delete(oldest);
+    }
+    void browser.runtime.sendMessage({
+      type: 'RECORD_LOCAL_PERFORMANCE',
+      payload: {
+        operation: 'render-result',
+        timings: {
+          totalMs: metrics.textRenderMs + metrics.mathRenderMs,
+          textRenderMs: metrics.textRenderMs,
+          mathRenderMs: metrics.mathRenderMs,
+        },
+        ...(metrics.mathRenderFailed ? { errorCode: 'INVALID_RESPONSE' as const } : {}),
+      },
+    } satisfies RuntimeMessage).catch(() => undefined);
+  }
+
+  private translatedTextElement(
+    text:string,
+    className:string,
+    renderLatex:boolean,
+    onPerformance?: (metrics: TranslationRenderPerformance) => void,
+  ):HTMLDivElement {
     const element=document.createElement('div');element.className=className;
-    renderTranslationContent(element,text,renderLatex);
+    void renderTranslationContent(element,text,renderLatex,onPerformance);
     return element;
   }
 
@@ -716,9 +747,17 @@ export class TranslationOverlay {
         }
         content.append(pair,actions);row.append(num,content);list.append(row);
       }
-      renderTranslationContents(renderTargets);
+      void renderTranslationContents(
+        renderTargets,
+        (metrics) => this.recordResultRenderPerformance(result, metrics),
+      );
       surface.append(list);
-    }else{surface.append(this.translatedTextElement(result.translatedText,'body',renderLatex))}
+    }else{surface.append(this.translatedTextElement(
+      result.translatedText,
+      'body',
+      renderLatex,
+      (metrics) => this.recordResultRenderPerformance(result, metrics),
+    ))}
     if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?'公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。':`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;surface.append(uncertain)}
     if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent='部分 LaTeX 使用了保守保护策略，请复制后检查。';surface.append(warning)}
     const footer=document.createElement('div');footer.className='footer';const copy=this.button('复制','action copy-action','复制译文（保留标准 LaTeX）');copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(result.translatedText)));footer.append(copy);if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correction=this.button('修正','action correction-action','修正译文');correction.addEventListener('click',()=>this.openTranslationCorrection(result,correction));footer.append(correction)}if(this.correctionUndo?.correctedRequestId===result.requestId&&this.actions.onUndoTranslationEdit){const notice=document.createElement('span');notice.className='correction-undo';notice.setAttribute('role','status');notice.textContent='已修正 ·';const undo=this.button('撤销','','撤销上次译文修正');undo.addEventListener('click',()=>this.undoTranslationCorrection(result,notice));notice.append(undo);footer.append(notice)}if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.dataset.piFocusKey='source-mark';mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}footer.append(this.moreMenu(result));surface.append(footer);this.showSurface(surface);

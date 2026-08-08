@@ -31,6 +31,8 @@ export interface RecognizePdfPageRequest {
   imageWidth: number;
   imageHeight: number;
   pageNumber: number;
+  /** Numeric capture timing only; never forwarded to the OCR provider. */
+  clientPerformance?: { captureMs?: number };
 }
 
 export type CoordinateOcrValidation =

@@ -29,7 +29,14 @@ export interface TranslateRequest {
   contextText?: string;
   bypassCache?: boolean;
   sourceLocation?: PdfSourceLocation;
+  /** Numeric client-side timings only; never forwarded to the translation provider. */
+  clientPerformance?: TranslationClientPerformance;
   revision?: TranslationRevisionRequest;
+}
+
+export interface TranslationClientPerformance {
+  captureMs?: number;
+  queueMs?: number;
 }
 
 export type TranslationRevisionKind =
@@ -121,6 +128,8 @@ export interface TranslateImageRegionRequest {
   style: TranslationStyle;
   bypassCache?: boolean;
   sourceLocation?: PdfSourceLocation;
+  /** Numeric client-side timings only; never forwarded to the translation provider. */
+  clientPerformance?: TranslationClientPerformance;
   revision?: TranslationRevisionRequest;
 }
 

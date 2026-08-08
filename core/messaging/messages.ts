@@ -99,6 +99,16 @@ export interface ApiDiagnosticReport {
   notes: string[];
 }
 
+export interface LocalRenderPerformancePayload {
+  operation: 'render-result';
+  timings: {
+    totalMs: number;
+    textRenderMs: number;
+    mathRenderMs: number;
+  };
+  errorCode?: 'INVALID_RESPONSE';
+}
+
 export interface PdfSidePanelSession {
   tabId: number;
   requestId: string;
@@ -252,6 +262,7 @@ export type RuntimeMessage =
       type: 'DIAGNOSE_API';
       payload: { apiKey?: string; apiBaseUrl: string; model: string; profileId?: string };
     }
+  | { type: 'RECORD_LOCAL_PERFORMANCE'; payload: LocalRenderPerformancePayload }
   | { type: 'GET_LOCAL_DIAGNOSTIC_REPORT' };
 
 export type RuntimeResponse<T> =
@@ -509,6 +520,31 @@ function validPdfSidePanelRequestPayload(value: unknown): boolean {
   );
 }
 
+function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
+  const allowlist = new Set(allowed);
+  return Object.keys(value).every((key) => allowlist.has(key));
+}
+
+function validPerformanceDuration(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value) && value >= 0 && value <= 1_800_000;
+}
+
+function validLocalRenderPerformancePayload(value: unknown): boolean {
+  const payload = record(value);
+  const timings = record(payload?.timings);
+  return Boolean(
+    payload &&
+    timings &&
+    hasOnlyKeys(payload, ['operation', 'timings', 'errorCode']) &&
+    hasOnlyKeys(timings, ['totalMs', 'textRenderMs', 'mathRenderMs']) &&
+    payload.operation === 'render-result' &&
+    validPerformanceDuration(timings.totalMs) &&
+    validPerformanceDuration(timings.textRenderMs) &&
+    validPerformanceDuration(timings.mathRenderMs) &&
+    (payload.errorCode === undefined || payload.errorCode === 'INVALID_RESPONSE')
+  );
+}
+
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
     return false;
@@ -533,6 +569,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   if (type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {
     return validPdfSidePanelRequestPayload(message.payload);
+  }
+  if (type === 'RECORD_LOCAL_PERFORMANCE') {
+    return validLocalRenderPerformancePayload(message.payload);
   }
   return (
     type === 'TRANSLATE_SELECTION' ||
@@ -570,6 +609,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'TEST_VISION_CAPABILITY' ||
     type === 'LIST_API_MODELS' ||
     type === 'DIAGNOSE_API' ||
+    type === 'RECORD_LOCAL_PERFORMANCE' ||
     type === 'GET_LOCAL_DIAGNOSTIC_REPORT'
   );
 }

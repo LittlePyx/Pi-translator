@@ -214,6 +214,7 @@ interface QueuedRegionTranslation {
   documentEpoch: number;
   pageLabel: string;
   cancelled: boolean;
+  enqueuedAt: number;
   payload: QueuedRegionTranslationPayload;
 }
 
@@ -1549,13 +1550,18 @@ async function navigateToPdfMarkerPage(pageNumber: number): Promise<void> {
 }
 
 function enqueueRegionTranslation(
-  task: Omit<QueuedRegionTranslation, 'id' | 'cancelled'>,
+  task: Omit<QueuedRegionTranslation, 'id' | 'cancelled' | 'enqueuedAt'>,
 ): boolean {
   if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
     showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', { transient: true });
     return false;
   }
-  regionTranslationQueue.push({ ...task, id: crypto.randomUUID(), cancelled: false });
+  regionTranslationQueue.push({
+    ...task,
+    id: crypto.randomUUID(),
+    cancelled: false,
+    enqueuedAt: performance.now(),
+  });
   updateRegionAction();
   showNotice(`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, { transient: true });
   void drainRegionTranslationQueue();
@@ -1575,9 +1581,18 @@ async function drainRegionTranslationQueue(): Promise<void> {
       try {
         const controller = await selectionTranslator;
         if (task.cancelled || task.documentEpoch !== documentEpoch) continue;
+        const queueMs = Math.max(0, performance.now() - task.enqueuedAt);
         if (task.payload.kind === 'text') {
+          task.payload.capture.clientPerformance = {
+            ...task.payload.capture.clientPerformance,
+            queueMs,
+          };
           await controller.translatePdfRegionText(task.payload.capture);
         } else {
+          task.payload.capture.clientPerformance = {
+            ...task.payload.capture.clientPerformance,
+            queueMs,
+          };
           await controller.translateImageRegion(task.payload.capture);
         }
       } catch (error) {
@@ -1719,6 +1734,7 @@ function createRegionConfirmation(
       cancel.disabled = false;
       cancel.textContent = '取消识别';
       void (async () => {
+        const captureStartedAt = performance.now();
         const captured = await captureCanvasRegion(
           selection.canvas,
           { left: 0, top: 0, width: currentBounds.width, height: currentBounds.height },
@@ -1733,6 +1749,9 @@ function createRegionConfirmation(
             imageWidth: captured.width,
             imageHeight: captured.height,
             pageNumber: numericPageNumber,
+            clientPerformance: {
+              captureMs: Math.max(0, performance.now() - captureStartedAt),
+            },
           },
         } satisfies RuntimeMessage) as RecognizePdfPageResponse;
         if (
@@ -1804,6 +1823,7 @@ function createRegionConfirmation(
       ): Promise<ImageRegionTranslationCapture | undefined> => {
         if (documentEpoch !== captureEpoch || !selection.canvas.isConnected) return undefined;
         const pageBounds = selection.pageElement.getBoundingClientRect();
+        const captureStartedAt = performance.now();
         const capture = await captureCanvasRegion(
           selection.canvas,
           { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
@@ -1818,6 +1838,9 @@ function createRegionConfirmation(
           pageUrl: requestPageUrl,
           sourceLabel,
           selectionReference: sourceLocation,
+          clientPerformance: {
+            captureMs: Math.max(0, performance.now() - captureStartedAt),
+          },
         };
         return captureRequest;
       };

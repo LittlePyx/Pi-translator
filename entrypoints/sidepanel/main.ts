@@ -30,7 +30,10 @@ import {
 import { getSettings } from '../../core/settings/repository';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
-import { renderTranslationContent } from '../../ui/translation-content';
+import {
+  renderTranslationContent,
+  type TranslationRenderPerformance,
+} from '../../ui/translation-content';
 import { normalizeLatexForClipboard } from '../../ui/latex-copy';
 import {
   applyManualCorrection,
@@ -118,8 +121,39 @@ function settingsRecoveryRequest(
   };
 }
 
-function renderTranslationText(text: string, renderLatex: boolean): void {
-  renderTranslationContent(translationText, text, renderLatex);
+const recordedRenderPerformance = new Set<string>();
+
+function recordResultRenderPerformance(
+  requestId: string,
+  metrics: TranslationRenderPerformance,
+): void {
+  if (recordedRenderPerformance.has(requestId)) return;
+  recordedRenderPerformance.add(requestId);
+  if (recordedRenderPerformance.size > 100) {
+    const oldest = recordedRenderPerformance.values().next().value as string | undefined;
+    if (oldest) recordedRenderPerformance.delete(oldest);
+  }
+  void browser.runtime.sendMessage({
+    type: 'RECORD_LOCAL_PERFORMANCE',
+    payload: {
+      operation: 'render-result',
+      timings: {
+        totalMs: metrics.textRenderMs + metrics.mathRenderMs,
+        textRenderMs: metrics.textRenderMs,
+        mathRenderMs: metrics.mathRenderMs,
+      },
+      ...(metrics.mathRenderFailed ? { errorCode: 'INVALID_RESPONSE' as const } : {}),
+    },
+  } satisfies RuntimeMessage).catch(() => undefined);
+}
+
+function renderTranslationText(text: string, renderLatex: boolean, requestId: string): void {
+  void renderTranslationContent(
+    translationText,
+    text,
+    renderLatex,
+    (metrics) => recordResultRenderPerformance(requestId, metrics),
+  );
 }
 
 function presentationText(session: PdfSidePanelSession, text: string): string {
@@ -436,7 +470,11 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   formulaView.textContent = renderLatex ? '源码' : '公式';
   formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
   formulaView.setAttribute('aria-pressed', String(renderLatex));
-  renderTranslationText(translatedText, hasLatex && renderLatex);
+  renderTranslationText(
+    translatedText,
+    hasLatex && renderLatex,
+    session.result?.requestId ?? session.requestId,
+  );
   if (retryFocusPending) {
     const shouldRestoreFocus = retryStatusFocusPending || document.activeElement === translationState;
     retryFocusPending = false;

@@ -83,6 +83,7 @@ describe('LaTeX-safe translation retry', () => {
       translatedText: '参见该论文。',
       warnings: [],
     });
+    const onDiagnostics = vi.fn();
 
     await expect(translateWithLatexRetry(
       { translate } as Pick<Translator, 'translate'>,
@@ -95,7 +96,12 @@ describe('LaTeX-safe translation retry', () => {
       new AbortController().signal,
       protectedLatex,
       undefined,
+      onDiagnostics,
     )).rejects.toMatchObject({ code: 'LATEX_VALIDATION_FAILED' });
     expect(translate).toHaveBeenCalledTimes(3);
+    expect(onDiagnostics).toHaveBeenCalledTimes(2);
+    expect(onDiagnostics.mock.calls.at(-1)?.[0]).toEqual({
+      latexValidationMs: expect.any(Number),
+    });
   });
 });

@@ -109,6 +109,8 @@ export interface ImageRegionTranslationCapture {
   sourceLabel?: string;
   selectionReference?: PdfSourceLocation;
   sourceSelection?: SelectionSnapshot;
+  /** Numeric local timings only; never contains selection or page data. */
+  clientPerformance?: { captureMs?: number; queueMs?: number };
 }
 
 export interface PdfRegionTextTranslationCapture {
@@ -117,11 +119,14 @@ export interface PdfRegionTextTranslationCapture {
   pageUrl: string;
   sourceLabel?: string;
   sourceLocation: PdfSourceLocation;
+  /** Numeric local timings only; never contains selection or page data. */
+  clientPerformance?: { queueMs?: number };
 }
 
 type TextTranslationMetadata = {
   sourceLabel?: string;
   sourceLocation?: PdfSourceLocation;
+  clientPerformance?: { captureMs?: number; queueMs?: number };
 };
 
 type TranslationRetryContext =
@@ -1598,6 +1603,9 @@ export async function startSelectionTranslator(
           ...(requestContext ? { contextText: requestContext } : {}),
           ...(bypassCache ? { bypassCache: true } : {}),
           ...(metadata?.sourceLocation ? { sourceLocation: metadata.sourceLocation } : {}),
+          ...(metadata?.clientPerformance
+            ? { clientPerformance: metadata.clientPerformance }
+            : {}),
           ...(revision ? { revision } : {}),
         },
       } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
@@ -1683,8 +1691,13 @@ export async function startSelectionTranslator(
     );
     if (options.captureVisualSelection && snapshot.source === 'window-selection') {
       try {
+        const captureStartedAt = performance.now();
         const capture = await options.captureVisualSelection(snapshot);
         if (capture) {
+          capture.clientPerformance = {
+            ...capture.clientPerformance,
+            captureMs: Math.max(0, performance.now() - captureStartedAt),
+          };
           await translateImageRegion(capture);
           return;
         }
@@ -1761,6 +1774,9 @@ export async function startSelectionTranslator(
           ...(isRetry ? { bypassCache: true } : {}),
           ...(capture.selectionReference
             ? { sourceLocation: capture.selectionReference }
+            : {}),
+          ...(capture.clientPerformance
+            ? { clientPerformance: capture.clientPerformance }
             : {}),
           ...(revision ? { revision } : {}),
         },
@@ -1847,6 +1863,7 @@ export async function startSelectionTranslator(
     }, false, {
       ...(capture.sourceLabel ? { sourceLabel: capture.sourceLabel } : {}),
       sourceLocation: capture.sourceLocation,
+      ...(capture.clientPerformance ? { clientPerformance: capture.clientPerformance } : {}),
     });
   }
 

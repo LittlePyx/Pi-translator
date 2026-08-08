@@ -49,6 +49,28 @@ function installFakeDom(): void {
   });
 }
 
+function installFakeTiming(...timestamps: number[]): ReturnType<typeof vi.fn> {
+  const now = vi.fn();
+  timestamps.forEach((timestamp) => now.mockReturnValueOnce(timestamp));
+  now.mockReturnValue(timestamps.at(-1) ?? 0);
+  vi.stubGlobal('performance', { now });
+  return now;
+}
+
+function deferred<T>(): {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason?: unknown) => void;
+} {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((accept, decline) => {
+    resolve = accept;
+    reject = decline;
+  });
+  return { promise, resolve, reject };
+}
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -153,5 +175,129 @@ describe('shared translation content renderer', () => {
     expect((inline.children[1] as FakeElement).tagName).toBe('span');
     expect((inline.children[1] as FakeElement).className).toContain('pi-math-inline');
     expect(source).toContain(String.raw`\operatorname{argmin}_`);
+  });
+
+  it('reports synchronous text timing exactly once when no formula needs rendering', async () => {
+    installFakeDom();
+    installFakeTiming(10, 16);
+    const sendMessage = vi.fn();
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const callback = vi.fn();
+    const container = new FakeElement('div');
+
+    const metrics = await renderTranslationContents([
+      {
+        container: container as unknown as HTMLElement,
+        text: 'Plain translated text.',
+        renderLatex: true,
+      },
+    ], callback);
+
+    expect(metrics).toEqual({
+      textRenderMs: 6,
+      mathRenderMs: 0,
+      mathBatchCount: 0,
+      mathRenderFailed: false,
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(callback).toHaveBeenCalledWith(metrics);
+    expect(sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('waits for every MathML batch before reporting render timing', async () => {
+    installFakeDom();
+    installFakeTiming(100, 107, 151);
+    const first = deferred<{
+      ok: true;
+      data: { html: string[] };
+    }>();
+    const second = deferred<{
+      ok: true;
+      data: { html: string[] };
+    }>();
+    const sendMessage = vi.fn()
+      .mockReturnValueOnce(first.promise)
+      .mockReturnValueOnce(second.promise);
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const callback = vi.fn();
+    const container = new FakeElement('div');
+    const render = renderTranslationContents([
+      {
+        container: container as unknown as HTMLElement,
+        text: Array.from({ length: 65 }, (_, index) => `$x_{${index}}$`).join(' '),
+        renderLatex: true,
+      },
+    ], callback);
+
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+    second.resolve({ ok: true, data: { html: ['<math>last</math>'] } });
+    await Promise.resolve();
+    expect(callback).not.toHaveBeenCalled();
+    first.resolve({
+      ok: true,
+      data: { html: Array.from({ length: 64 }, () => '<math>item</math>') },
+    });
+
+    await expect(render).resolves.toEqual({
+      textRenderMs: 7,
+      mathRenderMs: 44,
+      mathBatchCount: 2,
+      mathRenderFailed: false,
+    });
+    expect(callback).toHaveBeenCalledOnce();
+  });
+
+  it('settles and reports a failed MathML batch without exposing render input', async () => {
+    installFakeDom();
+    installFakeTiming(20, 23, 31);
+    const sendMessage = vi.fn(async () => {
+      throw new Error('private formula and translated text');
+    });
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const callback = vi.fn();
+    const container = new FakeElement('div');
+
+    const metrics = await renderTranslationContents([
+      {
+        container: container as unknown as HTMLElement,
+        text: '$private_formula$',
+        renderLatex: true,
+      },
+    ], callback);
+
+    expect(metrics).toEqual({
+      textRenderMs: 3,
+      mathRenderMs: 8,
+      mathBatchCount: 1,
+      mathRenderFailed: true,
+    });
+    expect(callback).toHaveBeenCalledOnce();
+    expect(JSON.stringify(callback.mock.calls)).not.toContain('private_formula');
+  });
+
+  it('treats an empty MathML renderer result as a render failure', async () => {
+    installFakeDom();
+    installFakeTiming(40, 43, 49);
+    const sendMessage = vi.fn(async () => ({
+      ok: true,
+      data: { html: [null] },
+    }));
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const callback = vi.fn();
+    const container = new FakeElement('div');
+
+    const metrics = await renderTranslationContents([{
+      container: container as unknown as HTMLElement,
+      text: '$unsupported_formula$',
+      renderLatex: true,
+    }], callback);
+
+    expect(metrics).toEqual({
+      textRenderMs: 3,
+      mathRenderMs: 6,
+      mathBatchCount: 1,
+      mathRenderFailed: true,
+    });
+    expect(callback).toHaveBeenCalledWith(metrics);
   });
 });

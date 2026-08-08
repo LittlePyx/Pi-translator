@@ -968,6 +968,73 @@ test('opens, drags, and dismisses a translation card', async () => {
   await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
 });
 
+test('records content-free translation and render stage timings in session storage', async () => {
+  const worker = context.serviceWorkers()[0]!;
+  await worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+    }).chrome;
+    await api.storage.session.remove('localPerformanceSamplesV1');
+  });
+  await page.goto(OVERLEAF_FIXTURE_URL);
+  const privateFixture = `Private performance fixture ${Date.now()}.`;
+  await page.locator('#source').evaluate((element, value) => {
+    element.textContent = value;
+  }, privateFixture);
+  await selectSourceText();
+  const overlay = page.locator('#tex-selection-translator-root');
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).not.toBeEmpty();
+
+  const readSamples = () => worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        storage: {
+          session: {
+            get(key: string): Promise<Record<string, unknown>>;
+          };
+        };
+      };
+    }).chrome;
+    const stored = await api.storage.session.get('localPerformanceSamplesV1');
+    return stored.localPerformanceSamplesV1 as Array<{
+      schemaVersion: number;
+      operation: string;
+      timings: Record<string, number>;
+      errorCode?: string;
+    }> | undefined;
+  });
+  await expect.poll(async () => {
+    const samples = await readSamples();
+    return [...new Set((samples ?? []).map((sample) => sample.operation))].sort();
+  }).toEqual(['render-result', 'translate-text']);
+
+  const samples = await readSamples();
+  const translation = samples?.find((sample) => sample.operation === 'translate-text');
+  const rendering = samples?.find((sample) => sample.operation === 'render-result');
+  expect(translation?.timings).toEqual(expect.objectContaining({
+    totalMs: expect.any(Number),
+    preflightMs: expect.any(Number),
+    providerMs: expect.any(Number),
+    commitMs: expect.any(Number),
+    maintenanceMs: expect.any(Number),
+  }));
+  expect(rendering?.timings).toEqual(expect.objectContaining({
+    totalMs: expect.any(Number),
+    textRenderMs: expect.any(Number),
+    mathRenderMs: 0,
+  }));
+  const serialized = JSON.stringify(samples);
+  expect(serialized).not.toContain(privateFixture);
+  expect(serialized).not.toContain('e2e-key');
+  expect(serialized).not.toContain('e2e-model');
+  expect(serialized).not.toContain(OVERLEAF_FIXTURE_URL);
+
+  await overlay.locator('.surface-close').click();
+  await clearBrowserSelection();
+  await page.goto(OVERLEAF_FIXTURE_URL);
+});
+
 test('lightly marks translated source text and previews the translation on hover', async () => {
   const source = page.locator('#source');
   const originalMarkup = await source.evaluate((element) => element.innerHTML);

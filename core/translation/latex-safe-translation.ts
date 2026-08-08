@@ -10,9 +10,15 @@ import type {
   Translator,
 } from './types';
 
+export interface LatexSafeTranslationDiagnostics {
+  /** Local placeholder restoration and validation only; never includes source or formula data. */
+  latexValidationMs: number;
+}
+
 export interface LatexSafeTranslationResult {
   providerResult: ProviderTranslationResult;
   restored: RestoredLatex;
+  diagnostics: LatexSafeTranslationDiagnostics;
 }
 
 interface LatexFallbackPart {
@@ -20,6 +26,17 @@ interface LatexFallbackPart {
   segmentId?: string;
   leading?: string;
   trailing?: string;
+}
+
+function notifyDiagnostics(
+  callback: ((diagnostics: LatexSafeTranslationDiagnostics) => void) | undefined,
+  latexValidationMs: number,
+): void {
+  try {
+    callback?.({ latexValidationMs });
+  } catch {
+    // Local performance diagnostics must never affect translation.
+  }
 }
 
 function buildLatexFallbackParts(protectedLatex: ProtectedLatex): {
@@ -104,6 +121,7 @@ async function translateLatexProseFallback(
         },
       ],
     },
+    diagnostics: { latexValidationMs: 0 },
   };
 }
 
@@ -119,9 +137,11 @@ export async function translateWithLatexRetry(
   signal: AbortSignal,
   protectedLatex: ProtectedLatex | undefined,
   callbacks: TranslationCallbacks | undefined,
+  onDiagnostics?: (diagnostics: LatexSafeTranslationDiagnostics) => void,
 ): Promise<LatexSafeTranslationResult> {
   const attempts = protectedLatex ? 2 : 1;
   let lastValidationError: ReturnType<typeof toTranslationError> | undefined;
+  let latexValidationMs = 0;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     const providerResult = await translator.translate(
@@ -136,15 +156,23 @@ export async function translateWithLatexRetry(
       return {
         providerResult,
         restored: { text: providerResult.translatedText, warnings: [] },
+        diagnostics: { latexValidationMs },
       };
     }
 
+    const validationStartedAt = performance.now();
     try {
+      const restored = restoreLatex(providerResult.translatedText, protectedLatex);
+      latexValidationMs += Math.max(0, performance.now() - validationStartedAt);
+      notifyDiagnostics(onDiagnostics, latexValidationMs);
       return {
         providerResult,
-        restored: restoreLatex(providerResult.translatedText, protectedLatex),
+        restored,
+        diagnostics: { latexValidationMs },
       };
     } catch (error) {
+      latexValidationMs += Math.max(0, performance.now() - validationStartedAt);
+      notifyDiagnostics(onDiagnostics, latexValidationMs);
       const normalized = toTranslationError(error);
       if (normalized.code !== 'LATEX_VALIDATION_FAILED') throw normalized;
       lastValidationError = normalized;
@@ -160,7 +188,12 @@ export async function translateWithLatexRetry(
       signal,
       protectedLatex,
     );
-    if (fallback) return fallback;
+    if (fallback) {
+      return {
+        ...fallback,
+        diagnostics: { latexValidationMs },
+      };
+    }
   }
   if (lastValidationError) throw lastValidationError;
   throw new Error('LaTeX validation retry ended without a result.');
