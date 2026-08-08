@@ -9,9 +9,13 @@ import {
   mergeDocumentGlossary,
   rememberDocumentCorrection,
   rememberDocumentTranslation,
+  rollbackDocumentCorrectionChange,
+  rollbackDocumentTermChange,
   resolveDocumentReview,
   restoreDocumentCorrection,
+  restoreDocumentCorrectionIfCurrent,
   upsertDocumentTerm,
+  upsertDocumentTermWithReceipt,
 } from '../core/document/document-memory-repository';
 import type { TranslateResult } from '../core/translation/types';
 
@@ -85,6 +89,40 @@ describe('document translation memory', () => {
       termCandidates: [{ source: 'ROI', target: '感兴趣区域' }],
     });
     expect(memory.candidateTerms).toHaveLength(0);
+  });
+
+  it('captures and conditionally rolls back a standalone document term atomically', async () => {
+    await upsertDocumentTerm(identity, {
+      source: 'inverse problem',
+      target: '旧译法',
+    });
+    const applied = await upsertDocumentTermWithReceipt(identity, {
+      source: 'inverse  problem',
+      target: '逆问题',
+    });
+    expect(applied.termChange).toMatchObject({
+      source: 'inverse  problem',
+      previousTarget: '旧译法',
+      appliedTarget: '逆问题',
+    });
+    if (!applied.termChange) throw new Error('Missing document term rollback receipt.');
+
+    const rolledBack = await rollbackDocumentTermChange(identity, applied.termChange);
+    expect(rolledBack.rolledBack).toBe(true);
+    expect(rolledBack.memory.confirmedTerms[0]?.target).toBe('旧译法');
+
+    const reapplied = await upsertDocumentTermWithReceipt(identity, {
+      source: 'inverse problem',
+      target: '逆问题',
+    });
+    if (!reapplied.termChange) throw new Error('Missing document term rollback receipt.');
+    await upsertDocumentTerm(identity, {
+      source: 'inverse problem',
+      target: '用户后续译法',
+    });
+    const staleRollback = await rollbackDocumentTermChange(identity, reapplied.termChange);
+    expect(staleRollback.rolledBack).toBe(false);
+    expect(staleRollback.memory.confirmedTerms[0]?.target).toBe('用户后续译法');
   });
 
   it('injects only relevant, size-limited document context', async () => {
@@ -182,6 +220,387 @@ describe('document translation memory', () => {
       target: '旧译法',
     });
     expect(restored.memory.recentTranslations[0]?.translatedText).toBe('旧译文。');
+  });
+
+  it('conditionally rolls back a document correction and exposes an inverse compensation', async () => {
+    await rememberDocumentTranslation(identity, {
+      requestId: 'receipt-base',
+      originalText: 'The estimator is robust.',
+      translatedText: 'base translation',
+      warnings: [],
+      completedAt: 10,
+    });
+    await upsertDocumentTerm(identity, {
+      source: 'robust estimator',
+      target: 'old term',
+    });
+
+    const correction = await rememberDocumentCorrection(identity, {
+      requestId: 'receipt-correction',
+      originalText: 'The estimator is robust.',
+      translatedText: 'corrected translation',
+      warnings: [],
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'receipt-base',
+        kind: 'manual',
+        label: 'Manual correction',
+        scope: 'document',
+      },
+    }, {
+      source: 'robust estimator',
+      target: 'corrected term',
+    });
+
+    expect(correction.translationChange.applied).toMatchObject({
+      requestId: 'receipt-correction',
+      translatedText: 'corrected translation',
+    });
+    expect(correction.translationChange.previous).toMatchObject({
+      requestId: 'receipt-base',
+      translatedText: 'base translation',
+    });
+
+    const rollback = await rollbackDocumentCorrectionChange(identity, correction.change);
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.termRolledBack).toBe(true);
+    expect(rollback.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'receipt-base',
+      translatedText: 'base translation',
+    });
+    expect(rollback.memory.confirmedTerms[0]?.target).toBe('old term');
+    expect(rollback.compensation).toBeDefined();
+
+    const compensated = await rollbackDocumentCorrectionChange(
+      identity,
+      rollback.compensation!,
+    );
+    expect(compensated.rolledBack).toBe(true);
+    expect(compensated.termRolledBack).toBe(true);
+    expect(compensated.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'receipt-correction',
+      translatedText: 'corrected translation',
+    });
+    expect(compensated.memory.confirmedTerms[0]?.target).toBe('corrected term');
+  });
+
+  it('deletes a newly introduced translation when its conditional rollback has no previous entry', async () => {
+    const correction = await rememberDocumentCorrection(identity, {
+      requestId: 'new-subject-correction',
+      originalText: 'A newly corrected sentence.',
+      translatedText: 'new translation',
+      warnings: [],
+      completedAt: 20,
+    });
+    expect(correction.translationChange.previous).toBeUndefined();
+
+    const rollback = await rollbackDocumentCorrectionChange(identity, correction.change);
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.memory.recentTranslations).toHaveLength(0);
+  });
+
+  it('restores an unrelated translation evicted by document capacity on rollback', async () => {
+    for (let index = 0; index < 20; index += 1) {
+      await rememberDocumentTranslation(identity, {
+        requestId: `capacity-base-${index}`,
+        originalText: `Capacity source ${index}.`,
+        translatedText: `Capacity translation ${index}.`,
+        warnings: [],
+        completedAt: index + 1,
+      });
+    }
+    const correction = await rememberDocumentCorrection(identity, {
+      requestId: 'capacity-correction',
+      originalText: 'A separate corrected subject.',
+      translatedText: 'Newest correction.',
+      warnings: [],
+      completedAt: 100,
+    });
+    expect(correction.translationChange.evicted).toHaveLength(1);
+    expect(correction.translationChange.evicted[0]?.requestId).toBe('capacity-base-0');
+
+    const rollback = await rollbackDocumentCorrectionChange(identity, correction.change);
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.memory.recentTranslations).toHaveLength(20);
+    expect(rollback.memory.recentTranslations.some(
+      (entry) => entry.requestId === 'capacity-base-0',
+    )).toBe(true);
+    expect(rollback.memory.recentTranslations.some(
+      (entry) => entry.requestId === 'capacity-correction',
+    )).toBe(false);
+  });
+
+  it('rejects a stale correction rollback and preserves a later translation of the same subject', async () => {
+    await rememberDocumentTranslation(identity, {
+      requestId: 'stale-base',
+      originalText: 'The same document sentence.',
+      translatedText: 'base translation',
+      warnings: [],
+      completedAt: 10,
+    });
+    const correction = await rememberDocumentCorrection(identity, {
+      requestId: 'stale-correction',
+      originalText: 'The same document sentence.',
+      translatedText: 'first correction',
+      warnings: [],
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'stale-base',
+        kind: 'manual',
+        label: 'First tab',
+        scope: 'document',
+      },
+    });
+    await rememberDocumentTranslation(identity, {
+      requestId: 'later-correction',
+      originalText: 'The same document sentence.',
+      translatedText: 'later tab wins',
+      warnings: [],
+      completedAt: 30,
+      revision: {
+        rootRequestId: 'stale-base',
+        kind: 'manual',
+        label: 'Second tab',
+        scope: 'document',
+      },
+    });
+
+    const rollback = await rollbackDocumentCorrectionChange(identity, correction.change);
+    expect(rollback.rolledBack).toBe(false);
+    expect(rollback.compensation).toBeUndefined();
+    expect(rollback.memory.recentTranslations).toHaveLength(1);
+    expect(rollback.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'later-correction',
+      translatedText: 'later tab wins',
+    });
+  });
+
+  it('conditionally restores a current document correction and can compensate the undo', async () => {
+    const base: TranslateResult = {
+      requestId: 'undo-base',
+      originalText: 'The document correction can be undone.',
+      translatedText: 'base translation',
+      warnings: [],
+      completedAt: 10,
+    };
+    await rememberDocumentTranslation(identity, base);
+    await upsertDocumentTerm(identity, { source: 'correction', target: 'old term' });
+    const corrected: TranslateResult = {
+      ...base,
+      requestId: 'undo-corrected',
+      translatedText: 'corrected translation',
+      completedAt: 20,
+      revision: {
+        rootRequestId: base.requestId,
+        kind: 'manual',
+        label: 'Manual correction',
+        scope: 'document',
+      },
+    };
+    const correction = await rememberDocumentCorrection(identity, corrected, {
+      source: 'correction',
+      target: 'corrected term',
+    });
+    const restoredResult: TranslateResult = {
+      ...corrected,
+      requestId: 'undo-restored',
+      translatedText: base.translatedText,
+      completedAt: 30,
+    };
+
+    const restored = await restoreDocumentCorrectionIfCurrent(
+      identity,
+      corrected,
+      restoredResult,
+      correction.termChange,
+    );
+    expect(restored.restored).toBe(true);
+    expect(restored.termRolledBack).toBe(true);
+    expect(restored.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'undo-restored',
+      translatedText: 'base translation',
+    });
+    expect(restored.memory.confirmedTerms[0]?.target).toBe('old term');
+    expect(restored.change).toBeDefined();
+
+    const compensated = await rollbackDocumentCorrectionChange(identity, restored.change!);
+    expect(compensated.rolledBack).toBe(true);
+    expect(compensated.termRolledBack).toBe(true);
+    expect(compensated.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'undo-corrected',
+      translatedText: 'corrected translation',
+    });
+    expect(compensated.memory.confirmedTerms[0]?.target).toBe('corrected term');
+  });
+
+  it('restores the translation without overwriting a term edited after the correction', async () => {
+    const base: TranslateResult = {
+      requestId: 'later-term-base',
+      originalText: 'The document term can be edited independently.',
+      translatedText: 'base translation',
+      warnings: [],
+      completedAt: 10,
+    };
+    await rememberDocumentTranslation(identity, base);
+    await upsertDocumentTerm(identity, { source: 'independent term', target: 'old term' });
+    const corrected: TranslateResult = {
+      ...base,
+      requestId: 'later-term-corrected',
+      translatedText: 'corrected translation',
+      completedAt: 20,
+      revision: {
+        rootRequestId: base.requestId,
+        kind: 'manual',
+        label: 'Manual correction',
+        scope: 'document',
+      },
+    };
+    const correction = await rememberDocumentCorrection(identity, corrected, {
+      source: 'independent term',
+      target: 'corrected term',
+    });
+    if (!correction.change.termChange) throw new Error('Missing detailed term receipt.');
+
+    await upsertDocumentTerm(identity, {
+      source: 'independent term',
+      target: 'later user edit',
+    });
+    const restored = await restoreDocumentCorrectionIfCurrent(identity, corrected, {
+      ...corrected,
+      requestId: 'later-term-restored',
+      translatedText: base.translatedText,
+      completedAt: 30,
+    }, correction.change.termChange);
+
+    expect(restored.restored).toBe(true);
+    expect(restored.termRolledBack).toBe(false);
+    expect(restored.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'later-term-restored',
+      translatedText: 'base translation',
+    });
+    expect(restored.memory.confirmedTerms[0]?.target).toBe('later user edit');
+    expect(restored.change?.termChange).toBeUndefined();
+
+    const compensated = await rollbackDocumentCorrectionChange(identity, restored.change!);
+    expect(compensated.rolledBack).toBe(true);
+    expect(compensated.termRolledBack).toBe(true);
+    expect(compensated.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'later-term-corrected',
+      translatedText: 'corrected translation',
+    });
+    expect(compensated.memory.confirmedTerms[0]?.target).toBe('later user edit');
+  });
+
+  it('restores removed term candidates at capacity and compensates without candidate loss', async () => {
+    const base: TranslateResult = {
+      requestId: 'candidate-base',
+      originalText: 'The candidate correction is reversible.',
+      translatedText: 'base translation',
+      warnings: [],
+      completedAt: 10,
+    };
+    await rememberDocumentTranslation(identity, base);
+    await rememberDocumentTranslation(identity, {
+      requestId: 'candidate-seed',
+      originalText: 'Seed twenty candidate terms.',
+      translatedText: 'seed translation',
+      warnings: [],
+      completedAt: 11,
+      termCandidates: Array.from({ length: 20 }, (_, index) => ({
+        source: `candidate-${index}`,
+        target: `candidate target ${index}`,
+      })),
+    });
+
+    const corrected: TranslateResult = {
+      ...base,
+      requestId: 'candidate-corrected',
+      translatedText: 'corrected translation',
+      completedAt: 20,
+      revision: {
+        rootRequestId: base.requestId,
+        kind: 'manual',
+        label: 'Manual correction',
+        scope: 'document',
+      },
+    };
+    const correction = await rememberDocumentCorrection(identity, corrected, {
+      source: 'candidate-0',
+      target: 'confirmed target',
+    });
+    if (!correction.change.termChange) throw new Error('Missing detailed term receipt.');
+    expect(correction.change.termChange.removedCandidates).toHaveLength(1);
+
+    const fullMemory = await rememberDocumentTranslation(identity, {
+      requestId: 'candidate-overflow',
+      originalText: 'Add one later candidate.',
+      translatedText: 'later translation',
+      warnings: [],
+      completedAt: 21,
+      termCandidates: [{ source: 'later-candidate', target: 'later target' }],
+    });
+    expect(fullMemory.candidateTerms).toHaveLength(20);
+    const beforeUndo = fullMemory.candidateTerms.map((term) => term.id).sort();
+
+    const restored = await restoreDocumentCorrectionIfCurrent(identity, corrected, {
+      ...corrected,
+      requestId: 'candidate-restored',
+      translatedText: base.translatedText,
+      completedAt: 30,
+    }, correction.change.termChange);
+    expect(restored.restored).toBe(true);
+    expect(restored.termRolledBack).toBe(true);
+    expect(restored.memory.confirmedTerms).toHaveLength(0);
+    expect(restored.memory.candidateTerms).toHaveLength(20);
+    expect(restored.memory.candidateTerms.some(
+      (term) => term.source === 'candidate-0',
+    )).toBe(true);
+
+    const compensated = await rollbackDocumentCorrectionChange(identity, restored.change!);
+    expect(compensated.rolledBack).toBe(true);
+    expect(compensated.termRolledBack).toBe(true);
+    expect(compensated.memory.confirmedTerms[0]).toMatchObject({
+      source: 'candidate-0',
+      target: 'confirmed target',
+    });
+    expect(compensated.memory.candidateTerms.map((term) => term.id).sort()).toEqual(beforeUndo);
+  });
+
+  it('does not let an old-tab document undo overwrite a later-tab correction', async () => {
+    const corrected: TranslateResult = {
+      requestId: 'cross-tab-corrected',
+      originalText: 'A shared document sentence.',
+      translatedText: 'first tab correction',
+      warnings: [],
+      completedAt: 20,
+      revision: {
+        rootRequestId: 'cross-tab-base',
+        kind: 'manual',
+        label: 'First tab',
+        scope: 'document',
+      },
+    };
+    await rememberDocumentCorrection(identity, corrected);
+    await rememberDocumentTranslation(identity, {
+      ...corrected,
+      requestId: 'cross-tab-later',
+      translatedText: 'later tab correction',
+      completedAt: 30,
+      revision: { ...corrected.revision!, label: 'Second tab' },
+    });
+
+    const restored = await restoreDocumentCorrectionIfCurrent(identity, corrected, {
+      ...corrected,
+      requestId: 'cross-tab-undo',
+      translatedText: 'old base translation',
+      completedAt: 40,
+    });
+    expect(restored.restored).toBe(false);
+    expect(restored.change).toBeUndefined();
+    expect(restored.memory.recentTranslations[0]).toMatchObject({
+      requestId: 'cross-tab-later',
+      translatedText: 'later tab correction',
+    });
   });
 
   it('allows an explicit document term to preserve its source spelling', async () => {

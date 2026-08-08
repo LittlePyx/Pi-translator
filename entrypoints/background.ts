@@ -34,8 +34,8 @@ import { createSerialTaskRunner } from '../core/runtime/serial-task';
 import {
   getApiKey,
   getSettings,
+  mutateSettings,
   restrictSensitiveStorageAccess,
-  saveSettings,
 } from '../core/settings/repository';
 import {
   ConfigurationRevisionBarrier,
@@ -93,6 +93,10 @@ import {
 } from '../core/translation/aligned-segment-correction';
 import { createPerTabAsyncLane } from '../core/runtime/per-tab-async-lane';
 import {
+  createPerTabLifecycle,
+  type TabLifecycleToken,
+} from '../core/runtime/per-tab-lifecycle';
+import {
   clearTranslationHead,
   readTranslationHead,
   writeTranslationHead,
@@ -102,6 +106,7 @@ import {
   isEdgePdfSidePanelTab,
   isEdgeNativePdfContext,
   isExtensionPdfReaderUrl,
+  isSamePdfDocumentLocationChange,
   parsePdfSourceUrl,
   pdfDocumentIdentity,
   pdfFilename,
@@ -126,6 +131,7 @@ import {
   buildDocumentReferenceContext,
   clearDocumentMemory,
   confirmDocumentTerm,
+  type DocumentTermChangeReceipt,
   DocumentTermCapacityError,
   dismissDocumentTermCandidate,
   getDocumentMemory,
@@ -133,9 +139,12 @@ import {
   rememberDocumentCorrection,
   rememberDocumentTranslation,
   removeDocumentTerm,
+  rollbackDocumentCorrectionChange,
+  rollbackDocumentTermChange,
   resolveDocumentReview,
-  restoreDocumentCorrection,
+  restoreDocumentCorrectionIfCurrent,
   upsertDocumentTerm,
+  upsertDocumentTermWithReceipt,
 } from '../core/document/document-memory-repository';
 import {
   isSamePdfSidePanelSession,
@@ -169,7 +178,7 @@ const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
 const pendingTranslationRequests = new Map<number, string>();
 const runTranslationCommit = createPerTabAsyncLane();
-const runGlobalGlossaryMutation = createPerTabAsyncLane();
+const tabLifecycles = createPerTabLifecycle();
 const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
@@ -333,9 +342,20 @@ function publishPdfSidePanelSession(
 
 async function publishPdfSidePanelSessionDurably(
   session: PdfSidePanelSession,
+  assertCurrent?: () => void,
 ): Promise<void> {
-  pdfSidePanelSessions.set(session.tabId, session);
+  assertCurrent?.();
   await storePdfSidePanelSession(session);
+  try {
+    assertCurrent?.();
+  } catch (error) {
+    // A navigation may occur while storage.session is being written. Remove
+    // the just-written stale session before it can be restored by a later
+    // service-worker instance.
+    await removeStoredPdfSidePanelSession(session.tabId).catch(() => undefined);
+    throw error;
+  }
+  pdfSidePanelSessions.set(session.tabId, session);
   void browser.runtime.sendMessage({
     type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
     payload: session,
@@ -360,14 +380,9 @@ function publishTranslationProgress(
   const session = pdfSidePanelSessions.get(tabId);
   if (session?.requestId !== payload.requestId) return delivery;
   if (payload.result) {
-    publishPdfSidePanelSession({
-      ...session,
-      status: 'complete',
-      result: payload.result,
-      partialText: payload.result.translatedText,
-      completedChunks: payload.totalChunks,
-      totalChunks: payload.totalChunks,
-    });
+    // The completed native-PDF session is committed durably together with the
+    // translation head. Keeping this notification transport-only avoids a
+    // fire-and-forget storage write racing that transaction.
     return delivery;
   }
   publishPdfSidePanelSession({
@@ -377,6 +392,61 @@ function publishTranslationProgress(
     totalChunks: payload.totalChunks,
   }, false);
   return delivery;
+}
+
+async function commitTranslationResultState(
+  tabId: number,
+  result: TranslateResult,
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const nextHead = {
+    tabId,
+    currentResultRequestId: result.requestId,
+    rootRequestId: translationResultRootRequestId(result),
+  } as const;
+  const session = pdfSidePanelSessions.get(tabId);
+  const previousHead = await readTranslationHead(tabId);
+  assertCurrent();
+  await writeTranslationHead(nextHead);
+  try {
+    if (session?.requestId === result.requestId) {
+      await publishPdfSidePanelSessionDurably({
+        ...session,
+        status: 'complete',
+        result,
+        partialText: result.translatedText,
+        completedChunks: result.chunkCount ?? session.totalChunks ?? 1,
+        totalChunks: result.chunkCount ?? session.totalChunks ?? 1,
+      }, assertCurrent);
+    } else {
+      assertCurrent();
+    }
+  } catch (error) {
+    // The result head and any native-PDF session are one commit. A storage
+    // failure or lifecycle change conditionally puts the old head back; a
+    // genuinely newer head always wins.
+    try {
+      if (previousHead) {
+        await writeTranslationHead({
+          tabId,
+          currentResultRequestId: previousHead.currentResultRequestId,
+          rootRequestId: previousHead.rootRequestId,
+        }, {
+          currentResultRequestId: nextHead.currentResultRequestId,
+          rootRequestId: nextHead.rootRequestId,
+        });
+      } else {
+        await clearTranslationHead(tabId, {
+          currentResultRequestId: nextHead.currentResultRequestId,
+          rootRequestId: nextHead.rootRequestId,
+        });
+      }
+    } catch (rollbackError) {
+      await recordLocalDiagnosticError('translate-finalization', rollbackError);
+    }
+    throw error;
+  }
 }
 
 async function settleTranslationFinalization(
@@ -407,7 +477,10 @@ async function beginPdfSidePanelTranslation(
 ): Promise<void> {
   const session = pdfSidePanelSessions.get(tabId);
   if (!session || (expectedRequestId && session.requestId !== expectedRequestId)) return;
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const isCurrent = (): boolean => tabLifecycles.isCurrent(lifecycleToken);
   try {
+    if (!isCurrent()) return;
     const settings = await getSettings();
     const visionApiKeyConfigured = settings.visionApiProfileId
       ? Boolean(await getApiKey(settings.visionApiProfileId))
@@ -426,7 +499,7 @@ async function beginPdfSidePanelTranslation(
       model: provider.model,
     } as const;
     const pending = pdfSidePanelSessions.get(tabId);
-    if (pending?.requestId !== session.requestId) return;
+    if (!isCurrent() || pending?.requestId !== session.requestId) return;
     publishPdfSidePanelSession({ ...pending, providerContext }, false);
     const response = await translate({
       requestId: session.requestId,
@@ -439,16 +512,10 @@ async function beginPdfSidePanelTranslation(
       contentMode: settings.contentMode,
     }, tabId, 'tab', provider);
     const current = pdfSidePanelSessions.get(tabId);
-    if (current?.requestId !== session.requestId) return;
+    if (!isCurrent() || current?.requestId !== session.requestId) return;
     if (response.ok) {
-      publishPdfSidePanelSession({
-        ...current,
-        status: 'complete',
-        result: response.data.result,
-        partialText: response.data.result.translatedText,
-        completedChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
-        totalChunks: response.data.result.chunkCount ?? current.totalChunks ?? 1,
-      });
+      // translate() has already committed the completed session durably with
+      // the result head. Do not issue a second best-effort persistence write.
       return;
     }
     publishPdfSidePanelSession({
@@ -458,7 +525,7 @@ async function beginPdfSidePanelTranslation(
     });
   } catch (error) {
     const current = pdfSidePanelSessions.get(tabId);
-    if (current?.requestId !== session.requestId) return;
+    if (!isCurrent() || current?.requestId !== session.requestId) return;
     const normalized = toTranslationError(error);
     publishPdfSidePanelSession({
       ...current,
@@ -490,7 +557,6 @@ function preparePdfSidePanelTranslation(
     completedChunks: 0,
     totalChunks: 1,
   };
-  publishPdfSidePanelSession(session);
   return session;
 }
 
@@ -514,7 +580,6 @@ function showPdfSidePanelSelectionError(
       retryable: false,
     },
   };
-  publishPdfSidePanelSession(session);
   return session;
 }
 
@@ -649,19 +714,23 @@ function publishPdfSidePanelTargetError(
   );
   void recordLocalDiagnosticError('resolve-pdf-context-tab', error);
   if (tabId !== undefined && tabId >= 0) {
-    publishPdfSidePanelSession({
-      tabId,
-      requestId: crypto.randomUUID(),
-      sourceText: '',
-      pageUrl: sourceUrl ?? 'edge://pdf',
-      sourceLabel: sourceUrl ? pdfFilename(sourceUrl, 'PDF') : 'PDF',
-      status: 'error',
-      startedAt: Date.now(),
-      error: {
-        code: error.code,
-        message: error.message,
-        retryable: error.retryable,
-      },
+    const lifecycleToken = tabLifecycles.capture(tabId);
+    void runTranslationCommit(tabId, () => {
+      if (!tabLifecycles.isCurrent(lifecycleToken)) return;
+      publishPdfSidePanelSession({
+        tabId,
+        requestId: crypto.randomUUID(),
+        sourceText: '',
+        pageUrl: sourceUrl ?? 'edge://pdf',
+        sourceLabel: sourceUrl ? pdfFilename(sourceUrl, 'PDF') : 'PDF',
+        status: 'error',
+        startedAt: Date.now(),
+        error: {
+          code: error.code,
+          message: error.message,
+          retryable: error.retryable,
+        },
+      });
     });
   }
   void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
@@ -683,23 +752,37 @@ function openPdfTranslationSidePanel(
   userGestureOpenPromise?: Promise<unknown>,
 ): void {
   const hasSelection = Boolean(sourceText?.trim());
-  const session = hasSelection
-    ? preparePdfSidePanelTranslation(tab.id, sourceText!, sourceUrl, pageNumber)
-    : showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
+  const lifecycleToken = tabLifecycles.capture(tab.id);
+  const assertCurrentLifecycle = (): void => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('PDF 标签页已经关闭或跳转，请重新选择内容。');
+    }
+  };
+  const createSession = async (): Promise<PdfSidePanelSession> => {
+    assertCurrentLifecycle();
+    const session = hasSelection
+      ? preparePdfSidePanelTranslation(tab.id, sourceText!, sourceUrl, pageNumber)
+      : showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
+    await publishPdfSidePanelSessionDurably(session, assertCurrentLifecycle);
+    return session;
+  };
 
   // Prefer the native Chrome namespace here. Edge exposes both namespaces,
   // but sidePanel is defined and documented on chrome.sidePanel.
   const sidePanelApi = getSidePanelApi();
   if (!sidePanelApi) {
-    publishPdfSidePanelSession({
-      ...session,
-      status: 'error',
-      error: {
-        code: 'UNSUPPORTED_PAGE',
-        message: '当前 Edge 版本无法打开扩展侧边栏，翻译请求尚未发送。',
-        retryable: false,
-      },
-    });
+    void runTranslationCommit(tab.id, createSession).then((session) => {
+      assertCurrentLifecycle();
+      publishPdfSidePanelSession({
+        ...session,
+        status: 'error',
+        error: {
+          code: 'UNSUPPORTED_PAGE',
+          message: '当前 Edge 版本无法打开扩展侧边栏，翻译请求尚未发送。',
+          retryable: false,
+        },
+      });
+    }).catch((error: unknown) => recordLocalDiagnosticError('open-pdf-side-panel', error));
     void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
     void browser.action.setTitle({
       tabId: tab.id,
@@ -712,26 +795,34 @@ function openPdfTranslationSidePanel(
   // just-in-time setOptions() against open() is unreliable in Edge.
   const openPromise = userGestureOpenPromise ?? beginPdfSidePanelOpenFromUserGesture(tab);
   if (!openPromise) return;
+  const sessionPromise = runTranslationCommit(tab.id, createSession);
   void openPromise.then(
     () => {
-      if (hasSelection) void beginPdfSidePanelTranslation(tab.id, session.requestId);
-      void queuePdfSidePanelOptionsSync().catch(() => undefined);
-      void browser.action.setBadgeText({ tabId: tab.id, text: '' });
-      void browser.action.setTitle({ tabId: tab.id, title: 'Pi Translator' });
+      void sessionPromise.then((session) => {
+        assertCurrentLifecycle();
+        if (hasSelection) void beginPdfSidePanelTranslation(tab.id, session.requestId);
+        void queuePdfSidePanelOptionsSync().catch(() => undefined);
+        void browser.action.setBadgeText({ tabId: tab.id, text: '' });
+        void browser.action.setTitle({ tabId: tab.id, title: 'Pi Translator' });
+      }).catch((error: unknown) => recordLocalDiagnosticError('open-pdf-side-panel', error));
     },
     (error: unknown) => {
       void recordLocalDiagnosticError('open-pdf-side-panel', error);
-      const current = pdfSidePanelSessions.get(tab.id);
-      if (!isSamePdfSidePanelSession(current, session)) return;
-      publishPdfSidePanelSession({
-        ...current,
-        status: 'error',
-        error: {
-          code: 'UNSUPPORTED_PAGE',
-          message: 'PDF 侧边栏打开失败，翻译请求尚未发送。请重新加载扩展后重试。',
-          retryable: false,
-        },
-      });
+      void sessionPromise.then((session) => {
+        assertCurrentLifecycle();
+        const current = pdfSidePanelSessions.get(tab.id);
+        if (!isSamePdfSidePanelSession(current, session)) return;
+        publishPdfSidePanelSession({
+          ...current,
+          status: 'error',
+          error: {
+            code: 'UNSUPPORTED_PAGE',
+            message: 'PDF 侧边栏打开失败，翻译请求尚未发送。请重新加载扩展后重试。',
+            retryable: false,
+          },
+        });
+      }).catch((sessionError: unknown) =>
+        recordLocalDiagnosticError('open-pdf-side-panel', sessionError));
       void queuePdfSidePanelOptionsSync().catch(() => undefined);
       void browser.action.setBadgeBackgroundColor({ color: '#b4233b' });
       void browser.action.setBadgeText({ tabId: tab.id, text: '!' });
@@ -760,46 +851,78 @@ async function disableSidePanelForPiPdfViewer(
   void queuePdfSidePanelOptionsSync().catch(() => undefined);
 }
 
-function retryPdfSidePanelTranslation(
+async function retryPdfSidePanelTranslation(
   tabId: number,
   expectedRequestId: string,
 ): Promise<RuntimeResponse<{ started: true }>> {
-  const session = pdfSidePanelSessions.get(tabId);
-  if (!session || !session.sourceText.trim()) {
-    return Promise.resolve(errorResponse(
-      new TranslationError('EMPTY_SELECTION', '请先在 PDF 中选择文字并使用右键翻译。'),
-    ));
-  }
-  if (session.status !== 'error' || session.requestId !== expectedRequestId) {
-    return Promise.resolve(errorResponse(
-      new TranslationError(
-        'REQUEST_ABORTED',
-        '原 PDF 翻译任务已经变化，没有发起新的 API 请求。',
-        false,
-      ),
-    ));
-  }
-  if (session.error?.code === 'UNSUPPORTED_PAGE') {
-    return Promise.resolve(errorResponse(
-      new TranslationError('UNSUPPORTED_PAGE', session.error.message, false),
-    ));
-  }
-  const nextSession: PdfSidePanelSession = {
-    ...session,
-    requestId: crypto.randomUUID(),
-    status: 'translating',
-    startedAt: Date.now(),
-    completedChunks: 0,
-    totalChunks: 1,
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrentLifecycle = (): void => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('PDF 标签页已经关闭或跳转，没有重新发起请求。');
+    }
   };
-  delete nextSession.partialText;
-  delete nextSession.result;
-  delete nextSession.error;
-  delete nextSession.providerContext;
-  delete nextSession.settingsRecoveryConfirmation;
-  publishPdfSidePanelSession(nextSession);
-  void beginPdfSidePanelTranslation(tabId, nextSession.requestId);
-  return Promise.resolve({ ok: true, data: { started: true } });
+  try {
+    const outcome = await runTranslationCommit(tabId, async () => {
+    try {
+      assertCurrentLifecycle();
+    } catch (error) {
+      return {
+        response: errorResponse(error) as RuntimeResponse<{ started: true }>,
+      };
+    }
+    const session = pdfSidePanelSessions.get(tabId);
+    if (!session || !session.sourceText.trim()) {
+      return {
+        response: errorResponse(
+          new TranslationError('EMPTY_SELECTION', '请先在 PDF 中选择文字并使用右键翻译。'),
+        ) as RuntimeResponse<{ started: true }>,
+      };
+    }
+    if (session.status !== 'error' || session.requestId !== expectedRequestId) {
+      return {
+        response: errorResponse(
+          new TranslationError(
+            'REQUEST_ABORTED',
+            '原 PDF 翻译任务已经变化，没有发起新的 API 请求。',
+            false,
+          ),
+        ) as RuntimeResponse<{ started: true }>,
+      };
+    }
+    if (session.error?.code === 'UNSUPPORTED_PAGE') {
+      return {
+        response: errorResponse(
+          new TranslationError('UNSUPPORTED_PAGE', session.error.message, false),
+        ) as RuntimeResponse<{ started: true }>,
+      };
+    }
+    const nextSession: PdfSidePanelSession = {
+      ...session,
+      requestId: crypto.randomUUID(),
+      status: 'translating',
+      startedAt: Date.now(),
+      completedChunks: 0,
+      totalChunks: 1,
+    };
+    delete nextSession.partialText;
+    delete nextSession.result;
+    delete nextSession.error;
+    delete nextSession.providerContext;
+    delete nextSession.settingsRecoveryConfirmation;
+    await publishPdfSidePanelSessionDurably(nextSession, assertCurrentLifecycle);
+    return {
+      response: { ok: true, data: { started: true } } as const,
+      requestId: nextSession.requestId,
+    };
+    });
+    if (outcome.requestId && tabLifecycles.isCurrent(lifecycleToken)) {
+      void beginPdfSidePanelTranslation(tabId, outcome.requestId);
+    }
+    return outcome.response;
+  } catch (error) {
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
+  }
 }
 
 interface SettingsRecoveryAck {
@@ -831,30 +954,43 @@ async function deliverSettingsRecovery(
     ...(ticket.clientId ? { clientId: ticket.clientId } : {}),
   } as const;
   if (ticket.targetKind === 'native-pdf') {
+    const lifecycleToken = tabLifecycles.capture(ticket.sourceTabId);
+    const assertCurrentLifecycle = (): void => {
+      assertTabLifecycleCurrent(lifecycleToken);
+    };
     await initializePdfSidePanelSessions();
     if (!requiresConfirmation) {
+      assertCurrentLifecycle();
       const response = await retryPdfSidePanelTranslation(
         ticket.sourceTabId,
         ticket.failedRequestId,
       );
       if (!response.ok) return { handled: false, resumed: false, requiresConfirmation: false };
     } else {
-      const session = pdfSidePanelSessions.get(ticket.sourceTabId);
-      if (
-        !session ||
-        session.status !== 'error' ||
-        session.requestId !== ticket.failedRequestId
-      ) {
+      const confirmed = await runTranslationCommit(ticket.sourceTabId, async () => {
+        assertCurrentLifecycle();
+        const session = pdfSidePanelSessions.get(ticket.sourceTabId);
+        if (
+          !session ||
+          session.status !== 'error' ||
+          session.requestId !== ticket.failedRequestId
+        ) {
+          return false;
+        }
+        await publishPdfSidePanelSessionDurably({
+          ...session,
+          settingsRecoveryConfirmation: {
+            failedRequestId: ticket.failedRequestId,
+            hadPartialOutput: ticket.hadPartialOutput,
+          },
+        }, assertCurrentLifecycle);
+        return true;
+      });
+      if (!confirmed) {
         return { handled: false, resumed: false, requiresConfirmation: true };
       }
-      await publishPdfSidePanelSessionDurably({
-        ...session,
-        settingsRecoveryConfirmation: {
-          failedRequestId: ticket.failedRequestId,
-          hadPartialOutput: ticket.hadPartialOutput,
-        },
-      });
     }
+    assertCurrentLifecycle();
     await activateSettingsRecoverySource(ticket);
     return {
       handled: true,
@@ -1023,13 +1159,26 @@ async function translate(
     );
   }
 
+  const lifecycleToken = tabLifecycles.capture(tabId);
   await runTranslationCommit(tabId, () => undefined);
+  if (!tabLifecycles.isCurrent(lifecycleToken)) {
+    return errorResponse(staleTranslationMutationError(
+      '页面已经关闭或跳转，旧的翻译请求没有启动。',
+    ));
+  }
   const controller = beginActiveRequest(tabId, request.requestId);
   pendingTranslationRequests.set(tabId, request.requestId);
+  const assertCurrentRequest = (): void => {
+    assertTabLifecycleCurrent(lifecycleToken);
+    assertActiveRequest(tabId, request.requestId, controller);
+  };
   let progressDeliveryTail: Promise<void> = Promise.resolve();
   const queueProgress = (payload: TranslationProgressPayload): void => {
-    progressDeliveryTail = progressDeliveryTail.then(() =>
-      publishTranslationProgress(tabId, payload, progressTarget));
+    progressDeliveryTail = progressDeliveryTail.then(() => {
+      if (!tabLifecycles.isCurrent(lifecycleToken)) return;
+      if (activeRequests.get(tabId)?.controller !== controller) return;
+      return publishTranslationProgress(tabId, payload, progressTarget);
+    });
   };
   try {
     const settings = await getSettings();
@@ -1083,6 +1232,7 @@ async function translate(
       if (cached) {
         const finalization = runTranslationCommit(tabId, async () => {
           assertActiveRequest(tabId, request.requestId, controller);
+          await commitTranslationResultState(tabId, cached, assertCurrentRequest);
           const history = await settleTranslationFinalization(
             'translate-finalization',
             settings.rememberRecentTranslations
@@ -1093,12 +1243,6 @@ async function translate(
               rememberDocumentTranslation(identity, cached),
             ],
           );
-          assertActiveRequest(tabId, request.requestId, controller);
-          await writeTranslationHead({
-            tabId,
-            currentResultRequestId: cached.requestId,
-            rootRequestId: translationResultRootRequestId(cached),
-          });
           return history;
         });
         await publishTranslationProgress(tabId, {
@@ -1369,10 +1513,7 @@ async function translate(
     assertActiveRequest(tabId, request.requestId, controller);
     const finalization = runTranslationCommit(tabId, async () => {
       assertActiveRequest(tabId, request.requestId, controller);
-      if (request.revision?.scope === 'document') {
-        await rememberDocumentTranslation(identity, result);
-        assertActiveRequest(tabId, request.requestId, controller);
-      }
+      await commitTranslationResultState(tabId, result, assertCurrentRequest);
       const history = await settleTranslationFinalization(
         'translate-finalization',
         settings.rememberRecentTranslations
@@ -1385,17 +1526,11 @@ async function translate(
               ? cacheTranslation(tabId, cacheKey, result)
               : Promise.resolve(),
           clearTranslationCheckpoint(tabId, cacheKey),
-          !request.revision
+          !request.revision || request.revision.scope === 'document'
             ? rememberDocumentTranslation(identity, result)
             : Promise.resolve(),
         ],
       );
-      assertActiveRequest(tabId, request.requestId, controller);
-      await writeTranslationHead({
-        tabId,
-        currentResultRequestId: result.requestId,
-        rootRequestId: translationResultRootRequestId(result),
-      });
       return history;
     });
     queueProgress({
@@ -1449,6 +1584,18 @@ function translationResultRootRequestId(result: TranslateResult): string {
   return result.revision?.rootRequestId?.trim() || result.requestId;
 }
 
+function staleTranslationMutationError(
+  message = '当前译文已经变化，请重新打开修正。',
+): TranslationError {
+  return new TranslationError('REQUEST_ABORTED', message);
+}
+
+function assertTabLifecycleCurrent(token: TabLifecycleToken | undefined): void {
+  if (!tabLifecycles.isCurrent(token)) {
+    throw staleTranslationMutationError('页面已经关闭或跳转，请在当前页面重新操作。');
+  }
+}
+
 async function assertTranslationHead(
   tabId: number,
   expectedResultRequestId: string,
@@ -1456,23 +1603,17 @@ async function assertTranslationHead(
 ): Promise<void> {
   const pendingRequestId = pendingTranslationRequests.get(tabId);
   if (pendingRequestId && pendingRequestId !== expectedResultRequestId) {
-    throw new TranslationError(
-      'REQUEST_ABORTED',
-      '当前译文已经变化，请重新打开修正。',
-    );
+    throw staleTranslationMutationError();
   }
   const head = await readTranslationHead(tabId);
   if (
-    head &&
+    !head ||
     (
       head.currentResultRequestId !== expectedResultRequestId ||
       (expectedRootRequestId !== undefined && head.rootRequestId !== expectedRootRequestId)
     )
   ) {
-    throw new TranslationError(
-      'REQUEST_ABORTED',
-      '当前译文已经变化，请重新打开修正。',
-    );
+    throw staleTranslationMutationError();
   }
 }
 
@@ -1497,26 +1638,11 @@ async function applyCorrectionTerm(
       );
     }
     const identity = documentIdentity(locator);
-    const before = await getDocumentMemory(identity);
-    const key = correctionTermSourceKey(validated.source);
-    const previous = before.confirmedTerms.find(
-      (candidate) => correctionTermSourceKey(candidate.source) === key,
-    );
-    const after = await upsertDocumentTerm(identity, validated);
-    const applied = after.confirmedTerms.find(
-      (candidate) => correctionTermSourceKey(candidate.source) === key,
-    );
-    return {
-      scope: 'document',
-      source: validated.source,
-      appliedTarget: validated.target,
-      ...(previous ? { previousTarget: previous.target } : {}),
-      ...(applied ? { documentTermId: applied.id } : {}),
-    };
+    const update = await upsertDocumentTermWithReceipt(identity, validated);
+    return update.termChange;
   }
 
-  return runGlobalGlossaryMutation(0, async () => {
-    const settings = await getSettings();
+  const mutation = await mutateSettings((settings) => {
     const key = correctionTermSourceKey(validated.source);
     const hasExisting = settings.academicGlossary.some(
       (entry) => correctionTermSourceKey(entry.source) === key,
@@ -1528,16 +1654,19 @@ async function applyCorrectionTerm(
       );
     }
     const updated = upsertGlossaryEntry(settings.academicGlossary, validated);
-    await saveSettings({ ...settings, academicGlossary: updated.entries });
     return {
-      scope: 'global',
-      source: validated.source,
-      appliedTarget: validated.target,
-      ...(updated.previousTarget !== undefined
-        ? { previousTarget: updated.previousTarget }
-        : {}),
+      nextSettings: { ...settings, academicGlossary: updated.entries },
+      value: {
+        scope: 'global' as const,
+        source: validated.source,
+        appliedTarget: validated.target,
+        ...(updated.previousTarget !== undefined
+          ? { previousTarget: updated.previousTarget }
+          : {}),
+      },
     };
   });
+  return mutation.value;
 }
 
 async function rollbackCorrectionTerm(
@@ -1546,60 +1675,85 @@ async function rollbackCorrectionTerm(
 ): Promise<boolean> {
   if (!change) return true;
   if (change.scope === 'global') {
-    return runGlobalGlossaryMutation(0, async () => {
-      const settings = await getSettings();
+    const mutation = await mutateSettings((settings) => {
       const rollback = rollbackGlossaryEntry(settings.academicGlossary, change);
-      if (!rollback.rolledBack) return false;
-      await saveSettings({ ...settings, academicGlossary: rollback.entries });
-      return true;
+      if (!rollback.rolledBack) {
+        return { nextSettings: null, value: false };
+      }
+      return {
+        nextSettings: { ...settings, academicGlossary: rollback.entries },
+        value: true,
+      };
     });
+    return mutation.value;
   }
 
   if (!locator.documentId?.trim() && !locator.sourceLocation?.documentId.trim() && !locator.pageUrl.trim()) {
     return false;
   }
   const identity = documentIdentity(locator);
-  const memory = await getDocumentMemory(identity);
-  const key = correctionTermSourceKey(change.source);
-  const current = memory.confirmedTerms.find(
-    (candidate) => correctionTermSourceKey(candidate.source) === key,
-  );
-  if (
-    !current ||
-    current.target !== change.appliedTarget ||
-    (change.documentTermId !== undefined && current.id !== change.documentTermId)
-  ) return false;
-  if (change.previousTarget !== undefined) {
-    await upsertDocumentTerm(identity, {
-      id: current.id,
-      source: change.source,
-      target: change.previousTarget,
-    });
-  } else {
-    await removeDocumentTerm(identity, current.id);
+  return (await rollbackDocumentTermChange(identity, change)).rolledBack;
+}
+
+async function compensateCorrectionTerm(
+  locator: DocumentIdentityInput,
+  change: TranslationCorrectionTermReceipt,
+): Promise<void> {
+  // A conditional rollback may return false because another tab deliberately
+  // edited the same global term. That is a successful later-edit-wins outcome,
+  // not a failed compensation, so it must not block translation-head rollback.
+  await rollbackCorrectionTerm(locator, change);
+}
+
+type TranslationMutationCompensation = () => Promise<boolean | void>;
+
+interface TranslationResultCommitOptions {
+  assertCurrent?: () => void;
+  documentUndo?: {
+    termChange?: TranslationCorrectionTermReceipt | DocumentTermChangeReceipt;
+    rollbackResult: TranslateResult;
+  };
+  preserveAlignedSegments?: boolean;
+  commitSideEffect?: (commit: {
+    result: TranslateResult;
+    correctionReceipt: TranslationCorrectionReceipt;
+  }) => Promise<void>;
+}
+
+async function compensateTranslationMutation(
+  compensations: TranslationMutationCompensation[],
+): Promise<boolean> {
+  let complete = true;
+  for (const compensate of [...compensations].reverse()) {
+    try {
+      if (await compensate() === false) complete = false;
+    } catch (error) {
+      complete = false;
+      await recordLocalDiagnosticError('translate', error);
+    }
   }
-  return true;
+  return complete;
 }
 
 async function updateTranslationResultCommitted(
   payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
-  options?: {
-    assertCurrent?: () => void;
-    documentUndo?: { termChange?: TranslationCorrectionTermReceipt };
-    preserveAlignedSegments?: boolean;
-  },
+  options?: TranslationResultCommitOptions,
 ): Promise<TranslateRuntimeResponse> {
+  const compensations: TranslationMutationCompensation[] = [];
+  let attemptedHead: {
+    baseRequestId: string;
+    nextRequestId: string;
+    rootRequestId: string;
+  } | undefined;
   try {
     options?.assertCurrent?.();
-    if (payload.baseRequestId) {
-      await assertTranslationHead(
-        tabId,
-        payload.baseRequestId,
-        translationResultRootRequestId(payload.result),
-      );
-      options?.assertCurrent?.();
-    }
+    await assertTranslationHead(
+      tabId,
+      payload.baseRequestId,
+      translationResultRootRequestId(payload.result),
+    );
+    options?.assertCurrent?.();
     const originalText = payload.result.originalText.trim();
     const translatedText = payload.result.translatedText.trim();
     if (!originalText || !translatedText) {
@@ -1648,75 +1802,113 @@ async function updateTranslationResultCommitted(
     const settings = await getSettings();
     options?.assertCurrent?.();
     let termChange: TranslationCorrectionTermReceipt | undefined;
+    let documentTermChange: DocumentTermChangeReceipt | undefined;
     let termRollbackSkipped = false;
     if (scope === 'document') {
       const identity = documentIdentity(payload);
       if (options?.documentUndo) {
-        const restored = await restoreDocumentCorrection(
+        const restored = await restoreDocumentCorrectionIfCurrent(
           identity,
+          options.documentUndo.rollbackResult,
           result,
           options.documentUndo.termChange,
         );
-        termRollbackSkipped = !restored.termRolledBack;
+        termRollbackSkipped = Boolean(options.documentUndo.termChange) &&
+          !restored.termRolledBack;
+        if (restored.change) {
+          compensations.push(async () => {
+            await rollbackDocumentCorrectionChange(identity, restored.change!);
+          });
+        }
       } else if (termScope === 'document') {
         const remembered = await rememberDocumentCorrection(identity, result, correctionTerm);
         termChange = remembered.termChange;
+        documentTermChange = remembered.change.termChange;
+        compensations.push(async () => {
+          await rollbackDocumentCorrectionChange(identity, remembered.change);
+        });
       } else {
         termChange = await applyCorrectionTerm(payload, termScope, correctionTerm);
-        try {
-          await rememberDocumentCorrection(identity, result);
-        } catch (error) {
-          if (termChange) {
-            try {
-              await rollbackCorrectionTerm(payload, termChange);
-            } catch (rollbackError) {
-              await recordLocalDiagnosticError('translate', rollbackError);
-            }
-          }
-          throw error;
+        if (termChange) {
+          const appliedTermChange = termChange;
+          compensations.push(() => compensateCorrectionTerm(payload, appliedTermChange));
         }
+        const remembered = await rememberDocumentCorrection(identity, result);
+        compensations.push(async () => {
+          await rollbackDocumentCorrectionChange(identity, remembered.change);
+        });
       }
       options?.assertCurrent?.();
     } else {
       termChange = await applyCorrectionTerm(payload, termScope, correctionTerm);
+      if (termChange) {
+        const appliedTermChange = termChange;
+        compensations.push(() => compensateCorrectionTerm(payload, appliedTermChange));
+      }
       options?.assertCurrent?.();
     }
+    const correctionReceipt = {
+      baseRequestId: payload.baseRequestId,
+      correctedRequestId: result.requestId,
+      scope,
+      previousTranslation: payload.previousTranslatedText,
+      correctedTranslation: result.translatedText,
+      ...(termChange ? { termChange } : {}),
+      ...(documentTermChange ? { documentTermChange } : {}),
+    } satisfies TranslationCorrectionReceipt;
+    options?.assertCurrent?.();
+    attemptedHead = {
+      baseRequestId: payload.baseRequestId,
+      nextRequestId: result.requestId,
+      rootRequestId,
+    };
+    const advanced = await writeTranslationHead({
+      tabId,
+      currentResultRequestId: result.requestId,
+      rootRequestId,
+    }, {
+      currentResultRequestId: payload.baseRequestId,
+      rootRequestId,
+    });
+    if (!advanced) throw staleTranslationMutationError();
+    await options?.commitSideEffect?.({ result, correctionReceipt });
+    compensations.length = 0;
     const historyTask = settings.rememberRecentTranslations
       ? addTranslationHistory(tabId, result, settings.historyLimit)
       : Promise.resolve([]);
     const history = await settleTranslationFinalization(
       'translate-finalization',
       historyTask,
-      [
-        clearTranslationCache(tabId),
-      ],
+      [clearTranslationCache(tabId)],
     );
-    const correctionReceipt = payload.previousTranslatedText === undefined
-      ? undefined
-      : {
-          baseRequestId: payload.baseRequestId ?? rootRequestId,
-          correctedRequestId: result.requestId,
-          scope,
-          previousTranslation: payload.previousTranslatedText,
-          correctedTranslation: result.translatedText,
-          ...(termChange ? { termChange } : {}),
-        } satisfies TranslationCorrectionReceipt;
-    await writeTranslationHead({
-      tabId,
-      currentResultRequestId: result.requestId,
-      rootRequestId,
-    });
-    options?.assertCurrent?.();
     return {
       ok: true,
       data: {
         result,
         history,
-        ...(correctionReceipt ? { correctionReceipt } : {}),
+        correctionReceipt,
         ...(termRollbackSkipped ? { termRollbackSkipped: true } : {}),
       },
     };
   } catch (error) {
+    const rollbackComplete = await compensateTranslationMutation(compensations);
+    if (attemptedHead && rollbackComplete) {
+      try {
+        const head = await readTranslationHead(tabId);
+        if (head?.currentResultRequestId === attemptedHead.nextRequestId) {
+          await writeTranslationHead({
+            tabId,
+            currentResultRequestId: attemptedHead.baseRequestId,
+            rootRequestId: attemptedHead.rootRequestId,
+          }, {
+            currentResultRequestId: attemptedHead.nextRequestId,
+            rootRequestId: attemptedHead.rootRequestId,
+          });
+        }
+      } catch (rollbackError) {
+        await recordLocalDiagnosticError('translate', rollbackError);
+      }
+    }
     if (error instanceof DocumentTermCapacityError) {
       return errorResponse(new TranslationError(
         'INVALID_RESPONSE',
@@ -1731,20 +1923,24 @@ async function updateTranslationResultCommitted(
 function updateTranslationResult(
   payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
-  options?: {
-    assertCurrent?: () => void;
-    documentUndo?: { termChange?: TranslationCorrectionTermReceipt };
-    preserveAlignedSegments?: boolean;
-  },
+  options?: TranslationResultCommitOptions,
 ): Promise<TranslateRuntimeResponse> {
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrent = (): void => {
+    assertTabLifecycleCurrent(lifecycleToken);
+    options?.assertCurrent?.();
+  };
   return runTranslationCommit(tabId, () =>
-    updateTranslationResultCommitted(payload, tabId, options));
+    updateTranslationResultCommitted(payload, tabId, {
+      ...options,
+      assertCurrent,
+    }));
 }
 
 async function undoTranslationResultCommitted(
   payload: Extract<RuntimeMessage, { type: 'UNDO_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
-  options?: { assertCurrent?: () => void },
+  options?: Pick<TranslationResultCommitOptions, 'assertCurrent' | 'commitSideEffect'>,
 ): Promise<TranslateRuntimeResponse> {
   try {
     options?.assertCurrent?.();
@@ -1803,12 +1999,16 @@ async function undoTranslationResultCommitted(
       baseRequestId: payload.receipt.correctedRequestId,
     }, tabId, {
       ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
+      ...(options?.commitSideEffect ? { commitSideEffect: options.commitSideEffect } : {}),
       ...(payload.receipt.segmentChange ? { preserveAlignedSegments: true } : {}),
       ...(documentUndo
         ? {
             documentUndo: {
-              ...(payload.receipt.termChange?.scope === 'document'
-                ? { termChange: payload.receipt.termChange }
+              rollbackResult: payload.result,
+              ...(payload.receipt.documentTermChange
+                ? { termChange: payload.receipt.documentTermChange }
+                : payload.receipt.termChange?.scope === 'document'
+                  ? { termChange: payload.receipt.termChange }
                 : {}),
             },
           }
@@ -1844,10 +2044,18 @@ async function undoTranslationResultCommitted(
 function undoTranslationResult(
   payload: Extract<RuntimeMessage, { type: 'UNDO_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
-  options?: { assertCurrent?: () => void },
+  options?: Pick<TranslationResultCommitOptions, 'assertCurrent' | 'commitSideEffect'>,
 ): Promise<TranslateRuntimeResponse> {
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrent = (): void => {
+    assertTabLifecycleCurrent(lifecycleToken);
+    options?.assertCurrent?.();
+  };
   return runTranslationCommit(tabId, () =>
-    undoTranslationResultCommitted(payload, tabId, options));
+    undoTranslationResultCommitted(payload, tabId, {
+      ...options,
+      assertCurrent,
+    }));
 }
 
 async function updateTranslationSegment(
@@ -1938,10 +2146,10 @@ function pdfSessionLocator(session: PdfSidePanelSession): DocumentIdentityInput 
   };
 }
 
-async function updatePdfSidePanelTranslationResult(
+async function updatePdfSidePanelTranslationResultCommitted(
   payload: Extract<RuntimeMessage, { type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+  lifecycleToken: TabLifecycleToken | undefined,
 ): Promise<TranslateRuntimeResponse> {
-  await initializePdfSidePanelSessions();
   if (pdfSidePanelCorrectionClaims.has(payload.tabId)) {
     return errorResponse(new TranslationError(
       'REQUEST_ABORTED',
@@ -1953,6 +2161,7 @@ async function updatePdfSidePanelTranslationResult(
   try {
     const session = pdfSidePanelSessions.get(payload.tabId);
     const assertCurrent = (): void => {
+      assertTabLifecycleCurrent(lifecycleToken);
       const current = pdfSidePanelSessions.get(payload.tabId);
       if (
         pdfSidePanelCorrectionClaims.get(payload.tabId) !== claim ||
@@ -1987,25 +2196,28 @@ async function updatePdfSidePanelTranslationResult(
       },
     };
     delete edited.alignedSegments;
-    const response = await updateTranslationResult({
+    const response = await updateTranslationResultCommitted({
       ...pdfSessionLocator(session),
       result: edited,
       scope: payload.scope,
       previousTranslatedText: currentResult.translatedText,
       baseRequestId: currentResult.requestId,
       ...(payload.term ? { term: payload.term } : {}),
-    }, session.tabId, { assertCurrent });
-    if (!response.ok) return response;
-    assertCurrent();
-    const current = pdfSidePanelSessions.get(session.tabId)!;
-    publishPdfSidePanelSession({
-      ...current,
-      result: response.data.result,
-      partialText: response.data.result.translatedText,
-      ...(response.data.correctionReceipt
-        ? { correctionReceipt: response.data.correctionReceipt }
-        : {}),
+    }, session.tabId, {
+      assertCurrent,
+      commitSideEffect: async ({ result, correctionReceipt }) => {
+        assertCurrent();
+        const current = pdfSidePanelSessions.get(session.tabId);
+        if (!current) throw staleTranslationMutationError();
+        await publishPdfSidePanelSessionDurably({
+          ...current,
+          result,
+          partialText: result.translatedText,
+          correctionReceipt,
+        }, assertCurrent);
+      },
     });
+    if (!response.ok) return response;
     return response;
   } catch (error) {
     return errorResponse(error);
@@ -2016,10 +2228,19 @@ async function updatePdfSidePanelTranslationResult(
   }
 }
 
-async function undoPdfSidePanelTranslationResult(
-  payload: Extract<RuntimeMessage, { type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+async function updatePdfSidePanelTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
 ): Promise<TranslateRuntimeResponse> {
+  const lifecycleToken = tabLifecycles.capture(payload.tabId);
   await initializePdfSidePanelSessions();
+  return runTranslationCommit(payload.tabId, () =>
+    updatePdfSidePanelTranslationResultCommitted(payload, lifecycleToken));
+}
+
+async function undoPdfSidePanelTranslationResultCommitted(
+  payload: Extract<RuntimeMessage, { type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+  lifecycleToken: TabLifecycleToken | undefined,
+): Promise<TranslateRuntimeResponse> {
   if (pdfSidePanelCorrectionClaims.has(payload.tabId)) {
     return errorResponse(new TranslationError(
       'REQUEST_ABORTED',
@@ -2031,6 +2252,7 @@ async function undoPdfSidePanelTranslationResult(
   try {
     const session = pdfSidePanelSessions.get(payload.tabId);
     const assertCurrent = (): void => {
+      assertTabLifecycleCurrent(lifecycleToken);
       const current = pdfSidePanelSessions.get(payload.tabId);
       if (
         pdfSidePanelCorrectionClaims.get(payload.tabId) !== claim ||
@@ -2047,20 +2269,25 @@ async function undoPdfSidePanelTranslationResult(
     if (!session?.result || !session.correctionReceipt) {
       throw new TranslationError('REQUEST_ABORTED', '没有可撤销的 PDF 译文修正。');
     }
-    const response = await undoTranslationResult({
+    const response = await undoTranslationResultCommitted({
       ...pdfSessionLocator(session),
       result: session.result,
       receipt: session.correctionReceipt,
-    }, session.tabId, { assertCurrent });
-    if (!response.ok) return response;
-    assertCurrent();
-    const current = pdfSidePanelSessions.get(session.tabId)!;
-    const { correctionReceipt: _receipt, ...withoutReceipt } = current;
-    publishPdfSidePanelSession({
-      ...withoutReceipt,
-      result: response.data.result,
-      partialText: response.data.result.translatedText,
+    }, session.tabId, {
+      assertCurrent,
+      commitSideEffect: async ({ result }) => {
+        assertCurrent();
+        const current = pdfSidePanelSessions.get(session.tabId);
+        if (!current) throw staleTranslationMutationError();
+        const { correctionReceipt: _receipt, ...withoutReceipt } = current;
+        await publishPdfSidePanelSessionDurably({
+          ...withoutReceipt,
+          result,
+          partialText: result.translatedText,
+        }, assertCurrent);
+      },
     });
+    if (!response.ok) return response;
     return response;
   } catch (error) {
     return errorResponse(error);
@@ -2069,6 +2296,16 @@ async function undoPdfSidePanelTranslationResult(
       pdfSidePanelCorrectionClaims.delete(payload.tabId);
     }
   }
+}
+
+
+async function undoPdfSidePanelTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+): Promise<TranslateRuntimeResponse> {
+  const lifecycleToken = tabLifecycles.capture(payload.tabId);
+  await initializePdfSidePanelSessions();
+  return runTranslationCommit(payload.tabId, () =>
+    undoPdfSidePanelTranslationResultCommitted(payload, lifecycleToken));
 }
 
 function validateImagePayload(
@@ -2161,13 +2398,26 @@ async function translateImageRegion(
   progressTarget: TranslationProgressTarget,
 ): Promise<TranslateRuntimeResponse> {
   validateImageRegionRequest(request);
+  const lifecycleToken = tabLifecycles.capture(tabId);
   await runTranslationCommit(tabId, () => undefined);
+  if (!tabLifecycles.isCurrent(lifecycleToken)) {
+    return errorResponse(staleTranslationMutationError(
+      '页面已经关闭或跳转，旧的框选翻译没有启动。',
+    ));
+  }
   const controller = beginActiveRequest(tabId, request.requestId);
   pendingTranslationRequests.set(tabId, request.requestId);
+  const assertCurrentRequest = (): void => {
+    assertTabLifecycleCurrent(lifecycleToken);
+    assertActiveRequest(tabId, request.requestId, controller);
+  };
   let progressDeliveryTail: Promise<void> = Promise.resolve();
   const queueProgress = (payload: TranslationProgressPayload): void => {
-    progressDeliveryTail = progressDeliveryTail.then(() =>
-      publishTranslationProgress(tabId, payload, progressTarget));
+    progressDeliveryTail = progressDeliveryTail.then(() => {
+      if (!tabLifecycles.isCurrent(lifecycleToken)) return;
+      if (activeRequests.get(tabId)?.controller !== controller) return;
+      return publishTranslationProgress(tabId, payload, progressTarget);
+    });
   };
   try {
     // A region request represents different source content and cannot resume a
@@ -2215,6 +2465,7 @@ async function translateImageRegion(
       if (cached) {
         const finalization = runTranslationCommit(tabId, async () => {
           assertActiveRequest(tabId, request.requestId, controller);
+          await commitTranslationResultState(tabId, cached, assertCurrentRequest);
           const history = await settleTranslationFinalization(
             'translate-image-region-finalization',
             settings.rememberRecentTranslations
@@ -2222,12 +2473,6 @@ async function translateImageRegion(
               : Promise.resolve([]),
             [rememberDocumentTranslation(identity, cached)],
           );
-          assertActiveRequest(tabId, request.requestId, controller);
-          await writeTranslationHead({
-            tabId,
-            currentResultRequestId: cached.requestId,
-            rootRequestId: translationResultRootRequestId(cached),
-          });
           return history;
         });
         await publishTranslationProgress(tabId, {
@@ -2297,20 +2542,23 @@ async function translateImageRegion(
         : undefined,
     );
     assertActiveRequest(tabId, request.requestId, controller);
-    const visionProfileMaintenance = autoSelectedVisionProfile
-      ? (async () => {
-          const latestSettings = await getSettings();
+    const maintainVisionProfile = (): Promise<void> => autoSelectedVisionProfile
+      ? mutateSettings((latestSettings) => {
           const profileStillAvailable = latestSettings.apiProfiles.some(
             (candidate) => candidate.id === profile.id,
           );
           if (!latestSettings.visionApiProfileId && profileStillAvailable) {
-            await saveSettings({
-              ...latestSettings,
-              visionApiProfileId: profile.id,
-              visionModel,
-            });
+            return {
+              nextSettings: {
+                ...latestSettings,
+                visionApiProfileId: profile.id,
+                visionModel,
+              },
+              value: undefined,
+            };
           }
-        })()
+          return { nextSettings: null, value: undefined };
+        }).then(() => undefined)
       : Promise.resolve();
     const result: TranslateResult = {
       requestId: request.requestId,
@@ -2355,10 +2603,7 @@ async function translateImageRegion(
     };
     const finalization = runTranslationCommit(tabId, async () => {
       assertActiveRequest(tabId, request.requestId, controller);
-      if (request.revision?.scope === 'document') {
-        await rememberDocumentTranslation(identity, result);
-        assertActiveRequest(tabId, request.requestId, controller);
-      }
+      await commitTranslationResultState(tabId, result, assertCurrentRequest);
       const history = await settleTranslationFinalization(
         'translate-image-region-finalization',
         settings.rememberRecentTranslations
@@ -2368,18 +2613,12 @@ async function translateImageRegion(
           settings.enableSessionCache
             ? cacheImageRegionTranslation(tabId, cacheKey, result)
             : Promise.resolve(),
-          visionProfileMaintenance,
-          !request.revision
+          maintainVisionProfile(),
+          !request.revision || request.revision.scope === 'document'
             ? rememberDocumentTranslation(identity, result)
             : Promise.resolve(),
         ],
       );
-      assertActiveRequest(tabId, request.requestId, controller);
-      await writeTranslationHead({
-        tabId,
-        currentResultRequestId: result.requestId,
-        rootRequestId: translationResultRootRequestId(result),
-      });
       return history;
     });
     queueProgress({
@@ -2981,26 +3220,34 @@ export default defineBackground(() => {
   });
 
   browser.tabs.onRemoved.addListener((tabId) => {
+    tabLifecycles.close(tabId);
     activeRequests.get(tabId)?.controller.abort();
     activeRequests.delete(tabId);
-    pendingTranslationRequests.delete(tabId);
-    void clearTranslationHead(tabId);
-    void clearTranslationHistory(tabId);
-    void clearTranslationCache(tabId);
-    void clearImageRegionTranslationCache(tabId);
-    void clearTranslationCheckpoint(tabId);
-    pdfSidePanelSessions.delete(tabId);
     piPdfReaderTabIds.delete(tabId);
     for (const [windowId, activeTabId] of activeTabIdsByWindow) {
       if (activeTabId === tabId) activeTabIdsByWindow.delete(windowId);
     }
     if (lastActiveBrowserTab?.id === tabId) lastActiveBrowserTab = undefined;
-    void clearSettingsRecoveryTicketsForTab(tabId).catch(() => undefined);
-    void removeStoredPdfSidePanelSession(tabId).catch(() => undefined);
-    void queuePdfSidePanelOptionsSync().catch(() => undefined);
+    void runTranslationCommit(tabId, async () => {
+      pendingTranslationRequests.delete(tabId);
+      pdfSidePanelCorrectionClaims.delete(tabId);
+      pdfSidePanelSessions.delete(tabId);
+      await Promise.allSettled([
+        clearTranslationHead(tabId),
+        clearTranslationHistory(tabId),
+        clearTranslationCache(tabId),
+        clearImageRegionTranslationCache(tabId),
+        clearTranslationCheckpoint(tabId),
+        clearSettingsRecoveryTicketsForTab(tabId),
+        removeStoredPdfSidePanelSession(tabId),
+      ]);
+    }).finally(() => {
+      void queuePdfSidePanelOptionsSync().catch(() => undefined);
+    });
   });
 
-  browser.tabs.onCreated.addListener(() => {
+  browser.tabs.onCreated.addListener((tab) => {
+    if (tab.id !== undefined) tabLifecycles.reopen(tab.id);
     void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
 
@@ -3013,6 +3260,31 @@ export default defineBackground(() => {
 
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (tab.active) rememberActiveBrowserTab(tabId, tab.windowId);
+    if (changeInfo.status === 'loading' && !changeInfo.url) {
+      const currentSession = pdfSidePanelSessions.get(tabId);
+      if (currentSession && isSamePdfDocumentLocationChange(
+        currentSession.pageUrl,
+        currentSession.pageNumber,
+        tab.url,
+      )) {
+        return;
+      }
+      // Edge reports an ordinary same-URL reload without a URL change. Rotate
+      // the generation anyway so work captured by the previous document
+      // instance cannot publish progress or revive its result after reload.
+      tabLifecycles.invalidate(tabId);
+      activeRequests.get(tabId)?.controller.abort();
+      activeRequests.delete(tabId);
+      void runTranslationCommit(tabId, async () => {
+        await Promise.allSettled([
+          clearTranslationHead(tabId),
+          clearTranslationCheckpoint(tabId),
+        ]);
+      }).finally(() => {
+        void queuePdfSidePanelOptionsSync().catch(() => undefined);
+      });
+      return;
+    }
     if (!changeInfo.url) return;
     if (isExtensionPdfReaderUrl(changeInfo.url, PI_PDF_READER_URL)) {
       piPdfReaderTabIds.add(tabId);
@@ -3031,19 +3303,47 @@ export default defineBackground(() => {
       ) {
         const pageNumber = pdfInitialPage(changeInfo.url) ?? pdfInitialPage(nextSourceUrl);
         if (pageNumber && pageNumber !== session.pageNumber) {
-          publishPdfSidePanelSession({ ...session, pageNumber });
+          void runTranslationCommit(tabId, () => {
+            const current = pdfSidePanelSessions.get(tabId);
+            if (!isSamePdfSidePanelSession(current, session)) return;
+            const currentSource = pdfDocumentIdentity(current.pageUrl);
+            if (!currentSource || currentSource !== nextSource) return;
+            publishPdfSidePanelSession({ ...current, pageNumber });
+          });
         }
         return;
       }
+      tabLifecycles.invalidate(tabId);
       activeRequests.get(tabId)?.controller.abort();
       activeRequests.delete(tabId);
-      pdfSidePanelSessions.delete(tabId);
-      void removeStoredPdfSidePanelSession(tabId).catch(() => undefined);
+      void runTranslationCommit(tabId, async () => {
+        const current = pdfSidePanelSessions.get(tabId);
+        const cleanupTasks: Promise<unknown>[] = [
+          clearTranslationHead(tabId),
+          clearTranslationCheckpoint(tabId),
+        ];
+        if (isSamePdfSidePanelSession(current, session)) {
+          pdfSidePanelSessions.delete(tabId);
+          pdfSidePanelCorrectionClaims.delete(tabId);
+          cleanupTasks.push(removeStoredPdfSidePanelSession(tabId));
+        }
+        await Promise.allSettled(cleanupTasks);
+      }).finally(() => {
+        void queuePdfSidePanelOptionsSync().catch(() => undefined);
+      });
+      return;
     }
+    tabLifecycles.invalidate(tabId);
     activeRequests.get(tabId)?.controller.abort();
     activeRequests.delete(tabId);
-    void clearTranslationCheckpoint(tabId);
-    void queuePdfSidePanelOptionsSync().catch(() => undefined);
+    void runTranslationCommit(tabId, async () => {
+      await Promise.allSettled([
+        clearTranslationHead(tabId),
+        clearTranslationCheckpoint(tabId),
+      ]);
+    }).finally(() => {
+      void queuePdfSidePanelOptionsSync().catch(() => undefined);
+    });
   });
 
   browser.runtime.onMessage.addListener(
@@ -3327,8 +3627,10 @@ export default defineBackground(() => {
 
       if (message.type === 'SET_SIDEBAR_WIDTH') {
         const width = Math.min(640, Math.max(320, Math.round(message.payload.width)));
-        return getSettings()
-          .then((settings) => saveSettings({ ...settings, sidebarWidth: width }))
+        return mutateSettings((settings) => ({
+          nextSettings: { ...settings, sidebarWidth: width },
+          value: undefined,
+        }))
           .then(() => ({ ok: true as const, data: { width } }));
       }
 

@@ -2,7 +2,7 @@ import {
   activateApiProfile,
   getSettings,
   hasApiKey,
-  saveSettings,
+  mutateSettings,
 } from '../../core/settings/repository';
 import { apiOriginPattern } from '../../core/settings/api-access';
 import type { ApiProfile, ExtensionSettings } from '../../core/settings/schema';
@@ -314,11 +314,13 @@ async function load(): Promise<void> {
 
 targetLanguage.addEventListener('change', () => {
   void (async () => {
-    const settings = await getSettings();
-    await saveSettings({
-      ...settings,
-      targetLanguage: targetLanguage.value,
-    });
+    await mutateSettings((settings) => ({
+      nextSettings: {
+        ...settings,
+        targetLanguage: targetLanguage.value,
+      },
+      value: undefined,
+    }));
     setStatus('目标语言已更新。');
   })().catch(() => setStatus('目标语言更新失败。', true));
 });

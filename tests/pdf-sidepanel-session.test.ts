@@ -72,6 +72,26 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('native PDF side-panel sessions', () => {
+  it('surfaces a durable storage failure and serializes the next session write', async () => {
+    const set = vi.mocked(browser.storage.session.set);
+    set.mockRejectedValueOnce(new Error('session storage unavailable'));
+
+    await expect(storePdfSidePanelSession(session({ requestId: 'failed-write' })))
+      .rejects.toThrow('session storage unavailable');
+    await expect(storePdfSidePanelSession(session({ requestId: 'next-write' })))
+      .resolves.toBeUndefined();
+
+    await expect(restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }])).resolves.toMatchObject([{
+      requestId: 'next-write',
+      status: 'error',
+      error: { code: 'REQUEST_ABORTED', retryable: true },
+    }]);
+    expect(JSON.stringify(storage)).not.toContain('failed-write');
+  });
+
   it('restores a matching tab and converts interrupted work into a retryable error', async () => {
     await storePdfSidePanelSession(session());
     const restored = await restorePdfSidePanelSessions([

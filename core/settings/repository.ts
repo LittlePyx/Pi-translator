@@ -20,6 +20,75 @@ const LEGACY_API_KEY_KEY = 'deepseekApiKey';
 export const API_KEYS_STORAGE_KEY = 'apiKeysByProfile';
 const API_KEYS_KEY = API_KEYS_STORAGE_KEY;
 
+let settingsWriteQueue: Promise<void> = Promise.resolve();
+const SETTINGS_WRITE_LOCK = 'pi-translator:settings-write:v1';
+
+export interface SettingsMutationUpdate<Value> {
+  /** Return null when the condition no longer holds and no write should occur. */
+  nextSettings: ExtensionSettings | null;
+  value: Value;
+}
+
+export interface SettingsMutationResult<Value> {
+  /** The settings that are current after the queued operation completes. */
+  settings: ExtensionSettings;
+  value: Value;
+  /** Null when the updater intentionally skipped the write. */
+  revisionId: string | null;
+}
+
+export interface ApiConfigurationCredentialPlan {
+  /** Remove every stored API key before exposing the new settings. */
+  clearAllApiKeys?: boolean;
+  /** Remove keys whose profile endpoint changed or whose profile was deleted. */
+  clearProfileIds?: string[];
+  /** Move the remaining keys before committing the storage-mode setting. */
+  moveApiKeysTo?: ApiKeyStorageMode;
+  /** Store a newly supplied key only after the new settings have committed. */
+  saveApiKey?: {
+    apiKey: string;
+    mode: ApiKeyStorageMode;
+    profileId: string;
+  };
+}
+
+export interface ApiConfigurationMutationUpdate<Value>
+  extends SettingsMutationUpdate<Value> {
+  credentials?: ApiConfigurationCredentialPlan;
+}
+
+/** A key is bound to a provider origin, not to one model at that origin. */
+export function changedApiCredentialProfileIds(
+  previous: readonly ApiProfile[],
+  next: readonly ApiProfile[],
+): string[] {
+  const nextById = new Map(next.map((profile) => [profile.id, profile]));
+  return previous.flatMap((profile) => {
+    const replacement = nextById.get(profile.id);
+    return !replacement || replacement.apiBaseUrl !== profile.apiBaseUrl
+      ? [profile.id]
+      : [];
+  });
+}
+
+function runSettingsWrite<Value>(operation: () => Promise<Value>): Promise<Value> {
+  const runWithOriginLock = async (): Promise<Value> => {
+    const locks = typeof navigator !== 'undefined' ? navigator.locks : undefined;
+    return locks
+      ? await locks.request(SETTINGS_WRITE_LOCK, async () => await operation())
+      : operation();
+  };
+  // The local queue orders calls in this realm. Web Locks also serializes the
+  // background worker, options page, and popup, which are separate realms but
+  // share the same extension origin.
+  const queued = settingsWriteQueue.then(runWithOriginLock, runWithOriginLock);
+  settingsWriteQueue = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
+}
+
 function isSettings(value: unknown): value is Partial<ExtensionSettings> {
   return Boolean(value && typeof value === 'object');
 }
@@ -110,9 +179,11 @@ export async function getSettings(): Promise<ExtensionSettings> {
   };
 }
 
-export async function saveSettings(settings: ExtensionSettings): Promise<string> {
+async function commitSettings(
+  settings: ExtensionSettings,
+): Promise<{ settings: ExtensionSettings; revisionId: string }> {
   const previous = await browser.storage.local.get(SETTINGS_KEY);
-  const storedSettings = {
+  const storedSettings: ExtensionSettings = {
     ...settings,
     schemaVersion: 8 as const,
     provider: 'openai-compatible' as const,
@@ -129,21 +200,62 @@ export async function saveSettings(settings: ExtensionSettings): Promise<string>
     [SETTINGS_KEY]: storedSettings,
     [CONFIGURATION_REVISION_STORAGE_KEY]: revision,
   });
-  return revision.id;
+  return { settings: storedSettings, revisionId: revision.id };
+}
+
+async function storeSettingsWithoutRevision(settings: ExtensionSettings): Promise<ExtensionSettings> {
+  const storedSettings: ExtensionSettings = {
+    ...settings,
+    schemaVersion: 8 as const,
+    provider: 'openai-compatible' as const,
+  };
+  await browser.storage.local.set({ [SETTINGS_KEY]: storedSettings });
+  return storedSettings;
+}
+
+export async function saveSettings(settings: ExtensionSettings): Promise<string> {
+  const committed = await runSettingsWrite(() => commitSettings(settings));
+  return committed.revisionId;
+}
+
+export async function mutateSettings<Value>(
+  updater: (
+    current: ExtensionSettings,
+  ) => SettingsMutationUpdate<Value> | Promise<SettingsMutationUpdate<Value>>,
+): Promise<SettingsMutationResult<Value>> {
+  return runSettingsWrite(async () => {
+    const current = await getSettings();
+    const update = await updater(current);
+    if (!update.nextSettings) {
+      return {
+        settings: current,
+        value: update.value,
+        revisionId: null,
+      };
+    }
+
+    const committed = await commitSettings(update.nextSettings);
+    return {
+      settings: committed.settings,
+      value: update.value,
+      revisionId: committed.revisionId,
+    };
+  });
 }
 
 export async function activateApiProfile(profileId: string): Promise<ExtensionSettings> {
-  const settings = await getSettings();
-  const profile = settings.apiProfiles.find((item) => item.id === profileId);
-  if (!profile) throw new Error('API 配置不存在。');
-  const next = {
-    ...settings,
-    activeApiProfileId: profile.id,
-    apiBaseUrl: profile.apiBaseUrl,
-    model: profile.model,
-  };
-  await saveSettings(next);
-  return next;
+  const result = await mutateSettings((settings) => {
+    const profile = settings.apiProfiles.find((item) => item.id === profileId);
+    if (!profile) throw new Error('API 配置不存在。');
+    const next = {
+      ...settings,
+      activeApiProfileId: profile.id,
+      apiBaseUrl: profile.apiBaseUrl,
+      model: profile.model,
+    };
+    return { nextSettings: next, value: undefined };
+  });
+  return result.settings;
 }
 
 function isApiProfile(value: unknown): value is ApiProfile {
@@ -163,6 +275,11 @@ function isApiProfile(value: unknown): value is ApiProfile {
 
 type ApiKeyMap = Record<string, string>;
 
+interface ApiKeyStorageState {
+  session: ApiKeyMap;
+  local: ApiKeyMap;
+}
+
 function apiKeyMap(value: unknown): ApiKeyMap {
   if (!value || typeof value !== 'object') return {};
   return Object.fromEntries(
@@ -172,7 +289,18 @@ function apiKeyMap(value: unknown): ApiKeyMap {
   );
 }
 
-async function migrateLegacyApiKeys(): Promise<void> {
+async function readApiKeyStorageState(): Promise<ApiKeyStorageState> {
+  const [session, local] = await Promise.all([
+    browser.storage.session.get(API_KEYS_KEY),
+    browser.storage.local.get(API_KEYS_KEY),
+  ]);
+  return {
+    session: apiKeyMap(session[API_KEYS_KEY]),
+    local: apiKeyMap(local[API_KEYS_KEY]),
+  };
+}
+
+async function migrateLegacyApiKeysLocked(): Promise<void> {
   const [session, local] = await Promise.all([
     browser.storage.session.get([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
     browser.storage.local.get([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
@@ -190,9 +318,109 @@ async function migrateLegacyApiKeys(): Promise<void> {
   await Promise.all([
     browser.storage.session.set({ [API_KEYS_KEY]: sessionMap }),
     browser.storage.local.set({ [API_KEYS_KEY]: localMap }),
+  ]);
+  // Legacy values are deleted only after both profile maps are durable. A
+  // failed migration can therefore be retried without losing the credential.
+  await Promise.all([
     browser.storage.session.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
     browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
   ]);
+}
+
+async function clearApiKeysLocked(profileIds?: readonly string[]): Promise<void> {
+  await migrateLegacyApiKeysLocked();
+  if (!profileIds) {
+    await Promise.all([
+      browser.storage.session.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
+      browser.storage.local.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
+    ]);
+    const remaining = await readApiKeyStorageState();
+    if (Object.keys(remaining.session).length || Object.keys(remaining.local).length) {
+      throw new Error('Failed to clear all API keys.');
+    }
+    return;
+  }
+
+  const uniqueIds = [...new Set(profileIds)];
+  if (!uniqueIds.length) return;
+  const state = await readApiKeyStorageState();
+  for (const profileId of uniqueIds) {
+    delete state.session[profileId];
+    delete state.local[profileId];
+  }
+  await Promise.all([
+    browser.storage.session.set({ [API_KEYS_KEY]: state.session }),
+    browser.storage.local.set({ [API_KEYS_KEY]: state.local }),
+  ]);
+  if (uniqueIds.includes('default')) {
+    await Promise.all([
+      browser.storage.session.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
+      browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
+    ]);
+  }
+  const remaining = await readApiKeyStorageState();
+  if (
+    uniqueIds.some(
+      (profileId) => remaining.session[profileId] || remaining.local[profileId],
+    )
+  ) {
+    throw new Error('Failed to clear an API key.');
+  }
+}
+
+async function saveApiKeyLocked(
+  apiKey: string,
+  mode: ApiKeyStorageMode,
+  profileId: string,
+): Promise<void> {
+  const normalized = apiKey.trim();
+  if (!normalized) throw new Error('API Key cannot be empty.');
+  await migrateLegacyApiKeysLocked();
+  const state = await readApiKeyStorageState();
+  if (mode === 'session') {
+    state.session[profileId] = normalized;
+    await browser.storage.session.set({ [API_KEYS_KEY]: state.session });
+    delete state.local[profileId];
+    await browser.storage.local.set({ [API_KEYS_KEY]: state.local });
+  } else {
+    // Session storage has lookup priority. Remove it first so an old session
+    // value can never mask the newly persisted local value.
+    delete state.session[profileId];
+    await browser.storage.session.set({ [API_KEYS_KEY]: state.session });
+    state.local[profileId] = normalized;
+    await browser.storage.local.set({ [API_KEYS_KEY]: state.local });
+  }
+  await Promise.all([
+    browser.storage.session.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
+    browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
+  ]);
+}
+
+async function moveApiKeysLocked(
+  mode: ApiKeyStorageMode,
+  profileIds: readonly string[],
+): Promise<void> {
+  await migrateLegacyApiKeysLocked();
+  const state = await readApiKeyStorageState();
+  const keys = Object.fromEntries(
+    profileIds.flatMap((profileId) => {
+      const key = state.session[profileId] ?? state.local[profileId];
+      return key ? [[profileId, key] as const] : [];
+    }),
+  );
+  if (mode === 'session') {
+    await browser.storage.session.set({
+      [API_KEYS_KEY]: { ...state.session, ...keys },
+    });
+    for (const profileId of profileIds) delete state.local[profileId];
+    await browser.storage.local.set({ [API_KEYS_KEY]: state.local });
+  } else {
+    await browser.storage.local.set({
+      [API_KEYS_KEY]: { ...state.local, ...keys },
+    });
+    for (const profileId of profileIds) delete state.session[profileId];
+    await browser.storage.session.set({ [API_KEYS_KEY]: state.session });
+  }
 }
 
 export async function getApiKey(profileId?: string): Promise<string | undefined> {
@@ -233,82 +461,82 @@ export async function saveApiKey(
   mode: ApiKeyStorageMode,
   profileId?: string,
 ): Promise<string> {
-  const normalized = apiKey.trim();
-  if (!normalized) {
-    throw new Error('API Key cannot be empty.');
-  }
-
-  await migrateLegacyApiKeys();
-  const activeProfileId = profileId ?? (await getSettings()).activeApiProfileId;
-  if (mode === 'session') {
-    const stored = await browser.storage.session.get(API_KEYS_KEY);
-    await browser.storage.session.set({
-      [API_KEYS_KEY]: {
-        ...apiKeyMap(stored[API_KEYS_KEY]),
-        [activeProfileId]: normalized,
-      },
-    });
-    await browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]);
-    const localMaps = await browser.storage.local.get(API_KEYS_KEY);
-    const nextLocalMap = apiKeyMap(localMaps[API_KEYS_KEY]);
-    delete nextLocalMap[activeProfileId];
-    await browser.storage.local.set({ [API_KEYS_KEY]: nextLocalMap });
-    await browser.storage.session.remove(LEGACY_API_KEY_KEY);
+  return runSettingsWrite(async () => {
+    const activeProfileId = profileId ?? (await getSettings()).activeApiProfileId;
+    await saveApiKeyLocked(apiKey, mode, activeProfileId);
     return commitConfigurationRevision(true);
-  }
-
-  const stored = await browser.storage.local.get(API_KEYS_KEY);
-  await browser.storage.local.set({
-    [API_KEYS_KEY]: {
-      ...apiKeyMap(stored[API_KEYS_KEY]),
-      [activeProfileId]: normalized,
-    },
   });
-  await browser.storage.session.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]);
-  const sessionMaps = await browser.storage.session.get(API_KEYS_KEY);
-  const nextSessionMap = apiKeyMap(sessionMaps[API_KEYS_KEY]);
-  delete nextSessionMap[activeProfileId];
-  await browser.storage.session.set({ [API_KEYS_KEY]: nextSessionMap });
-  await browser.storage.local.remove(LEGACY_API_KEY_KEY);
-  return commitConfigurationRevision(true);
 }
 
 export async function moveApiKey(mode: ApiKeyStorageMode): Promise<string> {
-  const settings = await getSettings();
-  for (const profile of settings.apiProfiles) {
-    const apiKey = await getApiKey(profile.id);
-    if (apiKey) await saveApiKey(apiKey, mode, profile.id);
-  }
-  return commitConfigurationRevision(true);
+  return runSettingsWrite(async () => {
+    const settings = await getSettings();
+    await moveApiKeysLocked(mode, settings.apiProfiles.map((profile) => profile.id));
+    return commitConfigurationRevision(true);
+  });
 }
 
 export async function clearApiKey(profileId?: string): Promise<string> {
-  if (profileId) {
-    const [session, local] = await Promise.all([
-      browser.storage.session.get(API_KEYS_KEY),
-      browser.storage.local.get(API_KEYS_KEY),
-    ]);
-    const sessionMap = apiKeyMap(session[API_KEYS_KEY]);
-    const localMap = apiKeyMap(local[API_KEYS_KEY]);
-    delete sessionMap[profileId];
-    delete localMap[profileId];
-    await Promise.all([
-      browser.storage.session.set({ [API_KEYS_KEY]: sessionMap }),
-      browser.storage.local.set({ [API_KEYS_KEY]: localMap }),
-    ]);
-    if (profileId === 'default') {
-      await Promise.all([
-        browser.storage.session.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
-        browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
-      ]);
-    }
+  return runSettingsWrite(async () => {
+    await clearApiKeysLocked(profileId ? [profileId] : undefined);
     return commitConfigurationRevision(true);
-  }
-  await Promise.all([
-    browser.storage.session.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
-    browser.storage.local.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
-  ]);
-  return commitConfigurationRevision(true);
+  });
+}
+
+/**
+ * Commits settings and credentials under one extension-origin lock. Keys that
+ * could otherwise become associated with a changed endpoint are removed
+ * first. A settings/key write failure can therefore leave the profile without
+ * a key, but can never expose an old key to a new provider configuration.
+ */
+export async function mutateApiConfiguration<Value>(
+  updater: (
+    current: ExtensionSettings,
+  ) =>
+    | ApiConfigurationMutationUpdate<Value>
+    | Promise<ApiConfigurationMutationUpdate<Value>>,
+): Promise<SettingsMutationResult<Value>> {
+  return runSettingsWrite(async () => {
+    const current = await getSettings();
+    const update = await updater(current);
+    if (!update.nextSettings) {
+      return { settings: current, value: update.value, revisionId: null };
+    }
+
+    const plan = update.credentials;
+    if (plan?.clearAllApiKeys) {
+      await clearApiKeysLocked();
+    } else if (plan?.clearProfileIds?.length) {
+      await clearApiKeysLocked(plan.clearProfileIds);
+    }
+    if (plan?.moveApiKeysTo) {
+      await moveApiKeysLocked(
+        plan.moveApiKeysTo,
+        update.nextSettings.apiProfiles.map((profile) => profile.id),
+      );
+    }
+
+    const storedSettings = await storeSettingsWithoutRevision(update.nextSettings);
+    if (plan?.saveApiKey) {
+      await saveApiKeyLocked(
+        plan.saveApiKey.apiKey,
+        plan.saveApiKey.mode,
+        plan.saveApiKey.profileId,
+      );
+    }
+    const credentialsChanged = Boolean(
+      plan?.clearAllApiKeys ||
+        plan?.clearProfileIds?.length ||
+        plan?.moveApiKeysTo ||
+        plan?.saveApiKey,
+    );
+    const invalidatesTranslationState =
+      credentialsChanged ||
+      translationBehaviorFingerprint(current) !==
+        translationBehaviorFingerprint(storedSettings);
+    const revisionId = await commitConfigurationRevision(invalidatesTranslationState);
+    return { settings: storedSettings, value: update.value, revisionId };
+  });
 }
 
 export async function restrictSensitiveStorageAccess(): Promise<void> {

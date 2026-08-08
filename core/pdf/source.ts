@@ -258,6 +258,32 @@ export function pdfDocumentIdentity(value: string | undefined): string | undefin
   return url.href;
 }
 
+/**
+ * Distinguishes an in-document PDF location change from a same-URL reload.
+ * Both keep the same document identity, but only the former changes a page or
+ * source fragment and should preserve work captured for the current document.
+ */
+export function isSamePdfDocumentLocationChange(
+  previousSourceUrl: string | undefined,
+  previousPage: number | undefined,
+  nextTabUrl: string | undefined,
+): boolean {
+  const nextSourceUrl = edgePdfSourceUrl({
+    ...(nextTabUrl ? { tabUrl: nextTabUrl } : {}),
+  }) ?? nextTabUrl;
+  const previousIdentity = pdfDocumentIdentity(previousSourceUrl);
+  const nextIdentity = pdfDocumentIdentity(nextSourceUrl);
+  if (!previousIdentity || previousIdentity !== nextIdentity) return false;
+
+  const oldPage = previousPage ?? pdfInitialPage(previousSourceUrl);
+  const nextPage = pdfInitialPage(nextTabUrl) ?? pdfInitialPage(nextSourceUrl);
+  if (nextPage && nextPage !== oldPage) return true;
+
+  const previousHash = parseUrl(previousSourceUrl)?.hash ?? '';
+  const nextHash = parseUrl(nextSourceUrl)?.hash ?? '';
+  return Boolean(nextHash && nextHash !== previousHash);
+}
+
 export function pdfPermissionPattern(value: string): string | undefined {
   const url = parsePdfSourceUrl(value);
   if (!url) return undefined;

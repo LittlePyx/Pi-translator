@@ -1,8 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   API_KEYS_STORAGE_KEY,
+  changedApiCredentialProfileIds,
+  clearApiKey,
   getApiKey,
   getSettings,
+  mutateApiConfiguration,
+  mutateSettings,
   saveApiKey,
   saveSettings,
 } from '../core/settings/repository';
@@ -13,8 +17,16 @@ type StorageRecord = Record<string, unknown>;
 
 function createStorageArea(initial: StorageRecord = {}) {
   const values: StorageRecord = { ...initial };
+  const setFailures: Array<(next: StorageRecord) => boolean> = [];
+  const removeFailures: Array<(keys: string[]) => boolean> = [];
   return {
     values,
+    failNextSet(predicate: (next: StorageRecord) => boolean) {
+      setFailures.push(predicate);
+    },
+    failNextRemove(predicate: (keys: string[]) => boolean) {
+      removeFailures.push(predicate);
+    },
     async get(keys: string | string[] | null) {
       if (keys === null) return { ...values };
       const requested = Array.isArray(keys) ? keys : [keys];
@@ -25,12 +37,34 @@ function createStorageArea(initial: StorageRecord = {}) {
       );
     },
     async set(next: StorageRecord) {
+      const failureIndex = setFailures.findIndex((predicate) => predicate(next));
+      if (failureIndex >= 0) {
+        setFailures.splice(failureIndex, 1);
+        throw new Error('Injected storage.set failure');
+      }
       Object.assign(values, next);
     },
     async remove(keys: string | string[]) {
-      for (const key of Array.isArray(keys) ? keys : [keys]) delete values[key];
+      const requested = Array.isArray(keys) ? keys : [keys];
+      const failureIndex = removeFailures.findIndex((predicate) => predicate(requested));
+      if (failureIndex >= 0) {
+        removeFailures.splice(failureIndex, 1);
+        throw new Error('Injected storage.remove failure');
+      }
+      for (const key of requested) delete values[key];
     },
     async setAccessLevel() {},
+  };
+}
+
+function createOriginLockManager() {
+  let tail: Promise<void> = Promise.resolve();
+  return {
+    request<T>(_name: string, callback: () => T | Promise<T>): Promise<T> {
+      const operation = tail.then(callback, callback);
+      tail = operation.then(() => undefined, () => undefined);
+      return operation;
+    },
   };
 }
 
@@ -44,6 +78,7 @@ describe('settings upgrade and browser-restart storage policy', () => {
     vi.stubGlobal('browser', {
       storage: { local, session },
     });
+    vi.stubGlobal('navigator', { locks: createOriginLockManager() });
   });
 
   it('upgrades a pre-profile configuration without losing user preferences', async () => {
@@ -157,5 +192,295 @@ describe('settings upgrade and browser-restart storage policy', () => {
       id: visionRevision,
       invalidatesTranslationState: true,
     });
+  });
+
+  it('serializes a slow glossary mutation after an ordinary settings save', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    let releaseMutation!: () => void;
+    let markMutationStarted!: () => void;
+    const mutationGate = new Promise<void>((resolve) => {
+      releaseMutation = resolve;
+    });
+    const mutationStarted = new Promise<void>((resolve) => {
+      markMutationStarted = resolve;
+    });
+
+    const save = saveSettings({
+      ...DEFAULT_SETTINGS,
+      sidebarWidth: 444,
+    });
+    const mutation = mutateSettings(async (current) => {
+      markMutationStarted();
+      await mutationGate;
+      return {
+        nextSettings: {
+          ...current,
+          academicGlossary: [
+            ...current.academicGlossary,
+            { source: 'single-pixel imaging', target: '单像素成像' },
+          ],
+        },
+        value: 'term-added',
+      };
+    });
+
+    await mutationStarted;
+    releaseMutation();
+    const [revisionId, result] = await Promise.all([save, mutation]);
+
+    expect(result.value).toBe('term-added');
+    expect(result.revisionId).not.toBeNull();
+    expect(result.revisionId).not.toBe(revisionId);
+    expect(result.settings.sidebarWidth).toBe(444);
+    expect(result.settings.academicGlossary).toEqual([
+      { source: 'single-pixel imaging', target: '单像素成像' },
+    ]);
+    expect(await getSettings()).toMatchObject({
+      sidebarWidth: 444,
+      academicGlossary: [
+        { source: 'single-pixel imaging', target: '单像素成像' },
+      ],
+    });
+  });
+
+  it('skips a conditional rollback when the glossary term changed later', async () => {
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      academicGlossary: [{ source: 'attention', target: '注意力' }],
+    });
+
+    const applied = await mutateSettings((current) => ({
+      nextSettings: {
+        ...current,
+        academicGlossary: [{ source: 'attention', target: '注意机制' }],
+      },
+      value: { source: 'attention', appliedTarget: '注意机制' },
+    }));
+    await mutateSettings((current) => ({
+      nextSettings: {
+        ...current,
+        academicGlossary: [{ source: 'attention', target: '注意力机制' }],
+      },
+      value: undefined,
+    }));
+
+    const rollback = await mutateSettings((current) => {
+      const currentTerm = current.academicGlossary.find(
+        (entry) => entry.source === applied.value.source,
+      );
+      if (currentTerm?.target !== applied.value.appliedTarget) {
+        return { nextSettings: null, value: false };
+      }
+      return {
+        nextSettings: {
+          ...current,
+          academicGlossary: [{ source: 'attention', target: '注意力' }],
+        },
+        value: true,
+      };
+    });
+
+    expect(rollback.value).toBe(false);
+    expect(rollback.revisionId).toBeNull();
+    expect(rollback.settings.academicGlossary).toEqual([
+      { source: 'attention', target: '注意力机制' },
+    ]);
+    expect((await getSettings()).academicGlossary).toEqual([
+      { source: 'attention', target: '注意力机制' },
+    ]);
+  });
+
+  it('uses the origin lock to serialize mutations from separate extension realms', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    vi.resetModules();
+    const firstRealm = await import('../core/settings/repository');
+    vi.resetModules();
+    const secondRealm = await import('../core/settings/repository');
+    let releaseFirst!: () => void;
+    let firstStarted!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+    const started = new Promise<void>((resolve) => { firstStarted = resolve; });
+
+    const first = firstRealm.mutateSettings(async (current) => {
+      firstStarted();
+      await gate;
+      return {
+        nextSettings: { ...current, sidebarWidth: 470 },
+        value: undefined,
+      };
+    });
+    await started;
+    const second = secondRealm.mutateSettings((current) => ({
+      nextSettings: {
+        ...current,
+        academicGlossary: [{ source: 'diffusion model', target: '扩散模型' }],
+      },
+      value: undefined,
+    }));
+    releaseFirst();
+    await Promise.all([first, second]);
+
+    expect(await secondRealm.getSettings()).toMatchObject({
+      sidebarWidth: 470,
+      academicGlossary: [{ source: 'diffusion model', target: '扩散模型' }],
+    });
+  });
+
+  it('does not lose another profile when separate realms save and clear keys concurrently', async () => {
+    await saveApiKey('key-a', 'local', 'profile-a');
+    await saveApiKey('key-b', 'local', 'profile-b');
+    await saveApiKey('key-c', 'local', 'profile-c');
+    vi.resetModules();
+    const firstRealm = await import('../core/settings/repository');
+    vi.resetModules();
+    const secondRealm = await import('../core/settings/repository');
+
+    await Promise.all([
+      firstRealm.clearApiKey('profile-a'),
+      secondRealm.clearApiKey('profile-b'),
+      firstRealm.saveApiKey('key-d', 'local', 'profile-d'),
+    ]);
+
+    expect(await secondRealm.getApiKey('profile-a')).toBeUndefined();
+    expect(await secondRealm.getApiKey('profile-b')).toBeUndefined();
+    expect(await secondRealm.getApiKey('profile-c')).toBe('key-c');
+    expect(await secondRealm.getApiKey('profile-d')).toBe('key-d');
+    expect(local.values[API_KEYS_STORAGE_KEY]).toEqual({
+      'profile-c': 'key-c',
+      'profile-d': 'key-d',
+    });
+  });
+
+  it('keeps a key for model-only changes but isolates endpoint changes and deletions', () => {
+    const profile = DEFAULT_SETTINGS.apiProfiles[0]!;
+    expect(changedApiCredentialProfileIds(
+      [profile],
+      [{ ...profile, model: 'another-model-at-the-same-endpoint' }],
+    )).toEqual([]);
+    expect(changedApiCredentialProfileIds(
+      [profile],
+      [{ ...profile, apiBaseUrl: 'https://another.example/v1' }],
+    )).toEqual([profile.id]);
+    expect(changedApiCredentialProfileIds([profile], [])).toEqual([profile.id]);
+  });
+
+  it('serializes a storage-mode move with a concurrent profile clear', async () => {
+    const profileA = { ...DEFAULT_SETTINGS.apiProfiles[0]!, id: 'profile-a' };
+    const profileB = { ...DEFAULT_SETTINGS.apiProfiles[0]!, id: 'profile-b' };
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      apiProfiles: [profileA, profileB],
+      activeApiProfileId: profileA.id,
+      apiBaseUrl: profileA.apiBaseUrl,
+      model: profileA.model,
+    });
+    await saveApiKey('key-a', 'session', profileA.id);
+    await saveApiKey('key-b', 'session', profileB.id);
+    vi.resetModules();
+    const firstRealm = await import('../core/settings/repository');
+    vi.resetModules();
+    const secondRealm = await import('../core/settings/repository');
+
+    await Promise.all([
+      firstRealm.moveApiKey('local'),
+      secondRealm.clearApiKey(profileB.id),
+    ]);
+
+    expect(await getApiKey(profileA.id)).toBe('key-a');
+    expect(await getApiKey(profileB.id)).toBeUndefined();
+    expect(local.values[API_KEYS_STORAGE_KEY]).toEqual({ [profileA.id]: 'key-a' });
+    expect(session.values[API_KEYS_STORAGE_KEY]).toEqual({});
+  });
+
+  it('clears an old profile key before committing a changed endpoint', async () => {
+    const oldSettings = {
+      ...DEFAULT_SETTINGS,
+      apiProfiles: [{
+        ...DEFAULT_SETTINGS.apiProfiles[0]!,
+        apiBaseUrl: 'https://old.example/v1',
+        model: 'old-model',
+      }],
+      apiBaseUrl: 'https://old.example/v1',
+      model: 'old-model',
+    };
+    await saveSettings(oldSettings);
+    await saveApiKey('old-key', 'session', 'default');
+    local.failNextSet((next) =>
+      (next.extensionSettings as { apiBaseUrl?: string } | undefined)?.apiBaseUrl ===
+      'https://new.example/v1',
+    );
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: {
+        ...current,
+        apiProfiles: [{
+          ...current.apiProfiles[0]!,
+          apiBaseUrl: 'https://new.example/v1',
+          model: 'new-model',
+        }],
+        apiBaseUrl: 'https://new.example/v1',
+        model: 'new-model',
+      },
+      credentials: {
+        clearProfileIds: ['default'],
+        saveApiKey: { apiKey: 'new-key', mode: 'session', profileId: 'default' },
+      },
+      value: undefined,
+    }))).rejects.toThrow('Injected storage.set failure');
+
+    expect((await getSettings()).apiBaseUrl).toBe('https://old.example/v1');
+    expect(await getApiKey('default')).toBeUndefined();
+  });
+
+  it('leaves a changed profile without a key when the new key write fails', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await saveApiKey('old-key', 'session', 'default');
+    session.failNextSet((next) =>
+      (next[API_KEYS_STORAGE_KEY] as Record<string, string> | undefined)?.default ===
+      'new-key',
+    );
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: {
+        ...current,
+        apiProfiles: [{
+          ...current.apiProfiles[0]!,
+          apiBaseUrl: 'https://new.example/v1',
+          model: 'new-model',
+        }],
+        apiBaseUrl: 'https://new.example/v1',
+        model: 'new-model',
+      },
+      credentials: {
+        clearProfileIds: ['default'],
+        saveApiKey: { apiKey: 'new-key', mode: 'session', profileId: 'default' },
+      },
+      value: undefined,
+    }))).rejects.toThrow('Injected storage.set failure');
+
+    expect((await getSettings()).apiBaseUrl).toBe('https://new.example/v1');
+    expect(await getApiKey('default')).toBeUndefined();
+  });
+
+  it('does not import new provider settings when clearing old credentials fails', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    await saveApiKey('old-key', 'local', 'default');
+    local.failNextRemove((keys) => keys.includes(API_KEYS_STORAGE_KEY));
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: {
+        ...current,
+        apiProfiles: [{
+          ...current.apiProfiles[0]!,
+          apiBaseUrl: 'https://imported.example/v1',
+        }],
+        apiBaseUrl: 'https://imported.example/v1',
+      },
+      credentials: { clearAllApiKeys: true },
+      value: undefined,
+    }))).rejects.toThrow('Injected storage.remove failure');
+
+    expect((await getSettings()).apiBaseUrl).toBe(DEFAULT_SETTINGS.apiBaseUrl);
+    expect(await getApiKey('default')).toBe('old-key');
   });
 });

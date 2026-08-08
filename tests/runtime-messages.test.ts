@@ -91,6 +91,8 @@ describe('runtime message guard', () => {
           translatedText: '修订译文。',
           warnings: [],
         },
+        previousTranslatedText: '原译文。',
+        baseRequestId: 'base-1',
       },
     })).toBe(true);
   });
@@ -161,6 +163,55 @@ describe('runtime message guard', () => {
     expect(isTranslationCorrectionReceipt(correctionReceipt())).toBe(true);
     expect(isTranslationCorrectionReceipt({
       ...correctionReceipt(),
+      documentTermChange: {
+        sourceKey: 'source term',
+        applied: {
+          id: 'term-1',
+          source: 'source term',
+          target: 'corrected term',
+          createdAt: 1,
+          updatedAt: 2,
+        },
+        previous: {
+          id: 'term-1',
+          source: 'source term',
+          target: 'previous term',
+          createdAt: 1,
+          updatedAt: 1,
+        },
+        removedCandidates: [{
+          id: 'candidate-1',
+          source: 'source term',
+          target: 'candidate translation',
+          createdAt: 1,
+        }],
+        introducedCandidates: [],
+      },
+    })).toBe(true);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      termChange: { ...correctionReceipt().termChange, scope: 'global' },
+      documentTermChange: {
+        sourceKey: 'source term',
+        removedCandidates: [],
+        introducedCandidates: [],
+      },
+    })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      documentTermChange: {
+        sourceKey: 'source term',
+        removedCandidates: Array.from({ length: 21 }, (_, index) => ({
+          id: `candidate-${index}`,
+          source: `source-${index}`,
+          target: `target-${index}`,
+          createdAt: 1,
+        })),
+        introducedCandidates: [],
+      },
+    })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
       segmentChange: {
         segmentId: 'S1',
         previousTranslatedText: 'Previous sentence.',
@@ -209,6 +260,22 @@ describe('runtime message guard', () => {
       payload: {
         pageUrl: 'https://example.com/paper',
         result: { ...correctedResult(), translatedText: '' },
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        previousTranslatedText: 'Previous translation.',
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        baseRequestId: 'base-1',
       },
     })).toBe(false);
     expect(isRuntimeMessage({

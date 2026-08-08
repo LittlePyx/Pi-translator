@@ -112,6 +112,45 @@ export function upsertGlossaryEntry(
   };
 }
 
+/**
+ * Applies edits made against an older settings-page snapshot to the latest
+ * stored glossary. Unchanged rows keep newer background corrections, while an
+ * explicit edit or deletion from the user still wins.
+ */
+export function mergeGlossaryDraft(
+  baseline: Iterable<GlossaryEntry>,
+  draft: Iterable<GlossaryEntry>,
+  latest: Iterable<GlossaryEntry>,
+): GlossaryEntry[] {
+  const byKey = (entries: Iterable<GlossaryEntry>) => new Map(
+    normalizeGlossaryEntries(entries).map(
+      (entry) => [normalizeGlossaryTermKey(entry.source), entry] as const,
+    ),
+  );
+  const baselineByKey = byKey(baseline);
+  const draftByKey = byKey(draft);
+  const removedKeys = new Set(
+    [...baselineByKey.keys()].filter((key) => !draftByKey.has(key)),
+  );
+  let merged = normalizeGlossaryEntries(latest).filter(
+    (entry) => !removedKeys.has(normalizeGlossaryTermKey(entry.source)),
+  );
+  for (const [key, entry] of draftByKey) {
+    const previous = baselineByKey.get(key);
+    if (previous && previous.source === entry.source && previous.target === entry.target) continue;
+    const alreadyPresent = merged.some(
+      (candidate) => normalizeGlossaryTermKey(candidate.source) === key,
+    );
+    if (!alreadyPresent && merged.length >= MAX_GLOSSARY_ENTRIES) {
+      throw new Error(
+        `术语表在设置页打开期间已达到 ${MAX_GLOSSARY_ENTRIES} 条，请重新加载后整理术语。`,
+      );
+    }
+    merged = upsertGlossaryEntry(merged, entry).entries;
+  }
+  return merged;
+}
+
 /** Rolls back only if the entry still has the target written by the correction. */
 export function rollbackGlossaryEntry(
   values: Iterable<GlossaryEntry>,

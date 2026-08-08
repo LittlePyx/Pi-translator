@@ -173,8 +173,8 @@ export type RuntimeMessage =
         result: TranslateResult;
         rememberForDocument?: boolean;
         scope?: TranslationMemoryScope;
-        previousTranslatedText?: string;
-        baseRequestId?: string;
+        previousTranslatedText: string;
+        baseRequestId: string;
         term?: TranslationCorrectionTermInput;
       };
     }
@@ -348,6 +348,43 @@ function validCorrectionTermReceipt(value: unknown): boolean {
   );
 }
 
+function validDocumentConfirmedTerm(value: unknown): boolean {
+  const term = record(value);
+  return Boolean(
+    term &&
+    validTerm(term) &&
+    nonEmptyString(term.id, 256) &&
+    typeof term.createdAt === 'number' && Number.isFinite(term.createdAt) &&
+    typeof term.updatedAt === 'number' && Number.isFinite(term.updatedAt),
+  );
+}
+
+function validDocumentTermCandidate(value: unknown): boolean {
+  const term = record(value);
+  return Boolean(
+    term &&
+    validTerm(term) &&
+    nonEmptyString(term.id, 256) &&
+    typeof term.createdAt === 'number' && Number.isFinite(term.createdAt),
+  );
+}
+
+function validDocumentTermChangeReceipt(value: unknown): boolean {
+  const change = record(value);
+  return Boolean(
+    change &&
+    nonEmptyString(change.sourceKey, 120) &&
+    (change.applied === undefined || validDocumentConfirmedTerm(change.applied)) &&
+    (change.previous === undefined || validDocumentConfirmedTerm(change.previous)) &&
+    Array.isArray(change.removedCandidates) &&
+    change.removedCandidates.length <= 20 &&
+    change.removedCandidates.every(validDocumentTermCandidate) &&
+    Array.isArray(change.introducedCandidates) &&
+    change.introducedCandidates.length <= 20 &&
+    change.introducedCandidates.every(validDocumentTermCandidate),
+  );
+}
+
 function validSegmentCorrectionReceipt(value: unknown): boolean {
   const change = record(value);
   return Boolean(
@@ -375,6 +412,12 @@ export function isTranslationCorrectionReceipt(
     nonEmptyString(receipt.correctedTranslation, MAX_SELECTION_LENGTH * 4) &&
     receipt.previousTranslation !== receipt.correctedTranslation &&
     (termChange === undefined || validCorrectionTermReceipt(termChange)) &&
+    (receipt.documentTermChange === undefined || (
+      receipt.scope === 'document' &&
+      termChange !== undefined &&
+      record(termChange)?.scope === 'document' &&
+      validDocumentTermChangeReceipt(receipt.documentTermChange)
+    )) &&
     (receipt.segmentChange === undefined || validSegmentCorrectionReceipt(receipt.segmentChange)),
   );
 }
@@ -398,9 +441,8 @@ function validUpdateTranslationPayload(value: unknown): boolean {
     validCorrectionResult(payload.result) &&
     (payload.rememberForDocument === undefined || typeof payload.rememberForDocument === 'boolean') &&
     (payload.scope === undefined || validTranslationMemoryScope(payload.scope)) &&
-    (payload.previousTranslatedText === undefined ||
-      nonEmptyString(payload.previousTranslatedText, MAX_SELECTION_LENGTH * 4)) &&
-    (payload.baseRequestId === undefined || nonEmptyString(payload.baseRequestId, 256)) &&
+    nonEmptyString(payload.previousTranslatedText, MAX_SELECTION_LENGTH * 4) &&
+    nonEmptyString(payload.baseRequestId, 256) &&
     (payload.term === undefined || validCorrectionTermInput(payload.term)),
   );
 }

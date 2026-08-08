@@ -22,15 +22,14 @@ import {
   importSettingsConfiguration,
 } from '../../core/settings/config-transfer';
 import {
+  changedApiCredentialProfileIds,
   clearApiKey,
   getSettings,
   hasApiKey,
-  moveApiKey,
-  saveApiKey,
-  saveSettings,
+  mutateApiConfiguration,
+  mutateSettings,
 } from '../../core/settings/repository';
-import { commitConfigurationRevision } from '../../core/settings/configuration-revision';
-import { translationBehaviorFingerprint } from '../../core/settings/translation-configuration';
+import { mergeSettingsDraft } from '../../core/settings/draft-merge';
 import type {
   ApiKeyStorageMode,
   ApiProfile,
@@ -44,7 +43,10 @@ import type {
 import { getAutoInjectionPatterns, normalizeSiteAllowlist } from '../../core/settings/site-access';
 import { normalizePdfRegionShortcutKey } from '../../core/pdf/region-shortcuts';
 import { supportsQwenCoordinateOcr } from '../../core/pdf/qwen-endpoint';
-import { formatGlossaryEntries, parseGlossaryText } from '../../core/translation/glossary';
+import {
+  formatGlossaryEntries,
+  parseGlossaryText,
+} from '../../core/translation/glossary';
 import type { TranslationStyle } from '../../core/translation/types';
 
 function element<T extends HTMLElement>(id: string): T {
@@ -142,7 +144,7 @@ const settingsNavButtons=[...document.querySelectorAll<HTMLButtonElement>('[data
 const settingsSections=[...document.querySelectorAll<HTMLElement>('[data-settings-section]')];
 
 let originalMode:ApiKeyStorageMode='session';
-let loadedSettings:ExtensionSettings|undefined;
+let loadedSettingsBaseline:ExtensionSettings|undefined;
 let profiles:ApiProfile[]=[];
 let currentProfileId='default';
 let activeTextProfileId='default';
@@ -315,9 +317,11 @@ async function finishOnboarding():Promise<void>{
   const visionDetection=await detectVisionModel(profile,onboardingAvailableModels,model,apiKey);
   const visionSupported=Boolean(visionDetection.model);
   const mode:ApiKeyStorageMode=onboardingPersistKey.checked?'local':'session';
-  const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:[profile],activeApiProfileId:profile.id,visionApiProfileId:visionSupported?profile.id:'',visionModel:visionDetection.model??current.visionModel,apiBaseUrl:base,model,apiKeyStorage:mode,onboardingCompleted:true};
-  await saveSettings(next);
-  await saveApiKey(apiKey,mode,profile.id);
+  const transaction=await mutateApiConfiguration((latest)=>({
+    nextSettings:{...latest,schemaVersion:8,apiProfiles:[profile],activeApiProfileId:profile.id,visionApiProfileId:visionSupported?profile.id:'',visionModel:visionDetection.model??latest.visionModel,apiBaseUrl:base,model,apiKeyStorage:mode,onboardingCompleted:true},
+    credentials:{clearAllApiKeys:true,saveApiKey:{apiKey,mode,profileId:profile.id}},
+    value:undefined,
+  }));
   onboardingApiKey.value='';
   onboardingDialog.close();
   await load();
@@ -325,8 +329,8 @@ async function finishOnboarding():Promise<void>{
   setStatus(visionSupported
     ? `首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`
     : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
-  const configurationRevision=await commitConfigurationRevision(true);
-  await completeSettingsRecovery({text:true,vision:visionSupported},configurationRevision);
+  if(!transaction.revisionId)throw new Error('首次设置未能提交。');
+  await completeSettingsRecovery({text:true,vision:visionSupported},transaction.revisionId);
 }
 
 function validatedProfiles():ApiProfile[] {
@@ -495,7 +499,7 @@ async function removeUnusedApiAccess(previous:ApiProfile[],next:ApiProfile[],act
 }
 
 async function load():Promise<void>{
-  const settings=await getSettings();loadedSettings=settings;profiles=settings.apiProfiles.map(profile=>({...profile}));activeTextProfileId=settings.activeApiProfileId;currentProfileId=activeTextProfileId;visionProfileId=settings.visionApiProfileId;visionSelectionTouched=false;visionSetupIntentProfileId='';visionModel.value=settings.visionModel;originalMode=settings.apiKeyStorage;persistKey.checked=settings.apiKeyStorage==='local';sourceLanguage.value=settings.sourceLanguage;targetLanguage.value=settings.targetLanguage;styleSelect.value=settings.style;contentMode.value=settings.contentMode;academicGlossary.value=formatGlossaryEntries(settings.academicGlossary);rememberHistory.checked=settings.rememberRecentTranslations;historyLimit.value=String(settings.historyLimit);sessionCache.checked=settings.enableSessionCache;alignmentDefault.checked=settings.sentenceAlignmentDefault;autoRenderLatex.checked=settings.autoRenderLatex;sidebarSide.value=settings.sidebarSide;contextMode.value=settings.contextMode;enableStreaming.checked=settings.enableStreaming;protectSensitiveFields.checked=settings.protectSensitiveFields;pdfKeyboardShortcuts.checked=settings.pdfKeyboardShortcutsEnabled;pdfRegionShortcutKey.value=settings.pdfRegionShortcutKey.toUpperCase();refreshPdfShortcutField();generalPageMode.value=settings.generalPageMode;siteAllowlist.value=settings.siteAllowlist.join('\n');floatingButton.checked=settings.showFloatingButtonOnOverleaf;hideTargetLanguageTrigger.checked=settings.hideFloatingButtonForTargetLanguage;contextMenu.checked=settings.enableContextMenu;refreshPageModeFields();await loadProfile(currentProfileId);setSaved();if(!settings.onboardingCompleted&&!onboardingDialog.open){onboardingPreset.value=API_PRESETS[0]?.id??'';applyOnboardingPreset();showOnboardingStep(1);onboardingDialog.showModal()}
+  const settings=await getSettings();loadedSettingsBaseline=settings;profiles=settings.apiProfiles.map(profile=>({...profile}));activeTextProfileId=settings.activeApiProfileId;currentProfileId=activeTextProfileId;visionProfileId=settings.visionApiProfileId;visionSelectionTouched=false;visionSetupIntentProfileId='';visionModel.value=settings.visionModel;originalMode=settings.apiKeyStorage;persistKey.checked=settings.apiKeyStorage==='local';sourceLanguage.value=settings.sourceLanguage;targetLanguage.value=settings.targetLanguage;styleSelect.value=settings.style;contentMode.value=settings.contentMode;academicGlossary.value=formatGlossaryEntries(settings.academicGlossary);rememberHistory.checked=settings.rememberRecentTranslations;historyLimit.value=String(settings.historyLimit);sessionCache.checked=settings.enableSessionCache;alignmentDefault.checked=settings.sentenceAlignmentDefault;autoRenderLatex.checked=settings.autoRenderLatex;sidebarSide.value=settings.sidebarSide;contextMode.value=settings.contextMode;enableStreaming.checked=settings.enableStreaming;protectSensitiveFields.checked=settings.protectSensitiveFields;pdfKeyboardShortcuts.checked=settings.pdfKeyboardShortcutsEnabled;pdfRegionShortcutKey.value=settings.pdfRegionShortcutKey.toUpperCase();refreshPdfShortcutField();generalPageMode.value=settings.generalPageMode;siteAllowlist.value=settings.siteAllowlist.join('\n');floatingButton.checked=settings.showFloatingButtonOnOverleaf;hideTargetLanguageTrigger.checked=settings.hideFloatingButtonForTargetLanguage;contextMenu.checked=settings.enableContextMenu;refreshPageModeFields();await loadProfile(currentProfileId);setSaved();if(!settings.onboardingCompleted&&!onboardingDialog.open){onboardingPreset.value=API_PRESETS[0]?.id??'';applyOnboardingPreset();showOnboardingStep(1);onboardingDialog.showModal()}
 }
 
 for(const [index,button] of settingsNavButtons.entries()){
@@ -515,7 +519,7 @@ window.addEventListener('beforeunload',event=>{if(!formDirty)return;event.preven
 
 onboardingPreset.addEventListener('change',applyOnboardingPreset);
 onboardingBack.addEventListener('click',()=>showOnboardingStep(onboardingStep-1));
-onboardingSkip.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();await saveSettings({...settings,onboardingCompleted:true});onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
+onboardingSkip.addEventListener('click',()=>{void(async()=>{await mutateSettings((settings)=>({nextSettings:{...settings,onboardingCompleted:true},value:undefined}));onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
 onboardingDialog.addEventListener('cancel',()=>{setTimeout(()=>{if(requestedFocusDeferred)void applyRequestedSettingsFocus()},0)});
 onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingStep===1){showOnboardingStep(2);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在验证 Key 并读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingAvailableModels=response.data.models;onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?`连接成功，已自动推荐文字模型 ${onboardingModel.value}；下一步会检测图片输入能力。`:'Key 验证成功，但接口未返回模型列表，请手动填写模型 ID。'}else{onboardingAvailableModels=[];message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步核对并手动填写模型。`;error=true}showOnboardingStep(3);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
 
@@ -573,7 +577,87 @@ deleteProfileButton.addEventListener('click',()=>{if(profiles.length<=1)return;c
 
 form.addEventListener('submit',event=>{event.preventDefault();const mode=generalPageMode.value as GeneralPageMode;const allowlist=normalizeSiteAllowlist(siteAllowlist.value.split(/\r?\n|,/));const glossary=parseGlossaryText(academicGlossary.value);try{profiles=validatedProfiles();renderProfileSelect()}catch(error){showSettingsSection('connection');setStatus(error instanceof Error?error.message:'API 配置不正确。',true);return}if(mode==='allowlist'&&!allowlist.length){showSettingsSection('pages');siteAllowlist.focus();setStatus('请至少填写一个有效的网站域名。',true);return}if(glossary.errors.length){showSettingsSection('translation');const details=academicGlossary.closest('details');if(details)details.open=true;academicGlossary.focus();setStatus(glossary.errors[0]??'术语表格式不正确。',true);return}
   if(pdfKeyboardShortcuts.checked&&!/^[a-z]$/i.test(pdfRegionShortcutKey.value.trim())){showSettingsSection('results');const details=pdfRegionShortcutKey.closest('details');if(details)details.open=true;pdfRegionShortcutKey.focus();setStatus('Pi PDF 框选键需要是一个英文字母。',true);return}
-  void(async()=>{const editing=currentProfile()!;const active=activeTextProfile()??editing;const pendingKey=apiKeyInput.value.trim();await requestSaveAccess(profiles,active.id,visionProfileId,mode,allowlist,pendingKey?[editing.id]:[]);const autoVision=await autoConfigureVisionProfile(editing);const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';const current=loadedSettings??await getSettings();const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);const visionProfile=profiles.find(profile=>profile.id===visionProfileId);const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:profiles.map(profile=>({...profile})),activeApiProfileId:active.id,visionApiProfileId:visionProfileId,visionModel:visionModel.value.trim()||visionProfile?.model||active.model,apiBaseUrl:active.apiBaseUrl,model:active.model,sourceLanguage:sourceLanguage.value,targetLanguage:targetLanguage.value,style:styleSelect.value as TranslationStyle,contentMode:contentMode.value as ContentMode,apiKeyStorage:keyMode,academicGlossary:glossary.entries,rememberRecentTranslations:rememberHistory.checked,historyLimit:Number(historyLimit.value) as HistoryLimit,enableSessionCache:sessionCache.checked,sentenceAlignmentDefault:alignmentDefault.checked,autoRenderLatex:autoRenderLatex.checked,sidebarSide:sidebarSide.value as SidebarSide,contextMode:contextMode.value as ContextMode,enableStreaming:enableStreaming.checked,protectSensitiveFields:protectSensitiveFields.checked,pdfKeyboardShortcutsEnabled:pdfKeyboardShortcuts.checked,pdfRegionShortcutKey:normalizePdfRegionShortcutKey(pdfRegionShortcutKey.value),showFloatingButtonOnOverleaf:floatingButton.checked,hideFloatingButtonForTargetLanguage:hideTargetLanguageTrigger.checked,generalPageMode:mode,siteAllowlist:allowlist,enableContextMenu:contextMenu.checked,onboardingCompleted:true};await saveSettings(next);if(pendingKey){await saveApiKey(pendingKey,keyMode,currentProfileId);apiKeyInput.value=''}else if(keyMode!==originalMode)await moveApiKey(keyMode);await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,mode,allowlist);activeTextProfileId=active.id;originalMode=keyMode;loadedSettings=next;visionSelectionTouched=false;renderProfileSelect();await refreshKeyState();setSaved();const roleMessage=active.id!==editing.id&&visionProfileId===editing.id?`设置已保存：文字继续使用“${active.name}”，PDF 图像使用“${editing.name}”。`:autoVision.configured&&autoVision.attempted?'设置已保存，并已自动启用 PDF 图像区域翻译。':autoVision.attempted?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。':'设置已保存，并已同步到打开的页面。';setStatus(roleMessage)})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
+  void(async()=>{
+    const editing=currentProfile()!;
+    const active=activeTextProfile()??editing;
+    const pendingKey=apiKeyInput.value.trim();
+    await requestSaveAccess(profiles,active.id,visionProfileId,mode,allowlist,pendingKey?[editing.id]:[]);
+    const autoVision=await autoConfigureVisionProfile(editing);
+    const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';
+    const baseline=loadedSettingsBaseline??await getSettings();
+    const visionProfile=profiles.find(profile=>profile.id===visionProfileId);
+    const draft:ExtensionSettings={
+      ...baseline,
+      schemaVersion:8,
+      apiProfiles:profiles.map(profile=>({...profile})),
+      activeApiProfileId:active.id,
+      visionApiProfileId:visionProfileId,
+      visionModel:visionModel.value.trim()||visionProfile?.model||active.model,
+      apiBaseUrl:active.apiBaseUrl,
+      model:active.model,
+      sourceLanguage:sourceLanguage.value,
+      targetLanguage:targetLanguage.value,
+      style:styleSelect.value as TranslationStyle,
+      contentMode:contentMode.value as ContentMode,
+      apiKeyStorage:keyMode,
+      academicGlossary:glossary.entries,
+      rememberRecentTranslations:rememberHistory.checked,
+      historyLimit:Number(historyLimit.value) as HistoryLimit,
+      enableSessionCache:sessionCache.checked,
+      sentenceAlignmentDefault:alignmentDefault.checked,
+      autoRenderLatex:autoRenderLatex.checked,
+      sidebarSide:sidebarSide.value as SidebarSide,
+      contextMode:contextMode.value as ContextMode,
+      enableStreaming:enableStreaming.checked,
+      protectSensitiveFields:protectSensitiveFields.checked,
+      pdfKeyboardShortcutsEnabled:pdfKeyboardShortcuts.checked,
+      pdfRegionShortcutKey:normalizePdfRegionShortcutKey(pdfRegionShortcutKey.value),
+      showFloatingButtonOnOverleaf:floatingButton.checked,
+      hideFloatingButtonForTargetLanguage:hideTargetLanguageTrigger.checked,
+      generalPageMode:mode,
+      siteAllowlist:allowlist,
+      enableContextMenu:contextMenu.checked,
+      onboardingCompleted:true,
+    };
+    const transaction=await mutateApiConfiguration((latest)=>{
+      const merged=mergeSettingsDraft(baseline,draft,latest);
+      if(pendingKey)merged.settings.apiKeyStorage=keyMode;
+      const clearProfileIds=changedApiCredentialProfileIds(latest.apiProfiles,merged.settings.apiProfiles);
+      return {
+        nextSettings:merged.settings,
+        credentials:{
+          clearProfileIds,
+          ...(keyMode!==latest.apiKeyStorage?{moveApiKeysTo:keyMode}:{}),
+          ...(pendingKey?{saveApiKey:{apiKey:pendingKey,mode:keyMode,profileId:editing.id}}:{}),
+        },
+        value:{
+          previous:latest,
+          next:merged.settings,
+          removedProfileIds:merged.removedProfileIds,
+        },
+      };
+    });
+    const {previous:current,next}=transaction.value;
+    if(pendingKey)apiKeyInput.value='';
+    await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,next.activeApiProfileId,next.visionApiProfileId,next.generalPageMode,next.siteAllowlist);
+    activeTextProfileId=active.id;
+    originalMode=keyMode;
+    // Keep the baseline aligned with what the form still shows. Unseen
+    // concurrent changes remain outside it and will be preserved next time.
+    loadedSettingsBaseline=draft;
+    visionSelectionTouched=false;
+    renderProfileSelect();
+    await refreshKeyState();
+    setSaved();
+    const roleMessage=active.id!==editing.id&&visionProfileId===editing.id
+      ?`设置已保存：文字继续使用“${active.name}”，PDF 图像使用“${editing.name}”。`
+      :autoVision.configured&&autoVision.attempted
+        ?'设置已保存，并已自动启用 PDF 图像区域翻译。'
+        :autoVision.attempted
+          ?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。'
+          :'设置已保存，并已同步到打开的页面。';
+    setStatus(roleMessage);
+  })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
 });
 
 async function persistConnectedApiConfiguration(message:string):Promise<string>{
@@ -583,11 +667,10 @@ async function persistConnectedApiConfiguration(message:string):Promise<string>{
   if(!editing||!active)throw new Error('当前 API 配置不存在，请重新加载设置页。');
   const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';
   const pendingKey=apiKeyInput.value.trim();
-  const current=loadedSettings??await getSettings();
-  const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);
   const visionProfile=profiles.find(profile=>profile.id===visionProfileId);
-  const next:ExtensionSettings={
-    ...current,
+  const baseline=loadedSettingsBaseline??await getSettings();
+  const draft:ExtensionSettings={
+    ...baseline,
     schemaVersion:8,
     apiProfiles:profiles.map(profile=>({...profile})),
     activeApiProfileId:active.id,
@@ -598,22 +681,32 @@ async function persistConnectedApiConfiguration(message:string):Promise<string>{
     apiKeyStorage:keyMode,
     onboardingCompleted:true,
   };
-  const invalidatesTranslationState=
-    translationBehaviorFingerprint(current)!==translationBehaviorFingerprint(next)||
-    Boolean(pendingKey)||
-    keyMode!==originalMode||
-    removedProfileIds.length>0;
-  await saveSettings(next);
-  if(pendingKey){await saveApiKey(pendingKey,keyMode,editing.id);apiKeyInput.value=''}
-  if(keyMode!==originalMode)await moveApiKey(keyMode);
-  await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));
-  // This final marker fences every preceding settings/key write. Recovery must
-  // acknowledge this exact revision before it can retry the original request.
-  const configurationRevision=await commitConfigurationRevision(invalidatesTranslationState);
-  await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,current.generalPageMode,current.siteAllowlist);
+  const transaction=await mutateApiConfiguration((latest)=>{
+    const merged=mergeSettingsDraft(baseline,draft,latest);
+    if(pendingKey)merged.settings.apiKeyStorage=keyMode;
+    const clearProfileIds=changedApiCredentialProfileIds(latest.apiProfiles,merged.settings.apiProfiles);
+    return {
+      nextSettings:merged.settings,
+      credentials:{
+        clearProfileIds,
+        ...(keyMode!==latest.apiKeyStorage?{moveApiKeysTo:keyMode}:{}),
+        ...(pendingKey?{saveApiKey:{apiKey:pendingKey,mode:keyMode,profileId:editing.id}}:{}),
+      },
+      value:{
+        previous:latest,
+        next:merged.settings,
+        removedProfileIds:merged.removedProfileIds,
+      },
+    };
+  });
+  const {previous:current,next}=transaction.value;
+  if(pendingKey)apiKeyInput.value='';
+  if(!transaction.revisionId)throw new Error('API 配置未能提交。');
+  const configurationRevision=transaction.revisionId;
+  await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,next.activeApiProfileId,next.visionApiProfileId,next.generalPageMode,next.siteAllowlist);
   activeTextProfileId=active.id;
   originalMode=keyMode;
-  loadedSettings=next;
+  loadedSettingsBaseline=draft;
   visionSelectionTouched=false;
   renderProfileSelect();
   await refreshKeyState();
@@ -726,7 +819,7 @@ shortcutsButton.addEventListener('click',()=>void browser.tabs.create({url:'edge
 restartOnboardingButton.addEventListener('click',()=>{const current=currentProfile();const matching=API_PRESETS.find(preset=>preset.apiBaseUrl===current?.apiBaseUrl);onboardingPreset.value=matching?.id??'custom';applyOnboardingPreset();if(current){onboardingBaseUrl.value=current.apiBaseUrl;onboardingModel.value=current.model}onboardingApiKey.value='';showOnboardingStep(1);onboardingDialog.showModal()});
 exportSettingsButton.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();const content=exportSettingsConfiguration(settings);const url=URL.createObjectURL(new Blob([content],{type:'application/json;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`pi-translator-settings-${new Date().toISOString().slice(0,10)}.json`;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setSupportStatus('配置已导出，文件中不包含任何 API Key。')})().catch(()=>setSupportStatus('导出配置失败。',true))});
 importSettingsButton.addEventListener('click',()=>importSettingsFile.click());
-importSettingsFile.addEventListener('change',()=>{const file=importSettingsFile.files?.[0];if(!file)return;void(async()=>{const current=await getSettings();const next=importSettingsConfiguration(await file.text(),current);await clearApiKey();await saveSettings(next);await load();setSupportStatus('配置已导入。出于安全考虑，所有 API Key 已清除；请重新填写 Key 并保存以授权接口域名。')})().catch((error:unknown)=>setSupportStatus(error instanceof Error?error.message:'导入配置失败。',true)).finally(()=>{importSettingsFile.value=''})});
+importSettingsFile.addEventListener('change',()=>{const file=importSettingsFile.files?.[0];if(!file)return;void(async()=>{const serialized=await file.text();await mutateApiConfiguration((latest)=>({nextSettings:importSettingsConfiguration(serialized,latest),credentials:{clearAllApiKeys:true},value:undefined}));await load();setSupportStatus('配置已导入。出于安全考虑，所有 API Key 已清除；请重新填写 Key 并保存以授权接口域名。')})().catch((error:unknown)=>setSupportStatus(error instanceof Error?error.message:'导入配置失败。',true)).finally(()=>{importSettingsFile.value=''})});
 copyDiagnosticReportButton.addEventListener('click',()=>{void(async()=>{const response=await browser.runtime.sendMessage({type:'GET_LOCAL_DIAGNOSTIC_REPORT'} satisfies RuntimeMessage) as LocalDiagnosticReportResponse;if(!response.ok)throw new Error(response.error.message);await navigator.clipboard.writeText(response.data.report);setSupportStatus('诊断报告已复制；不包含 API Key、选区、译文或网站名称。')})().catch(()=>setSupportStatus('复制诊断报告失败，请检查剪贴板权限。',true))});
 let requestedFocusDeferred=false;
 async function applyRequestedSettingsFocus():Promise<void>{

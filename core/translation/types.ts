@@ -70,6 +70,19 @@ export interface TranslationCorrectionTermReceipt {
   documentTermId?: string;
 }
 
+/**
+ * Exact document-term transition needed to undo a correction without losing
+ * candidates that were displaced when the term was confirmed. This remains
+ * session-local as part of the correction receipt.
+ */
+export interface TranslationDocumentTermChangeReceipt {
+  sourceKey: string;
+  applied?: GlossaryEntry & { id: string; createdAt: number; updatedAt: number };
+  previous?: GlossaryEntry & { id: string; createdAt: number; updatedAt: number };
+  removedCandidates: Array<GlossaryEntry & { id: string; createdAt: number }>;
+  introducedCandidates: Array<GlossaryEntry & { id: string; createdAt: number }>;
+}
+
 /** Kept only in the current browser session so a manual correction can be undone safely. */
 export interface TranslationCorrectionReceipt {
   baseRequestId: string;
@@ -78,6 +91,7 @@ export interface TranslationCorrectionReceipt {
   previousTranslation: string;
   correctedTranslation: string;
   termChange?: TranslationCorrectionTermReceipt;
+  documentTermChange?: TranslationDocumentTermChangeReceipt;
   segmentChange?: {
     segmentId: string;
     previousTranslatedText: string;

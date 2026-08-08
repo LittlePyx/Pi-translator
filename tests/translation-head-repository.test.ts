@@ -117,6 +117,68 @@ describe('translation head repository', () => {
     await expect(readTranslationHead(6)).resolves.toBeUndefined();
   });
 
+  it('allows exactly one concurrent correction to advance the same base result', async () => {
+    await writeTranslationHead({
+      tabId: 12,
+      currentResultRequestId: 'base-result',
+      rootRequestId: 'root-result',
+    });
+
+    const outcomes = await Promise.all([
+      writeTranslationHead({
+        tabId: 12,
+        currentResultRequestId: 'correction-a',
+        rootRequestId: 'root-result',
+      }, {
+        currentResultRequestId: 'base-result',
+        rootRequestId: 'root-result',
+      }),
+      writeTranslationHead({
+        tabId: 12,
+        currentResultRequestId: 'correction-b',
+        rootRequestId: 'root-result',
+      }, {
+        currentResultRequestId: 'base-result',
+        rootRequestId: 'root-result',
+      }),
+    ]);
+
+    expect(outcomes.filter(Boolean)).toHaveLength(1);
+    const winner = outcomes[0] ? 'correction-a' : 'correction-b';
+    await expect(readTranslationHead(12)).resolves.toMatchObject({
+      currentResultRequestId: winner,
+      rootRequestId: 'root-result',
+    });
+  });
+
+  it('rejects a stale undo after a newer correction advanced the result head', async () => {
+    await writeTranslationHead({
+      tabId: 13,
+      currentResultRequestId: 'corrected-result',
+      rootRequestId: 'root-result',
+    });
+    await writeTranslationHead({
+      tabId: 13,
+      currentResultRequestId: 'newer-correction',
+      rootRequestId: 'root-result',
+    }, {
+      currentResultRequestId: 'corrected-result',
+      rootRequestId: 'root-result',
+    });
+
+    await expect(writeTranslationHead({
+      tabId: 13,
+      currentResultRequestId: 'stale-undo',
+      rootRequestId: 'root-result',
+    }, {
+      currentResultRequestId: 'corrected-result',
+      rootRequestId: 'root-result',
+    })).resolves.toBe(false);
+    await expect(readTranslationHead(13)).resolves.toMatchObject({
+      currentResultRequestId: 'newer-correction',
+    });
+  });
+
   it('removes malformed stored heads instead of trusting them', async () => {
     storage['translationResultHead:9'] = {
       tabId: 9,

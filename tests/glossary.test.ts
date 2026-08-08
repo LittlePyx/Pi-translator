@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   formatGlossaryEntries,
+  MAX_GLOSSARY_ENTRIES,
+  mergeGlossaryDraft,
   parseGlossaryText,
   rollbackGlossaryEntry,
   upsertGlossaryEntry,
@@ -78,5 +80,70 @@ Large Language Model = 重复项
     );
     expect(whitespaceNormalized.previousTarget).toBe('旧译法');
     expect(whitespaceNormalized.entries).toHaveLength(1);
+  });
+
+  it('merges a stale settings-page draft without dropping newer terms', () => {
+    const baseline = [
+      { source: 'attention', target: '注意力' },
+      { source: 'obsolete term', target: '旧术语' },
+    ];
+    const latest = [
+      { source: 'diffusion model', target: '扩散模型' },
+      { source: 'attention', target: '后台更新的译法' },
+      { source: 'obsolete term', target: '旧术语' },
+    ];
+    const draft = [
+      { source: 'attention', target: '注意机制' },
+      { source: 'new user term', target: '用户新术语' },
+    ];
+
+    expect(mergeGlossaryDraft(baseline, draft, latest)).toEqual([
+      { source: 'new user term', target: '用户新术语' },
+      { source: 'attention', target: '注意机制' },
+      { source: 'diffusion model', target: '扩散模型' },
+    ]);
+
+    expect(mergeGlossaryDraft(
+      baseline,
+      baseline,
+      latest,
+    )).toEqual(latest);
+  });
+
+  it('rejects a stale draft when concurrent additions would exceed capacity', () => {
+    const baseline = Array.from({ length: MAX_GLOSSARY_ENTRIES - 1 }, (_, index) => ({
+      source: `baseline-${index}`,
+      target: `translation-${index}`,
+    }));
+    const latest = [
+      { source: 'background-addition', target: 'background translation' },
+      ...baseline,
+    ];
+    const draft = [
+      { source: 'settings-page-addition', target: 'settings translation' },
+      ...baseline,
+    ];
+
+    expect(() => mergeGlossaryDraft(baseline, draft, latest)).toThrow();
+  });
+
+  it('allows an explicit edit when a concurrently updated glossary is full', () => {
+    const baseline = Array.from({ length: MAX_GLOSSARY_ENTRIES }, (_, index) => ({
+      source: `term-${index}`,
+      target: `translation-${index}`,
+    }));
+    const latest = baseline.map((entry, index) => index === 1
+      ? { ...entry, target: 'newer background translation' }
+      : entry);
+    const draft = baseline.map((entry, index) => index === 0
+      ? { ...entry, target: 'explicit settings translation' }
+      : entry);
+
+    const merged = mergeGlossaryDraft(baseline, draft, latest);
+    expect(merged).toHaveLength(MAX_GLOSSARY_ENTRIES);
+    expect(merged.find((entry) => entry.source === 'term-0')?.target)
+      .toBe('explicit settings translation');
+    expect(merged.find((entry) => entry.source === 'term-1')?.target)
+      .toBe('newer background translation');
   });
 });

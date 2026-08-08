@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   edgePdfSourceUrl,
   isEdgePdfSidePanelTab,
+  isSamePdfDocumentLocationChange,
   isEdgeNativePdfContext,
   isEdgeNativePdfViewerUrl,
   isExtensionPdfReaderUrl,
@@ -71,6 +72,29 @@ describe('PDF source helpers', () => {
 describe('Edge native PDF context', () => {
   const viewer =
     'chrome-extension://mhjfbmdgcfjbbpaeojofohoefgiehjai/edge_pdf/index.html';
+
+  it('distinguishes PDF page and hash changes from a same-URL reload', () => {
+    expect(isSamePdfDocumentLocationChange(
+      'https://example.com/paper.pdf#page=2',
+      2,
+      'https://example.com/paper.pdf#page=3',
+    )).toBe(true);
+    expect(isSamePdfDocumentLocationChange(
+      'https://example.com/paper.pdf#page=2',
+      2,
+      'https://example.com/paper.pdf#page=2',
+    )).toBe(false);
+    expect(isSamePdfDocumentLocationChange(
+      'https://example.com/paper.pdf',
+      undefined,
+      'https://example.com/paper.pdf#nameddest=methods',
+    )).toBe(true);
+    expect(isSamePdfDocumentLocationChange(
+      'https://example.com/paper.pdf#page=2',
+      2,
+      'https://example.com/other.pdf#page=3',
+    )).toBe(false);
+  });
 
   it('recognizes the protected Edge PDF viewer', () => {
     expect(isEdgeNativePdfViewerUrl(viewer)).toBe(true);

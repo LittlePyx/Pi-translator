@@ -69,6 +69,40 @@ export interface DocumentMemorySnapshot {
   recentTranslations: DocumentMemoryTranslation[];
 }
 
+/**
+ * A reversible, conditional change to one translation subject in a document.
+ *
+ * `applied` is the exact entry which must still be current before this change
+ * can be rolled back. `previous` is the entry which rollback restores (or is
+ * absent when the correction introduced a new subject). Capacity evictions are
+ * recorded as well so a rollback does not silently lose an unrelated entry.
+ *
+ * The same shape is used for the compensation returned by rollback: applying
+ * that compensation reverses the rollback without overwriting a later edit.
+ */
+export interface DocumentTranslationChangeReceipt {
+  subject: DocumentMemoryTranslation;
+  applied?: DocumentMemoryTranslation;
+  previous?: DocumentMemoryTranslation;
+  evicted: DocumentMemoryTranslation[];
+  introduced: DocumentMemoryTranslation[];
+}
+
+/** Exact document-term transition used by the combined correction receipt. */
+export interface DocumentTermChangeReceipt {
+  sourceKey: string;
+  applied?: DocumentConfirmedTerm;
+  previous?: DocumentConfirmedTerm;
+  removedCandidates: DocumentTermCandidate[];
+  introducedCandidates: DocumentTermCandidate[];
+}
+
+/** One atomic document correction, including its optional terminology edit. */
+export interface DocumentCorrectionChangeReceipt {
+  translationChange: DocumentTranslationChangeReceipt;
+  termChange?: DocumentTermChangeReceipt;
+}
+
 interface StoredDocumentMemory extends DocumentMemorySnapshot {
   schemaVersion: 1;
   dismissedTermKeys: string[];
@@ -138,6 +172,83 @@ function sameTranslationSubject(
   if (sameImageRegion(previous, next)) return true;
   if (previous.sourceKind === 'image-region' || next.sourceKind === 'image-region') return false;
   return normalizedTerm(previous.originalText) === normalizedTerm(next.originalText);
+}
+
+function sameSourceLocation(
+  left: PdfSourceLocation | undefined,
+  right: PdfSourceLocation | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.documentId === right.documentId &&
+    left.pageNumber === right.pageNumber &&
+    left.leftRatio === right.leftRatio &&
+    left.topRatio === right.topRatio &&
+    left.widthRatio === right.widthRatio &&
+    left.heightRatio === right.heightRatio
+  );
+}
+
+function sameReview(
+  left: DocumentTranslationReview | undefined,
+  right: DocumentTranslationReview | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.id === right.id &&
+    left.formulaNeedsReview === right.formulaNeedsReview &&
+    left.updatedAt === right.updatedAt &&
+    left.reviewedAt === right.reviewedAt &&
+    left.uncertainSpans.length === right.uncertainSpans.length &&
+    left.uncertainSpans.every((span, index) => span === right.uncertainSpans[index])
+  );
+}
+
+/** Equality for conditional mutation receipts; any later edit must win. */
+function sameTranslationEntry(
+  left: DocumentMemoryTranslation | undefined,
+  right: DocumentMemoryTranslation | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.id === right.id &&
+    left.requestId === right.requestId &&
+    left.rootRequestId === right.rootRequestId &&
+    left.originalText === right.originalText &&
+    left.translatedText === right.translatedText &&
+    left.completedAt === right.completedAt &&
+    left.targetLanguage === right.targetLanguage &&
+    left.style === right.style &&
+    left.sourceKind === right.sourceKind &&
+    sameSourceLocation(left.sourceLocation, right.sourceLocation) &&
+    sameReview(left.review, right.review)
+  );
+}
+
+function sameConfirmedTerm(
+  left: DocumentConfirmedTerm | undefined,
+  right: DocumentConfirmedTerm | undefined,
+): boolean {
+  if (!left || !right) return left === right;
+  return (
+    left.id === right.id &&
+    left.source === right.source &&
+    left.target === right.target &&
+    left.createdAt === right.createdAt &&
+    left.updatedAt === right.updatedAt
+  );
+}
+
+function sameCandidateTerm(
+  left: DocumentTermCandidate,
+  right: DocumentTermCandidate,
+): boolean {
+  return (
+    left.id === right.id &&
+    left.source === right.source &&
+    left.target === right.target &&
+    left.createdAt === right.createdAt
+  );
 }
 
 function compactUncertainSpans(values: readonly string[]): string[] {
@@ -350,65 +461,89 @@ export async function getDocumentMemory(
   return publicSnapshot(sanitizeMemory(all[identity.documentId], identity));
 }
 
+function withRememberedDocumentTranslationChange(
+  memory: StoredDocumentMemory,
+  identity: DocumentIdentity,
+  result: TranslateResult,
+): { memory: StoredDocumentMemory; change: DocumentTranslationChangeReceipt } {
+  const now = Date.now();
+  const baseEntry: DocumentMemoryTranslation = {
+    id: stableId('translation', `${result.requestId}:${result.originalText}`),
+    requestId: result.requestId,
+    rootRequestId: result.revision?.rootRequestId ?? result.requestId,
+    originalText: compactText(result.originalText),
+    translatedText: compactText(result.translatedText),
+    completedAt: result.completedAt ?? now,
+    ...(result.targetLanguage ? { targetLanguage: result.targetLanguage } : {}),
+    ...(result.style ? { style: result.style } : {}),
+    ...(result.sourceKind ? { sourceKind: result.sourceKind } : {}),
+    ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
+  };
+  const previous = memory.recentTranslations.find((candidate) => (
+    sameTranslationSubject(candidate, baseEntry)
+  ));
+  const proposedReview = reviewForResult(result, now);
+  const review = proposedReview && sameReviewEvidence(
+    previous,
+    baseEntry.originalText,
+    baseEntry.translatedText,
+    proposedReview,
+  ) && previous?.review?.reviewedAt
+    ? { ...proposedReview, reviewedAt: previous.review.reviewedAt }
+    : proposedReview;
+  const entry: DocumentMemoryTranslation = review
+    ? { ...baseEntry, review }
+    : baseEntry;
+  const candidateKeys = new Set(memory.candidateTerms.map((term) => termKey(term.source, term.target)));
+  const confirmedSources = new Set(memory.confirmedTerms.map((term) => normalizedTerm(term.source)));
+  const dismissed = new Set(memory.dismissedTermKeys);
+  const candidates = [...memory.candidateTerms];
+  for (const candidate of result.termCandidates ?? []) {
+    const clean = sanitizeTerm(candidate.source, candidate.target);
+    if (!clean) continue;
+    const key = termKey(clean.source, clean.target);
+    if (confirmedSources.has(normalizedTerm(clean.source)) || dismissed.has(key) || candidateKeys.has(key)) {
+      continue;
+    }
+    candidates.unshift({ ...clean, id: stableId('candidate', key), createdAt: now });
+    candidateKeys.add(key);
+  }
+  const recentTranslations = retainRecentTranslations([
+    entry,
+    ...memory.recentTranslations.filter((candidate) => (
+      !sameTranslationSubject(candidate, entry)
+    )),
+  ]);
+  const retainedIds = new Set(recentTranslations.map((candidate) => candidate.id));
+  const evicted = memory.recentTranslations.filter((candidate) => (
+    candidate !== previous &&
+    candidate.id !== previous?.id &&
+    !retainedIds.has(candidate.id)
+  ));
+  return {
+    memory: {
+      ...memory,
+      label: identity.label,
+      updatedAt: now,
+      candidateTerms: candidates.slice(0, MAX_CANDIDATE_TERMS),
+      recentTranslations,
+    },
+    change: {
+      subject: entry,
+      applied: entry,
+      ...(previous ? { previous } : {}),
+      evicted,
+      introduced: [],
+    },
+  };
+}
+
 function withRememberedDocumentTranslation(
   memory: StoredDocumentMemory,
   identity: DocumentIdentity,
   result: TranslateResult,
 ): StoredDocumentMemory {
-    const now = Date.now();
-    const baseEntry: DocumentMemoryTranslation = {
-      id: stableId('translation', `${result.requestId}:${result.originalText}`),
-      requestId: result.requestId,
-      rootRequestId: result.revision?.rootRequestId ?? result.requestId,
-      originalText: compactText(result.originalText),
-      translatedText: compactText(result.translatedText),
-      completedAt: result.completedAt ?? now,
-      ...(result.targetLanguage ? { targetLanguage: result.targetLanguage } : {}),
-      ...(result.style ? { style: result.style } : {}),
-      ...(result.sourceKind ? { sourceKind: result.sourceKind } : {}),
-      ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
-    };
-    const previous = memory.recentTranslations.find((candidate) => (
-      sameTranslationSubject(candidate, baseEntry)
-    ));
-    const proposedReview = reviewForResult(result, now);
-    const review = proposedReview && sameReviewEvidence(
-      previous,
-      baseEntry.originalText,
-      baseEntry.translatedText,
-      proposedReview,
-    ) && previous?.review?.reviewedAt
-      ? { ...proposedReview, reviewedAt: previous.review.reviewedAt }
-      : proposedReview;
-    const entry: DocumentMemoryTranslation = review
-      ? { ...baseEntry, review }
-      : baseEntry;
-    const candidateKeys = new Set(memory.candidateTerms.map((term) => termKey(term.source, term.target)));
-    const confirmedSources = new Set(memory.confirmedTerms.map((term) => normalizedTerm(term.source)));
-    const dismissed = new Set(memory.dismissedTermKeys);
-    const candidates = [...memory.candidateTerms];
-    for (const candidate of result.termCandidates ?? []) {
-      const clean = sanitizeTerm(candidate.source, candidate.target);
-      if (!clean) continue;
-      const key = termKey(clean.source, clean.target);
-      if (confirmedSources.has(normalizedTerm(clean.source)) || dismissed.has(key) || candidateKeys.has(key)) {
-        continue;
-      }
-      candidates.unshift({ ...clean, id: stableId('candidate', key), createdAt: now });
-      candidateKeys.add(key);
-    }
-    return {
-      ...memory,
-      label: identity.label,
-      updatedAt: now,
-      candidateTerms: candidates.slice(0, MAX_CANDIDATE_TERMS),
-      recentTranslations: retainRecentTranslations([
-        entry,
-        ...memory.recentTranslations.filter((candidate) => (
-          !sameTranslationSubject(candidate, entry)
-        )),
-      ]),
-    };
+  return withRememberedDocumentTranslationChange(memory, identity, result).memory;
 }
 
 export async function rememberDocumentTranslation(
@@ -502,13 +637,17 @@ export async function upsertDocumentTerm(
   identity: DocumentIdentity,
   input: { id?: string; source: string; target: string },
 ): Promise<DocumentMemorySnapshot> {
-  return mutate(identity, (memory) => withUpsertedDocumentTerm(memory, input).memory);
+  return (await upsertDocumentTermWithReceipt(identity, input)).memory;
 }
 
 function withUpsertedDocumentTerm(
   memory: StoredDocumentMemory,
   input: { id?: string; source: string; target: string },
-): { memory: StoredDocumentMemory; receipt?: TranslationCorrectionTermReceipt } {
+): {
+  memory: StoredDocumentMemory;
+  receipt?: TranslationCorrectionTermReceipt;
+  change?: DocumentTermChangeReceipt;
+} {
   const clean = sanitizeConfirmedTerm(input.source, input.target);
   if (!clean) return { memory };
   const sourceKey = normalizedTerm(clean.source);
@@ -527,6 +666,9 @@ function withUpsertedDocumentTerm(
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
   };
+  const removedCandidates = memory.candidateTerms.filter(
+    (candidate) => normalizedTerm(candidate.source) === sourceKey,
+  );
   return {
     memory: {
       ...memory,
@@ -543,6 +685,257 @@ function withUpsertedDocumentTerm(
       ...(existing ? { previousTarget: existing.target } : {}),
       documentTermId: id,
     },
+    change: {
+      sourceKey,
+      applied: term,
+      ...(existing ? { previous: existing } : {}),
+      removedCandidates,
+      introducedCandidates: [],
+    },
+  };
+}
+
+/**
+ * Applies a document term and captures the exact conditional rollback receipt
+ * in the same storage mutation. This avoids a read-then-write window when a
+ * correction is committed from more than one tab of the same document.
+ */
+export async function upsertDocumentTermWithReceipt(
+  identity: DocumentIdentity,
+  input: { id?: string; source: string; target: string },
+): Promise<{
+  memory: DocumentMemorySnapshot;
+  termChange?: TranslationCorrectionTermReceipt;
+}> {
+  const update = await mutateWithValue(identity, (memory) => {
+    const next = withUpsertedDocumentTerm(memory, input);
+    return { memory: next.memory, value: next.receipt };
+  });
+  return {
+    memory: update.snapshot,
+    ...(update.value ? { termChange: update.value } : {}),
+  };
+}
+
+/**
+ * Rolls a document term back only while the value written by the matching
+ * correction is still current. A later user edit always wins.
+ */
+export async function rollbackDocumentTermChange(
+  identity: DocumentIdentity,
+  change: TranslationCorrectionTermReceipt,
+): Promise<{ memory: DocumentMemorySnapshot; rolledBack: boolean }> {
+  const update = await mutateWithValue(identity, (memory) => {
+    if (change.scope !== 'document') return { memory, value: false };
+    const sourceKey = normalizedTerm(change.source);
+    const current = memory.confirmedTerms.find(
+      (term) => normalizedTerm(term.source) === sourceKey,
+    );
+    if (
+      !current ||
+      current.target !== change.appliedTarget ||
+      (change.documentTermId !== undefined && current.id !== change.documentTermId)
+    ) return { memory, value: false };
+
+    if (change.previousTarget !== undefined) {
+      return {
+        memory: withUpsertedDocumentTerm(memory, {
+          id: current.id,
+          source: change.source,
+          target: change.previousTarget,
+        }).memory,
+        value: true,
+      };
+    }
+    return {
+      memory: {
+        ...memory,
+        updatedAt: Date.now(),
+        confirmedTerms: memory.confirmedTerms.filter((term) => term.id !== current.id),
+      },
+      value: true,
+    };
+  });
+  return { memory: update.snapshot, rolledBack: update.value };
+}
+
+function withAppliedTranslationChange(
+  memory: StoredDocumentMemory,
+  change: DocumentTranslationChangeReceipt,
+): {
+  memory: StoredDocumentMemory;
+  applied: boolean;
+  compensation?: DocumentTranslationChangeReceipt;
+} {
+  const current = memory.recentTranslations.find((entry) => (
+    sameTranslationSubject(entry, change.subject)
+  ));
+  if (!sameTranslationEntry(current, change.applied)) {
+    return { memory, applied: false };
+  }
+
+  const introducedIds = new Set(change.introduced.map((entry) => entry.id));
+  const actuallyRemovedIntroduced = memory.recentTranslations.filter((entry) => (
+    introducedIds.has(entry.id) &&
+    change.introduced.some((candidate) => sameTranslationEntry(candidate, entry))
+  ));
+  const remaining = memory.recentTranslations.filter((entry) => (
+    entry !== current &&
+    !actuallyRemovedIntroduced.some((candidate) => candidate.id === entry.id)
+  ));
+  const additions: DocumentMemoryTranslation[] = [];
+  if (change.previous) additions.push(change.previous);
+  for (const entry of change.evicted) {
+    if (
+      additions.some((candidate) => sameTranslationSubject(candidate, entry)) ||
+      remaining.some((candidate) => sameTranslationSubject(candidate, entry))
+    ) continue;
+    additions.push(entry);
+  }
+  const recentTranslations = retainRecentTranslations([...additions, ...remaining]);
+  const retainedIds = new Set(recentTranslations.map((entry) => entry.id));
+  const restoredEntries = change.evicted.filter((entry) => retainedIds.has(entry.id));
+  const excludedIds = new Set([
+    ...(current ? [current.id] : []),
+    ...actuallyRemovedIntroduced.map((entry) => entry.id),
+  ]);
+  const newlyEvicted = memory.recentTranslations.filter((entry) => (
+    !excludedIds.has(entry.id) && !retainedIds.has(entry.id)
+  ));
+  const replacement = change.previous && retainedIds.has(change.previous.id)
+    ? change.previous
+    : undefined;
+  const next: StoredDocumentMemory = {
+    ...memory,
+    updatedAt: Date.now(),
+    recentTranslations,
+  };
+  return {
+    memory: next,
+    applied: true,
+    compensation: {
+      subject: change.subject,
+      ...(replacement ? { applied: replacement } : {}),
+      ...(current ? { previous: current } : {}),
+      evicted: newlyEvicted,
+      introduced: restoredEntries,
+    },
+  };
+}
+
+function withAppliedTermChange(
+  memory: StoredDocumentMemory,
+  change: DocumentTermChangeReceipt,
+): {
+  memory: StoredDocumentMemory;
+  applied: boolean;
+  compensation?: DocumentTermChangeReceipt;
+} {
+  const current = memory.confirmedTerms.find((term) => (
+    normalizedTerm(term.source) === change.sourceKey
+  ));
+  if (!sameConfirmedTerm(current, change.applied)) {
+    return { memory, applied: false };
+  }
+
+  const remainingTerms = memory.confirmedTerms.filter((term) => term !== current);
+  const confirmedTerms = change.previous
+    ? [change.previous, ...remainingTerms.filter((term) => term.id !== change.previous!.id)]
+      .slice(0, MAX_CONFIRMED_TERMS)
+    : remainingTerms;
+  const actuallyRemovedCandidates = memory.candidateTerms.filter((candidate) => (
+    change.introducedCandidates.some((entry) => sameCandidateTerm(candidate, entry))
+  ));
+  const remainingCandidates = memory.candidateTerms.filter((candidate) => (
+    !actuallyRemovedCandidates.some((entry) => entry.id === candidate.id)
+  ));
+  const restoredCandidates = change.removedCandidates.filter((candidate) => (
+    !remainingCandidates.some((entry) => (
+      entry.id === candidate.id || termKey(entry.source, entry.target) === termKey(candidate.source, candidate.target)
+    ))
+  ));
+  const candidateTerms = [...restoredCandidates, ...remainingCandidates]
+    .slice(0, MAX_CANDIDATE_TERMS);
+  const retainedCandidateIds = new Set(candidateTerms.map((candidate) => candidate.id));
+  const newlyEvictedCandidates = memory.candidateTerms.filter((candidate) => (
+    !actuallyRemovedCandidates.some((entry) => entry.id === candidate.id) &&
+    !retainedCandidateIds.has(candidate.id)
+  ));
+  const restoredAndRetained = restoredCandidates.filter((candidate) => (
+    retainedCandidateIds.has(candidate.id)
+  ));
+  const replacement = change.previous && confirmedTerms.some((term) => (
+    sameConfirmedTerm(term, change.previous)
+  )) ? change.previous : undefined;
+  return {
+    memory: {
+      ...memory,
+      updatedAt: Date.now(),
+      confirmedTerms,
+      candidateTerms,
+    },
+    applied: true,
+    compensation: {
+      sourceKey: change.sourceKey,
+      ...(replacement ? { applied: replacement } : {}),
+      ...(current ? { previous: current } : {}),
+      removedCandidates: newlyEvictedCandidates,
+      introducedCandidates: restoredAndRetained,
+    },
+  };
+}
+
+/**
+ * Conditionally applies a correction receipt in reverse. Translation and term
+ * checks happen in one storage mutation. If the translation was changed by a
+ * later tab, nothing is touched. A later terminology edit is preserved while
+ * the still-current translation can still be restored.
+ *
+ * The returned `compensation` is another receipt of the same shape; applying it
+ * conditionally reverses this rollback if a later commit step fails.
+ */
+export async function rollbackDocumentCorrectionChange(
+  identity: DocumentIdentity,
+  change: DocumentCorrectionChangeReceipt,
+): Promise<{
+  memory: DocumentMemorySnapshot;
+  rolledBack: boolean;
+  termRolledBack: boolean;
+  compensation?: DocumentCorrectionChangeReceipt;
+}> {
+  type RollbackValue = {
+    rolledBack: boolean;
+    termRolledBack: boolean;
+    compensation?: DocumentCorrectionChangeReceipt;
+  };
+  const update = await mutateWithValue<RollbackValue>(identity, (memory) => {
+    const translation = withAppliedTranslationChange(memory, change.translationChange);
+    if (!translation.applied || !translation.compensation) {
+      return {
+        memory,
+        value: { rolledBack: false, termRolledBack: false },
+      };
+    }
+    const term = change.termChange
+      ? withAppliedTermChange(translation.memory, change.termChange)
+      : undefined;
+    const next = term?.applied ? term.memory : translation.memory;
+    const compensation: DocumentCorrectionChangeReceipt = {
+      translationChange: translation.compensation,
+      ...(term?.applied && term.compensation ? { termChange: term.compensation } : {}),
+    };
+    return {
+      memory: next,
+      value: {
+        rolledBack: true,
+        termRolledBack: change.termChange ? Boolean(term?.applied) : true,
+        compensation,
+      },
+    };
+  });
+  return {
+    memory: update.snapshot,
+    ...update.value,
   };
 }
 
@@ -552,22 +945,156 @@ export async function rememberDocumentCorrection(
   term?: GlossaryEntry,
 ): Promise<{
   memory: DocumentMemorySnapshot;
+  translationChange: DocumentTranslationChangeReceipt;
+  change: DocumentCorrectionChangeReceipt;
   termChange?: TranslationCorrectionTermReceipt;
 }> {
   const update = await mutateWithValue(identity, (memory) => {
-    let next = withRememberedDocumentTranslation(memory, identity, result);
+    const translationUpdate = withRememberedDocumentTranslationChange(memory, identity, result);
+    let next = translationUpdate.memory;
     let termChange: TranslationCorrectionTermReceipt | undefined;
+    let detailedTermChange: DocumentTermChangeReceipt | undefined;
     if (term) {
       const termUpdate = withUpsertedDocumentTerm(next, term);
       next = termUpdate.memory;
       termChange = termUpdate.receipt;
+      detailedTermChange = termUpdate.change;
     }
-    return { memory: next, value: termChange };
+    const change: DocumentCorrectionChangeReceipt = {
+      translationChange: translationUpdate.change,
+      ...(detailedTermChange ? { termChange: detailedTermChange } : {}),
+    };
+    return { memory: next, value: { change, termChange } };
   });
   return {
     memory: update.snapshot,
-    ...(update.value ? { termChange: update.value } : {}),
+    translationChange: update.value.change.translationChange,
+    change: update.value.change,
+    ...(update.value.termChange ? { termChange: update.value.termChange } : {}),
   };
+}
+
+function translationEntryMatchesResult(
+  entry: DocumentMemoryTranslation | undefined,
+  result: TranslateResult,
+): boolean {
+  if (!entry) return false;
+  return (
+    entry.requestId === result.requestId &&
+    (entry.rootRequestId ?? entry.requestId) ===
+      (result.revision?.rootRequestId ?? result.requestId) &&
+    entry.originalText === compactText(result.originalText) &&
+    entry.translatedText === compactText(result.translatedText) &&
+    entry.sourceKind === result.sourceKind &&
+    sameSourceLocation(entry.sourceLocation, result.sourceLocation)
+  );
+}
+
+/**
+ * Restores a document correction only while the exact corrected translation is
+ * still current. This is the document-wide counterpart to the per-tab result
+ * head: an undo from one tab must never overwrite a later edit from another
+ * tab viewing the same PDF.
+ *
+ * The returned change can be passed to rollbackDocumentCorrectionChange when a
+ * later commit step fails, so the undo itself is also conditionally reversible.
+ * Pass the detailed `rememberDocumentCorrection(...).change.termChange` receipt
+ * when available. The legacy term receipt remains accepted for compatibility,
+ * but it cannot restore candidate terms removed when the correction was saved.
+ */
+export async function restoreDocumentCorrectionIfCurrent(
+  identity: DocumentIdentity,
+  expectedCorrectedResult: TranslateResult,
+  restoredResult: TranslateResult,
+  termChange?: TranslationCorrectionTermReceipt | DocumentTermChangeReceipt,
+): Promise<{
+  memory: DocumentMemorySnapshot;
+  restored: boolean;
+  termRolledBack: boolean;
+  change?: DocumentCorrectionChangeReceipt;
+}> {
+  type RestoreValue = {
+    restored: boolean;
+    termRolledBack: boolean;
+    change?: DocumentCorrectionChangeReceipt;
+  };
+  const update = await mutateWithValue<RestoreValue>(identity, (memory) => {
+    const expectedSubject = withRememberedDocumentTranslationChange(
+      memory,
+      identity,
+      expectedCorrectedResult,
+    ).change.subject;
+    const current = memory.recentTranslations.find((entry) => (
+      sameTranslationSubject(entry, expectedSubject)
+    ));
+    if (!translationEntryMatchesResult(current, expectedCorrectedResult)) {
+      return {
+        memory,
+        value: { restored: false, termRolledBack: false },
+      };
+    }
+
+    const translation = withRememberedDocumentTranslationChange(
+      memory,
+      identity,
+      restoredResult,
+    );
+    let next = translation.memory;
+    let termRolledBack = true;
+    let detailedTermChange: DocumentTermChangeReceipt | undefined;
+    if (termChange && 'sourceKey' in termChange) {
+      const restoredTerm = withAppliedTermChange(next, termChange);
+      if (!restoredTerm.applied || !restoredTerm.compensation) {
+        termRolledBack = false;
+      } else {
+        next = restoredTerm.memory;
+        detailedTermChange = restoredTerm.compensation;
+      }
+    } else if (termChange?.scope === 'document') {
+      const sourceKey = normalizedTerm(termChange.source);
+      const currentTerm = next.confirmedTerms.find((term) => (
+        normalizedTerm(term.source) === sourceKey
+      ));
+      if (
+        !currentTerm ||
+        currentTerm.target !== termChange.appliedTarget ||
+        (termChange.documentTermId !== undefined &&
+          currentTerm.id !== termChange.documentTermId)
+      ) {
+        termRolledBack = false;
+      } else if (termChange.previousTarget !== undefined) {
+        const restoredTerm = withUpsertedDocumentTerm(next, {
+          id: currentTerm.id,
+          source: termChange.source,
+          target: termChange.previousTarget,
+        });
+        next = restoredTerm.memory;
+        detailedTermChange = restoredTerm.change;
+      } else {
+        next = {
+          ...next,
+          updatedAt: Date.now(),
+          confirmedTerms: next.confirmedTerms.filter((term) => term.id !== currentTerm.id),
+        };
+        detailedTermChange = {
+          sourceKey,
+          previous: currentTerm,
+          removedCandidates: [],
+          introducedCandidates: [],
+        };
+      }
+    }
+
+    const change: DocumentCorrectionChangeReceipt = {
+      translationChange: translation.change,
+      ...(detailedTermChange ? { termChange: detailedTermChange } : {}),
+    };
+    return {
+      memory: next,
+      value: { restored: true, termRolledBack, change },
+    };
+  });
+  return { memory: update.snapshot, ...update.value };
 }
 
 export async function restoreDocumentCorrection(

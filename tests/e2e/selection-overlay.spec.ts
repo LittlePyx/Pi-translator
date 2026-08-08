@@ -1284,6 +1284,260 @@ test('keeps a newer translation when an old correction save is rejected', async 
   }
 });
 
+test('serializes concurrent correction commits and rejects an old undo receipt', async () => {
+  const sender = await context.newPage();
+  await sender.goto(`chrome-extension://${extensionId}/popup.html`);
+  const tabId = await sender.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { tabs: { getCurrent(): Promise<{ id?: number }> } };
+    }).chrome;
+    return (await api.tabs.getCurrent()).id;
+  });
+  expect(tabId).toBeDefined();
+  if (tabId === undefined) {
+    await sender.close();
+    return;
+  }
+
+  const headKey = `translationResultHead:${tabId}`;
+  const baseResult = {
+    requestId: 'concurrent-correction-base',
+    originalText: 'Concurrent correction source text.',
+    translatedText: 'Base translation.',
+    warnings: [],
+    completedAt: Date.now(),
+    cached: false,
+    latencyMs: 10,
+  };
+
+  try {
+    await sender.evaluate(async ({ key, tab, result }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { set(values: Record<string, unknown>): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.set({
+        [key]: {
+          tabId: tab,
+          currentResultRequestId: result.requestId,
+          rootRequestId: result.requestId,
+          updatedAt: Date.now(),
+        },
+      });
+    }, { key: headKey, tab: tabId, result: baseResult });
+
+    const concurrent = await sender.evaluate(async ({ result }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+      }).chrome;
+      const correction = (requestId: string, translatedText: string) => ({
+        type: 'UPDATE_TRANSLATION_RESULT',
+        payload: {
+          pageUrl: 'https://example.com/concurrent-correction',
+          result: {
+            ...result,
+            requestId,
+            translatedText,
+            revision: {
+              rootRequestId: result.requestId,
+              kind: 'manual',
+              label: 'Manual correction',
+              scope: 'current',
+            },
+          },
+          scope: 'current',
+          previousTranslatedText: result.translatedText,
+          baseRequestId: result.requestId,
+        },
+      });
+      return Promise.all([
+        api.runtime.sendMessage(correction('concurrent-correction-a', 'Correction A.')),
+        api.runtime.sendMessage(correction('concurrent-correction-b', 'Correction B.')),
+      ]);
+    }, { result: baseResult }) as Array<{
+      ok: boolean;
+      data?: {
+        result: typeof baseResult;
+        correctionReceipt?: {
+          baseRequestId: string;
+          correctedRequestId: string;
+          scope: 'current' | 'document';
+          previousTranslation: string;
+          correctedTranslation: string;
+        };
+      };
+      error?: { code: string };
+    }>;
+
+    const succeeded = concurrent.filter((response) => response.ok);
+    const rejected = concurrent.filter((response) => !response.ok);
+    expect(succeeded).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]?.error?.code).toBe('REQUEST_ABORTED');
+    const firstCommit = succeeded[0]?.data;
+    expect(firstCommit?.correctionReceipt).toBeDefined();
+    if (!firstCommit?.correctionReceipt) throw new Error('Missing correction receipt.');
+
+    const newest = await sender.evaluate(async ({ previous }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'UPDATE_TRANSLATION_RESULT',
+        payload: {
+          pageUrl: 'https://example.com/concurrent-correction',
+          result: {
+            ...previous.result,
+            requestId: 'newer-correction-after-race',
+            translatedText: 'Newest correction.',
+          },
+          scope: 'current',
+          previousTranslatedText: previous.result.translatedText,
+          baseRequestId: previous.result.requestId,
+        },
+      });
+    }, { previous: firstCommit }) as {
+      ok: boolean;
+      data?: { result: typeof baseResult };
+      error?: { code: string };
+    };
+    expect(newest.ok).toBe(true);
+
+    const staleUndo = await sender.evaluate(async ({ previous }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'UNDO_TRANSLATION_RESULT',
+        payload: {
+          pageUrl: 'https://example.com/concurrent-correction',
+          result: previous.result,
+          receipt: previous.correctionReceipt,
+        },
+      });
+    }, { previous: firstCommit }) as { ok: boolean; error?: { code: string } };
+    expect(staleUndo.ok).toBe(false);
+    expect(staleUndo.error?.code).toBe('REQUEST_ABORTED');
+
+    const head = await sender.evaluate(async (key) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      return (await api.storage.session.get(key))[key];
+    }, headKey) as { currentResultRequestId?: string } | undefined;
+    expect(head?.currentResultRequestId).toBe(newest.data?.result.requestId);
+  } finally {
+    await sender.evaluate(async ({ key, tab }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            session: {
+              get(key: string): Promise<Record<string, unknown>>;
+              set(values: Record<string, unknown>): Promise<void>;
+              remove(key: string): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      const stored = await api.storage.session.get('translationHistoryByTab');
+      const history = {
+        ...((stored.translationHistoryByTab ?? {}) as Record<string, unknown>),
+      };
+      delete history[String(tab)];
+      await Promise.all([
+        api.storage.session.set({ translationHistoryByTab: history }),
+        api.storage.session.remove(key),
+      ]);
+    }, { key: headKey, tab: tabId }).catch(() => undefined);
+    await sender.close();
+  }
+});
+
+test('rejects a correction whose result head disappeared without persisting side effects', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.locator('.close').count()) await overlay.locator('.close').click();
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toBeVisible();
+
+  await overlay.locator('.correction-action').click();
+  const editor = overlay.locator('.correction-text-part').first();
+  const rejectedTranslation = 'MISSING_HEAD_CORRECTION_SHOULD_NOT_PERSIST';
+  const rejectedTermSource = 'missing-head-source-term';
+  const rejectedTermTarget = 'missing-head-target-term';
+  await editor.fill(rejectedTranslation);
+  await overlay.locator('.revision-scope select').selectOption('document');
+  await overlay.locator('details.correction-term-disclosure > summary').click();
+  await overlay.locator('.correction-term-fields input').nth(0).fill(rejectedTermSource);
+  await overlay.locator('.correction-term-fields input').nth(1).fill(rejectedTermTarget);
+
+  const worker = context.serviceWorkers()[0]!;
+  const removedHead = await worker.evaluate(async (pageUrl) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        tabs: { query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>> };
+        storage: {
+          session: {
+            get(key: string): Promise<Record<string, unknown>>;
+            remove(key: string): Promise<void>;
+          };
+        };
+      };
+    }).chrome;
+    const tab = (await api.tabs.query({})).find((candidate) => candidate.url === pageUrl);
+    if (tab?.id === undefined) throw new Error('Could not find the translated page tab.');
+    const key = `translationResultHead:${tab.id}`;
+    const original = (await api.storage.session.get(key))[key];
+    if (!original) throw new Error('The translated page has no result head.');
+    await api.storage.session.remove(key);
+    return { tabId: tab.id, key, original };
+  }, page.url());
+
+  try {
+    await overlay.locator('.correction-save').click();
+    const state = await worker.evaluate(async ({ tabId, key }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            local: { get(key: string): Promise<Record<string, unknown>> };
+            session: { get(keys: string[]): Promise<Record<string, unknown>> };
+          };
+        };
+      }).chrome;
+      const [local, session] = await Promise.all([
+        api.storage.local.get('documentTranslationMemoryV1'),
+        api.storage.session.get([key, 'translationHistoryByTab']),
+      ]);
+      return {
+        head: session[key],
+        history: (session.translationHistoryByTab as Record<string, unknown[]> | undefined)?.[
+          String(tabId)
+        ],
+        documentMemory: local.documentTranslationMemoryV1,
+      };
+    }, removedHead);
+    expect(state.head).toBeUndefined();
+    expect(JSON.stringify(state.history ?? null)).not.toContain(rejectedTranslation);
+    expect(JSON.stringify(state.documentMemory ?? null)).not.toContain(rejectedTranslation);
+    expect(JSON.stringify(state.documentMemory ?? null)).not.toContain(rejectedTermSource);
+    expect(JSON.stringify(state.documentMemory ?? null)).not.toContain(rejectedTermTarget);
+    await expect(overlay.locator('.revision-status')).not.toHaveText('');
+    await expect(editor).toBeVisible();
+  } finally {
+    await worker.evaluate(async ({ key, original }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { set(values: Record<string, unknown>): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.set({ [key]: original });
+    }, removedHead);
+    if (await overlay.locator('.correction-cancel').count()) {
+      await overlay.locator('.correction-cancel').click();
+    }
+    if (await overlay.locator('.close').count()) await overlay.locator('.close').click();
+    await clearBrowserSelection();
+  }
+});
+
 test('adopts an older translation version without an API call and can undo it', async () => {
   await clearBrowserSelection();
   const overlay = page.locator('#tex-selection-translator-root');
