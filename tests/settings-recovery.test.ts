@@ -81,6 +81,24 @@ describe('settings recovery session repository', () => {
       .resolves.toBeUndefined();
   });
 
+  it('atomically gives a concurrently claimed ticket to only one options tab', async () => {
+    const ticket = await createSettingsRecoveryTicket(recoveryTicket(), 25_000);
+
+    const claims = await Promise.all([
+      claimSettingsRecoveryTicket(ticket.token, 91, 25_001),
+      claimSettingsRecoveryTicket(ticket.token, 92, 25_001),
+    ]);
+    const successfulClaims = claims.filter(
+      (claim): claim is SettingsRecoveryTicket => claim !== undefined,
+    );
+
+    expect(successfulClaims).toHaveLength(1);
+    expect(successfulClaims[0]!.optionsTabId).toBeOneOf([91, 92]);
+    const losingTabId = successfulClaims[0]!.optionsTabId === 91 ? 92 : 91;
+    await expect(claimSettingsRecoveryTicket(ticket.token, losingTabId, 25_002))
+      .resolves.toBeUndefined();
+  });
+
   it('keeps a ticket until delivery is acknowledged and unlocks failed delivery', async () => {
     const ticket = await createSettingsRecoveryTicket(recoveryTicket(), 35_000);
     await claimSettingsRecoveryTicket(ticket.token, 91, 35_001);
@@ -98,6 +116,41 @@ describe('settings recovery session repository', () => {
 
     await finishSettingsRecoveryDelivery(ticket.token, 91, true, 35_006);
     await expect(claimSettingsRecoveryTicket(ticket.token, 91, 35_007))
+      .resolves.toBeUndefined();
+  });
+
+  it('preserves a claimed delivery lock across a service-worker module restart', async () => {
+    const ticket = await createSettingsRecoveryTicket(recoveryTicket(), 36_000);
+    await claimSettingsRecoveryTicket(ticket.token, 91, 36_001);
+    await beginSettingsRecoveryDelivery(ticket.token, 91, 36_002);
+
+    vi.resetModules();
+    const restartedRepository = await import('../core/messaging/settings-recovery');
+
+    await expect(restartedRepository.claimSettingsRecoveryTicket(
+      ticket.token,
+      91,
+      36_003,
+    )).resolves.toMatchObject({
+      token: ticket.token,
+      optionsTabId: 91,
+      deliveryStartedAt: 36_002,
+    });
+    await expect(restartedRepository.beginSettingsRecoveryDelivery(
+      ticket.token,
+      91,
+      66_001,
+    )).resolves.toBeUndefined();
+    await expect(restartedRepository.beginSettingsRecoveryDelivery(
+      ticket.token,
+      91,
+      66_002,
+    )).resolves.toMatchObject({
+      token: ticket.token,
+      deliveryStartedAt: 66_002,
+    });
+    await restartedRepository.finishSettingsRecoveryDelivery(ticket.token, 91, true, 66_003);
+    await expect(restartedRepository.claimSettingsRecoveryTicket(ticket.token, 91, 66_004))
       .resolves.toBeUndefined();
   });
 
@@ -121,6 +174,88 @@ describe('settings recovery session repository', () => {
       .resolves.toBeUndefined();
     await expect(claimSettingsRecoveryTicket(tickets.at(-1)!.token, 91, 40_100))
       .resolves.toBeDefined();
+  });
+
+  it('keeps concurrent recovery tickets isolated by token, source tab, and client', async () => {
+    const [piPdfTicket, nativePdfTicket, webTicket] = await Promise.all([
+      createSettingsRecoveryTicket(recoveryTicket({
+        targetKind: 'extension-page',
+        sourceTabId: 21,
+        clientId: 'pi-pdf-client',
+        failedRequestId: 'pi-pdf-request',
+        role: 'vision',
+        focus: 'vision-model',
+      }), 45_000),
+      createSettingsRecoveryTicket(recoveryTicket({
+        targetKind: 'native-pdf',
+        sourceTabId: 22,
+        failedRequestId: 'native-pdf-request',
+      }), 45_000),
+      createSettingsRecoveryTicket(recoveryTicket({
+        sourceTabId: 23,
+        sourceFrameId: 4,
+        clientId: 'web-frame-client',
+        failedRequestId: 'web-request',
+      }), 45_000),
+    ]);
+
+    expect(new Set([
+      piPdfTicket.token,
+      nativePdfTicket.token,
+      webTicket.token,
+    ]).size).toBe(3);
+    expect(new Set([
+      piPdfTicket.createdAt,
+      nativePdfTicket.createdAt,
+      webTicket.createdAt,
+    ]).size).toBe(3);
+
+    const [piClaim, nativeClaim, webClaim] = await Promise.all([
+      claimSettingsRecoveryTicket(piPdfTicket.token, 101, 45_010),
+      claimSettingsRecoveryTicket(nativePdfTicket.token, 102, 45_010),
+      claimSettingsRecoveryTicket(webTicket.token, 103, 45_010),
+    ]);
+    expect(piClaim).toMatchObject({
+      targetKind: 'extension-page',
+      sourceTabId: 21,
+      clientId: 'pi-pdf-client',
+      failedRequestId: 'pi-pdf-request',
+      role: 'vision',
+      focus: 'vision-model',
+      optionsTabId: 101,
+    });
+    expect(nativeClaim).toMatchObject({
+      targetKind: 'native-pdf',
+      sourceTabId: 22,
+      failedRequestId: 'native-pdf-request',
+      optionsTabId: 102,
+    });
+    expect(webClaim).toMatchObject({
+      targetKind: 'content-script',
+      sourceTabId: 23,
+      sourceFrameId: 4,
+      clientId: 'web-frame-client',
+      failedRequestId: 'web-request',
+      optionsTabId: 103,
+    });
+
+    await Promise.all([
+      beginSettingsRecoveryDelivery(piPdfTicket.token, 101, 45_011),
+      beginSettingsRecoveryDelivery(nativePdfTicket.token, 102, 45_011),
+      beginSettingsRecoveryDelivery(webTicket.token, 103, 45_011),
+    ]);
+    await Promise.all([
+      finishSettingsRecoveryDelivery(piPdfTicket.token, 101, true, 45_012),
+      finishSettingsRecoveryDelivery(nativePdfTicket.token, 102, false, 45_012),
+      finishSettingsRecoveryDelivery(webTicket.token, 103, true, 45_012),
+    ]);
+
+    await expect(claimSettingsRecoveryTicket(piPdfTicket.token, 101, 45_013))
+      .resolves.toBeUndefined();
+    await expect(claimSettingsRecoveryTicket(webTicket.token, 103, 45_013))
+      .resolves.toBeUndefined();
+    await expect(beginSettingsRecoveryDelivery(nativePdfTicket.token, 102, 45_013))
+      .resolves.toMatchObject({ token: nativePdfTicket.token });
   });
 
   it('never serializes selected text, translations, API keys, URLs, or image data', async () => {

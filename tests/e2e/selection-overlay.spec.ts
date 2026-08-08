@@ -1505,6 +1505,62 @@ test('opens a local PDF and exposes selectable text to the translator', async ({
   await pdfPage.close();
 });
 
+test('returns to the same Pi PDF selection after text API configuration recovery', async () => {
+  const sourceText = 'Pi PDF recovery keeps this selection.';
+  const pdfPage = await context.newPage();
+  let options: Page | undefined;
+  await replaceStoredApiKeys({ 'vision-e2e': 'e2e-vision-key' });
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'pi-pdf-recovery.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTextPdf(sourceText),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await expect(firstPage.locator('.textLayer')).toContainText(sourceText);
+    await firstPage.locator('.textLayer span').first().evaluate((span) => {
+      const range = document.createRange();
+      range.selectNodeContents(span);
+      window.getSelection()?.removeAllRanges();
+      window.getSelection()?.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.error')).toContainText('API Key');
+
+    const optionsPromise = context.waitForEvent('page');
+    await overlay.getByRole('button', { name: '配置 API' }).click();
+    options = await optionsPromise;
+    await options.waitForLoadState('domcontentloaded');
+    await expect(options.locator('#settings-recovery-title'))
+      .toHaveText('完成文字 API 配置后继续');
+    await expect(options.locator('#api-key')).toBeFocused();
+
+    await options.locator('#api-key').fill('e2e-pi-pdf-recovery-key');
+    await options.locator('#refresh-models').click();
+
+    await expect(overlay.locator('.body')).toHaveText(
+      '一致的学术翻译能够提升研究论文的可读性。',
+    );
+    await expect(options.locator('#settings-recovery-status'))
+      .toContainText('已返回原页面并继续翻译');
+    await expect(pdfPage.locator('#document-name')).toHaveText('pi-pdf-recovery.pdf');
+    await expect(firstPage.locator('.textLayer')).toContainText(sourceText);
+  } finally {
+    await replaceStoredApiKeys({
+      default: 'e2e-key',
+      'vision-e2e': 'e2e-vision-key',
+    });
+    if (options && !options.isClosed()) await options.close();
+    if (!pdfPage.isClosed()) await pdfPage.close();
+  }
+});
+
 test('centers a fit-width PDF inside the space left by the translation sidebar', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.setViewportSize({ width: 1200, height: 800 });

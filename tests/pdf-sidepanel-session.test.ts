@@ -84,6 +84,58 @@ describe('native PDF side-panel sessions', () => {
     }]);
   });
 
+  it('restores independent native PDF sessions after a service-worker module restart', async () => {
+    await Promise.all([
+      storePdfSidePanelSession(session({
+        tabId: 7,
+        requestId: 'request-tab-7',
+        pageUrl: 'https://example.com/first.pdf#page=2',
+        status: 'translating',
+      })),
+      storePdfSidePanelSession(session({
+        tabId: 8,
+        requestId: 'request-tab-8',
+        pageUrl: 'https://example.com/second.pdf#page=4',
+        pageNumber: 4,
+        status: 'error',
+        error: { code: 'AUTH_FAILED', message: 'Invalid key.', retryable: false },
+        settingsRecoveryConfirmation: {
+          failedRequestId: 'request-tab-8',
+          hadPartialOutput: false,
+        },
+      })),
+    ]);
+
+    vi.resetModules();
+    const restartedRepository = await import('../core/pdf/sidepanel-session');
+    const restored = await restartedRepository.restorePdfSidePanelSessions([
+      { id: 7, url: 'https://example.com/first.pdf#page=6' },
+      { id: 8, url: 'https://example.com/second.pdf#page=9' },
+    ]);
+
+    expect(restored).toHaveLength(2);
+    expect(restored).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        tabId: 7,
+        requestId: 'request-tab-7',
+        pageNumber: 6,
+        status: 'error',
+        error: expect.objectContaining({ code: 'REQUEST_ABORTED', retryable: true }),
+      }),
+      expect.objectContaining({
+        tabId: 8,
+        requestId: 'request-tab-8',
+        pageNumber: 9,
+        status: 'error',
+        settingsRecoveryConfirmation: {
+          failedRequestId: 'request-tab-8',
+          hadPartialOutput: false,
+        },
+      }),
+    ]));
+    expect(JSON.stringify(storage)).not.toContain('"status":"translating"');
+  });
+
   it('invalidates out-of-order side-panel loads', () => {
     const gate = createLatestRequestGate();
     const first = gate.begin();

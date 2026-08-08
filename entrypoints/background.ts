@@ -37,6 +37,11 @@ import {
   restrictSensitiveStorageAccess,
   saveSettings,
 } from '../core/settings/repository';
+import {
+  ConfigurationRevisionBarrier,
+  ConfigurationRevisionMismatchError,
+  configurationRevisionFromStorageChange,
+} from '../core/settings/configuration-revision';
 import { apiOriginPattern } from '../core/settings/api-access';
 import {
   getAutoInjectionPatterns,
@@ -71,7 +76,6 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
-import { invalidateTranslationStateForApiKeyChange } from '../core/translation/credential-change';
 import {
   edgePdfSourceUrl,
   isEdgePdfSidePanelTab,
@@ -175,23 +179,6 @@ function assertActiveRequest(
   ) {
     throw new TranslationError('REQUEST_ABORTED', 'The request was replaced.');
   }
-}
-
-function translationBehaviorFingerprint(value: unknown): string {
-  if (!value || typeof value !== 'object') return '';
-  const settings = value as Record<string, unknown>;
-  return JSON.stringify({
-    provider: settings.provider,
-    activeApiProfileId: settings.activeApiProfileId,
-    apiBaseUrl: settings.apiBaseUrl,
-    model: settings.model,
-    sourceLanguage: settings.sourceLanguage,
-    targetLanguage: settings.targetLanguage,
-    style: settings.style,
-    contentMode: settings.contentMode,
-    academicGlossary: settings.academicGlossary,
-    contextMode: settings.contextMode,
-  });
 }
 
 function sourceHostForRequest(
@@ -1997,20 +1984,18 @@ async function sendContextMenuTranslationToWebPage(
 }
 
 export default defineBackground(() => {
-  let configurationInvalidationTail: Promise<void> = Promise.resolve();
-  async function waitForConfigurationInvalidationBarrier(): Promise<void> {
-    // storage.onChanged delivery trails storage.set on some Edge builds. Wait
-    // for a short quiet window so a late invalidation cannot abort the request
-    // that recovery is about to start.
-    for (let attempt = 0; attempt < 4; attempt += 1) {
-      const observedTail = configurationInvalidationTail;
-      await observedTail;
-      await new Promise<void>((resolve) => setTimeout(resolve, 25));
-      if (observedTail === configurationInvalidationTail) return;
-    }
-    await configurationInvalidationTail;
-  }
+  const configurationRevisionBarrier = new ConfigurationRevisionBarrier({
+    apply: async (revision) => {
+      if (!revision.invalidatesTranslationState) return;
+      for (const active of activeRequests.values()) active.controller.abort();
+      activeRequests.clear();
+      await clearTranslationCheckpoint();
+    },
+  });
   void restrictSensitiveStorageAccess();
+  // Reconcile a commit that occurred while the MV3 worker was stopped. The
+  // applied id in storage.session makes this idempotent across worker restarts.
+  void configurationRevisionBarrier.applyCurrent().catch(() => undefined);
   void synchronizeContextMenu();
   void initializePdfSidePanelSessions()
     .then(() => queuePdfSidePanelOptionsSync())
@@ -2041,25 +2026,10 @@ export default defineBackground(() => {
   });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
-    const behaviorChanged = areaName === 'local' &&
-      'extensionSettings' in changes &&
-      translationBehaviorFingerprint(changes.extensionSettings?.oldValue) !==
-        translationBehaviorFingerprint(changes.extensionSettings?.newValue);
-    configurationInvalidationTail = configurationInvalidationTail.then(async () => {
-      await invalidateTranslationStateForApiKeyChange(
-        areaName,
-        changes,
-        () => {
-          for (const active of activeRequests.values()) active.controller.abort();
-          activeRequests.clear();
-        },
-        () => clearTranslationCheckpoint(),
-      );
-      if (!behaviorChanged) return;
-      for (const active of activeRequests.values()) active.controller.abort();
-      activeRequests.clear();
-      await clearTranslationCheckpoint();
-    }).catch(() => undefined);
+    const revision = configurationRevisionFromStorageChange(areaName, changes);
+    if (revision) {
+      void configurationRevisionBarrier.observe(revision).catch(() => undefined);
+    }
     if (areaName === 'local' && 'extensionSettings' in changes) {
       void synchronizeContextMenu();
       scheduleGeneralPageAccessSync();
@@ -2550,7 +2520,20 @@ export default defineBackground(() => {
           if (sender.tab?.id === undefined || !sender.url?.startsWith(browser.runtime.getURL('/options.html'))) {
             throw new TranslationError('UNSUPPORTED_PAGE', '恢复任务只能由设置页完成。');
           }
-          await waitForConfigurationInvalidationBarrier();
+          try {
+            await configurationRevisionBarrier.waitFor(
+              message.payload.configurationRevision,
+            );
+          } catch (error) {
+            if (error instanceof ConfigurationRevisionMismatchError) {
+              throw new TranslationError(
+                'REQUEST_ABORTED',
+                'API 设置在验证后又发生了变化，请重新验证并保存后继续。',
+                false,
+              );
+            }
+            throw error;
+          }
           const ticket = await beginSettingsRecoveryDelivery(
             message.payload.token,
             sender.tab.id,

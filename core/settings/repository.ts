@@ -8,6 +8,11 @@ import {
 import { normalizeGlossaryEntries } from '../translation/glossary';
 import type { GlossaryEntry } from '../translation/types';
 import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
+import {
+  CONFIGURATION_REVISION_STORAGE_KEY,
+  commitConfigurationRevision,
+} from './configuration-revision';
+import { translationBehaviorFingerprint } from './translation-configuration';
 
 const SETTINGS_KEY = 'extensionSettings';
 const API_KEY_KEY = 'apiKey';
@@ -105,14 +110,26 @@ export async function getSettings(): Promise<ExtensionSettings> {
   };
 }
 
-export async function saveSettings(settings: ExtensionSettings): Promise<void> {
+export async function saveSettings(settings: ExtensionSettings): Promise<string> {
+  const previous = await browser.storage.local.get(SETTINGS_KEY);
+  const storedSettings = {
+    ...settings,
+    schemaVersion: 8 as const,
+    provider: 'openai-compatible' as const,
+  };
+  const invalidatesTranslationState =
+    translationBehaviorFingerprint(previous[SETTINGS_KEY]) !==
+    translationBehaviorFingerprint(storedSettings);
+  const revision = {
+    id: crypto.randomUUID(),
+    committedAt: Date.now(),
+    invalidatesTranslationState,
+  };
   await browser.storage.local.set({
-    [SETTINGS_KEY]: {
-      ...settings,
-      schemaVersion: 8,
-      provider: 'openai-compatible',
-    },
+    [SETTINGS_KEY]: storedSettings,
+    [CONFIGURATION_REVISION_STORAGE_KEY]: revision,
   });
+  return revision.id;
 }
 
 export async function activateApiProfile(profileId: string): Promise<ExtensionSettings> {
@@ -215,7 +232,7 @@ export async function saveApiKey(
   apiKey: string,
   mode: ApiKeyStorageMode,
   profileId?: string,
-): Promise<void> {
+): Promise<string> {
   const normalized = apiKey.trim();
   if (!normalized) {
     throw new Error('API Key cannot be empty.');
@@ -237,7 +254,7 @@ export async function saveApiKey(
     delete nextLocalMap[activeProfileId];
     await browser.storage.local.set({ [API_KEYS_KEY]: nextLocalMap });
     await browser.storage.session.remove(LEGACY_API_KEY_KEY);
-    return;
+    return commitConfigurationRevision(true);
   }
 
   const stored = await browser.storage.local.get(API_KEYS_KEY);
@@ -253,17 +270,19 @@ export async function saveApiKey(
   delete nextSessionMap[activeProfileId];
   await browser.storage.session.set({ [API_KEYS_KEY]: nextSessionMap });
   await browser.storage.local.remove(LEGACY_API_KEY_KEY);
+  return commitConfigurationRevision(true);
 }
 
-export async function moveApiKey(mode: ApiKeyStorageMode): Promise<void> {
+export async function moveApiKey(mode: ApiKeyStorageMode): Promise<string> {
   const settings = await getSettings();
   for (const profile of settings.apiProfiles) {
     const apiKey = await getApiKey(profile.id);
     if (apiKey) await saveApiKey(apiKey, mode, profile.id);
   }
+  return commitConfigurationRevision(true);
 }
 
-export async function clearApiKey(profileId?: string): Promise<void> {
+export async function clearApiKey(profileId?: string): Promise<string> {
   if (profileId) {
     const [session, local] = await Promise.all([
       browser.storage.session.get(API_KEYS_KEY),
@@ -283,12 +302,13 @@ export async function clearApiKey(profileId?: string): Promise<void> {
         browser.storage.local.remove([API_KEY_KEY, LEGACY_API_KEY_KEY]),
       ]);
     }
-    return;
+    return commitConfigurationRevision(true);
   }
   await Promise.all([
     browser.storage.session.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
     browser.storage.local.remove([API_KEYS_KEY, API_KEY_KEY, LEGACY_API_KEY_KEY]),
   ]);
+  return commitConfigurationRevision(true);
 }
 
 export async function restrictSensitiveStorageAccess(): Promise<void> {

@@ -27,6 +27,41 @@ header > span:last-child { display: grid; gap: 2px; }
 header strong { font-size: 16px; }
 header small { color: #7c889e; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
 
+.capability-status {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: -5px 0 13px;
+  padding: 7px 0;
+  border-top: 1px solid #e3e8f1;
+  border-bottom: 1px solid #e3e8f1;
+}
+
+.capability-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: auto;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  color: #475569;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.capability-item:hover { color: #3730a3; background: transparent; filter: none; }
+.capability-item:focus-visible { outline-width: 2px; outline-offset: 3px; }
+.capability-dot { width: 5px; height: 5px; border-radius: 50%; background: #94a3b8; }
+.capability-value { color: #7c889e; font-weight: 560; }
+.capability-item[data-tone="ready"] .capability-dot { background: #849b91; }
+.capability-item[data-tone="issue"] { color: #8c4d19; }
+.capability-item[data-tone="issue"] .capability-dot { background: #c7742c; }
+.capability-item[data-tone="issue"] .capability-value { color: #9b5c25; }
+
 .logo {
   display: grid;
   place-items: center;
@@ -151,4 +186,12 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
+  .capability-status { border-color: #2c374b; }
+  .capability-item { color: #cbd5e1; background: transparent; }
+  .capability-item:hover { color: #c7d2fe; background: transparent; }
+  .capability-value { color: #93a1b6; }
+  .capability-item[data-tone="ready"] .capability-dot { background: #829b91; }
+  .capability-item[data-tone="issue"] { color: #f0b879; }
+  .capability-item[data-tone="issue"] .capability-dot { background: #e39a50; }
+  .capability-item[data-tone="issue"] .capability-value { color: #e1a768; }
 }

@@ -1,9 +1,18 @@
 import {
   activateApiProfile,
   getSettings,
+  hasApiKey,
   saveSettings,
 } from '../../core/settings/repository';
 import { apiOriginPattern } from '../../core/settings/api-access';
+import type { ApiProfile, ExtensionSettings } from '../../core/settings/schema';
+import {
+  textApiReadiness,
+  visionApiReadiness,
+  type ApiReadinessStatus,
+  type ProviderReadinessSnapshot,
+} from '../../core/settings/api-readiness';
+import { getApiModelCapabilities } from '../../core/translation/api-capability-repository';
 import type {
   ActivePdfSourceResponse,
   RuntimeMessage,
@@ -45,15 +54,103 @@ const pdfAccessMessage = element<HTMLElement>('pdf-access-message');
 const pdfAccessSteps = element<HTMLOListElement>('pdf-access-steps');
 const openExtensionManagement = element<HTMLButtonElement>('open-extension-management');
 const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
+const textApiStatus = element<HTMLButtonElement>('text-api-status');
+const visionApiStatus = element<HTMLButtonElement>('vision-api-status');
 
 let activeUrl: string | undefined;
 let activePdfSourceUrl: string | undefined;
 let activePdfPage: number | undefined;
 let activePdfContext: 'native' | 'overleaf' | undefined;
+let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
+let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
 
 function setStatus(message: string, error = false): void {
   status.textContent = message;
   status.classList.toggle('error', error);
+}
+
+async function providerReadinessSnapshot(
+  profile: ApiProfile | undefined,
+  model: string,
+): Promise<ProviderReadinessSnapshot> {
+  let originPattern: string | undefined;
+  if (profile) {
+    try {
+      originPattern = apiOriginPattern(profile.apiBaseUrl);
+    } catch {
+      originPattern = undefined;
+    }
+  }
+  const [apiKeyConfigured, permissionGranted, capabilities] = await Promise.all([
+    profile ? hasApiKey(profile.id).catch(() => false) : Promise.resolve(false),
+    originPattern
+      ? browser.permissions.contains({ origins: [originPattern] }).catch(() => false)
+      : Promise.resolve(false),
+    profile && model.trim()
+      ? getApiModelCapabilities(profile.apiBaseUrl, model).catch(() => ({}))
+      : Promise.resolve({}),
+  ]);
+  return {
+    hasProfile: Boolean(profile),
+    hasValidBaseUrl: Boolean(originPattern),
+    hasModel: Boolean(model.trim()),
+    hasApiKey: apiKeyConfigured,
+    hasPermission: permissionGranted,
+    capabilities,
+  };
+}
+
+function renderReadinessStatus(
+  control: HTMLButtonElement,
+  readiness: ApiReadinessStatus,
+): void {
+  const label = control.querySelector<HTMLElement>('.capability-label');
+  const value = control.querySelector<HTMLElement>('.capability-value');
+  if (label) label.textContent = readiness.label;
+  if (value) value.textContent = readiness.value;
+  control.dataset.tone = readiness.tone;
+  control.title = `${readiness.label}：${readiness.detail}`;
+  control.setAttribute(
+    'aria-label',
+    `${readiness.label}：${readiness.value}。${readiness.detail}点击打开对应设置。`,
+  );
+}
+
+async function refreshApiReadiness(settings: ExtensionSettings): Promise<void> {
+  const textProfile = settings.apiProfiles.find(
+    (profile) => profile.id === settings.activeApiProfileId,
+  );
+  const visionProfile = settings.apiProfiles.find(
+    (profile) => profile.id === settings.visionApiProfileId,
+  );
+  const visionModel = settings.visionModel.trim() || visionProfile?.model.trim() || '';
+  const [textSnapshot, visionSnapshot] = await Promise.all([
+    providerReadinessSnapshot(textProfile, textProfile?.model ?? ''),
+    visionProfile
+      ? providerReadinessSnapshot(visionProfile, visionModel)
+      : Promise.resolve(undefined),
+  ]);
+  const textReadiness = textApiReadiness(textSnapshot);
+  const visionReadiness = visionApiReadiness(visionSnapshot);
+  textApiSettingsFocus = textReadiness.settingsFocus;
+  visionApiSettingsFocus = visionReadiness.settingsFocus;
+  renderReadinessStatus(textApiStatus, textReadiness);
+  renderReadinessStatus(visionApiStatus, visionReadiness);
+}
+
+function openSettingsPage(focus?: ApiReadinessStatus['settingsFocus']): void {
+  void browser.runtime.sendMessage({
+    type: 'OPEN_OPTIONS_PAGE',
+    ...(focus ? { payload: { focus } } : {}),
+  } satisfies RuntimeMessage)
+    .then((response: RuntimeResponse<{ opened: true }>) => {
+      if (!response.ok) {
+        setStatus('无法打开完整设置，请在扩展管理页重试。', true);
+        return;
+      }
+      window.close();
+    })
+    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', true));
 }
 
 function hidePdfAccessAlert(): void {
@@ -200,6 +297,7 @@ async function load(): Promise<void> {
   }));
   apiProfile.value = settings.activeApiProfileId;
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
+  await refreshApiReadiness(settings);
   await resolveActivePdfContext(tabs[0] ?? {});
   updateOpenPdfLabel();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
@@ -236,6 +334,7 @@ apiProfile.addEventListener('change', () => {
     });
     if (!granted) throw new Error('API access was not granted.');
     await activateApiProfile(requestedProfileId);
+    await refreshApiReadiness(await getSettings());
     setStatus('翻译接口已切换。');
   })().catch(async () => {
     apiProfile.value = (await getSettings()).activeApiProfileId;
@@ -260,18 +359,11 @@ pauseSite.addEventListener('change', () => {
 });
 
 openSettings.addEventListener('click', () => {
-  void browser.runtime.sendMessage({
-    type: 'OPEN_OPTIONS_PAGE',
-  } satisfies RuntimeMessage)
-    .then((response: RuntimeResponse<{ opened: true }>) => {
-      if (!response.ok) {
-        setStatus('无法打开完整设置，请在扩展管理页重试。', true);
-        return;
-      }
-      window.close();
-    })
-    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', true));
+  openSettingsPage();
 });
+
+textApiStatus.addEventListener('click', () => openSettingsPage(textApiSettingsFocus));
+visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettingsFocus));
 
 openSidebar.addEventListener('click', () => {
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)

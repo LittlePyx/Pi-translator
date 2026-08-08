@@ -97,7 +97,10 @@ describe('runtime message guard', () => {
     })).toBe(true);
     expect(isRuntimeMessage({
       type: 'COMPLETE_SETTINGS_RECOVERY',
-      payload: { token: 'opaque-recovery-token' },
+      payload: {
+        token: 'opaque-recovery-token',
+        configurationRevision: 'opaque-configuration-revision',
+      },
     })).toBe(true);
     expect(isRuntimeMessage({
       type: 'SETTINGS_RECOVERY_READY',

@@ -4,7 +4,10 @@ import {
   getApiKey,
   getSettings,
   saveApiKey,
+  saveSettings,
 } from '../core/settings/repository';
+import { CONFIGURATION_REVISION_STORAGE_KEY } from '../core/settings/configuration-revision';
+import { DEFAULT_SETTINGS } from '../core/settings/schema';
 
 type StorageRecord = Record<string, unknown>;
 
@@ -90,11 +93,16 @@ describe('settings upgrade and browser-restart storage policy', () => {
   });
 
   it('keeps local keys across a simulated restart and drops session-only keys', async () => {
-    await saveApiKey('session-only-key', 'session', 'session-profile');
-    await saveApiKey('persistent-key', 'local', 'local-profile');
+    const sessionRevision = await saveApiKey('session-only-key', 'session', 'session-profile');
+    const localRevision = await saveApiKey('persistent-key', 'local', 'local-profile');
 
     expect(await getApiKey('session-profile')).toBe('session-only-key');
     expect(await getApiKey('local-profile')).toBe('persistent-key');
+    expect(sessionRevision).not.toBe(localRevision);
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toMatchObject({
+      id: localRevision,
+      invalidatesTranslationState: true,
+    });
 
     session = createStorageArea();
     vi.stubGlobal('browser', {
@@ -119,6 +127,35 @@ describe('settings upgrade and browser-restart storage policy', () => {
     expect(local.values.apiKey).toBeUndefined();
     expect(local.values[API_KEYS_STORAGE_KEY]).toEqual({
       default: 'replacement-key',
+    });
+  });
+
+  it('commits settings with a revision and avoids invalidating presentation-only changes', async () => {
+    const firstRevision = await saveSettings(DEFAULT_SETTINGS);
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toMatchObject({
+      id: firstRevision,
+      invalidatesTranslationState: true,
+    });
+
+    const secondRevision = await saveSettings({
+      ...DEFAULT_SETTINGS,
+      sidebarWidth: DEFAULT_SETTINGS.sidebarWidth + 20,
+    });
+    expect(secondRevision).not.toBe(firstRevision);
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toMatchObject({
+      id: secondRevision,
+      invalidatesTranslationState: false,
+    });
+
+    const visionRevision = await saveSettings({
+      ...DEFAULT_SETTINGS,
+      sidebarWidth: DEFAULT_SETTINGS.sidebarWidth + 20,
+      visionApiProfileId: DEFAULT_SETTINGS.activeApiProfileId,
+      visionModel: 'vision-model-v2',
+    });
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toMatchObject({
+      id: visionRevision,
+      invalidatesTranslationState: true,
     });
   });
 });

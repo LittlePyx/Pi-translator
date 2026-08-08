@@ -9,6 +9,7 @@ const EDGE_EXECUTABLE =
 let context: BrowserContext;
 let options: Page;
 let userDataDirectory: string;
+let extensionId: string;
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -37,7 +38,7 @@ test.beforeAll(async () => {
   });
   let serviceWorker = context.serviceWorkers()[0];
   if (!serviceWorker) serviceWorker = await context.waitForEvent('serviceworker');
-  const extensionId = new URL(serviceWorker.url()).host;
+  extensionId = new URL(serviceWorker.url()).host;
   options = context.pages()[0] ?? await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   if (await options.locator('#onboarding-dialog').isVisible()) {
@@ -107,6 +108,36 @@ test('offers a focused Qwen setup without replacing the text API', async () => {
     return stored.extensionSettings?.activeApiProfileId;
   });
   expect(activeTextProfile).toBe('text-api');
+});
+
+test('keeps API readiness compact and deep-links the exact setting', async () => {
+  const popup = await context.newPage();
+  let focusedOptions: Page | undefined;
+  try {
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    const statusRow = popup.locator('.capability-status');
+    const textStatus = popup.locator('#text-api-status');
+    const visionStatus = popup.locator('#vision-api-status');
+
+    await expect(statusRow).toBeVisible();
+    await expect(textStatus).toContainText('文字翻译');
+    await expect(visionStatus).toContainText('PDF 图像');
+    await expect(visionStatus).toContainText('按需配置');
+    expect(await statusRow.locator('.capability-item').count()).toBe(2);
+    expect(await statusRow.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeLessThan(32);
+    expect(await textStatus.evaluate((element) => getComputedStyle(element).borderRadius))
+      .toBe('0px');
+
+    const optionsPromise = context.waitForEvent('page');
+    await textStatus.click();
+    focusedOptions = await optionsPromise;
+    await focusedOptions.waitForLoadState('domcontentloaded');
+    await expect(focusedOptions.locator('#test-connection')).toBeFocused();
+  } finally {
+    if (focusedOptions && !focusedOptions.isClosed()) await focusedOptions.close();
+    if (!popup.isClosed()) await popup.close();
+  }
 });
 
 test('keeps settings interaction surfaces dark on hover and keyboard focus', async () => {

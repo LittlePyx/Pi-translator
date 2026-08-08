@@ -135,7 +135,10 @@ export type RuntimeMessage =
       payload?: { focus?: SettingsFocus; recovery?: SettingsRecoveryRequest };
     }
   | { type: 'GET_SETTINGS_RECOVERY'; payload: { token: string } }
-  | { type: 'COMPLETE_SETTINGS_RECOVERY'; payload: { token: string } }
+  | {
+      type: 'COMPLETE_SETTINGS_RECOVERY';
+      payload: { token: string; configurationRevision: string };
+    }
   | { type: 'SETTINGS_RECOVERY_READY'; payload: SettingsRecoveryReadyPayload }
   | { type: 'GET_ACTIVE_PDF_SOURCE' }
   | { type: 'OPEN_PDF_VIEWER'; payload?: { url?: string; page?: number } }

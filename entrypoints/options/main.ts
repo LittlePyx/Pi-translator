@@ -29,6 +29,8 @@ import {
   saveApiKey,
   saveSettings,
 } from '../../core/settings/repository';
+import { commitConfigurationRevision } from '../../core/settings/configuration-revision';
+import { translationBehaviorFingerprint } from '../../core/settings/translation-configuration';
 import type {
   ApiKeyStorageMode,
   ApiProfile,
@@ -229,7 +231,7 @@ async function claimRequestedSettingsRecovery():Promise<void>{
   activeSettingsRecovery=response.data.recovery;
   renderSettingsRecovery(response.data.recovery);
 }
-async function completeSettingsRecovery(validation:{text:boolean;vision:boolean}):Promise<boolean>{
+async function completeSettingsRecovery(validation:{text:boolean;vision:boolean},configurationRevision:string):Promise<boolean>{
   const recovery=activeSettingsRecovery;
   if(!recovery||settingsRecoveryCompleting)return false;
   const validated=recovery.role==='vision'?validation.vision:validation.text;
@@ -244,7 +246,7 @@ async function completeSettingsRecovery(validation:{text:boolean;vision:boolean}
   try{
     const response=await browser.runtime.sendMessage({
       type:'COMPLETE_SETTINGS_RECOVERY',
-      payload:{token:recovery.token},
+      payload:{token:recovery.token,configurationRevision},
     } satisfies RuntimeMessage) as CompleteSettingsRecoveryResponse;
     if(!response.ok){
       setSettingsRecoveryStatus(translationErrorMessage(response.error.code,response.error.message),'error');
@@ -323,7 +325,8 @@ async function finishOnboarding():Promise<void>{
   setStatus(visionSupported
     ? `首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`
     : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
-  await completeSettingsRecovery({text:true,vision:visionSupported});
+  const configurationRevision=await commitConfigurationRevision(true);
+  await completeSettingsRecovery({text:true,vision:visionSupported},configurationRevision);
 }
 
 function validatedProfiles():ApiProfile[] {
@@ -573,7 +576,7 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
   void(async()=>{const editing=currentProfile()!;const active=activeTextProfile()??editing;const pendingKey=apiKeyInput.value.trim();await requestSaveAccess(profiles,active.id,visionProfileId,mode,allowlist,pendingKey?[editing.id]:[]);const autoVision=await autoConfigureVisionProfile(editing);const keyMode:ApiKeyStorageMode=persistKey.checked?'local':'session';const current=loadedSettings??await getSettings();const removedProfileIds=current.apiProfiles.filter(profile=>!profiles.some(item=>item.id===profile.id)).map(profile=>profile.id);const visionProfile=profiles.find(profile=>profile.id===visionProfileId);const next:ExtensionSettings={...current,schemaVersion:8,apiProfiles:profiles.map(profile=>({...profile})),activeApiProfileId:active.id,visionApiProfileId:visionProfileId,visionModel:visionModel.value.trim()||visionProfile?.model||active.model,apiBaseUrl:active.apiBaseUrl,model:active.model,sourceLanguage:sourceLanguage.value,targetLanguage:targetLanguage.value,style:styleSelect.value as TranslationStyle,contentMode:contentMode.value as ContentMode,apiKeyStorage:keyMode,academicGlossary:glossary.entries,rememberRecentTranslations:rememberHistory.checked,historyLimit:Number(historyLimit.value) as HistoryLimit,enableSessionCache:sessionCache.checked,sentenceAlignmentDefault:alignmentDefault.checked,autoRenderLatex:autoRenderLatex.checked,sidebarSide:sidebarSide.value as SidebarSide,contextMode:contextMode.value as ContextMode,enableStreaming:enableStreaming.checked,protectSensitiveFields:protectSensitiveFields.checked,pdfKeyboardShortcutsEnabled:pdfKeyboardShortcuts.checked,pdfRegionShortcutKey:normalizePdfRegionShortcutKey(pdfRegionShortcutKey.value),showFloatingButtonOnOverleaf:floatingButton.checked,hideFloatingButtonForTargetLanguage:hideTargetLanguageTrigger.checked,generalPageMode:mode,siteAllowlist:allowlist,enableContextMenu:contextMenu.checked,onboardingCompleted:true};await saveSettings(next);if(pendingKey){await saveApiKey(pendingKey,keyMode,currentProfileId);apiKeyInput.value=''}else if(keyMode!==originalMode)await moveApiKey(keyMode);await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,mode,allowlist);activeTextProfileId=active.id;originalMode=keyMode;loadedSettings=next;visionSelectionTouched=false;renderProfileSelect();await refreshKeyState();setSaved();const roleMessage=active.id!==editing.id&&visionProfileId===editing.id?`设置已保存：文字继续使用“${active.name}”，PDF 图像使用“${editing.name}”。`:autoVision.configured&&autoVision.attempted?'设置已保存，并已自动启用 PDF 图像区域翻译。':autoVision.attempted?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。':'设置已保存，并已同步到打开的页面。';setStatus(roleMessage)})().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
 });
 
-async function persistConnectedApiConfiguration(message:string):Promise<void>{
+async function persistConnectedApiConfiguration(message:string):Promise<string>{
   profiles=validatedProfiles();
   const editing=currentProfile();
   const active=activeTextProfile()??editing;
@@ -595,10 +598,18 @@ async function persistConnectedApiConfiguration(message:string):Promise<void>{
     apiKeyStorage:keyMode,
     onboardingCompleted:true,
   };
+  const invalidatesTranslationState=
+    translationBehaviorFingerprint(current)!==translationBehaviorFingerprint(next)||
+    Boolean(pendingKey)||
+    keyMode!==originalMode||
+    removedProfileIds.length>0;
   await saveSettings(next);
   if(pendingKey){await saveApiKey(pendingKey,keyMode,editing.id);apiKeyInput.value=''}
   if(keyMode!==originalMode)await moveApiKey(keyMode);
   await Promise.all(removedProfileIds.map(profileId=>clearApiKey(profileId)));
+  // This final marker fences every preceding settings/key write. Recovery must
+  // acknowledge this exact revision before it can retry the original request.
+  const configurationRevision=await commitConfigurationRevision(invalidatesTranslationState);
   await removeUnusedApiAccess(current.apiProfiles,next.apiProfiles,active.id,visionProfileId,current.generalPageMode,current.siteAllowlist);
   activeTextProfileId=active.id;
   originalMode=keyMode;
@@ -608,6 +619,7 @@ async function persistConnectedApiConfiguration(message:string):Promise<void>{
   await refreshKeyState();
   setApiConnectionSaved();
   setStatus(message);
+  return configurationRevision;
 }
 
 async function callModels():Promise<void>{
@@ -657,8 +669,8 @@ async function callModels():Promise<void>{
       : vision.model
         ? `自动配置完成并已保存：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。`
         : `文字模型 ${suggested} 已连接并保存；普通文字翻译可用。需要扫描件功能时再配置 Qwen。`;
-  await persistConnectedApiConfiguration(savedMessage);
-  await completeSettingsRecovery({text:true,vision:Boolean(vision.model)&&!vision.preserved});
+  const configurationRevision=await persistConnectedApiConfiguration(savedMessage);
+  await completeSettingsRecovery({text:true,vision:Boolean(vision.model)&&!vision.preserved},configurationRevision);
 }
 refreshModelsButton.addEventListener('click',()=>void callModels().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{refreshModelsButton.disabled=false}));
 
@@ -674,8 +686,8 @@ testButton.addEventListener('click',()=>{
     const response=await browser.runtime.sendMessage({type:'TEST_API_CONNECTION',payload:{apiBaseUrl:base,model,profileId:currentProfileId,...(apiKey?{apiKey}:{})}} satisfies RuntimeMessage) as ConnectionTestResponse;
     if(!response.ok){setStatus(translationErrorMessage(response.error.code,response.error.message),true);return}
     if(activeSettingsRecovery?.role==='text'){
-      await persistConnectedApiConfiguration('连接成功，API Key 与模型可用，当前配置已保存。');
-      await completeSettingsRecovery({text:true,vision:false});
+      const configurationRevision=await persistConnectedApiConfiguration('连接成功，API Key 与模型可用，当前配置已保存。');
+      await completeSettingsRecovery({text:true,vision:false},configurationRevision);
       return;
     }
     setStatus('连接成功，API Key 与模型可用。');
@@ -700,8 +712,8 @@ testVisionCapabilityButton.addEventListener('click',()=>{void(async()=>{
     visionModel.value=model;
     visionSelectionTouched=true;
     renderVisionProfileSelect();
-    await persistConnectedApiConfiguration('视觉能力验证成功，当前 PDF 图像配置已保存。');
-    await completeSettingsRecovery({text:false,vision:true});
+    const configurationRevision=await persistConnectedApiConfiguration('视觉能力验证成功，当前 PDF 图像配置已保存。');
+    await completeSettingsRecovery({text:false,vision:true},configurationRevision);
   }
 })().catch((error:unknown)=>setVisionTestStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),'error')).finally(()=>{testVisionCapabilityButton.disabled=false})});
 
