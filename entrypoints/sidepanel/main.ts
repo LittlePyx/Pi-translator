@@ -6,7 +6,10 @@ import type {
   SettingsRecoveryRequest,
   TranslationSessionResult,
 } from '../../core/messaging/messages';
-import type { GlossaryEntry, TranslationRevisionScope } from '../../core/translation/types';
+import type {
+  TranslationCorrectionTermInput,
+  TranslationMemoryScope,
+} from '../../core/translation/types';
 import {
   translationErrorMessage,
   translationErrorRecovery,
@@ -442,14 +445,13 @@ function openCorrectionEditor(): void {
   }
   const scopeLabel = document.createElement('label');
   scopeLabel.className = 'correction-scope';
-  scopeLabel.append('保存方式');
+  scopeLabel.append('译文保存');
   const scope = document.createElement('select');
-  scope.ariaLabel = '修正后的使用范围';
+  scope.ariaLabel = '修正译文的保存范围';
   const stableDocument = Boolean(session.pageUrl.trim() || session.result.documentId);
   for (const [value, label] of [
-    ['current', '仅修正本次'],
-    ['document', '用于本文并固定术语'],
-    ['global', '同时固定为全局术语'],
+    ['current', '仅本次'],
+    ['document', '记住本文'],
   ] as const) {
     const option = document.createElement('option');
     option.value = value;
@@ -458,9 +460,12 @@ function openCorrectionEditor(): void {
     scope.append(option);
   }
   scopeLabel.append(scope);
+  const termDisclosure = document.createElement('details');
+  termDisclosure.className = 'correction-term-disclosure';
+  const termSummary = document.createElement('summary');
+  termSummary.textContent = '＋ 固定术语（可选）';
   const termFields = document.createElement('fieldset');
   termFields.className = 'correction-term-fields';
-  termFields.hidden = true;
   const sourceLabel = document.createElement('label');
   sourceLabel.append('原文术语');
   const source = document.createElement('input');
@@ -475,10 +480,25 @@ function openCorrectionEditor(): void {
   target.placeholder = '例如 自适应感知';
   target.ariaLabel = '固定译法';
   targetLabel.append(target);
-  termFields.append(sourceLabel, targetLabel);
-  scope.addEventListener('change', () => {
-    termFields.hidden = scope.value === 'current';
-  });
+  const termScopeLabel = document.createElement('label');
+  termScopeLabel.className = 'correction-term-scope';
+  termScopeLabel.append('保存到');
+  const termScope = document.createElement('select');
+  termScope.ariaLabel = '术语保存范围';
+  for (const [value, label] of [
+    ['document', '本文'],
+    ['global', '全局'],
+  ] as const) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    option.disabled = value === 'document' && !stableDocument;
+    termScope.append(option);
+  }
+  if (!stableDocument) termScope.value = 'global';
+  termScopeLabel.append(termScope);
+  termFields.append(sourceLabel, targetLabel, termScopeLabel);
+  termDisclosure.append(termSummary, termFields);
   const actions = document.createElement('div');
   actions.className = 'correction-actions';
   const feedback = document.createElement('span');
@@ -492,7 +512,7 @@ function openCorrectionEditor(): void {
   save.className = 'save';
   save.textContent = '保存';
   actions.append(feedback, cancel, save);
-  panel.append(parts, note, scopeLabel, termFields, actions);
+  panel.append(parts, note, scopeLabel, termDisclosure, actions);
   translationText.replaceChildren(panel);
   formulaView.hidden = true;
   copy.disabled = true;
@@ -510,16 +530,17 @@ function openCorrectionEditor(): void {
     cancel.click();
   });
   save.addEventListener('click', () => {
-    const selectedScope = scope.value as TranslationRevisionScope;
+    const selectedScope = scope.value as TranslationMemoryScope;
     const edits: ManualCorrectionEdit[] = [...inputs].map(([partId, input]) => ({
       partId,
       text: input.value,
     }));
-    const explicitTermCandidate = selectedScope === 'current'
-      ? undefined
-      : { source: source.value, target: target.value };
+    const hasTermInput = Boolean(source.value.trim() || target.value.trim());
+    const explicitTermCandidate = termDisclosure.open && hasTermInput
+      ? { source: source.value, target: target.value }
+      : undefined;
     let translatedText: string;
-    let term: GlossaryEntry | undefined;
+    let term: TranslationCorrectionTermInput | undefined;
     try {
       const applied = applyManualCorrection(correctionSession, {
         revision: draft.revision,
@@ -531,6 +552,7 @@ function openCorrectionEditor(): void {
         ? {
             source: applied.correction.termCandidateDraft.source,
             target: applied.correction.termCandidateDraft.target,
+            scope: termScope.value as TranslationCorrectionTermInput['scope'],
           }
         : undefined;
     } catch (error) {
@@ -549,6 +571,7 @@ function openCorrectionEditor(): void {
     save.disabled = true;
     cancel.disabled = true;
     scope.disabled = true;
+    termScope.disabled = true;
     for (const input of inputs.values()) input.disabled = true;
     source.disabled = true;
     target.disabled = true;
@@ -588,6 +611,7 @@ function openCorrectionEditor(): void {
       for (const input of inputs.values()) input.disabled = false;
       source.disabled = false;
       target.disabled = false;
+      termScope.disabled = false;
       feedback.textContent = error instanceof Error ? error.message : '保存失败，请重试';
     });
   });

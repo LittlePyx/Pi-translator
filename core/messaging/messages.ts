@@ -10,7 +10,9 @@ import type {
   TranslateImageRegionRequest,
   TranslateResult,
   TranslationCorrectionReceipt,
+  TranslationCorrectionTermInput,
   TranslationHistoryEntry,
+  TranslationMemoryScope,
   TranslationRevisionScope,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
@@ -170,10 +172,10 @@ export type RuntimeMessage =
       payload: DocumentMemoryLocator & {
         result: TranslateResult;
         rememberForDocument?: boolean;
-        scope?: TranslationRevisionScope;
+        scope?: TranslationMemoryScope;
         previousTranslatedText?: string;
         baseRequestId?: string;
-        term?: GlossaryEntry;
+        term?: TranslationCorrectionTermInput;
       };
     }
   | {
@@ -184,14 +186,23 @@ export type RuntimeMessage =
       };
     }
   | {
+      type: 'UPDATE_TRANSLATION_SEGMENT';
+      payload: DocumentMemoryLocator & {
+        result: TranslateResult;
+        segmentId: string;
+        expectedTranslatedText: string;
+        correctedTranslatedText: string;
+      };
+    }
+  | {
       type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT';
       payload: {
         tabId: number;
         expectedRequestId: string;
         expectedResultRequestId: string;
         translatedText: string;
-        scope: TranslationRevisionScope;
-        term?: GlossaryEntry;
+        scope: TranslationMemoryScope;
+        term?: TranslationCorrectionTermInput;
       };
     }
   | {
@@ -303,6 +314,14 @@ function validTranslationScope(value: unknown): value is TranslationRevisionScop
   return value === 'current' || value === 'document' || value === 'global';
 }
 
+function validTranslationMemoryScope(value: unknown): value is TranslationMemoryScope {
+  return value === 'current' || value === 'document';
+}
+
+function validTranslationTermScope(value: unknown): value is TranslationCorrectionTermInput['scope'] {
+  return value === 'document' || value === 'global';
+}
+
 function validTerm(value: unknown): value is GlossaryEntry {
   const term = record(value);
   return Boolean(
@@ -310,6 +329,11 @@ function validTerm(value: unknown): value is GlossaryEntry {
     nonEmptyString(term.source, 120) &&
     nonEmptyString(term.target, 120),
   );
+}
+
+function validCorrectionTermInput(value: unknown): value is TranslationCorrectionTermInput {
+  const term = record(value);
+  return Boolean(term && validTerm(term) && validTranslationTermScope(term.scope));
 }
 
 function validCorrectionTermReceipt(value: unknown): boolean {
@@ -324,6 +348,17 @@ function validCorrectionTermReceipt(value: unknown): boolean {
   );
 }
 
+function validSegmentCorrectionReceipt(value: unknown): boolean {
+  const change = record(value);
+  return Boolean(
+    change &&
+    nonEmptyString(change.segmentId, 256) &&
+    nonEmptyString(change.previousTranslatedText, MAX_SELECTION_LENGTH * 4) &&
+    nonEmptyString(change.correctedTranslatedText, MAX_SELECTION_LENGTH * 4) &&
+    change.previousTranslatedText !== change.correctedTranslatedText,
+  );
+}
+
 /** Runtime/storage guard for the short-lived manual-correction undo receipt. */
 export function isTranslationCorrectionReceipt(
   value: unknown,
@@ -335,14 +370,12 @@ export function isTranslationCorrectionReceipt(
     nonEmptyString(receipt.baseRequestId, 256) &&
     nonEmptyString(receipt.correctedRequestId, 256) &&
     receipt.baseRequestId !== receipt.correctedRequestId &&
-    validTranslationScope(receipt.scope) &&
+    validTranslationMemoryScope(receipt.scope) &&
     nonEmptyString(receipt.previousTranslation, MAX_SELECTION_LENGTH * 4) &&
     nonEmptyString(receipt.correctedTranslation, MAX_SELECTION_LENGTH * 4) &&
     receipt.previousTranslation !== receipt.correctedTranslation &&
-    (termChange === undefined || (
-      validCorrectionTermReceipt(termChange) &&
-      record(termChange)?.scope === receipt.scope
-    )),
+    (termChange === undefined || validCorrectionTermReceipt(termChange)) &&
+    (receipt.segmentChange === undefined || validSegmentCorrectionReceipt(receipt.segmentChange)),
   );
 }
 
@@ -364,11 +397,11 @@ function validUpdateTranslationPayload(value: unknown): boolean {
     nonEmptyString(payload.pageUrl, 16_384) &&
     validCorrectionResult(payload.result) &&
     (payload.rememberForDocument === undefined || typeof payload.rememberForDocument === 'boolean') &&
-    (payload.scope === undefined || validTranslationScope(payload.scope)) &&
+    (payload.scope === undefined || validTranslationMemoryScope(payload.scope)) &&
     (payload.previousTranslatedText === undefined ||
       nonEmptyString(payload.previousTranslatedText, MAX_SELECTION_LENGTH * 4)) &&
     (payload.baseRequestId === undefined || nonEmptyString(payload.baseRequestId, 256)) &&
-    (payload.term === undefined || validTerm(payload.term)),
+    (payload.term === undefined || validCorrectionTermInput(payload.term)),
   );
 }
 
@@ -382,6 +415,18 @@ function validUndoTranslationPayload(value: unknown): boolean {
   );
 }
 
+function validUpdateTranslationSegmentPayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    nonEmptyString(payload.pageUrl, 16_384) &&
+    validCorrectionResult(payload.result) &&
+    nonEmptyString(payload.segmentId, 256) &&
+    nonEmptyString(payload.expectedTranslatedText, MAX_SELECTION_LENGTH * 4) &&
+    nonEmptyString(payload.correctedTranslatedText, MAX_SELECTION_LENGTH * 4),
+  );
+}
+
 function validPdfCorrectionUpdatePayload(value: unknown): boolean {
   const payload = record(value);
   return Boolean(
@@ -391,8 +436,8 @@ function validPdfCorrectionUpdatePayload(value: unknown): boolean {
     nonEmptyString(payload.expectedRequestId, 256) &&
     nonEmptyString(payload.expectedResultRequestId, 256) &&
     nonEmptyString(payload.translatedText, MAX_SELECTION_LENGTH * 4) &&
-    validTranslationScope(payload.scope) &&
-    (payload.term === undefined || validTerm(payload.term)),
+    validTranslationMemoryScope(payload.scope) &&
+    (payload.term === undefined || validCorrectionTermInput(payload.term)),
   );
 }
 
@@ -420,6 +465,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   if (type === 'UNDO_TRANSLATION_RESULT') {
     return validUndoTranslationPayload(message.payload);
+  }
+  if (type === 'UPDATE_TRANSLATION_SEGMENT') {
+    return validUpdateTranslationSegmentPayload(message.payload);
   }
   if (type === 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
     return validPdfCorrectionUpdatePayload(message.payload);

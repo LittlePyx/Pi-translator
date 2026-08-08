@@ -241,9 +241,14 @@ footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
 .correction-note { margin: 0; color: #5f687a; font-size: 10px; line-height: 1.5; }
 .correction-scope { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #667085; font-size: 10px; }
 .correction-scope select { height: 27px; border: 1px solid #d8dce7; border-radius: 3px; color: #172033; background: transparent; font-size: 10px; }
-.correction-term-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 7px 0; border: 0; border-bottom: 1px solid #e2e6ee; margin: 0; }
+.correction-term-disclosure { border-bottom: 1px solid #e2e6ee; }
+.correction-term-disclosure > summary { padding: 7px 1px; color: #5f687a; cursor: pointer; font-size: 10px; list-style: none; }
+.correction-term-disclosure > summary::-webkit-details-marker { display: none; }
+.correction-term-disclosure > summary:hover { color: #4f46e5; }
+.correction-term-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 0 0 8px; border: 0; margin: 0; }
 .correction-term-fields label { display: grid; gap: 3px; color: #5f687a; font-size: 9px; }
-.correction-term-fields input { min-width: 0; padding: 6px 1px; border: 0; border-bottom: 1px solid #d8dce7; border-radius: 0; color: #172033; background: transparent; font-family: inherit; font-size: 11px; line-height: 1.4; }
+.correction-term-fields .correction-term-scope { grid-column: 1 / -1; grid-template-columns: auto minmax(100px, 140px); align-items: center; justify-content: space-between; }
+.correction-term-fields input, .correction-term-fields select { min-width: 0; padding: 6px 1px; border: 0; border-bottom: 1px solid #d8dce7; border-radius: 0; color: #172033; background: transparent; font-family: inherit; font-size: 11px; line-height: 1.4; }
 .correction-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
 .correction-actions span { margin-right: auto; color: #5f687a; font-size: 10px; }
 .correction-actions button { border: 1px solid #c9cdee; border-radius: 4px; padding: 5px 8px; color: #5f687a; background: transparent; cursor: pointer; font-size: 10px; }
@@ -273,6 +278,7 @@ button:focus-visible {
 .correction-text-part:focus-visible,
 .correction-scope select:focus-visible,
 .correction-term-fields input:focus-visible,
+.correction-term-fields select:focus-visible,
 .correction-latex:focus-visible {
   outline: 2px solid #6366f1;
   outline-offset: 2px;
@@ -310,10 +316,10 @@ button:focus-visible {
   .progress-track i { background: #8c82f4; }
   .correction-action { color: #a6afbd; }
   .correction-action:hover, .correction-undo button:hover { color: #c1bcff; background: #202938; }
-  .correction-parts, .correction-latex, .correction-term-fields { border-color: #303846; }
-  .correction-text-part, .correction-scope select, .correction-term-fields input { color: #f1f4f8; background: transparent; border-color: #424b5b; }
+  .correction-parts, .correction-latex, .correction-term-disclosure { border-color: #303846; }
+  .correction-text-part, .correction-scope select, .correction-term-fields input, .correction-term-fields select { color: #f1f4f8; background: transparent; border-color: #424b5b; }
   .correction-text-part:focus { background: #202938; }
-  .correction-note, .correction-scope, .correction-term-fields label,
+  .correction-note, .correction-scope, .correction-term-disclosure > summary, .correction-term-fields label,
   .correction-actions span, .correction-undo { color: #aeb8c7; }
   .correction-actions button { color: #c3cad5; border-color: #4a5568; }
 }

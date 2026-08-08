@@ -53,6 +53,14 @@ export interface TranslationRevisionRequest {
 }
 
 export type TranslationRevisionScope = 'current' | 'document' | 'global';
+/** Where a locally corrected translation itself is remembered. */
+export type TranslationMemoryScope = 'current' | 'document';
+/** Optional destination for a user-confirmed terminology pair. */
+export type TranslationTermScope = 'document' | 'global';
+
+export interface TranslationCorrectionTermInput extends GlossaryEntry {
+  scope: TranslationTermScope;
+}
 
 export interface TranslationCorrectionTermReceipt {
   scope: 'document' | 'global';
@@ -66,10 +74,15 @@ export interface TranslationCorrectionTermReceipt {
 export interface TranslationCorrectionReceipt {
   baseRequestId: string;
   correctedRequestId: string;
-  scope: TranslationRevisionScope;
+  scope: TranslationMemoryScope;
   previousTranslation: string;
   correctedTranslation: string;
   termChange?: TranslationCorrectionTermReceipt;
+  segmentChange?: {
+    segmentId: string;
+    previousTranslatedText: string;
+    correctedTranslatedText: string;
+  };
 }
 
 export interface TranslationRevision {

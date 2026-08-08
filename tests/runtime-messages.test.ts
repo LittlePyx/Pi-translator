@@ -104,7 +104,24 @@ describe('runtime message guard', () => {
         scope: 'document',
         previousTranslatedText: 'Previous translation.',
         baseRequestId: 'base-1',
-        term: { source: 'source term', target: 'corrected term' },
+        term: { source: 'source term', target: 'corrected term', scope: 'document' },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_SEGMENT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: {
+          ...correctedResult(),
+          alignedSegments: [{
+            id: 'S1',
+            originalText: 'Source.',
+            translatedText: 'Previous translation.',
+          }],
+        },
+        segmentId: 'S1',
+        expectedTranslatedText: 'Previous translation.',
+        correctedTranslatedText: 'Corrected translation.',
       },
     })).toBe(true);
     expect(isRuntimeMessage({
@@ -125,8 +142,8 @@ describe('runtime message guard', () => {
         expectedRequestId: 'native-pdf-request',
         expectedResultRequestId: 'native-pdf-result',
         translatedText: 'Corrected translation.',
-        scope: 'global',
-        term: { source: 'source term', target: 'corrected term' },
+        scope: 'current',
+        term: { source: 'source term', target: 'corrected term', scope: 'global' },
       },
     })).toBe(true);
     expect(isRuntimeMessage({
@@ -144,6 +161,14 @@ describe('runtime message guard', () => {
     expect(isTranslationCorrectionReceipt(correctionReceipt())).toBe(true);
     expect(isTranslationCorrectionReceipt({
       ...correctionReceipt(),
+      segmentChange: {
+        segmentId: 'S1',
+        previousTranslatedText: 'Previous sentence.',
+        correctedTranslatedText: 'Corrected sentence.',
+      },
+    })).toBe(true);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
       scope: undefined,
     })).toBe(false);
     expect(isTranslationCorrectionReceipt({
@@ -153,14 +178,32 @@ describe('runtime message guard', () => {
     expect(isTranslationCorrectionReceipt({
       ...correctionReceipt(),
       termChange: { ...correctionReceipt().termChange, scope: 'global' },
-    })).toBe(false);
+    })).toBe(true);
     expect(isTranslationCorrectionReceipt({
       ...correctionReceipt(),
       correctedTranslation: 'Previous translation.',
     })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      segmentChange: {
+        segmentId: 'S1',
+        previousTranslatedText: 'Same sentence.',
+        correctedTranslatedText: 'Same sentence.',
+      },
+    })).toBe(false);
   });
 
   it('rejects malformed manual-correction messages before dispatch', () => {
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_SEGMENT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        segmentId: '',
+        expectedTranslatedText: 'Previous translation.',
+        correctedTranslatedText: 'Corrected translation.',
+      },
+    })).toBe(false);
     expect(isRuntimeMessage({
       type: 'UPDATE_TRANSLATION_RESULT',
       payload: {

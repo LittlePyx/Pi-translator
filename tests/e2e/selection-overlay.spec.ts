@@ -1059,11 +1059,9 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await expect(editor).toBeVisible();
   await editor.fill('用户手动修订后的学术译文。');
-  const revisionScope = overlay.getByRole('combobox', { name: '修正后的使用范围' });
+  const revisionScope = overlay.getByRole('combobox', { name: '修正译文的保存范围' });
   await expect(revisionScope).toHaveValue('current');
   await revisionScope.selectOption('document');
-  await overlay.getByRole('textbox', { name: '原文术语' }).fill('academic translation');
-  await overlay.getByRole('textbox', { name: '固定译法' }).fill('学术译文');
   const requestsBeforeManualSave = textRequests.length;
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
@@ -1130,28 +1128,29 @@ test('keeps correction terms explicit and rolls a global term back with the tran
   }
   await correction.click();
 
-  const scope = overlay.getByRole('combobox', { name: '修正后的使用范围' });
+  const scope = overlay.getByRole('combobox', { name: '修正译文的保存范围' });
   await expect(scope).toHaveValue('current');
   await expect(scope.locator('option')).toHaveText([
-    '仅修正本次',
-    '用于本文并固定术语',
-    '同时固定为全局术语',
+    '仅本次',
+    '记住本文',
   ]);
   await expect(overlay.getByRole('textbox', { name: '原文术语' })).toBeHidden();
   await expect(overlay.getByRole('textbox', { name: '固定译法' })).toBeHidden();
 
-  await scope.selectOption('global');
+  await overlay.getByText('＋ 固定术语（可选）').click();
   const sourceTerm = overlay.getByRole('textbox', { name: '原文术语' });
   const targetTerm = overlay.getByRole('textbox', { name: '固定译法' });
   await expect(sourceTerm).toBeVisible();
   await expect(targetTerm).toBeVisible();
+  await overlay.getByRole('combobox', { name: '术语保存范围' }).selectOption('global');
   await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' })
     .fill('显式术语修正后的译文。');
 
   const requestsBeforeSave = textRequests.length;
+  await sourceTerm.fill('incomplete term');
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.revision-status'))
-    .toContainText('请填写不含公式的简短术语和固定译法');
+    .toContainText('请完整填写不含公式的简短术语和固定译法');
   expect(textRequests).toHaveLength(requestsBeforeSave);
 
   const uniqueSource = 'correction-only global phrase';
@@ -1286,6 +1285,55 @@ test('retries a failed model adjustment with the frozen draft and revision conte
   await expect(page.locator('#pi-translation-marker-layer .tooltip')).toContainText('经用户调整后');
   await overlay.locator('.mark-action').click();
   await expect(page.locator('#pi-translation-marker-layer .marker')).toHaveCount(0);
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
+test('corrects one aligned sentence locally without adding visible controls or API calls', async () => {
+  await page.evaluate(() => {
+    const source = document.querySelector('#multi-source');
+    if (!source) throw new Error('Missing multi-sentence source fixture.');
+    const range = document.createRange();
+    range.selectNodeContents(source);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+  });
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toHaveText('第一句重要译文。第二句补充译文。');
+  await overlay.getByRole('button', { name: '显示逐句对照' }).click();
+  let segments = overlay.locator('.segment');
+  await expect(segments).toHaveCount(2);
+  const first = segments.nth(0);
+  await expect.poll(() => first.locator('.segment-actions').evaluate(
+    (element) => getComputedStyle(element).opacity,
+  )).toBe('0');
+  await first.focus();
+  await expect.poll(() => first.locator('.segment-actions').evaluate(
+    (element) => getComputedStyle(element).opacity,
+  )).toBe('1');
+  const requestsBeforeCorrection = textRequests.length;
+  await first.locator('.segment-correct').click();
+  const sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
+  await sentenceEditor.getByRole('textbox', { name: '可编辑本句译文第 1 段' })
+    .fill('人工修正后的第一句。');
+  await sentenceEditor.getByRole('button', { name: '保存' }).click();
+
+  segments = overlay.locator('.segment');
+  await expect(segments).toHaveCount(2);
+  await expect(segments.nth(0).locator('.segment-target')).toHaveText('人工修正后的第一句。');
+  await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
+  expect(textRequests).toHaveLength(requestsBeforeCorrection);
+
+  await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+  segments = overlay.locator('.segment');
+  await expect(segments).toHaveCount(2);
+  await expect(segments.nth(0).locator('.segment-target')).toHaveText('第一句重要译文。');
+  await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
+  expect(textRequests).toHaveLength(requestsBeforeCorrection);
   await overlay.getByTitle('关闭').click();
   await clearBrowserSelection();
 });
@@ -3406,11 +3454,16 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
     .toHaveAttribute('role', 'textbox');
   await expect(sidePanel.locator('#copy')).toBeDisabled();
-  const correctionScope = nativeCorrection.getByLabel('修正后的使用范围');
+  const correctionScope = nativeCorrection.getByLabel('修正译文的保存范围');
   await correctionScope.focus();
   await correctionScope.press('ArrowDown');
-  await correctionScope.press('ArrowDown');
-  await expect(correctionScope).toHaveValue('global');
+  await expect(correctionScope).toHaveValue('document');
+  await expect(correctionScope).toBeFocused();
+  await expect(nativeCorrection.getByLabel('原文术语')).toBeHidden();
+  await nativeCorrection.getByText('＋ 固定术语（可选）').click();
+  const nativeTermScope = nativeCorrection.getByLabel('术语保存范围');
+  await nativeTermScope.selectOption('global');
+  await expect(nativeTermScope).toHaveValue('global');
   await nativeCorrection.press('Escape');
   await expect(sidePanel.locator('#correct')).toBeFocused();
   await expect(sidePanel.locator('#copy')).toBeEnabled();

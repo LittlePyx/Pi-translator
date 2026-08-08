@@ -88,6 +88,16 @@ import {
   validateManualTermCandidate,
 } from '../core/translation/manual-correction';
 import {
+  AlignedSegmentCorrectionError,
+  applyAlignedSegmentCorrection,
+} from '../core/translation/aligned-segment-correction';
+import { createPerTabAsyncLane } from '../core/runtime/per-tab-async-lane';
+import {
+  clearTranslationHead,
+  readTranslationHead,
+  writeTranslationHead,
+} from '../core/translation/head-repository';
+import {
   edgePdfSourceUrl,
   isEdgePdfSidePanelTab,
   isEdgeNativePdfContext,
@@ -142,8 +152,10 @@ import type {
   TranslationCorrectionReceipt,
   TranslationCorrectionTermReceipt,
   TranslationHistoryEntry,
+  TranslationMemoryScope,
   TranslationRevisionScope,
   TranslationSegment,
+  TranslationTermScope,
 } from '../core/translation/types';
 
 const CONTEXT_MENU_ID = 'translate-selection-with-pi-translator';
@@ -155,6 +167,9 @@ const PI_PDF_READER_URL = browser.runtime.getURL('/pdf.html');
 const LEGACY_FAVORITES_KEY = 'translationFavorites';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
+const pendingTranslationRequests = new Map<number, string>();
+const runTranslationCommit = createPerTabAsyncLane();
+const runGlobalGlossaryMutation = createPerTabAsyncLane();
 const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
@@ -1008,7 +1023,9 @@ async function translate(
     );
   }
 
+  await runTranslationCommit(tabId, () => undefined);
   const controller = beginActiveRequest(tabId, request.requestId);
+  pendingTranslationRequests.set(tabId, request.requestId);
   let progressDeliveryTail: Promise<void> = Promise.resolve();
   const queueProgress = (payload: TranslationProgressPayload): void => {
     progressDeliveryTail = progressDeliveryTail.then(() =>
@@ -1064,6 +1081,26 @@ async function translate(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        const finalization = runTranslationCommit(tabId, async () => {
+          assertActiveRequest(tabId, request.requestId, controller);
+          const history = await settleTranslationFinalization(
+            'translate-finalization',
+            settings.rememberRecentTranslations
+              ? addTranslationHistory(tabId, cached, settings.historyLimit)
+              : Promise.resolve([]),
+            [
+              clearTranslationCheckpoint(tabId, cacheKey),
+              rememberDocumentTranslation(identity, cached),
+            ],
+          );
+          assertActiveRequest(tabId, request.requestId, controller);
+          await writeTranslationHead({
+            tabId,
+            currentResultRequestId: cached.requestId,
+            rootRequestId: translationResultRootRequestId(cached),
+          });
+          return history;
+        });
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
@@ -1071,16 +1108,7 @@ async function translate(
           totalChunks: cached.chunkCount ?? 1,
           result: cached,
         }, progressTarget);
-        const history = await settleTranslationFinalization(
-          'translate-finalization',
-          settings.rememberRecentTranslations
-            ? addTranslationHistory(tabId, cached, settings.historyLimit)
-            : Promise.resolve([]),
-          [
-            clearTranslationCheckpoint(tabId, cacheKey),
-            rememberDocumentTranslation(identity, cached),
-          ],
-        );
+        const history = await finalization;
         assertActiveRequest(tabId, request.requestId, controller);
         return { ok: true, data: { result: cached, history } };
       }
@@ -1339,6 +1367,37 @@ async function translate(
         : {}),
     };
     assertActiveRequest(tabId, request.requestId, controller);
+    const finalization = runTranslationCommit(tabId, async () => {
+      assertActiveRequest(tabId, request.requestId, controller);
+      if (request.revision?.scope === 'document') {
+        await rememberDocumentTranslation(identity, result);
+        assertActiveRequest(tabId, request.requestId, controller);
+      }
+      const history = await settleTranslationFinalization(
+        'translate-finalization',
+        settings.rememberRecentTranslations
+          ? addTranslationHistory(tabId, result, settings.historyLimit)
+          : Promise.resolve([]),
+        [
+          request.revision
+            ? clearTranslationCache(tabId)
+            : settings.enableSessionCache
+              ? cacheTranslation(tabId, cacheKey, result)
+              : Promise.resolve(),
+          clearTranslationCheckpoint(tabId, cacheKey),
+          !request.revision
+            ? rememberDocumentTranslation(identity, result)
+            : Promise.resolve(),
+        ],
+      );
+      assertActiveRequest(tabId, request.requestId, controller);
+      await writeTranslationHead({
+        tabId,
+        currentResultRequestId: result.requestId,
+        rootRequestId: translationResultRootRequestId(result),
+      });
+      return history;
+    });
     queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
@@ -1347,27 +1406,7 @@ async function translate(
       result,
     });
     await progressDeliveryTail;
-    if (request.revision?.scope === 'document') {
-      await rememberDocumentTranslation(identity, result);
-      assertActiveRequest(tabId, request.requestId, controller);
-    }
-    const history = await settleTranslationFinalization(
-      'translate-finalization',
-      settings.rememberRecentTranslations
-        ? addTranslationHistory(tabId, result, settings.historyLimit)
-        : Promise.resolve([]),
-      [
-      request.revision
-        ? clearTranslationCache(tabId)
-        : settings.enableSessionCache
-          ? cacheTranslation(tabId, cacheKey, result)
-          : Promise.resolve(),
-      clearTranslationCheckpoint(tabId, cacheKey),
-      !request.revision
-        ? rememberDocumentTranslation(identity, result)
-        : Promise.resolve(),
-      ],
-    );
+    const history = await finalization;
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
@@ -1378,6 +1417,9 @@ async function translate(
     const current = activeRequests.get(tabId);
     if (current?.requestId === request.requestId) {
       activeRequests.delete(tabId);
+    }
+    if (pendingTranslationRequests.get(tabId) === request.requestId) {
+      pendingTranslationRequests.delete(tabId);
     }
   }
 }
@@ -1403,12 +1445,43 @@ function manualCorrectionError(error: unknown): TranslationError {
   return new TranslationError('INVALID_RESPONSE', '修正内容已过期或格式不正确，请重新打开编辑器。');
 }
 
+function translationResultRootRequestId(result: TranslateResult): string {
+  return result.revision?.rootRequestId?.trim() || result.requestId;
+}
+
+async function assertTranslationHead(
+  tabId: number,
+  expectedResultRequestId: string,
+  expectedRootRequestId?: string,
+): Promise<void> {
+  const pendingRequestId = pendingTranslationRequests.get(tabId);
+  if (pendingRequestId && pendingRequestId !== expectedResultRequestId) {
+    throw new TranslationError(
+      'REQUEST_ABORTED',
+      '当前译文已经变化，请重新打开修正。',
+    );
+  }
+  const head = await readTranslationHead(tabId);
+  if (
+    head &&
+    (
+      head.currentResultRequestId !== expectedResultRequestId ||
+      (expectedRootRequestId !== undefined && head.rootRequestId !== expectedRootRequestId)
+    )
+  ) {
+    throw new TranslationError(
+      'REQUEST_ABORTED',
+      '当前译文已经变化，请重新打开修正。',
+    );
+  }
+}
+
 async function applyCorrectionTerm(
   locator: DocumentIdentityInput,
-  scope: TranslationRevisionScope,
+  scope: TranslationTermScope | undefined,
   term: GlossaryEntry | undefined,
 ): Promise<TranslationCorrectionTermReceipt | undefined> {
-  if (scope === 'current' || !term) return undefined;
+  if (!scope || !term) return undefined;
   let validated: { source: string; target: string };
   try {
     validated = validateManualTermCandidate(term);
@@ -1442,27 +1515,29 @@ async function applyCorrectionTerm(
     };
   }
 
-  const settings = await getSettings();
-  const key = correctionTermSourceKey(validated.source);
-  const hasExisting = settings.academicGlossary.some(
-    (entry) => correctionTermSourceKey(entry.source) === key,
-  );
-  if (!hasExisting && settings.academicGlossary.length >= MAX_GLOSSARY_ENTRIES) {
-    throw new TranslationError(
-      'INVALID_RESPONSE',
-      `全局术语表已满（最多 ${MAX_GLOSSARY_ENTRIES} 条），请先在设置中整理术语。`,
+  return runGlobalGlossaryMutation(0, async () => {
+    const settings = await getSettings();
+    const key = correctionTermSourceKey(validated.source);
+    const hasExisting = settings.academicGlossary.some(
+      (entry) => correctionTermSourceKey(entry.source) === key,
     );
-  }
-  const updated = upsertGlossaryEntry(settings.academicGlossary, validated);
-  await saveSettings({ ...settings, academicGlossary: updated.entries });
-  return {
-    scope: 'global',
-    source: validated.source,
-    appliedTarget: validated.target,
-    ...(updated.previousTarget !== undefined
-      ? { previousTarget: updated.previousTarget }
-      : {}),
-  };
+    if (!hasExisting && settings.academicGlossary.length >= MAX_GLOSSARY_ENTRIES) {
+      throw new TranslationError(
+        'INVALID_RESPONSE',
+        `全局术语表已满（最多 ${MAX_GLOSSARY_ENTRIES} 条），请先在设置中整理术语。`,
+      );
+    }
+    const updated = upsertGlossaryEntry(settings.academicGlossary, validated);
+    await saveSettings({ ...settings, academicGlossary: updated.entries });
+    return {
+      scope: 'global',
+      source: validated.source,
+      appliedTarget: validated.target,
+      ...(updated.previousTarget !== undefined
+        ? { previousTarget: updated.previousTarget }
+        : {}),
+    };
+  });
 }
 
 async function rollbackCorrectionTerm(
@@ -1471,11 +1546,13 @@ async function rollbackCorrectionTerm(
 ): Promise<boolean> {
   if (!change) return true;
   if (change.scope === 'global') {
-    const settings = await getSettings();
-    const rollback = rollbackGlossaryEntry(settings.academicGlossary, change);
-    if (!rollback.rolledBack) return false;
-    await saveSettings({ ...settings, academicGlossary: rollback.entries });
-    return true;
+    return runGlobalGlossaryMutation(0, async () => {
+      const settings = await getSettings();
+      const rollback = rollbackGlossaryEntry(settings.academicGlossary, change);
+      if (!rollback.rolledBack) return false;
+      await saveSettings({ ...settings, academicGlossary: rollback.entries });
+      return true;
+    });
   }
 
   if (!locator.documentId?.trim() && !locator.sourceLocation?.documentId.trim() && !locator.pageUrl.trim()) {
@@ -1504,16 +1581,25 @@ async function rollbackCorrectionTerm(
   return true;
 }
 
-async function updateTranslationResult(
+async function updateTranslationResultCommitted(
   payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
   options?: {
     assertCurrent?: () => void;
     documentUndo?: { termChange?: TranslationCorrectionTermReceipt };
+    preserveAlignedSegments?: boolean;
   },
 ): Promise<TranslateRuntimeResponse> {
   try {
     options?.assertCurrent?.();
+    if (payload.baseRequestId) {
+      await assertTranslationHead(
+        tabId,
+        payload.baseRequestId,
+        translationResultRootRequestId(payload.result),
+      );
+      options?.assertCurrent?.();
+    }
     const originalText = payload.result.originalText.trim();
     const translatedText = payload.result.translatedText.trim();
     if (!originalText || !translatedText) {
@@ -1529,9 +1615,11 @@ async function updateTranslationResult(
         throw manualCorrectionError(error);
       }
     }
-    const scope = payload.scope ?? (payload.rememberForDocument ? 'document' : 'current');
+    const scope: TranslationMemoryScope = payload.scope ??
+      (payload.rememberForDocument ? 'document' : 'current');
+    const termScope = payload.term?.scope;
     let correctionTerm: GlossaryEntry | undefined;
-    if (scope !== 'current' && payload.term) {
+    if (termScope && payload.term) {
       try {
         const validated = validateManualTermCandidate(payload.term);
         correctionTerm = { source: validated.source, target: validated.target };
@@ -1556,7 +1644,7 @@ async function updateTranslationResult(
         scope,
       },
     };
-    delete result.alignedSegments;
+    if (!options?.preserveAlignedSegments) delete result.alignedSegments;
     const settings = await getSettings();
     options?.assertCurrent?.();
     let termChange: TranslationCorrectionTermReceipt | undefined;
@@ -1570,13 +1658,27 @@ async function updateTranslationResult(
           options.documentUndo.termChange,
         );
         termRollbackSkipped = !restored.termRolledBack;
-      } else {
+      } else if (termScope === 'document') {
         const remembered = await rememberDocumentCorrection(identity, result, correctionTerm);
         termChange = remembered.termChange;
+      } else {
+        termChange = await applyCorrectionTerm(payload, termScope, correctionTerm);
+        try {
+          await rememberDocumentCorrection(identity, result);
+        } catch (error) {
+          if (termChange) {
+            try {
+              await rollbackCorrectionTerm(payload, termChange);
+            } catch (rollbackError) {
+              await recordLocalDiagnosticError('translate', rollbackError);
+            }
+          }
+          throw error;
+        }
       }
       options?.assertCurrent?.();
     } else {
-      termChange = await applyCorrectionTerm(payload, scope, correctionTerm);
+      termChange = await applyCorrectionTerm(payload, termScope, correctionTerm);
       options?.assertCurrent?.();
     }
     const historyTask = settings.rememberRecentTranslations
@@ -1599,6 +1701,12 @@ async function updateTranslationResult(
           correctedTranslation: result.translatedText,
           ...(termChange ? { termChange } : {}),
         } satisfies TranslationCorrectionReceipt;
+    await writeTranslationHead({
+      tabId,
+      currentResultRequestId: result.requestId,
+      rootRequestId,
+    });
+    options?.assertCurrent?.();
     return {
       ok: true,
       data: {
@@ -1620,7 +1728,20 @@ async function updateTranslationResult(
   }
 }
 
-async function undoTranslationResult(
+function updateTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
+  tabId: number,
+  options?: {
+    assertCurrent?: () => void;
+    documentUndo?: { termChange?: TranslationCorrectionTermReceipt };
+    preserveAlignedSegments?: boolean;
+  },
+): Promise<TranslateRuntimeResponse> {
+  return runTranslationCommit(tabId, () =>
+    updateTranslationResultCommitted(payload, tabId, options));
+}
+
+async function undoTranslationResultCommitted(
   payload: Extract<RuntimeMessage, { type: 'UNDO_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
   options?: { assertCurrent?: () => void },
@@ -1636,10 +1757,32 @@ async function undoTranslationResult(
         '这条译文已发生变化，无法撤销旧的修正。',
       );
     }
+    let restoredSegments = payload.result.alignedSegments;
+    if (payload.receipt.segmentChange) {
+      const change = payload.receipt.segmentChange;
+      const matching = payload.result.alignedSegments?.filter(
+        (segment) => segment.id === change.segmentId,
+      ) ?? [];
+      if (
+        matching.length !== 1 ||
+        matching[0]?.translatedText !== change.correctedTranslatedText
+      ) {
+        throw new TranslationError(
+          'REQUEST_ABORTED',
+          '本句对照已经变化，无法撤销旧的修正。',
+        );
+      }
+      restoredSegments = payload.result.alignedSegments!.map((segment) => (
+        segment.id === change.segmentId
+          ? { ...segment, translatedText: change.previousTranslatedText }
+          : segment
+      ));
+    }
     const restored: TranslateResult = {
       ...payload.result,
       requestId: crypto.randomUUID(),
       translatedText: payload.receipt.previousTranslation,
+      ...(restoredSegments ? { alignedSegments: restoredSegments } : {}),
       completedAt: Date.now(),
       revision: {
         rootRequestId: payload.result.revision?.rootRequestId ?? payload.receipt.baseRequestId,
@@ -1649,7 +1792,7 @@ async function undoTranslationResult(
       },
     };
     const documentUndo = payload.receipt.scope === 'document';
-    const response = await updateTranslationResult({
+    const response = await updateTranslationResultCommitted({
       pageUrl: payload.pageUrl,
       ...(payload.documentId ? { documentId: payload.documentId } : {}),
       ...(payload.sourceLabel ? { sourceLabel: payload.sourceLabel } : {}),
@@ -1660,13 +1803,23 @@ async function undoTranslationResult(
       baseRequestId: payload.receipt.correctedRequestId,
     }, tabId, {
       ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
+      ...(payload.receipt.segmentChange ? { preserveAlignedSegments: true } : {}),
       ...(documentUndo
-        ? { documentUndo: { ...(payload.receipt.termChange ? { termChange: payload.receipt.termChange } : {}) } }
+        ? {
+            documentUndo: {
+              ...(payload.receipt.termChange?.scope === 'document'
+                ? { termChange: payload.receipt.termChange }
+                : {}),
+            },
+          }
         : {}),
     });
     if (!response.ok) return response;
     let termRollbackSkipped = Boolean(response.data.termRollbackSkipped);
-    if (!documentUndo) {
+    const separateTermRollback = payload.receipt.termChange && (
+      !documentUndo || payload.receipt.termChange.scope === 'global'
+    );
+    if (separateTermRollback) {
       try {
         termRollbackSkipped = !await rollbackCorrectionTerm(payload, payload.receipt.termChange);
       } catch (error) {
@@ -1680,6 +1833,94 @@ async function undoTranslationResult(
         result: response.data.result,
         history: response.data.history,
         ...(termRollbackSkipped ? { termRollbackSkipped: true } : {}),
+      },
+    };
+  } catch (error) {
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
+  }
+}
+
+function undoTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UNDO_TRANSLATION_RESULT' }>['payload'],
+  tabId: number,
+  options?: { assertCurrent?: () => void },
+): Promise<TranslateRuntimeResponse> {
+  return runTranslationCommit(tabId, () =>
+    undoTranslationResultCommitted(payload, tabId, options));
+}
+
+async function updateTranslationSegment(
+  payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_SEGMENT' }>['payload'],
+  tabId: number,
+): Promise<TranslateRuntimeResponse> {
+  try {
+    let correction: ReturnType<typeof applyAlignedSegmentCorrection>;
+    try {
+      correction = applyAlignedSegmentCorrection({
+        result: payload.result,
+        segmentId: payload.segmentId,
+        expectedSegmentTranslation: payload.expectedTranslatedText,
+        correctedSegmentTranslation: payload.correctedTranslatedText.trim(),
+      });
+    } catch (error) {
+      if (error instanceof ManualCorrectionError) throw manualCorrectionError(error);
+      if (error instanceof AlignedSegmentCorrectionError) {
+        if (error.code === 'STALE_SEGMENT') {
+          throw new TranslationError(
+            'REQUEST_ABORTED',
+            '本句译文已经变化，请重新打开修正。',
+          );
+        }
+        throw new TranslationError(
+          'INVALID_RESPONSE',
+          '逐句对照已变化，无法安全定位本句；请改用整段修正。',
+        );
+      }
+      throw error;
+    }
+    const edited: TranslateResult = {
+      ...payload.result,
+      requestId: crypto.randomUUID(),
+      translatedText: correction.translatedText,
+      alignedSegments: correction.alignedSegments,
+      completedAt: Date.now(),
+      cached: false,
+      latencyMs: 0,
+      revision: {
+        rootRequestId: payload.result.revision?.rootRequestId ?? payload.result.requestId,
+        kind: 'manual',
+        label: '修正本句',
+        scope: 'current',
+      },
+    };
+    const response = await updateTranslationResult({
+      pageUrl: payload.pageUrl,
+      ...(payload.documentId ? { documentId: payload.documentId } : {}),
+      ...(payload.sourceLabel ? { sourceLabel: payload.sourceLabel } : {}),
+      ...(payload.sourceLocation ? { sourceLocation: payload.sourceLocation } : {}),
+      result: edited,
+      scope: 'current',
+      previousTranslatedText: payload.result.translatedText,
+      baseRequestId: payload.result.requestId,
+    }, tabId, { preserveAlignedSegments: true });
+    if (!response.ok) return response;
+    const receipt = response.data.correctionReceipt;
+    if (!receipt) {
+      throw new TranslationError('INVALID_RESPONSE', '无法建立本句修正的撤销记录。');
+    }
+    return {
+      ok: true,
+      data: {
+        ...response.data,
+        correctionReceipt: {
+          ...receipt,
+          segmentChange: {
+            segmentId: payload.segmentId,
+            previousTranslatedText: payload.expectedTranslatedText,
+            correctedTranslatedText: payload.correctedTranslatedText.trim(),
+          },
+        },
       },
     };
   } catch (error) {
@@ -1920,7 +2161,9 @@ async function translateImageRegion(
   progressTarget: TranslationProgressTarget,
 ): Promise<TranslateRuntimeResponse> {
   validateImageRegionRequest(request);
+  await runTranslationCommit(tabId, () => undefined);
   const controller = beginActiveRequest(tabId, request.requestId);
+  pendingTranslationRequests.set(tabId, request.requestId);
   let progressDeliveryTail: Promise<void> = Promise.resolve();
   const queueProgress = (payload: TranslationProgressPayload): void => {
     progressDeliveryTail = progressDeliveryTail.then(() =>
@@ -1970,6 +2213,23 @@ async function translateImageRegion(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        const finalization = runTranslationCommit(tabId, async () => {
+          assertActiveRequest(tabId, request.requestId, controller);
+          const history = await settleTranslationFinalization(
+            'translate-image-region-finalization',
+            settings.rememberRecentTranslations
+              ? addTranslationHistory(tabId, cached, settings.historyLimit)
+              : Promise.resolve([]),
+            [rememberDocumentTranslation(identity, cached)],
+          );
+          assertActiveRequest(tabId, request.requestId, controller);
+          await writeTranslationHead({
+            tabId,
+            currentResultRequestId: cached.requestId,
+            rootRequestId: translationResultRootRequestId(cached),
+          });
+          return history;
+        });
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
@@ -1977,13 +2237,7 @@ async function translateImageRegion(
           totalChunks: 1,
           result: cached,
         }, progressTarget);
-        const history = await settleTranslationFinalization(
-          'translate-image-region-finalization',
-          settings.rememberRecentTranslations
-            ? addTranslationHistory(tabId, cached, settings.historyLimit)
-            : Promise.resolve([]),
-          [rememberDocumentTranslation(identity, cached)],
-        );
+        const history = await finalization;
         assertActiveRequest(tabId, request.requestId, controller);
         return { ok: true, data: { result: cached, history } };
       }
@@ -2099,6 +2353,35 @@ async function translateImageRegion(
           }
         : {}),
     };
+    const finalization = runTranslationCommit(tabId, async () => {
+      assertActiveRequest(tabId, request.requestId, controller);
+      if (request.revision?.scope === 'document') {
+        await rememberDocumentTranslation(identity, result);
+        assertActiveRequest(tabId, request.requestId, controller);
+      }
+      const history = await settleTranslationFinalization(
+        'translate-image-region-finalization',
+        settings.rememberRecentTranslations
+          ? addTranslationHistory(tabId, result, settings.historyLimit)
+          : Promise.resolve([]),
+        [
+          settings.enableSessionCache
+            ? cacheImageRegionTranslation(tabId, cacheKey, result)
+            : Promise.resolve(),
+          visionProfileMaintenance,
+          !request.revision
+            ? rememberDocumentTranslation(identity, result)
+            : Promise.resolve(),
+        ],
+      );
+      assertActiveRequest(tabId, request.requestId, controller);
+      await writeTranslationHead({
+        tabId,
+        currentResultRequestId: result.requestId,
+        rootRequestId: translationResultRootRequestId(result),
+      });
+      return history;
+    });
     queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
@@ -2108,25 +2391,7 @@ async function translateImageRegion(
     });
     await progressDeliveryTail;
     assertActiveRequest(tabId, request.requestId, controller);
-    if (request.revision?.scope === 'document') {
-      await rememberDocumentTranslation(identity, result);
-      assertActiveRequest(tabId, request.requestId, controller);
-    }
-    const history = await settleTranslationFinalization(
-      'translate-image-region-finalization',
-      settings.rememberRecentTranslations
-        ? addTranslationHistory(tabId, result, settings.historyLimit)
-        : Promise.resolve([]),
-      [
-      settings.enableSessionCache
-        ? cacheImageRegionTranslation(tabId, cacheKey, result)
-        : Promise.resolve(),
-      visionProfileMaintenance,
-      !request.revision
-        ? rememberDocumentTranslation(identity, result)
-        : Promise.resolve(),
-      ],
-    );
+    const history = await finalization;
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
@@ -2136,6 +2401,9 @@ async function translateImageRegion(
   } finally {
     const current = activeRequests.get(tabId);
     if (current?.requestId === request.requestId) activeRequests.delete(tabId);
+    if (pendingTranslationRequests.get(tabId) === request.requestId) {
+      pendingTranslationRequests.delete(tabId);
+    }
   }
 }
 
@@ -2715,6 +2983,8 @@ export default defineBackground(() => {
   browser.tabs.onRemoved.addListener((tabId) => {
     activeRequests.get(tabId)?.controller.abort();
     activeRequests.delete(tabId);
+    pendingTranslationRequests.delete(tabId);
+    void clearTranslationHead(tabId);
     void clearTranslationHistory(tabId);
     void clearTranslationCache(tabId);
     void clearImageRegionTranslationCache(tabId);
@@ -3141,6 +3411,16 @@ export default defineBackground(() => {
           ));
         }
         return undoTranslationResult(message.payload, tabId);
+      }
+
+      if (message.type === 'UPDATE_TRANSLATION_SEGMENT') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(errorResponse(
+            new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
+          ));
+        }
+        return updateTranslationSegment(message.payload, tabId);
       }
 
       if (message.type === 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT') {

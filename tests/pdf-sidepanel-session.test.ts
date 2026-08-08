@@ -189,7 +189,7 @@ describe('native PDF side-panel sessions', () => {
     await storePdfSidePanelSession(correctedSession({
       correctionReceipt: {
         ...correctedSession().correctionReceipt!,
-        scope: 'global',
+        scope: 'current',
         termChange: {
           scope: 'global',
           source: 'source term',

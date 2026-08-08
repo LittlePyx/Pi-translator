@@ -28,11 +28,12 @@ import {
   type DocumentMemoryTranslation,
 } from '../document/document-memory-repository';
 import type {
-  GlossaryEntry,
   PdfSourceLocation,
   TranslateResult,
   TranslationCorrectionReceipt,
+  TranslationCorrectionTermInput,
   TranslationHistoryEntry,
+  TranslationMemoryScope,
   TranslationRevisionRequest,
   TranslationRevisionScope,
   TranslationSegment,
@@ -419,6 +420,13 @@ export async function startSelectionTranslator(
     },
     onSaveTranslationEdit: (result, translatedText, scope, term) =>
       saveTranslationEdit(result, translatedText, scope, term),
+    onSaveSegmentTranslationEdit: (result, segmentId, expectedTranslatedText, correctedTranslatedText) =>
+      saveSegmentTranslationEdit(
+        result,
+        segmentId,
+        expectedTranslatedText,
+        correctedTranslatedText,
+      ),
     onUndoTranslationEdit: (result, receipt) => undoTranslationEdit(result, receipt),
     ...(options.onAdjustPdfRegion
       ? {
@@ -1338,8 +1346,8 @@ export async function startSelectionTranslator(
   async function saveTranslationEdit(
     result: TranslateResult,
     translatedText: string,
-    scope: TranslationRevisionScope,
-    term?: GlossaryEntry,
+    scope: TranslationMemoryScope,
+    term?: TranslationCorrectionTermInput,
   ): Promise<{
     result: TranslateResult;
     history: TranslationHistoryEntry[];
@@ -1415,6 +1423,43 @@ export async function startSelectionTranslator(
       result: response.data.result,
       history: combinedOverlayHistory(),
       ...(response.data.termRollbackSkipped ? { termRollbackSkipped: true } : {}),
+    };
+  }
+
+  async function saveSegmentTranslationEdit(
+    result: TranslateResult,
+    segmentId: string,
+    expectedTranslatedText: string,
+    correctedTranslatedText: string,
+  ): Promise<{
+    result: TranslateResult;
+    history: TranslationHistoryEntry[];
+    correctionReceipt?: TranslationCorrectionReceipt;
+  }> {
+    carryRevisionAnchor(result, result.requestId);
+    const response = await browser.runtime.sendMessage({
+      type: 'UPDATE_TRANSLATION_SEGMENT',
+      payload: {
+        ...documentLocatorForResult(result),
+        result,
+        segmentId,
+        expectedTranslatedText,
+        correctedTranslatedText,
+      },
+    } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
+    if (!response.ok) {
+      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+    }
+    overlayHistory = response.data.history;
+    carryRevisionAnchor(result, response.data.result.requestId);
+    rememberResultRetryContext(response.data.result, retryContextForResult(result));
+    syncRevisionMarkers(response.data.result);
+    return {
+      result: response.data.result,
+      history: combinedOverlayHistory(),
+      ...(response.data.correctionReceipt
+        ? { correctionReceipt: response.data.correctionReceipt }
+        : {}),
     };
   }
 
