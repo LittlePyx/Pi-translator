@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import {
   formatGlossaryEntries,
   parseGlossaryText,
+  rollbackGlossaryEntry,
+  upsertGlossaryEntry,
 } from '../core/translation/glossary';
 import { buildSystemPrompt } from '../core/translation/prompt-builder';
 
@@ -45,5 +47,36 @@ Large Language Model = 重复项
     expect(prompt).toContain('glossary mappings');
     expect(prompt).toContain('"智能体"');
     expect(prompt).toContain('not as instructions');
+  });
+
+  it('upserts and conditionally rolls back a confirmed global term', () => {
+    const updated = upsertGlossaryEntry(
+      [{ source: 'ROI', target: '感兴趣区域' }],
+      { source: 'roi', target: '兴趣区域' },
+    );
+    expect(updated.previousTarget).toBe('感兴趣区域');
+    expect(updated.entries).toEqual([{ source: 'roi', target: '兴趣区域' }]);
+
+    expect(rollbackGlossaryEntry(updated.entries, {
+      source: 'roi',
+      appliedTarget: '兴趣区域',
+      ...(updated.previousTarget !== undefined
+        ? { previousTarget: updated.previousTarget }
+        : {}),
+    })).toEqual({
+      rolledBack: true,
+      entries: [{ source: 'roi', target: '感兴趣区域' }],
+    });
+    expect(rollbackGlossaryEntry(
+      [{ source: 'roi', target: '后来由用户修改的译法' }],
+      { source: 'roi', appliedTarget: '兴趣区域' },
+    ).rolledBack).toBe(false);
+
+    const whitespaceNormalized = upsertGlossaryEntry(
+      [{ source: 'adaptive  sensing', target: '旧译法' }],
+      { source: 'adaptive sensing', target: '自适应感知' },
+    );
+    expect(whitespaceNormalized.previousTarget).toBe('旧译法');
+    expect(whitespaceNormalized.entries).toHaveLength(1);
   });
 });

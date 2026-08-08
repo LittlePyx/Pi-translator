@@ -1,14 +1,17 @@
-import type { SelectionSnapshot } from '../selection/types';
+import { MAX_SELECTION_LENGTH, type SelectionSnapshot } from '../selection/types';
 import type { ContextMode, GeneralPageMode, HistoryLimit, SidebarSide } from '../settings/schema';
 import type {
   TranslationContentMode,
   TranslationStyle,
 } from '../translation/types';
 import type {
+  GlossaryEntry,
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
+  TranslationCorrectionReceipt,
   TranslationHistoryEntry,
+  TranslationRevisionScope,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
 import type { SettingsFocus, TranslationProviderRole } from './user-facing-error';
@@ -121,6 +124,7 @@ export interface PdfSidePanelSession {
     failedRequestId: string;
     hadPartialOutput: boolean;
   };
+  correctionReceipt?: TranslationCorrectionReceipt;
 }
 
 export type RuntimeMessage =
@@ -166,6 +170,37 @@ export type RuntimeMessage =
       payload: DocumentMemoryLocator & {
         result: TranslateResult;
         rememberForDocument?: boolean;
+        scope?: TranslationRevisionScope;
+        previousTranslatedText?: string;
+        baseRequestId?: string;
+        term?: GlossaryEntry;
+      };
+    }
+  | {
+      type: 'UNDO_TRANSLATION_RESULT';
+      payload: DocumentMemoryLocator & {
+        result: TranslateResult;
+        receipt: TranslationCorrectionReceipt;
+      };
+    }
+  | {
+      type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT';
+      payload: {
+        tabId: number;
+        expectedRequestId: string;
+        expectedResultRequestId: string;
+        translatedText: string;
+        scope: TranslationRevisionScope;
+        term?: GlossaryEntry;
+      };
+    }
+  | {
+      type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT';
+      payload: {
+        tabId: number;
+        expectedRequestId: string;
+        expectedResultRequestId: string;
+        expectedCorrectedRequestId: string;
       };
     }
   | { type: 'RENDER_LATEX_MATHML'; payload: { tex: string; displayMode: boolean } }
@@ -218,6 +253,8 @@ export type RuntimeResponse<T> =
 export interface TranslationSessionResult {
   result: TranslateResult;
   history: TranslationHistoryEntry[];
+  correctionReceipt?: TranslationCorrectionReceipt;
+  termRollbackSkipped?: boolean;
 }
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
@@ -252,12 +289,144 @@ export type CompleteSettingsRecoveryResponse = RuntimeResponse<{
 export type LatexMathMlResponse = RuntimeResponse<{ html?: string }>;
 export type LatexMathMlBatchResponse = RuntimeResponse<{ html: Array<string | null> }>;
 
+type UnknownRecord = Record<string, unknown>;
+
+function record(value: unknown): UnknownRecord | undefined {
+  return value && typeof value === 'object' ? value as UnknownRecord : undefined;
+}
+
+function nonEmptyString(value: unknown, maximumLength: number): value is string {
+  return typeof value === 'string' && value.trim().length > 0 && value.length <= maximumLength;
+}
+
+function validTranslationScope(value: unknown): value is TranslationRevisionScope {
+  return value === 'current' || value === 'document' || value === 'global';
+}
+
+function validTerm(value: unknown): value is GlossaryEntry {
+  const term = record(value);
+  return Boolean(
+    term &&
+    nonEmptyString(term.source, 120) &&
+    nonEmptyString(term.target, 120),
+  );
+}
+
+function validCorrectionTermReceipt(value: unknown): boolean {
+  const term = record(value);
+  return Boolean(
+    term &&
+    (term.scope === 'document' || term.scope === 'global') &&
+    nonEmptyString(term.source, 120) &&
+    nonEmptyString(term.appliedTarget, 120) &&
+    (term.previousTarget === undefined || nonEmptyString(term.previousTarget, 120)) &&
+    (term.documentTermId === undefined || nonEmptyString(term.documentTermId, 256)),
+  );
+}
+
+/** Runtime/storage guard for the short-lived manual-correction undo receipt. */
+export function isTranslationCorrectionReceipt(
+  value: unknown,
+): value is TranslationCorrectionReceipt {
+  const receipt = record(value);
+  const termChange = receipt?.termChange;
+  return Boolean(
+    receipt &&
+    nonEmptyString(receipt.baseRequestId, 256) &&
+    nonEmptyString(receipt.correctedRequestId, 256) &&
+    receipt.baseRequestId !== receipt.correctedRequestId &&
+    validTranslationScope(receipt.scope) &&
+    nonEmptyString(receipt.previousTranslation, MAX_SELECTION_LENGTH * 4) &&
+    nonEmptyString(receipt.correctedTranslation, MAX_SELECTION_LENGTH * 4) &&
+    receipt.previousTranslation !== receipt.correctedTranslation &&
+    (termChange === undefined || (
+      validCorrectionTermReceipt(termChange) &&
+      record(termChange)?.scope === receipt.scope
+    )),
+  );
+}
+
+function validCorrectionResult(value: unknown): value is TranslateResult {
+  const result = record(value);
+  return Boolean(
+    result &&
+    nonEmptyString(result.requestId, 256) &&
+    nonEmptyString(result.originalText, MAX_SELECTION_LENGTH) &&
+    nonEmptyString(result.translatedText, MAX_SELECTION_LENGTH * 4) &&
+    Array.isArray(result.warnings),
+  );
+}
+
+function validUpdateTranslationPayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    nonEmptyString(payload.pageUrl, 16_384) &&
+    validCorrectionResult(payload.result) &&
+    (payload.rememberForDocument === undefined || typeof payload.rememberForDocument === 'boolean') &&
+    (payload.scope === undefined || validTranslationScope(payload.scope)) &&
+    (payload.previousTranslatedText === undefined ||
+      nonEmptyString(payload.previousTranslatedText, MAX_SELECTION_LENGTH * 4)) &&
+    (payload.baseRequestId === undefined || nonEmptyString(payload.baseRequestId, 256)) &&
+    (payload.term === undefined || validTerm(payload.term)),
+  );
+}
+
+function validUndoTranslationPayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    nonEmptyString(payload.pageUrl, 16_384) &&
+    validCorrectionResult(payload.result) &&
+    isTranslationCorrectionReceipt(payload.receipt),
+  );
+}
+
+function validPdfCorrectionUpdatePayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    Number.isSafeInteger(payload.tabId) &&
+    (payload.tabId as number) >= 0 &&
+    nonEmptyString(payload.expectedRequestId, 256) &&
+    nonEmptyString(payload.expectedResultRequestId, 256) &&
+    nonEmptyString(payload.translatedText, MAX_SELECTION_LENGTH * 4) &&
+    validTranslationScope(payload.scope) &&
+    (payload.term === undefined || validTerm(payload.term)),
+  );
+}
+
+function validPdfCorrectionUndoPayload(value: unknown): boolean {
+  const payload = record(value);
+  return Boolean(
+    payload &&
+    Number.isSafeInteger(payload.tabId) &&
+    (payload.tabId as number) >= 0 &&
+    nonEmptyString(payload.expectedRequestId, 256) &&
+    nonEmptyString(payload.expectedResultRequestId, 256) &&
+    nonEmptyString(payload.expectedCorrectedRequestId, 256),
+  );
+}
+
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
     return false;
   }
 
-  const type = (value as { type: unknown }).type;
+  const message = value as { type: unknown; payload?: unknown };
+  const type = message.type;
+  if (type === 'UPDATE_TRANSLATION_RESULT') {
+    return validUpdateTranslationPayload(message.payload);
+  }
+  if (type === 'UNDO_TRANSLATION_RESULT') {
+    return validUndoTranslationPayload(message.payload);
+  }
+  if (type === 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
+    return validPdfCorrectionUpdatePayload(message.payload);
+  }
+  if (type === 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
+    return validPdfCorrectionUndoPayload(message.payload);
+  }
   return (
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
@@ -284,7 +453,6 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'DISMISS_DOCUMENT_TERM_CANDIDATE' ||
     type === 'RESOLVE_DOCUMENT_REVIEW' ||
     type === 'CLEAR_DOCUMENT_MEMORY' ||
-    type === 'UPDATE_TRANSLATION_RESULT' ||
     type === 'RENDER_LATEX_MATHML' ||
     type === 'RENDER_LATEX_MATHML_BATCH' ||
     type === 'TRANSLATION_PROGRESS' ||

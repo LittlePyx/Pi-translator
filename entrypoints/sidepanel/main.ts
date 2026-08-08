@@ -4,7 +4,9 @@ import type {
   RuntimeMessage,
   RuntimeResponse,
   SettingsRecoveryRequest,
+  TranslationSessionResult,
 } from '../../core/messaging/messages';
+import type { GlossaryEntry, TranslationRevisionScope } from '../../core/translation/types';
 import {
   translationErrorMessage,
   translationErrorRecovery,
@@ -25,6 +27,13 @@ import { getSettings } from '../../core/settings/repository';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import { renderTranslationContent } from '../../ui/translation-content';
+import {
+  applyManualCorrection,
+  createManualCorrectionDraft,
+  createManualCorrectionSession,
+  ManualCorrectionError,
+  type ManualCorrectionEdit,
+} from '../../core/translation/manual-correction';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -43,6 +52,9 @@ const progressTrack = element<HTMLElement>('progress-track');
 const errorActions = element<HTMLElement>('error-actions');
 const retry = element<HTMLButtonElement>('retry');
 const copy = element<HTMLButtonElement>('copy');
+const correct = element<HTMLButtonElement>('correct');
+const correctionUndo = element<HTMLElement>('correction-undo');
+const undoCorrection = element<HTMLButtonElement>('undo-correction');
 const status = element<HTMLElement>('status');
 const openPiReader = element<HTMLButtonElement>('open-pi-reader');
 const readerHintText = element<HTMLElement>('reader-hint-text');
@@ -126,12 +138,12 @@ function providerErrorContext(session: PdfSidePanelSession): string | undefined 
   return `本次使用：${role}「${context.profileName}」 · ${context.model}`;
 }
 
-function setStatus(message: string): void {
+function setStatus(message: string, timeoutMs = 2_200): void {
   status.textContent = message;
-  if (!message) return;
+  if (!message || timeoutMs <= 0) return;
   window.setTimeout(() => {
     if (status.textContent === message) status.textContent = '';
-  }, 2200);
+  }, timeoutMs);
 }
 
 function hidePdfAccessAlert(): void {
@@ -222,7 +234,11 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   currentSession = session ?? undefined;
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
-  if (!session) return;
+  if (!session) {
+    correct.hidden = true;
+    correctionUndo.hidden = true;
+    return;
+  }
 
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
@@ -253,6 +269,10 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   errorSettings.classList.remove('primary');
   errorSettings.classList.add('secondary');
   copy.disabled = session.status !== 'complete' || !session.result?.translatedText;
+  correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
+  correct.disabled = correct.hidden;
+  correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
+  undoCorrection.disabled = correctionUndo.hidden;
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle('error', session.status === 'error');
 
@@ -371,6 +391,251 @@ function activeSession(): PdfSidePanelSession | undefined {
   return undefined;
 }
 
+function openCorrectionEditor(): void {
+  const session = activeSession();
+  if (!session?.result || session.status !== 'complete') return;
+  const sessionResult = session.result;
+  const correctionSession = createManualCorrectionSession({
+    translatedText: sessionResult.translatedText,
+    sourceText: session.sourceText,
+  });
+  const draft = createManualCorrectionDraft(correctionSession);
+  const panel = document.createElement('div');
+  panel.className = 'correction-editor';
+  panel.setAttribute('role', 'group');
+  panel.setAttribute('aria-label', '修正译文，公式已锁定');
+  const parts = document.createElement('div');
+  parts.className = 'correction-parts';
+  const inputs = new Map<string, HTMLTextAreaElement>();
+  let textPartNumber = 0;
+  let formulaNumber = 0;
+  for (const part of draft.parts) {
+    if (part.kind === 'text') {
+      if (!part.text.length) continue;
+      textPartNumber += 1;
+      const input = document.createElement('textarea');
+      input.className = 'correction-text-part';
+      input.value = part.text;
+      input.maxLength = 24000;
+      input.setAttribute('aria-label', `可编辑译文第 ${textPartNumber} 段`);
+      inputs.set(part.id, input);
+      parts.append(input);
+    } else {
+      formulaNumber += 1;
+      const formula = document.createElement('div');
+      formula.className = 'correction-latex';
+      formula.textContent = part.text;
+      formula.setAttribute('aria-label', `受保护公式 ${formulaNumber}，不可编辑`);
+      formula.setAttribute('role', 'textbox');
+      formula.setAttribute('aria-readonly', 'true');
+      formula.tabIndex = 0;
+      parts.append(formula);
+    }
+  }
+  const note = document.createElement('p');
+  note.className = 'correction-note';
+  note.textContent = formulaNumber
+    ? '公式片段已锁定；保存只修改自然语言，不调用 API。'
+    : '保存修改不会调用 API。';
+  if (session.result.alignedSegments?.length) {
+    note.textContent += ' 保存整段修正后将退出逐句对照。';
+  }
+  const scopeLabel = document.createElement('label');
+  scopeLabel.className = 'correction-scope';
+  scopeLabel.append('保存方式');
+  const scope = document.createElement('select');
+  scope.ariaLabel = '修正后的使用范围';
+  const stableDocument = Boolean(session.pageUrl.trim() || session.result.documentId);
+  for (const [value, label] of [
+    ['current', '仅修正本次'],
+    ['document', '用于本文并固定术语'],
+    ['global', '同时固定为全局术语'],
+  ] as const) {
+    const option = document.createElement('option');
+    option.value = value;
+    option.textContent = label;
+    option.disabled = value === 'document' && !stableDocument;
+    scope.append(option);
+  }
+  scopeLabel.append(scope);
+  const termFields = document.createElement('fieldset');
+  termFields.className = 'correction-term-fields';
+  termFields.hidden = true;
+  const sourceLabel = document.createElement('label');
+  sourceLabel.append('原文术语');
+  const source = document.createElement('input');
+  source.maxLength = 120;
+  source.placeholder = '例如 adaptive sensing';
+  source.ariaLabel = '原文术语';
+  sourceLabel.append(source);
+  const targetLabel = document.createElement('label');
+  targetLabel.append('固定译法');
+  const target = document.createElement('input');
+  target.maxLength = 120;
+  target.placeholder = '例如 自适应感知';
+  target.ariaLabel = '固定译法';
+  targetLabel.append(target);
+  termFields.append(sourceLabel, targetLabel);
+  scope.addEventListener('change', () => {
+    termFields.hidden = scope.value === 'current';
+  });
+  const actions = document.createElement('div');
+  actions.className = 'correction-actions';
+  const feedback = document.createElement('span');
+  feedback.setAttribute('role', 'status');
+  feedback.setAttribute('aria-live', 'polite');
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = '取消';
+  const save = document.createElement('button');
+  save.type = 'button';
+  save.className = 'save';
+  save.textContent = '保存';
+  actions.append(feedback, cancel, save);
+  panel.append(parts, note, scopeLabel, termFields, actions);
+  translationText.replaceChildren(panel);
+  formulaView.hidden = true;
+  copy.disabled = true;
+  correct.hidden = true;
+  correctionUndo.hidden = true;
+
+  cancel.addEventListener('click', () => {
+    if (!isSamePdfSidePanelSession(currentSession, session)) return;
+    render(currentSession);
+    queueMicrotask(() => correct.focus());
+  });
+  panel.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    cancel.click();
+  });
+  save.addEventListener('click', () => {
+    const selectedScope = scope.value as TranslationRevisionScope;
+    const edits: ManualCorrectionEdit[] = [...inputs].map(([partId, input]) => ({
+      partId,
+      text: input.value,
+    }));
+    const explicitTermCandidate = selectedScope === 'current'
+      ? undefined
+      : { source: source.value, target: target.value };
+    let translatedText: string;
+    let term: GlossaryEntry | undefined;
+    try {
+      const applied = applyManualCorrection(correctionSession, {
+        revision: draft.revision,
+        edits,
+        ...(explicitTermCandidate ? { explicitTermCandidate } : {}),
+      });
+      translatedText = applied.correction.correctedTranslation;
+      term = applied.correction.termCandidateDraft
+        ? {
+            source: applied.correction.termCandidateDraft.source,
+            target: applied.correction.termCandidateDraft.target,
+          }
+        : undefined;
+    } catch (error) {
+      feedback.textContent = error instanceof ManualCorrectionError
+        ? error.code === 'NO_CHANGES'
+          ? '译文没有变化'
+          : error.code === 'LATEX_CHANGED'
+            ? '公式已锁定，请只修改文字'
+            : error.code === 'INVALID_TERM_CANDIDATE'
+              ? '请填写不含公式的简短术语和固定译法'
+              : '修正内容不完整，请检查'
+        : '无法保存修正';
+      return;
+    }
+    panel.setAttribute('aria-busy', 'true');
+    save.disabled = true;
+    cancel.disabled = true;
+    scope.disabled = true;
+    for (const input of inputs.values()) input.disabled = true;
+    source.disabled = true;
+    target.disabled = true;
+    feedback.textContent = '正在保存…';
+    void (async () => {
+      const response = await browser.runtime.sendMessage({
+        type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+        payload: {
+          tabId: session.tabId,
+          expectedRequestId: session.requestId,
+          expectedResultRequestId: sessionResult.requestId,
+          translatedText,
+          scope: selectedScope,
+          ...(term ? { term } : {}),
+        },
+      } satisfies RuntimeMessage) as RuntimeResponse<TranslationSessionResult>;
+      if (!isSamePdfSidePanelSession(currentSession, session)) return;
+      if (!response.ok) {
+        throw new Error(translationErrorMessage(response.error.code, response.error.message));
+      }
+      currentSession = {
+        ...session,
+        result: response.data.result,
+        partialText: response.data.result.translatedText,
+        ...(response.data.correctionReceipt
+          ? { correctionReceipt: response.data.correctionReceipt }
+          : {}),
+      };
+      render(currentSession);
+      queueMicrotask(() => undoCorrection.focus());
+    })().catch((error: unknown) => {
+      if (!isSamePdfSidePanelSession(currentSession, session)) return;
+      panel.removeAttribute('aria-busy');
+      save.disabled = false;
+      cancel.disabled = false;
+      scope.disabled = false;
+      for (const input of inputs.values()) input.disabled = false;
+      source.disabled = false;
+      target.disabled = false;
+      feedback.textContent = error instanceof Error ? error.message : '保存失败，请重试';
+    });
+  });
+  queueMicrotask(() => (inputs.values().next().value ?? scope).focus());
+}
+
+function undoCurrentCorrection(): void {
+  const session = activeSession();
+  if (!session?.correctionReceipt || !session.result) return;
+  const sessionResult = session.result;
+  const correctionReceipt = session.correctionReceipt;
+  undoCorrection.disabled = true;
+  setStatus('正在撤销修正');
+  void (async () => {
+    const response = await browser.runtime.sendMessage({
+      type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: {
+        tabId: session.tabId,
+        expectedRequestId: session.requestId,
+        expectedResultRequestId: sessionResult.requestId,
+        expectedCorrectedRequestId: correctionReceipt.correctedRequestId,
+      },
+    } satisfies RuntimeMessage) as RuntimeResponse<TranslationSessionResult>;
+    if (!isSamePdfSidePanelSession(currentSession, session)) return;
+    if (!response.ok) {
+      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+    }
+    const { correctionReceipt: _receipt, ...withoutReceipt } = session;
+    currentSession = {
+      ...withoutReceipt,
+      result: response.data.result,
+      partialText: response.data.result.translatedText,
+    };
+    render(currentSession);
+    queueMicrotask(() => correct.focus());
+    const rollbackSkipped = Boolean(response.data.termRollbackSkipped);
+    setStatus(
+      rollbackSkipped
+        ? '译文已撤销；术语后来被修改，未自动覆盖'
+        : '已撤销修正',
+      rollbackSkipped ? 8_000 : 2_200,
+    );
+  })().catch((error: unknown) => {
+    undoCorrection.disabled = false;
+    setStatus(error instanceof Error ? error.message : '撤销失败');
+  });
+}
+
 function openFullSettings(
   focus?: SettingsFocus,
   recovery?: SettingsRecoveryRequest,
@@ -436,6 +701,8 @@ copy.addEventListener('click', () => {
     .then(() => setStatus('已复制'))
     .catch(() => setStatus('复制失败'));
 });
+correct.addEventListener('click', openCorrectionEditor);
+undoCorrection.addEventListener('click', undoCurrentCorrection);
 
 openPiReader.addEventListener('click', () => {
   void (async () => {

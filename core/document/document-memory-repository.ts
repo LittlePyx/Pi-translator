@@ -2,9 +2,11 @@ import type {
   GlossaryEntry,
   PdfSourceLocation,
   TranslateResult,
+  TranslationCorrectionTermReceipt,
   TranslationStyle,
 } from '../translation/types';
 import type { DocumentIdentity } from './document-identity';
+import { normalizeGlossaryTermKey } from '../translation/glossary';
 
 const STORAGE_KEY = 'documentTranslationMemoryV1';
 const SCHEMA_VERSION = 1;
@@ -15,6 +17,13 @@ const MAX_CANDIDATE_TERMS = 20;
 const MAX_DISMISSED_TERMS = 60;
 const MAX_ENTRY_TEXT = 2_400;
 const MAX_REFERENCE_CONTEXT = 1_600;
+
+export class DocumentTermCapacityError extends Error {
+  constructor() {
+    super(`A document can keep at most ${MAX_CONFIRMED_TERMS} confirmed terms.`);
+    this.name = 'DocumentTermCapacityError';
+  }
+}
 
 export interface DocumentConfirmedTerm extends GlossaryEntry {
   id: string;
@@ -76,7 +85,7 @@ function compactText(value: string, maximum = MAX_ENTRY_TEXT): string {
 }
 
 function normalizedTerm(value: string): string {
-  return value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  return normalizeGlossaryTermKey(value);
 }
 
 function termKey(source: string, target: string): string {
@@ -234,6 +243,13 @@ function sanitizeTerm(source: string, target: string): GlossaryEntry | undefined
   return { source: cleanSource, target: cleanTarget };
 }
 
+function sanitizeConfirmedTerm(source: string, target: string): GlossaryEntry | undefined {
+  const cleanSource = compactText(source, 120);
+  const cleanTarget = compactText(target, 120);
+  if (!cleanSource || !cleanTarget) return undefined;
+  return { source: cleanSource, target: cleanTarget };
+}
+
 function sanitizeMemory(value: unknown, identity: DocumentIdentity): StoredDocumentMemory {
   if (!value || typeof value !== 'object') return emptyMemory(identity);
   const record = value as Partial<StoredDocumentMemory>;
@@ -275,15 +291,18 @@ function publicSnapshot(memory: StoredDocumentMemory): DocumentMemorySnapshot {
   return snapshot;
 }
 
-async function mutate(
+async function mutateWithValue<T>(
   identity: DocumentIdentity,
-  updater: (memory: StoredDocumentMemory) => StoredDocumentMemory,
-): Promise<DocumentMemorySnapshot> {
+  updater: (memory: StoredDocumentMemory) => { memory: StoredDocumentMemory; value: T },
+): Promise<{ snapshot: DocumentMemorySnapshot; value: T }> {
   let snapshot = publicSnapshot(emptyMemory(identity));
+  let value: T | undefined;
   const operation = writeQueue.then(async () => {
     const all = await readAll();
     const current = sanitizeMemory(all[identity.documentId], identity);
-    const proposed = updater(current);
+    const update = updater(current);
+    const proposed = update.memory;
+    value = update.value;
     const newestStoredTimestamp = Object.values(all).reduce(
       (latest, memory) => Math.max(latest, memory.updatedAt || 0),
       0,
@@ -309,6 +328,17 @@ async function mutate(
   });
   writeQueue = operation.catch(() => undefined);
   await operation;
+  return { snapshot, value: value as T };
+}
+
+async function mutate(
+  identity: DocumentIdentity,
+  updater: (memory: StoredDocumentMemory) => StoredDocumentMemory,
+): Promise<DocumentMemorySnapshot> {
+  const { snapshot } = await mutateWithValue(identity, (memory) => ({
+    memory: updater(memory),
+    value: undefined,
+  }));
   return snapshot;
 }
 
@@ -320,11 +350,11 @@ export async function getDocumentMemory(
   return publicSnapshot(sanitizeMemory(all[identity.documentId], identity));
 }
 
-export async function rememberDocumentTranslation(
+function withRememberedDocumentTranslation(
+  memory: StoredDocumentMemory,
   identity: DocumentIdentity,
   result: TranslateResult,
-): Promise<DocumentMemorySnapshot> {
-  return mutate(identity, (memory) => {
+): StoredDocumentMemory {
     const now = Date.now();
     const baseEntry: DocumentMemoryTranslation = {
       id: stableId('translation', `${result.requestId}:${result.originalText}`),
@@ -379,7 +409,13 @@ export async function rememberDocumentTranslation(
         )),
       ]),
     };
-  });
+}
+
+export async function rememberDocumentTranslation(
+  identity: DocumentIdentity,
+  result: TranslateResult,
+): Promise<DocumentMemorySnapshot> {
+  return mutate(identity, (memory) => withRememberedDocumentTranslation(memory, identity, result));
 }
 
 export async function resolveDocumentReview(
@@ -466,28 +502,111 @@ export async function upsertDocumentTerm(
   identity: DocumentIdentity,
   input: { id?: string; source: string; target: string },
 ): Promise<DocumentMemorySnapshot> {
-  const clean = sanitizeTerm(input.source, input.target);
-  if (!clean) return getDocumentMemory(identity);
-  return mutate(identity, (memory) => {
-    const now = Date.now();
-    const id = input.id ?? stableId('term', normalizedTerm(clean.source));
-    const existing = memory.confirmedTerms.find((term) => term.id === id);
-    const term: DocumentConfirmedTerm = {
-      ...clean,
-      id,
-      createdAt: existing?.createdAt ?? now,
-      updatedAt: now,
-    };
-    return {
+  return mutate(identity, (memory) => withUpsertedDocumentTerm(memory, input).memory);
+}
+
+function withUpsertedDocumentTerm(
+  memory: StoredDocumentMemory,
+  input: { id?: string; source: string; target: string },
+): { memory: StoredDocumentMemory; receipt?: TranslationCorrectionTermReceipt } {
+  const clean = sanitizeConfirmedTerm(input.source, input.target);
+  if (!clean) return { memory };
+  const sourceKey = normalizedTerm(clean.source);
+  const existingBySource = memory.confirmedTerms.find(
+    (term) => normalizedTerm(term.source) === sourceKey,
+  );
+  if (!existingBySource && memory.confirmedTerms.length >= MAX_CONFIRMED_TERMS) {
+    throw new DocumentTermCapacityError();
+  }
+  const now = Date.now();
+  const id = input.id ?? existingBySource?.id ?? stableId('term', sourceKey);
+  const existing = memory.confirmedTerms.find((term) => term.id === id) ?? existingBySource;
+  const term: DocumentConfirmedTerm = {
+    ...clean,
+    id,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+  };
+  return {
+    memory: {
       ...memory,
       updatedAt: now,
-      confirmedTerms: [term, ...memory.confirmedTerms.filter((item) => item.id !== id)]
-        .slice(0, MAX_CONFIRMED_TERMS),
+      confirmedTerms: [term, ...memory.confirmedTerms.filter((item) => item.id !== id)],
       candidateTerms: memory.candidateTerms.filter(
-        (candidate) => normalizedTerm(candidate.source) !== normalizedTerm(term.source),
+        (candidate) => normalizedTerm(candidate.source) !== sourceKey,
       ),
-    };
+    },
+    receipt: {
+      scope: 'document',
+      source: clean.source,
+      appliedTarget: clean.target,
+      ...(existing ? { previousTarget: existing.target } : {}),
+      documentTermId: id,
+    },
+  };
+}
+
+export async function rememberDocumentCorrection(
+  identity: DocumentIdentity,
+  result: TranslateResult,
+  term?: GlossaryEntry,
+): Promise<{
+  memory: DocumentMemorySnapshot;
+  termChange?: TranslationCorrectionTermReceipt;
+}> {
+  const update = await mutateWithValue(identity, (memory) => {
+    let next = withRememberedDocumentTranslation(memory, identity, result);
+    let termChange: TranslationCorrectionTermReceipt | undefined;
+    if (term) {
+      const termUpdate = withUpsertedDocumentTerm(next, term);
+      next = termUpdate.memory;
+      termChange = termUpdate.receipt;
+    }
+    return { memory: next, value: termChange };
   });
+  return {
+    memory: update.snapshot,
+    ...(update.value ? { termChange: update.value } : {}),
+  };
+}
+
+export async function restoreDocumentCorrection(
+  identity: DocumentIdentity,
+  result: TranslateResult,
+  change?: TranslationCorrectionTermReceipt,
+): Promise<{ memory: DocumentMemorySnapshot; termRolledBack: boolean }> {
+  const update = await mutateWithValue(identity, (memory) => {
+    let next = withRememberedDocumentTranslation(memory, identity, result);
+    if (!change || change.scope !== 'document') {
+      return { memory: next, value: true };
+    }
+    const sourceKey = normalizedTerm(change.source);
+    const current = next.confirmedTerms.find(
+      (term) => normalizedTerm(term.source) === sourceKey,
+    );
+    if (
+      !current ||
+      current.target !== change.appliedTarget ||
+      (change.documentTermId !== undefined && current.id !== change.documentTermId)
+    ) {
+      return { memory: next, value: false };
+    }
+    if (change.previousTarget !== undefined) {
+      next = withUpsertedDocumentTerm(next, {
+        id: current.id,
+        source: change.source,
+        target: change.previousTarget,
+      }).memory;
+    } else {
+      next = {
+        ...next,
+        updatedAt: Date.now(),
+        confirmedTerms: next.confirmedTerms.filter((term) => term.id !== current.id),
+      };
+    }
+    return { memory: next, value: true };
+  });
+  return { memory: update.snapshot, termRolledBack: update.value };
 }
 
 export async function removeDocumentTerm(

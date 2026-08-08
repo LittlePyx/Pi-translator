@@ -1,5 +1,40 @@
 import { describe, expect, it } from 'vitest';
-import { isRuntimeMessage } from '../core/messaging/messages';
+import {
+  isRuntimeMessage,
+  isTranslationCorrectionReceipt,
+} from '../core/messaging/messages';
+
+function correctedResult() {
+  return {
+    requestId: 'corrected-1',
+    originalText: 'Source text.',
+    translatedText: 'Corrected translation.',
+    warnings: [],
+    revision: {
+      rootRequestId: 'base-1',
+      kind: 'manual' as const,
+      label: 'Manual correction',
+      scope: 'document' as const,
+    },
+  };
+}
+
+function correctionReceipt() {
+  return {
+    baseRequestId: 'base-1',
+    correctedRequestId: 'corrected-1',
+    scope: 'document' as const,
+    previousTranslation: 'Previous translation.',
+    correctedTranslation: 'Corrected translation.',
+    termChange: {
+      scope: 'document' as const,
+      source: 'source term',
+      appliedTarget: 'corrected term',
+      previousTarget: 'previous term',
+      documentTermId: 'term-1',
+    },
+  };
+}
 
 describe('runtime message guard', () => {
   it('accepts the dedicated vision-capability test message', () => {
@@ -58,6 +93,111 @@ describe('runtime message guard', () => {
         },
       },
     })).toBe(true);
+  });
+
+  it('accepts manual-correction update and undo messages', () => {
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        scope: 'document',
+        previousTranslatedText: 'Previous translation.',
+        baseRequestId: 'base-1',
+        term: { source: 'source term', target: 'corrected term' },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'UNDO_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        receipt: correctionReceipt(),
+      },
+    })).toBe(true);
+  });
+
+  it('accepts native PDF manual-correction update and undo messages', () => {
+    expect(isRuntimeMessage({
+      type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: {
+        tabId: 7,
+        expectedRequestId: 'native-pdf-request',
+        expectedResultRequestId: 'native-pdf-result',
+        translatedText: 'Corrected translation.',
+        scope: 'global',
+        term: { source: 'source term', target: 'corrected term' },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: {
+        tabId: 7,
+        expectedRequestId: 'native-pdf-request',
+        expectedResultRequestId: 'native-pdf-corrected-result',
+        expectedCorrectedRequestId: 'native-pdf-corrected-result',
+      },
+    })).toBe(true);
+  });
+
+  it('validates correction receipts including their scope and term rollback', () => {
+    expect(isTranslationCorrectionReceipt(correctionReceipt())).toBe(true);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      scope: undefined,
+    })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      correctedRequestId: 'base-1',
+    })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      termChange: { ...correctionReceipt().termChange, scope: 'global' },
+    })).toBe(false);
+    expect(isTranslationCorrectionReceipt({
+      ...correctionReceipt(),
+      correctedTranslation: 'Previous translation.',
+    })).toBe(false);
+  });
+
+  it('rejects malformed manual-correction messages before dispatch', () => {
+    expect(isRuntimeMessage({
+      type: 'UPDATE_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: { ...correctedResult(), translatedText: '' },
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UNDO_TRANSLATION_RESULT',
+      payload: {
+        pageUrl: 'https://example.com/paper',
+        result: correctedResult(),
+        receipt: { ...correctionReceipt(), correctedRequestId: '' },
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: {
+        tabId: -1,
+        expectedRequestId: 'request-1',
+        translatedText: 'Corrected translation.',
+        scope: 'document',
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: {
+        tabId: 7,
+        expectedRequestId: 'request-1',
+        translatedText: 'Corrected translation.',
+        scope: 'forever',
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT',
+      payload: { tabId: 7, expectedRequestId: '' },
+    })).toBe(false);
   });
 
   it('accepts batched local MathML rendering', () => {

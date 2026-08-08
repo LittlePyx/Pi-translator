@@ -1055,16 +1055,17 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
   await overlay.locator('.mark-action').click();
 
-  await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '调整译文…' }).click();
-  const editor = overlay.getByRole('textbox', { name: '直接修改译文' });
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await expect(editor).toBeVisible();
   await editor.fill('用户手动修订后的学术译文。');
-  const revisionScope = overlay.getByRole('combobox', { name: '译文调整作用范围' });
+  const revisionScope = overlay.getByRole('combobox', { name: '修正后的使用范围' });
   await expect(revisionScope).toHaveValue('current');
   await revisionScope.selectOption('document');
+  await overlay.getByRole('textbox', { name: '原文术语' }).fill('academic translation');
+  await overlay.getByRole('textbox', { name: '固定译法' }).fill('学术译文');
   const requestsBeforeManualSave = textRequests.length;
-  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
   expect(textRequests).toHaveLength(requestsBeforeManualSave);
   await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
@@ -1080,7 +1081,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   }
 
   await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  await overlay.getByRole('button', { name: '让模型调整…' }).click();
   await overlay.getByRole('button', { name: '更忠实原文' }).click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
   await expect(overlay.locator('.version-counter')).toHaveText('v1/3');
@@ -1112,6 +1113,119 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await clearBrowserSelection();
 });
 
+test('keeps correction terms explicit and rolls a global term back with the translation', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+
+  const correction = overlay.getByRole('button', { name: '修正译文' });
+  const correctionBox = await correction.boundingBox();
+  expect(correctionBox).not.toBeNull();
+  if (correctionBox) {
+    expect(correctionBox.width).toBeLessThanOrEqual(52);
+    expect(correctionBox.height).toBeLessThanOrEqual(32);
+  }
+  await correction.click();
+
+  const scope = overlay.getByRole('combobox', { name: '修正后的使用范围' });
+  await expect(scope).toHaveValue('current');
+  await expect(scope.locator('option')).toHaveText([
+    '仅修正本次',
+    '用于本文并固定术语',
+    '同时固定为全局术语',
+  ]);
+  await expect(overlay.getByRole('textbox', { name: '原文术语' })).toBeHidden();
+  await expect(overlay.getByRole('textbox', { name: '固定译法' })).toBeHidden();
+
+  await scope.selectOption('global');
+  const sourceTerm = overlay.getByRole('textbox', { name: '原文术语' });
+  const targetTerm = overlay.getByRole('textbox', { name: '固定译法' });
+  await expect(sourceTerm).toBeVisible();
+  await expect(targetTerm).toBeVisible();
+  await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' })
+    .fill('显式术语修正后的译文。');
+
+  const requestsBeforeSave = textRequests.length;
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(overlay.locator('.revision-status'))
+    .toContainText('请填写不含公式的简短术语和固定译法');
+  expect(textRequests).toHaveLength(requestsBeforeSave);
+
+  const uniqueSource = 'correction-only global phrase';
+  const uniqueTarget = '仅供修正测试的全局译法';
+  await sourceTerm.fill(uniqueSource);
+  await targetTerm.fill(uniqueTarget);
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(overlay.locator('.body')).toHaveText('显式术语修正后的译文。');
+  expect(textRequests).toHaveLength(requestsBeforeSave);
+
+  const worker = context.serviceWorkers()[0]!;
+  const storedGlobalTarget = async (): Promise<string | undefined> => worker.evaluate(
+    async (source) => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      const settings = stored.extensionSettings as {
+        academicGlossary?: Array<{ source: string; target: string }>;
+      } | undefined;
+      return settings?.academicGlossary?.find((term) => term.source === source)?.target;
+    },
+    uniqueSource,
+  );
+  await expect.poll(storedGlobalTarget).toBe(uniqueTarget);
+
+  const undo = overlay.getByRole('button', { name: '撤销上次译文修正' });
+  await expect(undo).toBeVisible();
+  await undo.click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await expect(overlay.getByRole('button', { name: '撤销上次译文修正' })).toHaveCount(0);
+  await expect.poll(storedGlobalTarget).toBeUndefined();
+  expect(textRequests).toHaveLength(requestsBeforeSave);
+
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
+test('adopts an older translation version without an API call and can undo it', async () => {
+  await clearBrowserSelection();
+  const overlay = page.locator('#tex-selection-translator-root');
+  if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+  await selectSourceText();
+  await overlay.locator('.trigger').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('第一版人工译文。');
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(overlay.locator('.body')).toHaveText('第一版人工译文。');
+
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('第二版人工译文。');
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+  await expect(overlay.locator('.body')).toHaveText('第二版人工译文。');
+  const requestsBeforeAdoption = textRequests.length;
+
+  await overlay.getByTitle('查看上一版译文').click();
+  await expect(overlay.getByRole('button', { name: '撤销上次译文修正' })).toHaveCount(0);
+  await overlay.getByTitle('查看下一版译文').click();
+  await expect(overlay.getByRole('button', { name: '撤销上次译文修正' })).toBeVisible();
+  await overlay.getByTitle('查看上一版译文').click();
+  await overlay.getByTitle('查看上一版译文').click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await overlay.locator('details.more > summary').click();
+  await overlay.getByRole('button', { name: '采用当前版本' }).click();
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  expect(textRequests).toHaveLength(requestsBeforeAdoption);
+
+  await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+  await expect(overlay.locator('.body')).toHaveText('第二版人工译文。');
+  expect(textRequests).toHaveLength(requestsBeforeAdoption);
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
 test('retries a failed model adjustment with the frozen draft and revision context', async () => {
   await clearBrowserSelection();
   const overlay = page.locator('#tex-selection-translator-root');
@@ -1121,17 +1235,16 @@ test('retries a failed model adjustment with the frozen draft and revision conte
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
   await overlay.locator('.mark-action').click();
 
-  await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '调整译文…' }).click();
-  const editor = overlay.getByRole('textbox', { name: '直接修改译文' });
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await editor.fill('必须保留的人工术语修订。');
-  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.body')).toHaveText('必须保留的人工术语修订。');
 
   failNextRevisionRequest = true;
   const requestsBeforeFailedRevision = textRequests.length;
   await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '调整译文…' }).click();
+  await overlay.getByRole('button', { name: '让模型调整…' }).click();
   await overlay.getByRole('combobox', { name: '译文调整作用范围' })
     .selectOption('document');
   await overlay.getByRole('button', { name: '更自然简洁' }).click();
@@ -1219,10 +1332,9 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
 
   await page.mouse.click(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
-  await overlay.locator('details.more > summary').click();
-  await overlay.getByRole('button', { name: '调整译文…' }).click();
-  await overlay.getByRole('textbox', { name: '直接修改译文' }).fill('手动修改后的完整双句译文。');
-  await overlay.getByRole('button', { name: '保存修改' }).click();
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('手动修改后的完整双句译文。');
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(markerLayer.locator('.marker')).toHaveCount(1);
   await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(markerLayer.locator('.tooltip')).toContainText('第一句重要译文。');
@@ -2650,6 +2762,38 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   const request = JSON.stringify(visionRequests.at(-1));
   expect(request).toContain('Energy E = mc^2 is invariant.');
 
+  const textRequestsBeforeCorrection = textRequests.length;
+  const visionRequestsBeforeCorrection = visionRequests.length;
+  await overlay.getByRole('button', { name: '修正译文' }).click();
+  const correctionEditor = overlay.getByRole('group', {
+    name: '修正译文，公式已锁定',
+  });
+  await expect(correctionEditor).toBeVisible();
+  const lockedFormula = correctionEditor.getByLabel('受保护公式 1，不可编辑');
+  await expect(lockedFormula).toHaveText('$E=mc^2$');
+  await expect(lockedFormula).toHaveAttribute('aria-readonly', 'true');
+  await expect(lockedFormula.locator('textarea,input,[contenteditable="true"]')).toHaveCount(0);
+  const editableParts = correctionEditor.locator('.correction-text-part');
+  await expect(editableParts).toHaveCount(2);
+  await editableParts.nth(0).fill('修正后的能量关系式 ');
+  await overlay.getByRole('button', { name: '保存', exact: true }).click();
+
+  await expect(overlay.locator('.body')).toContainText('修正后的能量关系式');
+  await expect(overlay.locator('.body .pi-math-inline math')).toBeVisible();
+  await overlay.locator('.formula-view').click();
+  await expect(overlay.locator('.body'))
+    .toHaveText('修正后的能量关系式 $E=mc^2$ 保持不变。');
+  expect(textRequests).toHaveLength(textRequestsBeforeCorrection);
+  expect(visionRequests).toHaveLength(visionRequestsBeforeCorrection);
+
+  await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+  await expect(overlay.locator('.body')).toContainText('能量关系式');
+  await expect(overlay.locator('.body')).not.toContainText('修正后的能量关系式');
+  await overlay.locator('.formula-view').click();
+  await expect(overlay.locator('.body')).toHaveText('能量关系式 $E=mc^2$ 保持不变。');
+  expect(textRequests).toHaveLength(textRequestsBeforeCorrection);
+  expect(visionRequests).toHaveLength(visionRequestsBeforeCorrection);
+
   await overlay.getByRole('button', { name: '关闭' }).click();
   await pdfPage.evaluate(() => window.getSelection()?.removeAllRanges());
   await pdfPage.locator('#region-translate').click();
@@ -3136,6 +3280,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
   await expect(sidePanel.locator('#translation-state')).toHaveText('正在流式接收');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
+  await expect(sidePanel.locator('#correct')).toBeHidden();
+  await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('未提供选区图像');
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('第 6 页');
@@ -3162,6 +3308,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   }, baseSession);
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('流式译文应当显示在原生 PDF 阅读器旁边');
+  await expect(sidePanel.locator('#correct')).toBeVisible();
+  await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#translation-text .pi-math-inline math')).toBeVisible();
   await expect(sidePanel.locator('#formula-view')).toHaveText('源码');
   await sidePanel.locator('#formula-view').click();
@@ -3248,6 +3396,25 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   )).toBeLessThan(1);
   expect(optimizerLayout!.tagRight).toBeLessThanOrEqual(optimizerLayout!.viewportWidth + 1);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  await sidePanel.locator('#correct').click();
+  const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
+  await expect(nativeCorrection).toBeVisible();
+  await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
+    .toContainText('Q^{\\Pi^*}');
+  await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
+    .toHaveAttribute('aria-readonly', 'true');
+  await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
+    .toHaveAttribute('role', 'textbox');
+  await expect(sidePanel.locator('#copy')).toBeDisabled();
+  const correctionScope = nativeCorrection.getByLabel('修正后的使用范围');
+  await correctionScope.focus();
+  await correctionScope.press('ArrowDown');
+  await correctionScope.press('ArrowDown');
+  await expect(correctionScope).toHaveValue('global');
+  await nativeCorrection.press('Escape');
+  await expect(sidePanel.locator('#correct')).toBeFocused();
+  await expect(sidePanel.locator('#copy')).toBeEnabled();
+  await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toHaveCount(3);
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel.png') });
   }

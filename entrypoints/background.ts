@@ -77,6 +77,17 @@ import {
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
 import {
+  MAX_GLOSSARY_ENTRIES,
+  normalizeGlossaryTermKey,
+  rollbackGlossaryEntry,
+  upsertGlossaryEntry,
+} from '../core/translation/glossary';
+import {
+  ManualCorrectionError,
+  validateManualCorrectionText,
+  validateManualTermCandidate,
+} from '../core/translation/manual-correction';
+import {
   edgePdfSourceUrl,
   isEdgePdfSidePanelTab,
   isEdgeNativePdfContext,
@@ -97,17 +108,23 @@ import {
 } from '../core/pdf/native-translation-profile';
 import { recognizeQwenPdfPage } from '../core/pdf/qwen-coordinate-ocr';
 import type { RecognizePdfPageRequest } from '../core/pdf/ocr-text-layer';
-import { documentIdentity } from '../core/document/document-identity';
+import {
+  documentIdentity,
+  type DocumentIdentityInput,
+} from '../core/document/document-identity';
 import {
   buildDocumentReferenceContext,
   clearDocumentMemory,
   confirmDocumentTerm,
+  DocumentTermCapacityError,
   dismissDocumentTermCandidate,
   getDocumentMemory,
   mergeDocumentGlossary,
+  rememberDocumentCorrection,
   rememberDocumentTranslation,
   removeDocumentTerm,
   resolveDocumentReview,
+  restoreDocumentCorrection,
   upsertDocumentTerm,
 } from '../core/document/document-memory-repository';
 import {
@@ -118,10 +135,14 @@ import {
   storePdfSidePanelSession,
 } from '../core/pdf/sidepanel-session';
 import type {
+  GlossaryEntry,
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
+  TranslationCorrectionReceipt,
+  TranslationCorrectionTermReceipt,
   TranslationHistoryEntry,
+  TranslationRevisionScope,
   TranslationSegment,
 } from '../core/translation/types';
 
@@ -135,6 +156,7 @@ const LEGACY_FAVORITES_KEY = 'translationFavorites';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
 const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
+const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
 const activeTabIdsByWindow = new Map<number, number>();
 let lastActiveBrowserTab: { id: number; windowId: number } | undefined;
@@ -1360,11 +1382,138 @@ async function translate(
   }
 }
 
+function correctionTermSourceKey(value: string): string {
+  return normalizeGlossaryTermKey(value);
+}
+
+function manualCorrectionError(error: unknown): TranslationError {
+  if (!(error instanceof ManualCorrectionError)) return toTranslationError(error);
+  if (error.code === 'EMPTY_TRANSLATION') {
+    return new TranslationError('EMPTY_SELECTION', '修正后的译文不能为空。');
+  }
+  if (error.code === 'TRANSLATION_TOO_LONG') {
+    return new TranslationError('SELECTION_TOO_LONG', '修正后的译文过长。');
+  }
+  if (error.code === 'LATEX_CHANGED') {
+    return new TranslationError(
+      'LATEX_VALIDATION_FAILED',
+      '公式已锁定。请只修改自然语言部分，不要增删或改变 LaTeX。',
+    );
+  }
+  return new TranslationError('INVALID_RESPONSE', '修正内容已过期或格式不正确，请重新打开编辑器。');
+}
+
+async function applyCorrectionTerm(
+  locator: DocumentIdentityInput,
+  scope: TranslationRevisionScope,
+  term: GlossaryEntry | undefined,
+): Promise<TranslationCorrectionTermReceipt | undefined> {
+  if (scope === 'current' || !term) return undefined;
+  let validated: { source: string; target: string };
+  try {
+    validated = validateManualTermCandidate(term);
+  } catch (error) {
+    throw manualCorrectionError(error);
+  }
+
+  if (scope === 'document') {
+    if (!locator.documentId?.trim() && !locator.sourceLocation?.documentId.trim() && !locator.pageUrl.trim()) {
+      throw new TranslationError(
+        'UNSUPPORTED_PAGE',
+        '无法确认当前 PDF 的稳定身份，请先用 Pi PDF 打开后再保存本文术语。',
+      );
+    }
+    const identity = documentIdentity(locator);
+    const before = await getDocumentMemory(identity);
+    const key = correctionTermSourceKey(validated.source);
+    const previous = before.confirmedTerms.find(
+      (candidate) => correctionTermSourceKey(candidate.source) === key,
+    );
+    const after = await upsertDocumentTerm(identity, validated);
+    const applied = after.confirmedTerms.find(
+      (candidate) => correctionTermSourceKey(candidate.source) === key,
+    );
+    return {
+      scope: 'document',
+      source: validated.source,
+      appliedTarget: validated.target,
+      ...(previous ? { previousTarget: previous.target } : {}),
+      ...(applied ? { documentTermId: applied.id } : {}),
+    };
+  }
+
+  const settings = await getSettings();
+  const key = correctionTermSourceKey(validated.source);
+  const hasExisting = settings.academicGlossary.some(
+    (entry) => correctionTermSourceKey(entry.source) === key,
+  );
+  if (!hasExisting && settings.academicGlossary.length >= MAX_GLOSSARY_ENTRIES) {
+    throw new TranslationError(
+      'INVALID_RESPONSE',
+      `全局术语表已满（最多 ${MAX_GLOSSARY_ENTRIES} 条），请先在设置中整理术语。`,
+    );
+  }
+  const updated = upsertGlossaryEntry(settings.academicGlossary, validated);
+  await saveSettings({ ...settings, academicGlossary: updated.entries });
+  return {
+    scope: 'global',
+    source: validated.source,
+    appliedTarget: validated.target,
+    ...(updated.previousTarget !== undefined
+      ? { previousTarget: updated.previousTarget }
+      : {}),
+  };
+}
+
+async function rollbackCorrectionTerm(
+  locator: DocumentIdentityInput,
+  change: TranslationCorrectionTermReceipt | undefined,
+): Promise<boolean> {
+  if (!change) return true;
+  if (change.scope === 'global') {
+    const settings = await getSettings();
+    const rollback = rollbackGlossaryEntry(settings.academicGlossary, change);
+    if (!rollback.rolledBack) return false;
+    await saveSettings({ ...settings, academicGlossary: rollback.entries });
+    return true;
+  }
+
+  if (!locator.documentId?.trim() && !locator.sourceLocation?.documentId.trim() && !locator.pageUrl.trim()) {
+    return false;
+  }
+  const identity = documentIdentity(locator);
+  const memory = await getDocumentMemory(identity);
+  const key = correctionTermSourceKey(change.source);
+  const current = memory.confirmedTerms.find(
+    (candidate) => correctionTermSourceKey(candidate.source) === key,
+  );
+  if (
+    !current ||
+    current.target !== change.appliedTarget ||
+    (change.documentTermId !== undefined && current.id !== change.documentTermId)
+  ) return false;
+  if (change.previousTarget !== undefined) {
+    await upsertDocumentTerm(identity, {
+      id: current.id,
+      source: change.source,
+      target: change.previousTarget,
+    });
+  } else {
+    await removeDocumentTerm(identity, current.id);
+  }
+  return true;
+}
+
 async function updateTranslationResult(
   payload: Extract<RuntimeMessage, { type: 'UPDATE_TRANSLATION_RESULT' }>['payload'],
   tabId: number,
+  options?: {
+    assertCurrent?: () => void;
+    documentUndo?: { termChange?: TranslationCorrectionTermReceipt };
+  },
 ): Promise<TranslateRuntimeResponse> {
   try {
+    options?.assertCurrent?.();
     const originalText = payload.result.originalText.trim();
     const translatedText = payload.result.translatedText.trim();
     if (!originalText || !translatedText) {
@@ -1372,6 +1521,23 @@ async function updateTranslationResult(
     }
     if (originalText.length > MAX_SELECTION_LENGTH || translatedText.length > MAX_SELECTION_LENGTH * 4) {
       throw new TranslationError('SELECTION_TOO_LONG', 'The edited translation is too long.');
+    }
+    if (payload.previousTranslatedText !== undefined) {
+      try {
+        validateManualCorrectionText(payload.previousTranslatedText, translatedText);
+      } catch (error) {
+        throw manualCorrectionError(error);
+      }
+    }
+    const scope = payload.scope ?? (payload.rememberForDocument ? 'document' : 'current');
+    let correctionTerm: GlossaryEntry | undefined;
+    if (scope !== 'current' && payload.term) {
+      try {
+        const validated = validateManualTermCandidate(payload.term);
+        correctionTerm = { source: validated.source, target: validated.target };
+      } catch (error) {
+        throw manualCorrectionError(error);
+      }
     }
     const rootRequestId = payload.result.revision?.rootRequestId?.trim() ||
       payload.result.requestId;
@@ -1387,13 +1553,31 @@ async function updateTranslationResult(
         rootRequestId,
         kind: 'manual',
         label: '手动修改',
-        scope: payload.rememberForDocument ? 'document' : 'current',
+        scope,
       },
     };
     delete result.alignedSegments;
     const settings = await getSettings();
-    if (payload.rememberForDocument) {
-      await rememberDocumentTranslation(documentIdentity(payload), result);
+    options?.assertCurrent?.();
+    let termChange: TranslationCorrectionTermReceipt | undefined;
+    let termRollbackSkipped = false;
+    if (scope === 'document') {
+      const identity = documentIdentity(payload);
+      if (options?.documentUndo) {
+        const restored = await restoreDocumentCorrection(
+          identity,
+          result,
+          options.documentUndo.termChange,
+        );
+        termRollbackSkipped = !restored.termRolledBack;
+      } else {
+        const remembered = await rememberDocumentCorrection(identity, result, correctionTerm);
+        termChange = remembered.termChange;
+      }
+      options?.assertCurrent?.();
+    } else {
+      termChange = await applyCorrectionTerm(payload, scope, correctionTerm);
+      options?.assertCurrent?.();
     }
     const historyTask = settings.rememberRecentTranslations
       ? addTranslationHistory(tabId, result, settings.historyLimit)
@@ -1405,10 +1589,244 @@ async function updateTranslationResult(
         clearTranslationCache(tabId),
       ],
     );
-    return { ok: true, data: { result, history } };
+    const correctionReceipt = payload.previousTranslatedText === undefined
+      ? undefined
+      : {
+          baseRequestId: payload.baseRequestId ?? rootRequestId,
+          correctedRequestId: result.requestId,
+          scope,
+          previousTranslation: payload.previousTranslatedText,
+          correctedTranslation: result.translatedText,
+          ...(termChange ? { termChange } : {}),
+        } satisfies TranslationCorrectionReceipt;
+    return {
+      ok: true,
+      data: {
+        result,
+        history,
+        ...(correctionReceipt ? { correctionReceipt } : {}),
+        ...(termRollbackSkipped ? { termRollbackSkipped: true } : {}),
+      },
+    };
+  } catch (error) {
+    if (error instanceof DocumentTermCapacityError) {
+      return errorResponse(new TranslationError(
+        'INVALID_RESPONSE',
+        '本文术语表已满（最多 100 条），请先在本文侧栏中整理术语。',
+      ));
+    }
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
+  }
+}
+
+async function undoTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UNDO_TRANSLATION_RESULT' }>['payload'],
+  tabId: number,
+  options?: { assertCurrent?: () => void },
+): Promise<TranslateRuntimeResponse> {
+  try {
+    options?.assertCurrent?.();
+    if (
+      payload.result.requestId !== payload.receipt.correctedRequestId ||
+      payload.result.translatedText !== payload.receipt.correctedTranslation
+    ) {
+      throw new TranslationError(
+        'REQUEST_ABORTED',
+        '这条译文已发生变化，无法撤销旧的修正。',
+      );
+    }
+    const restored: TranslateResult = {
+      ...payload.result,
+      requestId: crypto.randomUUID(),
+      translatedText: payload.receipt.previousTranslation,
+      completedAt: Date.now(),
+      revision: {
+        rootRequestId: payload.result.revision?.rootRequestId ?? payload.receipt.baseRequestId,
+        kind: 'manual',
+        label: '撤销修改',
+        scope: 'current',
+      },
+    };
+    const documentUndo = payload.receipt.scope === 'document';
+    const response = await updateTranslationResult({
+      pageUrl: payload.pageUrl,
+      ...(payload.documentId ? { documentId: payload.documentId } : {}),
+      ...(payload.sourceLabel ? { sourceLabel: payload.sourceLabel } : {}),
+      ...(payload.sourceLocation ? { sourceLocation: payload.sourceLocation } : {}),
+      result: restored,
+      scope: payload.receipt.scope === 'document' ? 'document' : 'current',
+      previousTranslatedText: payload.receipt.correctedTranslation,
+      baseRequestId: payload.receipt.correctedRequestId,
+    }, tabId, {
+      ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
+      ...(documentUndo
+        ? { documentUndo: { ...(payload.receipt.termChange ? { termChange: payload.receipt.termChange } : {}) } }
+        : {}),
+    });
+    if (!response.ok) return response;
+    let termRollbackSkipped = Boolean(response.data.termRollbackSkipped);
+    if (!documentUndo) {
+      try {
+        termRollbackSkipped = !await rollbackCorrectionTerm(payload, payload.receipt.termChange);
+      } catch (error) {
+        termRollbackSkipped = true;
+        await recordLocalDiagnosticError('translate', error);
+      }
+    }
+    return {
+      ok: true,
+      data: {
+        result: response.data.result,
+        history: response.data.history,
+        ...(termRollbackSkipped ? { termRollbackSkipped: true } : {}),
+      },
+    };
   } catch (error) {
     await recordLocalDiagnosticError('translate', error);
     return errorResponse(error);
+  }
+}
+
+function pdfSessionLocator(session: PdfSidePanelSession): DocumentIdentityInput {
+  return {
+    pageUrl: session.pageUrl,
+    sourceLabel: session.sourceLabel,
+    ...(session.result?.documentId ? { documentId: session.result.documentId } : {}),
+    ...(session.result?.sourceLocation ? { sourceLocation: session.result.sourceLocation } : {}),
+  };
+}
+
+async function updatePdfSidePanelTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+): Promise<TranslateRuntimeResponse> {
+  await initializePdfSidePanelSessions();
+  if (pdfSidePanelCorrectionClaims.has(payload.tabId)) {
+    return errorResponse(new TranslationError(
+      'REQUEST_ABORTED',
+      '另一项 PDF 译文修正仍在保存，请稍后再试。',
+    ));
+  }
+  const claim = crypto.randomUUID();
+  pdfSidePanelCorrectionClaims.set(payload.tabId, claim);
+  try {
+    const session = pdfSidePanelSessions.get(payload.tabId);
+    const assertCurrent = (): void => {
+      const current = pdfSidePanelSessions.get(payload.tabId);
+      if (
+        pdfSidePanelCorrectionClaims.get(payload.tabId) !== claim ||
+        !current ||
+        current.requestId !== payload.expectedRequestId ||
+        current.status !== 'complete' ||
+        current.result?.requestId !== payload.expectedResultRequestId
+      ) {
+        throw new TranslationError(
+          'REQUEST_ABORTED',
+          '当前 PDF 或译文已经变化，请重新打开修正。',
+        );
+      }
+    };
+    assertCurrent();
+    const currentResult = session?.result;
+    if (!session || !currentResult) {
+      throw new TranslationError('REQUEST_ABORTED', '当前 PDF 或译文已经变化，请重新打开修正。');
+    }
+    const edited: TranslateResult = {
+      ...currentResult,
+      requestId: crypto.randomUUID(),
+      translatedText: payload.translatedText.trim(),
+      completedAt: Date.now(),
+      cached: false,
+      latencyMs: 0,
+      revision: {
+        rootRequestId: currentResult.revision?.rootRequestId ?? currentResult.requestId,
+        kind: 'manual',
+        label: '手动修改',
+        scope: payload.scope,
+      },
+    };
+    delete edited.alignedSegments;
+    const response = await updateTranslationResult({
+      ...pdfSessionLocator(session),
+      result: edited,
+      scope: payload.scope,
+      previousTranslatedText: currentResult.translatedText,
+      baseRequestId: currentResult.requestId,
+      ...(payload.term ? { term: payload.term } : {}),
+    }, session.tabId, { assertCurrent });
+    if (!response.ok) return response;
+    assertCurrent();
+    const current = pdfSidePanelSessions.get(session.tabId)!;
+    publishPdfSidePanelSession({
+      ...current,
+      result: response.data.result,
+      partialText: response.data.result.translatedText,
+      ...(response.data.correctionReceipt
+        ? { correctionReceipt: response.data.correctionReceipt }
+        : {}),
+    });
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  } finally {
+    if (pdfSidePanelCorrectionClaims.get(payload.tabId) === claim) {
+      pdfSidePanelCorrectionClaims.delete(payload.tabId);
+    }
+  }
+}
+
+async function undoPdfSidePanelTranslationResult(
+  payload: Extract<RuntimeMessage, { type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT' }>['payload'],
+): Promise<TranslateRuntimeResponse> {
+  await initializePdfSidePanelSessions();
+  if (pdfSidePanelCorrectionClaims.has(payload.tabId)) {
+    return errorResponse(new TranslationError(
+      'REQUEST_ABORTED',
+      '另一项 PDF 译文修正仍在保存，请稍后再试。',
+    ));
+  }
+  const claim = crypto.randomUUID();
+  pdfSidePanelCorrectionClaims.set(payload.tabId, claim);
+  try {
+    const session = pdfSidePanelSessions.get(payload.tabId);
+    const assertCurrent = (): void => {
+      const current = pdfSidePanelSessions.get(payload.tabId);
+      if (
+        pdfSidePanelCorrectionClaims.get(payload.tabId) !== claim ||
+        !current ||
+        current.requestId !== payload.expectedRequestId ||
+        current.status !== 'complete' ||
+        current.result?.requestId !== payload.expectedResultRequestId ||
+        current.correctionReceipt?.correctedRequestId !== payload.expectedCorrectedRequestId
+      ) {
+        throw new TranslationError('REQUEST_ABORTED', '没有可撤销的 PDF 译文修正。');
+      }
+    };
+    assertCurrent();
+    if (!session?.result || !session.correctionReceipt) {
+      throw new TranslationError('REQUEST_ABORTED', '没有可撤销的 PDF 译文修正。');
+    }
+    const response = await undoTranslationResult({
+      ...pdfSessionLocator(session),
+      result: session.result,
+      receipt: session.correctionReceipt,
+    }, session.tabId, { assertCurrent });
+    if (!response.ok) return response;
+    assertCurrent();
+    const current = pdfSidePanelSessions.get(session.tabId)!;
+    const { correctionReceipt: _receipt, ...withoutReceipt } = current;
+    publishPdfSidePanelSession({
+      ...withoutReceipt,
+      result: response.data.result,
+      partialText: response.data.result.translatedText,
+    });
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  } finally {
+    if (pdfSidePanelCorrectionClaims.get(payload.tabId) === claim) {
+      pdfSidePanelCorrectionClaims.delete(payload.tabId);
+    }
   }
 }
 
@@ -2713,6 +3131,24 @@ export default defineBackground(() => {
           );
         }
         return updateTranslationResult(message.payload, tabId);
+      }
+
+      if (message.type === 'UNDO_TRANSLATION_RESULT') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(errorResponse(
+            new TranslationError('UNSUPPORTED_PAGE', 'A browser tab is required.'),
+          ));
+        }
+        return undoTranslationResult(message.payload, tabId);
+      }
+
+      if (message.type === 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
+        return updatePdfSidePanelTranslationResult(message.payload);
+      }
+
+      if (message.type === 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT') {
+        return undoPdfSidePanelTranslationResult(message.payload);
       }
 
       if (message.type === 'CANCEL_TRANSLATION') {

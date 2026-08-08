@@ -211,6 +211,43 @@ main {
 footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
 .copy-action:disabled { opacity: .45; cursor: default; }
 #status { color: #748094; font-size: 10px; }
+.correction-action {
+  border: 0;
+  padding: 5px 2px;
+  color: #667085;
+  background: transparent;
+  cursor: pointer;
+  font-size: 11px;
+}
+.correction-action:hover { color: #4f46e5; }
+.correction-undo { display: inline-flex; align-items: center; gap: 3px; color: #5f687a; font-size: 10px; }
+.correction-undo button { border: 0; padding: 3px; color: #4f46e5; background: transparent; cursor: pointer; font-size: 10px; }
+.correction-editor { display: grid; gap: 8px; margin-top: 12px; }
+.correction-parts { display: grid; border-block: 1px solid #e2e6ee; }
+.correction-text-part {
+  width: 100%;
+  min-height: 48px;
+  padding: 7px 1px;
+  border: 0;
+  border-radius: 0;
+  color: #172033;
+  background: transparent;
+  font: 12px/1.65 Inter, "Segoe UI", system-ui, sans-serif;
+  resize: vertical;
+}
+.correction-text-part:only-child { min-height: clamp(96px, 24vh, 190px); }
+.correction-text-part:focus { background: #f1f3f8; }
+.correction-latex { padding: 7px 1px; border-block: 1px solid #e2e6ee; overflow-x: auto; font: 11px/1.55 "Cambria Math", ui-monospace, monospace; white-space: pre-wrap; }
+.correction-note { margin: 0; color: #5f687a; font-size: 10px; line-height: 1.5; }
+.correction-scope { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: #667085; font-size: 10px; }
+.correction-scope select { height: 27px; border: 1px solid #d8dce7; border-radius: 3px; color: #172033; background: transparent; font-size: 10px; }
+.correction-term-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; padding: 7px 0; border: 0; border-bottom: 1px solid #e2e6ee; margin: 0; }
+.correction-term-fields label { display: grid; gap: 3px; color: #5f687a; font-size: 9px; }
+.correction-term-fields input { min-width: 0; padding: 6px 1px; border: 0; border-bottom: 1px solid #d8dce7; border-radius: 0; color: #172033; background: transparent; font-family: inherit; font-size: 11px; line-height: 1.4; }
+.correction-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.correction-actions span { margin-right: auto; color: #5f687a; font-size: 10px; }
+.correction-actions button { border: 1px solid #c9cdee; border-radius: 4px; padding: 5px 8px; color: #5f687a; background: transparent; cursor: pointer; font-size: 10px; }
+.correction-actions .save { color: #fff; border-color: #5145cd; background: #5b4be0; }
 
 .access-alert {
   margin: 0 0 14px;
@@ -231,6 +268,13 @@ footer { display: flex; align-items: center; gap: 10px; padding-top: 14px; }
 
 button:focus-visible {
   outline: 3px solid rgba(79, 70, 229, .2);
+  outline-offset: 2px;
+}
+.correction-text-part:focus-visible,
+.correction-scope select:focus-visible,
+.correction-term-fields input:focus-visible,
+.correction-latex:focus-visible {
+  outline: 2px solid #6366f1;
   outline-offset: 2px;
 }
 
@@ -264,4 +308,25 @@ button:focus-visible {
   .translation-text.pending { color: #96a1b2; }
   .progress-track { background: #303745; }
   .progress-track i { background: #8c82f4; }
+  .correction-action { color: #a6afbd; }
+  .correction-action:hover, .correction-undo button:hover { color: #c1bcff; background: #202938; }
+  .correction-parts, .correction-latex, .correction-term-fields { border-color: #303846; }
+  .correction-text-part, .correction-scope select, .correction-term-fields input { color: #f1f4f8; background: transparent; border-color: #424b5b; }
+  .correction-text-part:focus { background: #202938; }
+  .correction-note, .correction-scope, .correction-term-fields label,
+  .correction-actions span, .correction-undo { color: #aeb8c7; }
+  .correction-actions button { color: #c3cad5; border-color: #4a5568; }
+}
+
+@media (max-width: 380px) {
+  .correction-term-fields { grid-template-columns: 1fr; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
 }

@@ -8,6 +8,15 @@ export interface GlossaryParseResult {
   errors: string[];
 }
 
+export interface GlossaryUpsertResult {
+  entries: GlossaryEntry[];
+  previousTarget?: string;
+}
+
+export function normalizeGlossaryTermKey(value: string): string {
+  return value.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+}
+
 function splitGlossaryLine(
   line: string,
 ): { source: string; target: string } | undefined {
@@ -30,7 +39,7 @@ export function normalizeGlossaryEntries(
   for (const value of values) {
     const source = value.source.trim();
     const target = value.target.trim();
-    const key = source.toLocaleLowerCase();
+    const key = normalizeGlossaryTermKey(source);
     if (
       !source ||
       !target ||
@@ -83,4 +92,45 @@ export function formatGlossaryEntries(entries: Iterable<GlossaryEntry>): string 
   return normalizeGlossaryEntries(entries)
     .map(({ source, target }) => `${source} = ${target}`)
     .join('\n');
+}
+
+export function upsertGlossaryEntry(
+  values: Iterable<GlossaryEntry>,
+  value: GlossaryEntry,
+): GlossaryUpsertResult {
+  const source = value.source.trim();
+  const target = value.target.trim();
+  const key = normalizeGlossaryTermKey(source);
+  const current = normalizeGlossaryEntries(values);
+  const previousTarget = current.find((entry) => normalizeGlossaryTermKey(entry.source) === key)?.target;
+  return {
+    entries: normalizeGlossaryEntries([
+      { source, target },
+      ...current.filter((entry) => normalizeGlossaryTermKey(entry.source) !== key),
+    ]),
+    ...(previousTarget !== undefined ? { previousTarget } : {}),
+  };
+}
+
+/** Rolls back only if the entry still has the target written by the correction. */
+export function rollbackGlossaryEntry(
+  values: Iterable<GlossaryEntry>,
+  change: { source: string; appliedTarget: string; previousTarget?: string },
+): { entries: GlossaryEntry[]; rolledBack: boolean } {
+  const current = normalizeGlossaryEntries(values);
+  const key = normalizeGlossaryTermKey(change.source);
+  const applied = current.find((entry) => normalizeGlossaryTermKey(entry.source) === key);
+  if (!applied || applied.target !== change.appliedTarget) {
+    return { entries: current, rolledBack: false };
+  }
+  const withoutApplied = current.filter((entry) => normalizeGlossaryTermKey(entry.source) !== key);
+  return {
+    entries: change.previousTarget === undefined
+      ? withoutApplied
+      : normalizeGlossaryEntries([
+          { source: change.source.trim(), target: change.previousTarget },
+          ...withoutApplied,
+        ]),
+    rolledBack: true,
+  };
 }

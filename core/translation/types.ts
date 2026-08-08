@@ -52,7 +52,25 @@ export interface TranslationRevisionRequest {
   formulaNeedsReview?: boolean;
 }
 
-export type TranslationRevisionScope = 'current' | 'document';
+export type TranslationRevisionScope = 'current' | 'document' | 'global';
+
+export interface TranslationCorrectionTermReceipt {
+  scope: 'document' | 'global';
+  source: string;
+  appliedTarget: string;
+  previousTarget?: string;
+  documentTermId?: string;
+}
+
+/** Kept only in the current browser session so a manual correction can be undone safely. */
+export interface TranslationCorrectionReceipt {
+  baseRequestId: string;
+  correctedRequestId: string;
+  scope: TranslationRevisionScope;
+  previousTranslation: string;
+  correctedTranslation: string;
+  termChange?: TranslationCorrectionTermReceipt;
+}
 
 export interface TranslationRevision {
   rootRequestId: string;

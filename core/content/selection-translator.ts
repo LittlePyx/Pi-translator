@@ -28,8 +28,10 @@ import {
   type DocumentMemoryTranslation,
 } from '../document/document-memory-repository';
 import type {
+  GlossaryEntry,
   PdfSourceLocation,
   TranslateResult,
+  TranslationCorrectionReceipt,
   TranslationHistoryEntry,
   TranslationRevisionRequest,
   TranslationRevisionScope,
@@ -415,8 +417,9 @@ export async function startSelectionTranslator(
     onAdjustTranslation: (result, adjustment) => {
       void adjustTranslation(result, adjustment);
     },
-    onSaveTranslationEdit: (result, translatedText, scope) =>
-      saveTranslationEdit(result, translatedText, scope),
+    onSaveTranslationEdit: (result, translatedText, scope, term) =>
+      saveTranslationEdit(result, translatedText, scope, term),
+    onUndoTranslationEdit: (result, receipt) => undoTranslationEdit(result, receipt),
     ...(options.onAdjustPdfRegion
       ? {
           onAdjustPdfRegion: () => {
@@ -1336,7 +1339,12 @@ export async function startSelectionTranslator(
     result: TranslateResult,
     translatedText: string,
     scope: TranslationRevisionScope,
-  ): Promise<{ result: TranslateResult; history: TranslationHistoryEntry[] }> {
+    term?: GlossaryEntry,
+  ): Promise<{
+    result: TranslateResult;
+    history: TranslationHistoryEntry[];
+    correctionReceipt?: TranslationCorrectionReceipt;
+  }> {
     const requestId = crypto.randomUUID();
     const rootRequestId = revisionRootRequestId(result);
     carryRevisionAnchor(result, requestId);
@@ -1360,7 +1368,10 @@ export async function startSelectionTranslator(
       payload: {
         ...documentLocatorForResult(result),
         result: edited,
-        rememberForDocument: scope === 'document',
+        scope,
+        previousTranslatedText: result.translatedText,
+        baseRequestId: result.requestId,
+        ...(term ? { term } : {}),
       },
     } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
     if (!response.ok) {
@@ -1372,6 +1383,38 @@ export async function startSelectionTranslator(
     return {
       result: response.data.result,
       history: combinedOverlayHistory(),
+      ...(response.data.correctionReceipt
+        ? { correctionReceipt: response.data.correctionReceipt }
+        : {}),
+    };
+  }
+
+  async function undoTranslationEdit(
+    result: TranslateResult,
+    receipt: TranslationCorrectionReceipt,
+  ): Promise<{
+    result: TranslateResult;
+    history: TranslationHistoryEntry[];
+    termRollbackSkipped?: boolean;
+  }> {
+    const response = await browser.runtime.sendMessage({
+      type: 'UNDO_TRANSLATION_RESULT',
+      payload: {
+        ...documentLocatorForResult(result),
+        result,
+        receipt,
+      },
+    } satisfies RuntimeMessage) as UpdateTranslationResultResponse;
+    if (!response.ok) {
+      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+    }
+    overlayHistory = response.data.history;
+    rememberResultRetryContext(response.data.result, retryContextForResult(result));
+    syncRevisionMarkers(response.data.result);
+    return {
+      result: response.data.result,
+      history: combinedOverlayHistory(),
+      ...(response.data.termRollbackSkipped ? { termRollbackSkipped: true } : {}),
     };
   }
 

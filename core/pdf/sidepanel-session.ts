@@ -1,4 +1,7 @@
-import type { PdfSidePanelSession } from '../messaging/messages';
+import {
+  isTranslationCorrectionReceipt,
+  type PdfSidePanelSession,
+} from '../messaging/messages';
 import { edgePdfSourceUrl, pdfDocumentIdentity, pdfInitialPage } from './source';
 
 const PDF_SIDE_PANEL_SESSIONS_KEY = 'pdfSidePanelSessionsByTab';
@@ -28,12 +31,33 @@ function validSession(value: unknown): value is PdfSidePanelSession {
   );
 }
 
+function sanitizeCorrectionReceipt(
+  session: PdfSidePanelSession,
+): PdfSidePanelSession {
+  const receipt = session.correctionReceipt;
+  if (receipt === undefined) return session;
+  const result = session.result;
+  const matchesResult = Boolean(
+    session.status === 'complete' &&
+    result &&
+    result.requestId === receipt.correctedRequestId &&
+    result.translatedText === receipt.correctedTranslation &&
+    result.revision?.kind === 'manual' &&
+    result.revision.scope === receipt.scope,
+  );
+  if (isTranslationCorrectionReceipt(receipt) && matchesResult) return session;
+  const { correctionReceipt: _invalidReceipt, ...safeSession } = session;
+  return safeSession;
+}
+
 function validStoredSessions(value: unknown): StoredPdfSessions {
   if (!value || typeof value !== 'object') return {};
   return Object.fromEntries(
-    Object.entries(value).filter(
-      ([key, session]) => /^\d+$/.test(key) && validSession(session),
-    ),
+    Object.entries(value).flatMap(([key, session]) => (
+      /^\d+$/.test(key) && validSession(session)
+        ? [[key, sanitizeCorrectionReceipt(session)] as const]
+        : []
+    )),
   );
 }
 

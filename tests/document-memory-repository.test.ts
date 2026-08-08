@@ -7,8 +7,10 @@ import {
   documentMemoryTranslationResult,
   getDocumentMemory,
   mergeDocumentGlossary,
+  rememberDocumentCorrection,
   rememberDocumentTranslation,
   resolveDocumentReview,
+  restoreDocumentCorrection,
   upsertDocumentTerm,
 } from '../core/document/document-memory-repository';
 import type { TranslateResult } from '../core/translation/types';
@@ -136,6 +138,58 @@ describe('document translation memory', () => {
       undefined,
       memory,
     )).toContain('该估计器在扰动下保持稳定。');
+  });
+
+  it('atomically remembers a corrected translation and restores a whitespace-normalized term', async () => {
+    const before = await upsertDocumentTerm(identity, {
+      source: 'adaptive  sensing',
+      target: '旧译法',
+    });
+    const originalTermId = before.confirmedTerms[0]!.id;
+    const set = browser.storage.local.set as ReturnType<typeof vi.fn>;
+    set.mockClear();
+
+    const corrected = await rememberDocumentCorrection(identity, {
+      requestId: 'correction-request',
+      originalText: 'Adaptive sensing is stable.',
+      translatedText: '自适应感知保持稳定。',
+      warnings: [],
+      completedAt: 30,
+    }, {
+      source: 'adaptive sensing',
+      target: '自适应感知',
+    });
+
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(corrected.termChange).toMatchObject({
+      previousTarget: '旧译法',
+      documentTermId: originalTermId,
+    });
+    expect(corrected.memory.confirmedTerms).toHaveLength(1);
+
+    set.mockClear();
+    const restored = await restoreDocumentCorrection(identity, {
+      requestId: 'restored-request',
+      originalText: 'Adaptive sensing is stable.',
+      translatedText: '旧译文。',
+      warnings: [],
+      completedAt: 40,
+    }, corrected.termChange);
+    expect(set).toHaveBeenCalledTimes(1);
+    expect(restored.termRolledBack).toBe(true);
+    expect(restored.memory.confirmedTerms[0]).toMatchObject({
+      id: originalTermId,
+      target: '旧译法',
+    });
+    expect(restored.memory.recentTranslations[0]?.translatedText).toBe('旧译文。');
+  });
+
+  it('allows an explicit document term to preserve its source spelling', async () => {
+    const memory = await upsertDocumentTerm(identity, {
+      source: 'ResNet',
+      target: 'ResNet',
+    });
+    expect(memory.confirmedTerms[0]).toMatchObject({ source: 'ResNet', target: 'ResNet' });
   });
 
   it('replaces stale OCR text when re-recognition changes the source wording', async () => {

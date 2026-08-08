@@ -24,6 +24,39 @@ function session(overrides: Partial<PdfSidePanelSession> = {}): PdfSidePanelSess
   };
 }
 
+function correctedSession(overrides: Partial<PdfSidePanelSession> = {}): PdfSidePanelSession {
+  return session({
+    status: 'complete',
+    result: {
+      requestId: 'corrected-1',
+      originalText: 'Selected PDF text.',
+      translatedText: 'Corrected translation.',
+      warnings: [],
+      revision: {
+        rootRequestId: 'request-1',
+        kind: 'manual',
+        label: 'Manual correction',
+        scope: 'document',
+      },
+    },
+    correctionReceipt: {
+      baseRequestId: 'request-1',
+      correctedRequestId: 'corrected-1',
+      scope: 'document',
+      previousTranslation: 'Previous translation.',
+      correctedTranslation: 'Corrected translation.',
+      termChange: {
+        scope: 'document',
+        source: 'source term',
+        appliedTarget: 'corrected term',
+        previousTarget: 'previous term',
+        documentTermId: 'term-1',
+      },
+    },
+    ...overrides,
+  });
+}
+
 beforeEach(() => {
   for (const key of Object.keys(storage)) delete storage[key];
   vi.stubGlobal('browser', {
@@ -82,6 +115,96 @@ describe('native PDF side-panel sessions', () => {
         hadPartialOutput: true,
       },
     }]);
+  });
+
+  it('restores a valid correction receipt with its completed result', async () => {
+    await storePdfSidePanelSession(correctedSession());
+    vi.resetModules();
+    const restartedRepository = await import('../core/pdf/sidepanel-session');
+
+    await expect(restartedRepository.restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=8',
+    }])).resolves.toMatchObject([{
+      tabId: 7,
+      pageNumber: 8,
+      status: 'complete',
+      result: {
+        requestId: 'corrected-1',
+        translatedText: 'Corrected translation.',
+      },
+      correctionReceipt: {
+        baseRequestId: 'request-1',
+        correctedRequestId: 'corrected-1',
+        scope: 'document',
+        previousTranslation: 'Previous translation.',
+        correctedTranslation: 'Corrected translation.',
+        termChange: {
+          scope: 'document',
+          source: 'source term',
+          appliedTarget: 'corrected term',
+          previousTarget: 'previous term',
+          documentTermId: 'term-1',
+        },
+      },
+    }]);
+  });
+
+  it('keeps the completed PDF result but removes a mismatched correction receipt', async () => {
+    await storePdfSidePanelSession(correctedSession({
+      correctionReceipt: {
+        ...correctedSession().correctionReceipt!,
+        correctedTranslation: 'A different translation.',
+      },
+    }));
+
+    const restored = await restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }]);
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.result?.translatedText).toBe('Corrected translation.');
+    expect(restored[0]?.correctionReceipt).toBeUndefined();
+    expect(JSON.stringify(storage)).not.toContain('A different translation.');
+  });
+
+  it('removes a receipt that is attached to a non-complete PDF session', async () => {
+    await storePdfSidePanelSession(correctedSession({
+      status: 'error',
+      error: { code: 'REQUEST_ABORTED', message: 'Interrupted.', retryable: true },
+    }));
+
+    const restored = await restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }]);
+
+    expect(restored).toHaveLength(1);
+    expect(restored[0]?.status).toBe('error');
+    expect(restored[0]?.correctionReceipt).toBeUndefined();
+  });
+
+  it('removes a receipt whose rollback scope disagrees with its result', async () => {
+    await storePdfSidePanelSession(correctedSession({
+      correctionReceipt: {
+        ...correctedSession().correctionReceipt!,
+        scope: 'global',
+        termChange: {
+          scope: 'global',
+          source: 'source term',
+          appliedTarget: 'corrected term',
+        },
+      },
+    }));
+
+    const restored = await restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }]);
+
+    expect(restored[0]?.result?.revision?.scope).toBe('document');
+    expect(restored[0]?.correctionReceipt).toBeUndefined();
   });
 
   it('restores independent native PDF sessions after a service-worker module restart', async () => {
