@@ -59,11 +59,12 @@
             <h2>译文</h2>
             <div class="translation-heading-tools">
               <button id="formula-view" type="button" hidden>源码</button>
-              <span id="translation-state" aria-live="polite"></span>
+              <span id="translation-state" tabindex="-1" aria-live="polite"></span>
             </div>
           </div>
           <div id="progress-track" class="progress-track" hidden><i></i></div>
           <div id="translation-text" class="translation-text"></div>
+          <div id="error-message" class="error-message" role="alert" aria-live="assertive" hidden></div>
           <div id="error-actions" class="error-actions" hidden>
             <button id="retry" type="button">重试</button>
             <button id="error-settings" class="secondary" type="button">检查设置</button>

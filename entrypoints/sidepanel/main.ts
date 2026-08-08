@@ -52,6 +52,7 @@ const sourceLabel = element<HTMLElement>('source-label');
 const sourceText = element<HTMLElement>('source-text');
 const translationState = element<HTMLElement>('translation-state');
 const translationText = element<HTMLElement>('translation-text');
+const errorMessage = element<HTMLElement>('error-message');
 const formulaView = element<HTMLButtonElement>('formula-view');
 const progressTrack = element<HTMLElement>('progress-track');
 const errorActions = element<HTMLElement>('error-actions');
@@ -77,6 +78,9 @@ let activeWindowId: number | undefined;
 let currentSession: PdfSidePanelSession | undefined;
 let autoRenderLatex = true;
 let formulaRenderOverride: boolean | undefined;
+let retryFocusPending = false;
+let retryStatusFocusPending = false;
+let retryFocusTabId: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 
 function recoveryRole(session: PdfSidePanelSession): TranslationProviderRole {
@@ -127,6 +131,7 @@ function providerErrorContext(session: PdfSidePanelSession): string | undefined 
   const providerError = session.error && [
     'NO_API_KEY',
     'API_PERMISSION_REQUIRED',
+    'API_ENDPOINT_INVALID',
     'AUTH_FAILED',
     'PAYMENT_REQUIRED',
     'MODEL_NOT_FOUND',
@@ -240,9 +245,19 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
+    retryFocusPending = false;
+    retryStatusFocusPending = false;
+    retryFocusTabId = undefined;
+    errorMessage.hidden = true;
+    errorMessage.textContent = '';
     correct.hidden = true;
     correctionUndo.hidden = true;
     return;
+  }
+  if (retryFocusPending && retryFocusTabId !== session.tabId) {
+    retryFocusPending = false;
+    retryStatusFocusPending = false;
+    retryFocusTabId = undefined;
   }
 
   sourceLabel.textContent = session.sourceLabel;
@@ -262,7 +277,13 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   else hidePdfAccessAlert();
 
   const isTranslating = session.status === 'translating';
+  const preservedPartial = session.status === 'error' ? session.partialText?.trim() : undefined;
+  const copyableText = session.status === 'complete'
+    ? session.result?.translatedText
+    : preservedPartial;
   progressTrack.hidden = !isTranslating;
+  errorMessage.hidden = true;
+  errorMessage.textContent = '';
   errorActions.hidden = session.status !== 'error';
   retry.hidden = false;
   retry.disabled = false;
@@ -273,13 +294,14 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   errorSettings.textContent = '检查设置';
   errorSettings.classList.remove('primary');
   errorSettings.classList.add('secondary');
-  copy.disabled = session.status !== 'complete' || !session.result?.translatedText;
+  copy.disabled = !copyableText;
+  copy.textContent = preservedPartial ? '复制部分译文' : '复制译文';
   correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
   correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
   undoCorrection.disabled = correctionUndo.hidden;
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
-  translationText.classList.toggle('error', session.status === 'error');
+  translationText.classList.toggle('error', session.status === 'error' && !preservedPartial);
 
   if (isTranslating) {
     formulaView.hidden = true;
@@ -289,6 +311,15 @@ function render(session: PdfSidePanelSession | null | undefined): void {
       ? `翻译中 ${Math.min(completed + 1, total)}/${total}`
       : '正在流式接收';
     translationText.textContent = session.partialText || '正在连接翻译接口…';
+    if (retryStatusFocusPending) {
+      queueMicrotask(() => {
+        if (!retryStatusFocusPending) return;
+        retryStatusFocusPending = false;
+        if (currentSession?.status === 'translating') {
+          translationState.focus({ preventScroll: true });
+        }
+      });
+    }
     return;
   }
 
@@ -304,13 +335,16 @@ function render(session: PdfSidePanelSession | null | undefined): void {
       retry.classList.add('primary');
       errorSettings.hidden = true;
       errorActions.hidden = false;
-      const preservedPartial = session.partialText?.trim();
       translationText.textContent = preservedPartial
-        ? `${presentationText(session, preservedPartial)}\n\n配置已完成。上方部分译文已保留；为避免重复调用 API，请确认后再重新翻译。`
+        ? presentationText(session, preservedPartial)
         : '配置已完成。为避免意外调用 API，请确认后再重新翻译。';
+      if (preservedPartial) {
+        errorMessage.textContent = '上方部分译文已保留；为避免重复调用 API，请确认后再重新翻译。';
+        errorMessage.hidden = false;
+      }
       return;
     }
-    translationState.textContent = '翻译失败';
+    translationState.textContent = preservedPartial ? '翻译中断 · 已保留部分译文' : '翻译失败';
     const exactPdfMessage = [
       'EMPTY_SELECTION',
       'REQUEST_ABORTED',
@@ -333,9 +367,28 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     errorSettings.classList.toggle('primary', !recovery.showRetry && Boolean(recovery.settingsFocus));
     errorActions.hidden = !recovery.showRetry && !recovery.settingsFocus;
     const providerContext = providerErrorContext(session);
-    translationText.textContent = providerContext
+    const errorText = providerContext
       ? `${message}\n\n${providerContext}`
       : message;
+    if (preservedPartial) {
+      translationText.textContent = presentationText(session, preservedPartial);
+      errorMessage.textContent = errorText;
+      errorMessage.hidden = false;
+    } else {
+      translationText.textContent = errorText;
+    }
+    if (retryFocusPending) {
+      const shouldRestoreFocus = retryStatusFocusPending || document.activeElement === translationState;
+      retryFocusPending = false;
+      retryStatusFocusPending = false;
+      retryFocusTabId = undefined;
+      const focusTarget = recovery.showRetry
+        ? retry
+        : recovery.settingsFocus
+          ? errorSettings
+          : translationState;
+      if (shouldRestoreFocus) queueMicrotask(() => focusTarget.focus({ preventScroll: true }));
+    }
     return;
   }
 
@@ -355,6 +408,13 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
   formulaView.setAttribute('aria-pressed', String(renderLatex));
   renderTranslationText(translatedText, hasLatex && renderLatex);
+  if (retryFocusPending) {
+    const shouldRestoreFocus = retryStatusFocusPending || document.activeElement === translationState;
+    retryFocusPending = false;
+    retryStatusFocusPending = false;
+    retryFocusTabId = undefined;
+    if (shouldRestoreFocus) queueMicrotask(() => copy.focus({ preventScroll: true }));
+  }
 }
 
 async function loadActiveSession(
@@ -706,6 +766,9 @@ retry.addEventListener('click', () => {
   if (session.settingsRecoveryConfirmation?.failedRequestId === session.requestId) {
     setStatus('正在使用刚保存的配置重新翻译');
   }
+  retryFocusPending = document.activeElement === retry;
+  retryStatusFocusPending = retryFocusPending;
+  retryFocusTabId = retryFocusPending ? session.tabId : undefined;
   retry.disabled = true;
   void (async () => {
     const response = (await browser.runtime.sendMessage({
@@ -715,17 +778,26 @@ retry.addEventListener('click', () => {
     if (currentSession?.tabId !== session.tabId || activeTabId !== session.tabId) return;
     if (!response.ok) {
       retry.disabled = false;
+      retryFocusPending = false;
+      retryStatusFocusPending = false;
+      retryFocusTabId = undefined;
       setStatus(translationErrorMessage(response.error.code, response.error.message));
+      queueMicrotask(() => retry.focus({ preventScroll: true }));
     }
   })().catch(() => {
     retry.disabled = false;
+    retryFocusPending = false;
+    retryStatusFocusPending = false;
+    retryFocusTabId = undefined;
     setStatus('无法重新开始 PDF 翻译');
+    queueMicrotask(() => retry.focus({ preventScroll: true }));
   });
 });
 
 copy.addEventListener('click', () => {
   const session = currentSession;
-  const text = session?.result?.translatedText;
+  const text = session?.result?.translatedText ??
+    (session?.status === 'error' ? session.partialText : undefined);
   if (!session || !text) return;
   void navigator.clipboard.writeText(
     normalizeLatexForClipboard(presentationText(session, text)),

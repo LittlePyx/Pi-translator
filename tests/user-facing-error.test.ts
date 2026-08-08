@@ -36,6 +36,7 @@ describe('user-facing errors', () => {
     expect(translationErrorMessage('PROVIDER_ERROR')).toContain('请求参数兼容性');
     expect(translationErrorMessage('PROVIDER_ERROR')).not.toContain('接口地址和模型名称');
     expect(translationErrorMessage('NETWORK_ERROR')).toContain('网络');
+    expect(translationErrorMessage('API_ENDPOINT_INVALID')).toContain('Base URL');
   });
 
   it('explains how to fix image-region translation errors', () => {
@@ -122,6 +123,20 @@ describe('user-facing errors', () => {
     });
     expect(translationErrorRecovery('IMAGE_REGION_INVALID', true)).toEqual({ showRetry: false });
     expect(translationErrorRecovery('UNSUPPORTED_PAGE', true)).toEqual({ showRetry: false });
+    expect(translationErrorRecovery('REQUEST_ABORTED', false)).toEqual({ showRetry: false });
+    expect(translationErrorRecovery('REQUEST_ABORTED', true)).toEqual({ showRetry: true });
+    expect(translationErrorRecovery('API_ENDPOINT_INVALID', false)).toEqual({
+      showRetry: false,
+      settingsFocus: 'api',
+      settingsLabel: '检查接口地址',
+      autoResumeAfterSettings: true,
+    });
+    expect(translationErrorRecovery('API_ENDPOINT_INVALID', false, 'vision')).toEqual({
+      showRetry: false,
+      settingsFocus: 'vision',
+      settingsLabel: '检查图像接口',
+      autoResumeAfterSettings: true,
+    });
   });
 
   it.each([
@@ -133,6 +148,8 @@ describe('user-facing errors', () => {
     ['MODEL_NOT_FOUND', 'vision', 'vision-model'],
     ['API_PERMISSION_REQUIRED', 'text', 'api-permission'],
     ['API_PERMISSION_REQUIRED', 'vision', 'vision-permission'],
+    ['API_ENDPOINT_INVALID', 'text', 'api'],
+    ['API_ENDPOINT_INVALID', 'vision', 'vision'],
     ['VISION_NOT_CONFIGURED', 'vision', 'vision'],
     ['VISION_MODEL_UNSUPPORTED', 'vision', 'vision-model'],
     ['OCR_NOT_SUPPORTED', 'vision', 'vision-ocr'],

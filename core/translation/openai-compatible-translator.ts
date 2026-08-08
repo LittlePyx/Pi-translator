@@ -166,7 +166,7 @@ export function mapHttpError(
       providerDetails,
     );
   const modelAccessDenied =
-    /(?:model|deployment).{0,64}(?:not (?:found|available|allowed|authorized|enabled|included)|unavailable|does not exist|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan)|(?:not (?:allowed|authorized|enabled|included)|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan).{0,64}(?:model|deployment)|(?:access|permission).{0,32}(?:to|for).{0,16}(?:the )?(?:requested )?(?:model|deployment)|(?:模型|部署).{0,32}(?:无权限|未授权|不可用|不存在|未开通|无权访问)/i.test(
+    /model[_\s-]*(?:not[_\s-]*found|invalid|unknown)|invalid[_\s-]*model|(?:model|deployment).{0,64}(?:not (?:found|available|allowed|authorized|enabled|included)|unavailable|does not exist|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan)|(?:not (?:allowed|authorized|enabled|included)|access.{0,12}denied|permission.{0,12}denied|forbidden|entitlement|not entitled|subscription|billing plan).{0,64}(?:model|deployment)|(?:access|permission).{0,32}(?:to|for).{0,16}(?:the )?(?:requested )?(?:model|deployment)|(?:模型|部署).{0,32}(?:无权限|未授权|不可用|不存在|未开通|无权访问)/i.test(
       providerDetails,
     );
   if (
@@ -248,15 +248,24 @@ export function mapHttpError(
     );
   }
   if (
-    (
-      (status === 400 || status === 404 || status === 422) &&
-      /model|deployment|模型/i.test(providerDetails)
-    ) ||
-    (status === 403 && modelAccessDenied)
+    (status === 400 || status === 403 || status === 404 || status === 422) &&
+    modelAccessDenied
   ) {
     return new TranslationError(
       'MODEL_NOT_FOUND',
       providerMessage ?? 'The configured model is not available.',
+      false,
+      undefined,
+      undefined,
+      status,
+    );
+  }
+  if (status === 404 || status === 405) {
+    return new TranslationError(
+      'API_ENDPOINT_INVALID',
+      providerMessage
+        ? `The configured API endpoint rejected the request: ${providerMessage}`
+        : `The configured API endpoint returned HTTP ${status}.`,
       false,
       undefined,
       undefined,
@@ -371,6 +380,21 @@ export async function requestWithRetry<T>(
         normalized = new TranslationError('REQUEST_TIMEOUT', 'The API request timed out.', false);
       } else {
         normalized = toTranslationError(error);
+      }
+      if (
+        responseAccepted &&
+        !parentSignal.aborted &&
+        normalized.code === 'REQUEST_ABORTED'
+      ) {
+        // A reader can surface an AbortError when the remote SSE connection is
+        // reset. It is not a user cancellation unless the parent signal was
+        // actually aborted, and should therefore offer an explicit retry.
+        normalized = new TranslationError(
+          'NETWORK_ERROR',
+          'The API response stream was interrupted.',
+          false,
+          { cause: normalized },
+        );
       }
       lastError = normalized;
       if (

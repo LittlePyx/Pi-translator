@@ -532,6 +532,40 @@ describe('DeepSeek translator', () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  it('classifies an unexpected SSE reader abort as a retryable network recovery', async () => {
+    const encoder = new TextEncoder();
+    let pullCount = 0;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (pullCount === 0) {
+          pullCount += 1;
+          controller.enqueue(encoder.encode(
+            `data: ${JSON.stringify({ choices: [{ delta: { content: '{"translation":"partial' } }] })}\n\n`,
+          ));
+          return;
+        }
+        controller.error(new DOMException('Remote stream reset.', 'AbortError'));
+      },
+    });
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(stream, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream' },
+    })));
+    const partials: string[] = [];
+
+    await expect(new DeepSeekTranslator().translate(
+      { text: 'Hello', placeholderTokens: [] },
+      options,
+      { apiKey: 'test-key' },
+      new AbortController().signal,
+      { onPartialText: (value) => partials.push(value) },
+    )).rejects.toMatchObject({
+      code: 'NETWORK_ERROR',
+      message: 'The API response stream was interrupted.',
+    });
+    expect(partials).toContain('partial');
+  });
+
   it('never replays a numeric provider error after an SSE event was received', async () => {
     const encoder = new TextEncoder();
     const stream = new ReadableStream<Uint8Array>({

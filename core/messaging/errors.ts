@@ -3,6 +3,7 @@ export type TranslationErrorCode =
   | 'SELECTION_TOO_LONG'
   | 'NO_API_KEY'
   | 'API_PERMISSION_REQUIRED'
+  | 'API_ENDPOINT_INVALID'
   | 'AUTH_FAILED'
   | 'PAYMENT_REQUIRED'
   | 'MODEL_NOT_FOUND'

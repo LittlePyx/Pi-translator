@@ -23,6 +23,7 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   SELECTION_TOO_LONG: '选中的文本过长，请缩小选择范围。',
   NO_API_KEY: '请先在扩展设置页填写 API Key。',
   API_PERMISSION_REQUIRED: '尚未授权访问当前 API 域名，请打开扩展设置并重新保存或测试连接。',
+  API_ENDPOINT_INVALID: '接口地址或兼容路径不可用，请检查 API Base URL。',
   AUTH_FAILED: 'API Key 无效，或当前账号没有访问权限。',
   PAYMENT_REQUIRED: 'API 账户余额或额度不足，请在服务商后台检查用量。',
   MODEL_NOT_FOUND: '当前模型不存在，或 API Key 没有使用该模型的权限。',
@@ -118,6 +119,14 @@ export function translationErrorRecovery(
       autoResumeAfterSettings: true,
     };
   }
+  if (code === 'API_ENDPOINT_INVALID') {
+    return {
+      showRetry: false,
+      settingsFocus: providerSettings.settingsFocus,
+      settingsLabel: role === 'vision' ? '检查图像接口' : '检查接口地址',
+      autoResumeAfterSettings: true,
+    };
+  }
   if (code === 'MODEL_NOT_FOUND') {
     return {
       showRetry: false,
@@ -178,7 +187,13 @@ export function translationErrorRecovery(
   if (code === 'IMAGE_REGION_INVALID') {
     return { showRetry: false };
   }
-  if (['EMPTY_SELECTION', 'UNSUPPORTED_PAGE', 'REQUEST_ABORTED'].includes(code)) {
+  if (code === 'REQUEST_ABORTED') {
+    // An explicit cancellation is not retryable. A session restored after the
+    // background was interrupted uses the same error code with retryable=true,
+    // so keep the recovery action available in that distinct case.
+    return { showRetry: retryable };
+  }
+  if (['EMPTY_SELECTION', 'UNSUPPORTED_PAGE'].includes(code)) {
     return { showRetry: false };
   }
   if (code === 'UNKNOWN_ERROR') {

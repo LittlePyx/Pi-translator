@@ -672,7 +672,8 @@ test('returns to the original selection and resumes after a missing API key is c
   await selectElementText('#recovery-source');
   const overlay = page.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
-  await overlay.locator('.trigger').click();
+  await overlay.locator('.trigger').focus();
+  await overlay.locator('.trigger').press('Enter');
   await expect(overlay.locator('.error')).toContainText('API Key');
   await expect(overlay.getByRole('button', { name: '重试' })).toHaveCount(0);
 
@@ -736,11 +737,15 @@ test('requires confirmation after partial output and does not automatically repe
   await selectElementText('#partial-recovery-source');
   const overlay = page.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
-  await overlay.locator('.trigger').click();
+  await overlay.locator('.trigger').focus();
+  await overlay.locator('.trigger').press('Enter');
   await expect.poll(matchingRequestCount).toBe(requestsBefore + 2);
   await expect(overlay.locator('.stream-preview')).toContainText('已收到的部分译文');
   releasePartialRecoveryFailure?.();
   await expect(overlay.locator('.error')).toContainText('API');
+  await expect(overlay.locator('.stream-preview')).toContainText('已收到的部分译文');
+  await expect(overlay.getByRole('button', { name: '复制部分译文' })).toBeVisible();
+  await expect(overlay.getByRole('button', { name: '检查 API 配置' })).toBeFocused();
 
   const optionsPromise = context.waitForEvent('page');
   await overlay.getByRole('button', { name: '检查 API 配置' }).click();
@@ -973,8 +978,10 @@ test('lightly marks translated source text and previews the translation on hover
 
   const mark = overlay.locator('.mark-action');
   await expect(mark).toHaveAttribute('aria-pressed', 'false');
-  await mark.click();
+  await mark.focus();
+  await mark.press('Enter');
   await expect(overlay.locator('.mark-action')).toHaveAttribute('aria-pressed', 'true');
+  await expect(overlay.locator('.mark-action')).toBeFocused();
 
   const markerLayer = page.locator('#pi-translation-marker-layer');
   const marker = markerLayer.locator('.marker').first();
@@ -3167,8 +3174,10 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   await formulaView.click();
   await expect(overlay.locator('.body')).toHaveText('能量关系式 $E=mc^2$ 保持不变。');
   await expect(formulaView).toHaveText('公式');
+  await expect(formulaView).toBeFocused();
   await formulaView.click();
   await expect(overlay.locator('.body .pi-math-inline math')).toBeVisible();
+  await expect(formulaView).toBeFocused();
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.recognized-text'))
     .toHaveText('Energy $E=mc^2$ is invariant.');
@@ -3710,6 +3719,33 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
       type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
       payload: {
         ...session,
+        status: 'error',
+        error: {
+          code: 'REQUEST_TIMEOUT',
+          message: 'Synthetic stream interruption.',
+          retryable: false,
+        },
+      },
+    });
+  }, baseSession);
+  await expect(sidePanel.locator('#translation-state'))
+    .toHaveText('翻译中断 · 已保留部分译文');
+  await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
+  await expect(sidePanel.locator('#error-message')).toContainText('响应超时');
+  await expect(sidePanel.locator('#retry')).toBeVisible();
+  await expect(sidePanel.locator('#copy')).toHaveText('复制部分译文');
+  await expect(sidePanel.locator('#copy')).toBeEnabled();
+  await sidePanel.locator('#copy').click();
+  await expect(sidePanel.locator('#status')).toHaveText('已复制');
+
+  await messageSender.evaluate(async (session) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload: {
+        ...session,
         status: 'complete',
         partialText: '流式译文应当显示在原生 PDF 阅读器旁边。',
         result: {
@@ -4027,7 +4063,8 @@ test('keeps streaming output when a translating card is fixed to the sidebar', a
 });
 
 test('pins continuous translation to a collapsible sidebar', async () => {
-  await selectSourceText();
+  await page.locator('#blank').focus();
+  await selectElementText('#source');
   const overlay = page.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   await overlay.locator('.trigger').click();
@@ -4053,10 +4090,18 @@ test('pins continuous translation to a collapsible sidebar', async () => {
   }
   await page.locator('#blank').click();
   await expect(moreMenu).not.toHaveAttribute('open', '');
-  await overlay.getByTitle('收起侧栏').click();
+  const collapse = overlay.getByTitle('收起侧栏');
+  await collapse.focus();
+  await collapse.press('Enter');
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
-  await overlay.getByTitle('展开 Pi Translator 连续翻译侧栏').click();
+  const expand = overlay.getByTitle('展开 Pi Translator 连续翻译侧栏');
+  await expect(expand).toBeFocused();
+  await expand.press('Enter');
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.getByTitle('收起侧栏')).toBeFocused();
+  await overlay.getByTitle('关闭').click();
+  await expect(page.locator('#blank')).toBeFocused();
+  await clearBrowserSelection();
 });
 
 test('keeps document terminology behind a compact sidebar drawer', async () => {

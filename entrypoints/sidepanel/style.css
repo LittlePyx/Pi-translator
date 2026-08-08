@@ -146,6 +146,7 @@ main {
 }
 .translation-text.pending { color: #7b8498; font-size: 12px; }
 .translation-text.error { color: #b4233b; font-size: 12px; }
+.error-message { margin-top: 10px; padding-left: 9px; border-left: 2px solid #d58a98; color: #9f263b; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
 .translation-text .pi-rich-strong { font-weight: 700; }
 .translation-text .pi-math-inline { display: inline-flex; max-width: 100%; vertical-align: -.14em; white-space: normal; }
 .translation-text .pi-math-display {
@@ -276,6 +277,7 @@ button:focus-visible {
   outline: 3px solid rgba(79, 70, 229, .2);
   outline-offset: 2px;
 }
+#translation-state:focus-visible { outline: 2px solid #6558dc; outline-offset: 3px; }
 .correction-text-part:focus-visible,
 .correction-scope select:focus-visible,
 .correction-term-fields input:focus-visible,
@@ -313,6 +315,7 @@ button:focus-visible {
   .content-section h2, .source-section p { color: #a7b0bf; }
   .translation-text { color: #f1f4f8; }
   .translation-text.pending { color: #96a1b2; }
+  .error-message { border-color: #97566a; color: #ff9aaa; }
   .progress-track { background: #303745; }
   .progress-track i { background: #8c82f4; }
   .correction-action { color: #a6afbd; }

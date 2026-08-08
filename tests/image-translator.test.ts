@@ -185,6 +185,23 @@ describe('image region translator', () => {
       code: 'MODEL_NOT_FOUND',
     });
     expect(mapHttpError(
+      400,
+      null,
+      'Model output became abnormal while generating a JSON response for response_format.',
+    )).toMatchObject({ code: 'PROVIDER_ERROR' });
+    expect(mapHttpError(404, null, 'Route not found.')).toMatchObject({
+      code: 'API_ENDPOINT_INVALID',
+    });
+    expect(mapHttpError(404, null, 'The requested model does not exist.')).toMatchObject({
+      code: 'MODEL_NOT_FOUND',
+    });
+    expect(mapHttpError(404, null, 'model_not_found')).toMatchObject({
+      code: 'MODEL_NOT_FOUND',
+    });
+    expect(mapHttpError(400, null, 'invalid-model')).toMatchObject({
+      code: 'MODEL_NOT_FOUND',
+    });
+    expect(mapHttpError(
       429,
       null,
       'insufficient_quota You exceeded your current quota, check billing details.',

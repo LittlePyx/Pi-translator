@@ -253,8 +253,13 @@ export async function startSelectionTranslator(
   let persistenceRevision = 0;
   let persistenceWriteQueue: Promise<void> = Promise.resolve();
 
+  function currentPartialOutput(): string | undefined {
+    const partialText: string | undefined = activePartialText;
+    return partialText?.trim() ? partialText : undefined;
+  }
+
   function hasActivePartialOutput(): boolean {
-    return Boolean(activePartialText?.trim());
+    return Boolean(currentPartialOutput());
   }
 
   function currentDocumentLocator(): DocumentMemoryLocator {
@@ -1622,6 +1627,7 @@ export async function startSelectionTranslator(
           message,
           showSettings: Boolean(recovery.settingsFocus),
           retryable: recovery.showRetry,
+          ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
           ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
           ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
           ...(recovery.settingsFocus
@@ -1648,6 +1654,7 @@ export async function startSelectionTranslator(
           message: runtimeConnectionErrorMessage(error),
           showSettings: false,
           retryable: true,
+          ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
         },
         selectionRect(snapshot),
       );
@@ -1774,6 +1781,7 @@ export async function startSelectionTranslator(
           message: translationErrorMessage(response.error.code, response.error.message),
           showSettings: Boolean(recovery.settingsFocus),
           retryable: recovery.showRetry,
+          ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
           ...(recovery.settingsFocus ? { settingsFocus: recovery.settingsFocus } : {}),
           ...(recovery.settingsLabel ? { settingsLabel: recovery.settingsLabel } : {}),
           ...(recovery.settingsFocus
@@ -1796,7 +1804,12 @@ export async function startSelectionTranslator(
       if (completedEarlyRequestId === requestId) return;
       inFlightRequestId = undefined;
       overlay.showError(
-        { message: runtimeConnectionErrorMessage(error), showSettings: false, retryable: true },
+        {
+          message: runtimeConnectionErrorMessage(error),
+          showSettings: false,
+          retryable: true,
+          ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
+        },
         capture.rect,
       );
     }
