@@ -18,7 +18,7 @@ function functionSource(start: string, end: string): string {
 function expectHeadBeforeMaintenance(source: string, expectedCommits: number): void {
   const commitIndexes = [...source.matchAll(/await commitTranslationResultState\(/g)]
     .map((match) => match.index);
-  const maintenanceIndexes = [...source.matchAll(/await settleTranslationFinalization\(/g)]
+  const maintenanceIndexes = [...source.matchAll(/settleTranslationFinalization\(/g)]
     .map((match) => match.index);
 
   expect(commitIndexes).toHaveLength(expectedCommits);
@@ -28,10 +28,31 @@ function expectHeadBeforeMaintenance(source: string, expectedCommits: number): v
   }
 }
 
+function expectCommitBarrierBeforeCompletedProgress(
+  source: string,
+  expectedCompletions: number,
+): void {
+  const barrierIndexes = [...source.matchAll(/await finalization\.committed;/g)]
+    .map((match) => match.index);
+
+  expect(barrierIndexes).toHaveLength(expectedCompletions);
+  for (let index = 0; index < expectedCompletions; index += 1) {
+    const barrierIndex = barrierIndexes[index]!;
+    const sectionEnd = barrierIndexes[index + 1] ?? source.length;
+    const section = source.slice(barrierIndex, sectionEnd);
+    const completedProgressOffset = section.search(/(?:result: cached|\bresult),/);
+    const finishedOffset = section.indexOf('await finalization.finished;');
+
+    expect(completedProgressOffset).toBeGreaterThan(0);
+    expect(finishedOffset).toBeGreaterThan(completedProgressOffset);
+  }
+}
+
 describe('background result commit ordering', () => {
   it('commits cached and provider text results before best-effort maintenance', () => {
     const source = functionSource('async function translate(', 'function correctionTermSourceKey(');
     expectHeadBeforeMaintenance(source, 2);
+    expectCommitBarrierBeforeCompletedProgress(source, 2);
   });
 
   it('uses the lifecycle-safe result commit for cached and provider image results', () => {
@@ -40,6 +61,7 @@ describe('background result commit ordering', () => {
       'async function testConnection(',
     );
     expectHeadBeforeMaintenance(source, 2);
+    expectCommitBarrierBeforeCompletedProgress(source, 2);
     expect(source).not.toMatch(/await writeTranslationHead\(/);
   });
 

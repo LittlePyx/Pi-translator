@@ -623,9 +623,11 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
       const merged=mergeSettingsDraft(baseline,draft,latest);
       if(pendingKey)merged.settings.apiKeyStorage=keyMode;
       const clearProfileIds=changedApiCredentialProfileIds(latest.apiProfiles,merged.settings.apiProfiles);
+      const baselineEditingProfile=baseline.apiProfiles.find(profile=>profile.id===editing.id);
       return {
         nextSettings:merged.settings,
         credentials:{
+          ...(pendingKey&&baselineEditingProfile?{requireCurrentProfiles:[{id:baselineEditingProfile.id,apiBaseUrl:baselineEditingProfile.apiBaseUrl}]}:{}),
           clearProfileIds,
           ...(keyMode!==latest.apiKeyStorage?{moveApiKeysTo:keyMode}:{}),
           ...(pendingKey?{saveApiKey:{apiKey:pendingKey,mode:keyMode,profileId:editing.id}}:{}),
@@ -685,9 +687,11 @@ async function persistConnectedApiConfiguration(message:string):Promise<string>{
     const merged=mergeSettingsDraft(baseline,draft,latest);
     if(pendingKey)merged.settings.apiKeyStorage=keyMode;
     const clearProfileIds=changedApiCredentialProfileIds(latest.apiProfiles,merged.settings.apiProfiles);
+    const baselineEditingProfile=baseline.apiProfiles.find(profile=>profile.id===editing.id);
     return {
       nextSettings:merged.settings,
       credentials:{
+        ...(pendingKey&&baselineEditingProfile?{requireCurrentProfiles:[{id:baselineEditingProfile.id,apiBaseUrl:baselineEditingProfile.apiBaseUrl}]}:{}),
         clearProfileIds,
         ...(keyMode!==latest.apiKeyStorage?{moveApiKeysTo:keyMode}:{}),
         ...(pendingKey?{saveApiKey:{apiKey:pendingKey,mode:keyMode,profileId:editing.id}}:{}),

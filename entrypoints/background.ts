@@ -92,6 +92,7 @@ import {
   applyAlignedSegmentCorrection,
 } from '../core/translation/aligned-segment-correction';
 import { createPerTabAsyncLane } from '../core/runtime/per-tab-async-lane';
+import { startCommittedTask } from '../core/runtime/committed-task';
 import {
   createPerTabLifecycle,
   type TabLifecycleToken,
@@ -1230,10 +1231,13 @@ async function translate(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
-        const finalization = runTranslationCommit(tabId, async () => {
-          assertActiveRequest(tabId, request.requestId, controller);
-          await commitTranslationResultState(tabId, cached, assertCurrentRequest);
-          const history = await settleTranslationFinalization(
+        const finalization = startCommittedTask(
+          (operation) => runTranslationCommit(tabId, operation),
+          async () => {
+            assertActiveRequest(tabId, request.requestId, controller);
+            await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+          },
+          () => settleTranslationFinalization(
             'translate-finalization',
             settings.rememberRecentTranslations
               ? addTranslationHistory(tabId, cached, settings.historyLimit)
@@ -1242,9 +1246,9 @@ async function translate(
               clearTranslationCheckpoint(tabId, cacheKey),
               rememberDocumentTranslation(identity, cached),
             ],
-          );
-          return history;
-        });
+          ),
+        );
+        await finalization.committed;
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
@@ -1252,7 +1256,7 @@ async function translate(
           totalChunks: cached.chunkCount ?? 1,
           result: cached,
         }, progressTarget);
-        const history = await finalization;
+        const history = await finalization.finished;
         assertActiveRequest(tabId, request.requestId, controller);
         return { ok: true, data: { result: cached, history } };
       }
@@ -1511,10 +1515,13 @@ async function translate(
         : {}),
     };
     assertActiveRequest(tabId, request.requestId, controller);
-    const finalization = runTranslationCommit(tabId, async () => {
-      assertActiveRequest(tabId, request.requestId, controller);
-      await commitTranslationResultState(tabId, result, assertCurrentRequest);
-      const history = await settleTranslationFinalization(
+    const finalization = startCommittedTask(
+      (operation) => runTranslationCommit(tabId, operation),
+      async () => {
+        assertActiveRequest(tabId, request.requestId, controller);
+        await commitTranslationResultState(tabId, result, assertCurrentRequest);
+      },
+      () => settleTranslationFinalization(
         'translate-finalization',
         settings.rememberRecentTranslations
           ? addTranslationHistory(tabId, result, settings.historyLimit)
@@ -1530,9 +1537,9 @@ async function translate(
             ? rememberDocumentTranslation(identity, result)
             : Promise.resolve(),
         ],
-      );
-      return history;
-    });
+      ),
+    );
+    await finalization.committed;
     queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
@@ -1541,7 +1548,7 @@ async function translate(
       result,
     });
     await progressDeliveryTail;
-    const history = await finalization;
+    const history = await finalization.finished;
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {
@@ -2463,18 +2470,21 @@ async function translateImageRegion(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
-        const finalization = runTranslationCommit(tabId, async () => {
-          assertActiveRequest(tabId, request.requestId, controller);
-          await commitTranslationResultState(tabId, cached, assertCurrentRequest);
-          const history = await settleTranslationFinalization(
+        const finalization = startCommittedTask(
+          (operation) => runTranslationCommit(tabId, operation),
+          async () => {
+            assertActiveRequest(tabId, request.requestId, controller);
+            await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+          },
+          () => settleTranslationFinalization(
             'translate-image-region-finalization',
             settings.rememberRecentTranslations
               ? addTranslationHistory(tabId, cached, settings.historyLimit)
               : Promise.resolve([]),
             [rememberDocumentTranslation(identity, cached)],
-          );
-          return history;
-        });
+          ),
+        );
+        await finalization.committed;
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
           partialText: cached.translatedText,
@@ -2482,7 +2492,7 @@ async function translateImageRegion(
           totalChunks: 1,
           result: cached,
         }, progressTarget);
-        const history = await finalization;
+        const history = await finalization.finished;
         assertActiveRequest(tabId, request.requestId, controller);
         return { ok: true, data: { result: cached, history } };
       }
@@ -2601,10 +2611,13 @@ async function translateImageRegion(
           }
         : {}),
     };
-    const finalization = runTranslationCommit(tabId, async () => {
-      assertActiveRequest(tabId, request.requestId, controller);
-      await commitTranslationResultState(tabId, result, assertCurrentRequest);
-      const history = await settleTranslationFinalization(
+    const finalization = startCommittedTask(
+      (operation) => runTranslationCommit(tabId, operation),
+      async () => {
+        assertActiveRequest(tabId, request.requestId, controller);
+        await commitTranslationResultState(tabId, result, assertCurrentRequest);
+      },
+      () => settleTranslationFinalization(
         'translate-image-region-finalization',
         settings.rememberRecentTranslations
           ? addTranslationHistory(tabId, result, settings.historyLimit)
@@ -2618,9 +2631,9 @@ async function translateImageRegion(
             ? rememberDocumentTranslation(identity, result)
             : Promise.resolve(),
         ],
-      );
-      return history;
-    });
+      ),
+    );
+    await finalization.committed;
     queueProgress({
       requestId: request.requestId,
       partialText: result.translatedText,
@@ -2630,7 +2643,7 @@ async function translateImageRegion(
     });
     await progressDeliveryTail;
     assertActiveRequest(tabId, request.requestId, controller);
-    const history = await finalization;
+    const history = await finalization.finished;
     assertActiveRequest(tabId, request.requestId, controller);
     return { ok: true, data: { result, history } };
   } catch (error) {

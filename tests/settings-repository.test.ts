@@ -364,6 +364,126 @@ describe('settings upgrade and browser-restart storage policy', () => {
     expect(changedApiCredentialProfileIds([profile], [])).toEqual([profile.id]);
   });
 
+  it('rejects a pending key when another settings page deleted its profile', async () => {
+    const deletedProfile = { ...DEFAULT_SETTINGS.apiProfiles[0]! };
+    const remainingProfile = {
+      ...deletedProfile,
+      id: 'remaining-profile',
+      name: 'Remaining profile',
+    };
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      apiProfiles: [remainingProfile],
+      activeApiProfileId: remainingProfile.id,
+      apiBaseUrl: remainingProfile.apiBaseUrl,
+      model: remainingProfile.model,
+    });
+    const revisionBefore = local.values[CONFIGURATION_REVISION_STORAGE_KEY];
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: {
+        ...current,
+        apiProfiles: [...current.apiProfiles, deletedProfile],
+      },
+      credentials: {
+        requireCurrentProfiles: [{
+          id: deletedProfile.id,
+          apiBaseUrl: deletedProfile.apiBaseUrl,
+        }],
+        saveApiKey: {
+          apiKey: 'stale-page-key',
+          mode: 'session',
+          profileId: deletedProfile.id,
+        },
+      },
+      value: undefined,
+    }))).rejects.toThrow('另一个设置页');
+
+    expect((await getSettings()).apiProfiles).toEqual([remainingProfile]);
+    expect(await getApiKey(deletedProfile.id)).toBeUndefined();
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toBe(revisionBefore);
+  });
+
+  it('never writes a key for a profile missing from the committed settings', async () => {
+    await saveSettings(DEFAULT_SETTINGS);
+    const revisionBefore = local.values[CONFIGURATION_REVISION_STORAGE_KEY];
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: current,
+      credentials: {
+        saveApiKey: {
+          apiKey: 'orphan-key',
+          mode: 'local',
+          profileId: 'missing-profile',
+        },
+      },
+      value: undefined,
+    }))).rejects.toThrow('配置不存在');
+
+    expect(await getApiKey('missing-profile')).toBeUndefined();
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toBe(revisionBefore);
+  });
+
+  it('allows a pending key after a concurrent model-only change at the same endpoint', async () => {
+    const profile = DEFAULT_SETTINGS.apiProfiles[0]!;
+    const modelChanged = { ...profile, model: 'newer-model' };
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      apiProfiles: [modelChanged],
+      model: modelChanged.model,
+    });
+
+    await mutateApiConfiguration((current) => ({
+      nextSettings: current,
+      credentials: {
+        requireCurrentProfiles: [{ id: profile.id, apiBaseUrl: profile.apiBaseUrl }],
+        saveApiKey: {
+          apiKey: 'same-endpoint-key',
+          mode: 'session',
+          profileId: profile.id,
+        },
+      },
+      value: undefined,
+    }));
+
+    expect((await getSettings()).model).toBe('newer-model');
+    expect(await getApiKey(profile.id)).toBe('same-endpoint-key');
+  });
+
+  it('rejects a pending key when another settings page changed its endpoint', async () => {
+    const baselineProfile = DEFAULT_SETTINGS.apiProfiles[0]!;
+    const endpointChanged = {
+      ...baselineProfile,
+      apiBaseUrl: 'https://newer-provider.example/v1',
+    };
+    await saveSettings({
+      ...DEFAULT_SETTINGS,
+      apiProfiles: [endpointChanged],
+      apiBaseUrl: endpointChanged.apiBaseUrl,
+    });
+    const revisionBefore = local.values[CONFIGURATION_REVISION_STORAGE_KEY];
+
+    await expect(mutateApiConfiguration((current) => ({
+      nextSettings: current,
+      credentials: {
+        requireCurrentProfiles: [{
+          id: baselineProfile.id,
+          apiBaseUrl: baselineProfile.apiBaseUrl,
+        }],
+        saveApiKey: {
+          apiKey: 'wrong-provider-key',
+          mode: 'session',
+          profileId: baselineProfile.id,
+        },
+      },
+      value: undefined,
+    }))).rejects.toThrow('另一个设置页');
+
+    expect((await getSettings()).apiBaseUrl).toBe(endpointChanged.apiBaseUrl);
+    expect(await getApiKey(baselineProfile.id)).toBeUndefined();
+    expect(local.values[CONFIGURATION_REVISION_STORAGE_KEY]).toBe(revisionBefore);
+  });
+
   it('serializes a storage-mode move with a concurrent profile clear', async () => {
     const profileA = { ...DEFAULT_SETTINGS.apiProfiles[0]!, id: 'profile-a' };
     const profileB = { ...DEFAULT_SETTINGS.apiProfiles[0]!, id: 'profile-b' };

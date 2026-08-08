@@ -330,6 +330,59 @@ describe('document translation memory', () => {
     )).toBe(false);
   });
 
+  it('does not evict a later unrelated translation when a capacity compensation no longer fits', async () => {
+    for (let index = 0; index < 20; index += 1) {
+      await rememberDocumentTranslation(identity, {
+        requestId: `compensation-base-${index}`,
+        originalText: `Compensation source ${index}.`,
+        translatedText: `Compensation translation ${index}.`,
+        warnings: [],
+        completedAt: index + 1,
+      });
+    }
+    const correction = await rememberDocumentCorrection(identity, {
+      requestId: 'compensation-correction',
+      originalText: 'A separately corrected capacity subject.',
+      translatedText: 'Capacity correction.',
+      warnings: [],
+      completedAt: 100,
+    });
+    const rollback = await rollbackDocumentCorrectionChange(identity, correction.change);
+    expect(rollback.rolledBack).toBe(true);
+    expect(rollback.compensation).toBeDefined();
+    expect(rollback.memory.recentTranslations.some(
+      (entry) => entry.requestId === 'compensation-base-0',
+    )).toBe(true);
+
+    await rememberDocumentTranslation(identity, {
+      requestId: 'post-receipt-unrelated',
+      originalText: 'This unrelated translation was written after the receipt.',
+      translatedText: 'Later unrelated translation.',
+      warnings: [],
+      completedAt: 200,
+    });
+    const beforeCompensation = await getDocumentMemory(identity);
+    expect(beforeCompensation.recentTranslations).toHaveLength(20);
+    expect(beforeCompensation.recentTranslations.some(
+      (entry) => entry.requestId === 'compensation-base-0',
+    )).toBe(false);
+
+    const compensated = await rollbackDocumentCorrectionChange(
+      identity,
+      rollback.compensation!,
+    );
+    expect(compensated.rolledBack).toBe(false);
+    expect(compensated.memory.recentTranslations).toEqual(
+      beforeCompensation.recentTranslations,
+    );
+    expect(compensated.memory.recentTranslations.some(
+      (entry) => entry.requestId === 'post-receipt-unrelated',
+    )).toBe(true);
+    expect(compensated.memory.recentTranslations.some(
+      (entry) => entry.requestId === 'compensation-correction',
+    )).toBe(false);
+  });
+
   it('rejects a stale correction rollback and preserves a later translation of the same subject', async () => {
     await rememberDocumentTranslation(identity, {
       requestId: 'stale-base',

@@ -38,6 +38,11 @@ export interface SettingsMutationResult<Value> {
 }
 
 export interface ApiConfigurationCredentialPlan {
+  /**
+   * Abort before any settings or credential writes when an existing profile
+   * disappeared or changed providers since the caller loaded its draft.
+   */
+  requireCurrentProfiles?: Array<Pick<ApiProfile, 'id' | 'apiBaseUrl'>>;
   /** Remove every stored API key before exposing the new settings. */
   clearAllApiKeys?: boolean;
   /** Remove keys whose profile endpoint changed or whose profile was deleted. */
@@ -504,6 +509,28 @@ export async function mutateApiConfiguration<Value>(
     }
 
     const plan = update.credentials;
+    if (plan?.requireCurrentProfiles?.length) {
+      const currentById = new Map(
+        current.apiProfiles.map((profile) => [profile.id, profile] as const),
+      );
+      const staleProfile = plan.requireCurrentProfiles.find((expected) => {
+        const currentProfile = currentById.get(expected.id);
+        return !currentProfile || currentProfile.apiBaseUrl !== expected.apiBaseUrl;
+      });
+      if (staleProfile) {
+        throw new Error(
+          '当前 API 配置已在另一个设置页中删除或更改，请重新加载后再保存 Key。',
+        );
+      }
+    }
+    if (
+      plan?.saveApiKey &&
+      !update.nextSettings.apiProfiles.some(
+        (profile) => profile.id === plan.saveApiKey?.profileId,
+      )
+    ) {
+      throw new Error('API Key 对应的配置不存在，设置与 Key 均未保存。');
+    }
     if (plan?.clearAllApiKeys) {
       await clearApiKeysLocked();
     } else if (plan?.clearProfileIds?.length) {

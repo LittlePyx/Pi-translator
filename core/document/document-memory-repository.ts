@@ -75,7 +75,9 @@ export interface DocumentMemorySnapshot {
  * `applied` is the exact entry which must still be current before this change
  * can be rolled back. `previous` is the entry which rollback restores (or is
  * absent when the correction introduced a new subject). Capacity evictions are
- * recorded as well so a rollback does not silently lose an unrelated entry.
+ * recorded as well so a rollback can restore them when the reverted change
+ * frees enough room. A receipt never evicts entries written after it merely to
+ * restore an older capacity eviction.
  *
  * The same shape is used for the compensation returned by rollback: applying
  * that compensation reverses the rollback without overwriting a later edit.
@@ -784,13 +786,34 @@ function withAppliedTranslationChange(
     !actuallyRemovedIntroduced.some((candidate) => candidate.id === entry.id)
   ));
   const additions: DocumentMemoryTranslation[] = [];
-  if (change.previous) additions.push(change.previous);
-  for (const entry of change.evicted) {
+  let pendingReviewCount = remaining.filter((entry) => (
+    entry.review && !entry.review.reviewedAt
+  )).length;
+  const restoreWithoutEviction = (entry: DocumentMemoryTranslation): boolean => {
     if (
       additions.some((candidate) => sameTranslationSubject(candidate, entry)) ||
-      remaining.some((candidate) => sameTranslationSubject(candidate, entry))
-    ) continue;
+      remaining.some((candidate) => sameTranslationSubject(candidate, entry)) ||
+      additions.length + remaining.length >= MAX_TRANSLATIONS
+    ) return false;
+    if (entry.review && !entry.review.reviewedAt) {
+      // retainRecentTranslations deliberately keeps at most twelve pending
+      // reviews. Do not displace a newer pending review to restore an old one.
+      if (pendingReviewCount >= 12) return false;
+      pendingReviewCount += 1;
+    }
     additions.push(entry);
+    return true;
+  };
+  // Restoring the previous value of the changed subject is the core mutation.
+  // If later unrelated writes consumed every released slot, fail closed rather
+  // than evicting one of those writes and claiming a successful compensation.
+  if (change.previous && !restoreWithoutEviction(change.previous)) {
+    return { memory, applied: false };
+  }
+  for (const entry of change.evicted) {
+    // Capacity evictions are best-effort history restoration. They are older
+    // than the receipt, so a later unrelated translation always wins the slot.
+    restoreWithoutEviction(entry);
   }
   const recentTranslations = retainRecentTranslations([...additions, ...remaining]);
   const retainedIds = new Set(recentTranslations.map((entry) => entry.id));
