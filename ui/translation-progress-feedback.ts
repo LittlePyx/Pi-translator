@@ -44,6 +44,25 @@ export const TRANSLATION_PROGRESS_MESSAGES = {
 
 export const TRANSLATION_PROGRESS_STAGE_DELAY_MS = 600;
 export const TRANSLATION_PROGRESS_SLOW_DELAY_MS = 8_000;
+export const STREAM_PREVIEW_FOLLOW_THRESHOLD_PX = 24;
+
+export interface StreamPreviewScrollPosition {
+  scrollTop: number;
+  scrollHeight: number;
+  clientHeight: number;
+}
+
+/**
+ * Keep following streamed output only while the reader is already at the end.
+ * A small threshold absorbs fractional layout and wheel-scroll differences.
+ */
+export function shouldFollowStreamPreview(
+  position: StreamPreviewScrollPosition,
+  threshold = STREAM_PREVIEW_FOLLOW_THRESHOLD_PX,
+): boolean {
+  const distanceFromBottom = position.scrollHeight - position.clientHeight - position.scrollTop;
+  return distanceFromBottom <= Math.max(0, threshold);
+}
 
 type ProgressTimer = ReturnType<typeof setTimeout>;
 type FeedbackCallback = (feedback: TranslationProgressFeedback) => void;

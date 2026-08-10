@@ -4098,19 +4098,35 @@ test('opens the full settings page from the translation card menu', async () => 
 test('stops a streaming translation without discarding received output', async () => {
   const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-api/**';
   let releaseFirst: (() => void) | undefined;
+  let releaseSecond: (() => void) | undefined;
   let releaseRemaining: (() => void) | undefined;
   const firstGate = new Promise<void>((resolve) => { releaseFirst = resolve; });
+  const secondGate = new Promise<void>((resolve) => { releaseSecond = resolve; });
   const remainingGate = new Promise<void>((resolve) => { releaseRemaining = resolve; });
   let requestIndex = 0;
   const streamingHandler = async (route: Route): Promise<void> => {
     requestIndex += 1;
-    await (requestIndex === 1 ? firstGate : remainingGate);
+    await (requestIndex === 1 ? firstGate : requestIndex === 2 ? secondGate : remainingGate);
     if (requestIndex === 1) {
       await route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify({
           choices: [{ message: { content: JSON.stringify({
-            translation: '已经返回的第一段译文。',
+            translation: '已经返回的第一段译文。\n'.repeat(80),
+            detectedLanguage: 'en',
+            warnings: [],
+            segments: [],
+          }) } }],
+        }),
+      }).catch(() => undefined);
+      return;
+    }
+    if (requestIndex === 2) {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify({
+          choices: [{ message: { content: JSON.stringify({
+            translation: '已经返回的第二段译文。\n'.repeat(80),
             detectedLanguage: 'en',
             warnings: [],
             segments: [],
@@ -4134,7 +4150,7 @@ test('stops a streaming translation without discarding received output', async (
   await context.route(apiPattern, streamingHandler);
   try {
     await page.locator('#source').evaluate((element) => {
-      element.textContent = 'A long academic sentence for streaming translation. '.repeat(155);
+      element.textContent = 'A long academic sentence for streaming translation. '.repeat(250);
       const range = document.createRange();
       range.selectNodeContents(element);
       window.getSelection()?.removeAllRanges();
@@ -4159,7 +4175,15 @@ test('stops a streaming translation without discarding received output', async (
     releaseFirst?.();
     await expect.poll(() => requestIndex).toBeGreaterThanOrEqual(2);
     await expect(overlay.locator('.loading-status')).toContainText('正在接收译文');
-    await expect(overlay.locator('.stream-preview')).toHaveText('已经返回的第一段译文。');
+    const streamPreview = overlay.locator('.stream-preview');
+    await expect(streamPreview).toContainText('已经返回的第一段译文。');
+    await expect.poll(() => streamPreview.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+    await streamPreview.evaluate((element) => { element.scrollTop = 0; });
+
+    releaseSecond?.();
+    await expect.poll(() => requestIndex).toBeGreaterThanOrEqual(3);
+    await expect(streamPreview).toContainText('已经返回的第二段译文。');
+    await expect.poll(() => streamPreview.evaluate((element) => element.scrollTop)).toBe(0);
     await expect(overlay.locator('.progress')).toBeVisible();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     const stop = overlay.getByRole('button', {
@@ -4169,18 +4193,20 @@ test('stops a streaming translation without discarding received output', async (
     await stop.press('Enter');
     await expect(overlay.locator('.stopped-status'))
       .toHaveText('已停止 · 已保留部分译文');
-    await expect(overlay.locator('.stream-preview')).toHaveText('已经返回的第一段译文。');
+    await expect(overlay.locator('.stream-preview')).toContainText('已经返回的第一段译文。');
+    await expect(overlay.locator('.stream-preview')).toContainText('已经返回的第二段译文。');
     const copyPartial = overlay.getByRole('button', { name: '复制部分译文' });
     await expect(copyPartial).toBeVisible();
     await expect(copyPartial).toBeFocused();
     await expect(overlay.getByRole('button', { name: '重试' })).toHaveCount(0);
     await expect(overlay.locator('.stop-translation')).toHaveCount(0);
     await page.waitForTimeout(250);
-    expect(requestIndex).toBe(2);
+    expect(requestIndex).toBe(3);
     await expect(overlay.locator('.stopped-status'))
       .toHaveText('已停止 · 已保留部分译文');
   } finally {
     releaseFirst?.();
+    releaseSecond?.();
     releaseRemaining?.();
     await context.unroute(apiPattern, streamingHandler);
     const overlay = page.locator('#tex-selection-translator-root');

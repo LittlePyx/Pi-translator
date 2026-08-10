@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  shouldFollowStreamPreview,
   TRANSLATION_PROGRESS_MESSAGES,
   TranslationProgressFeedbackController,
   type TranslationProgressFeedback,
@@ -199,5 +200,36 @@ describe('translation progress feedback controller', () => {
     expect(() => vi.advanceTimersByTime(7_400)).not.toThrow();
     expect(callback).toHaveBeenCalledTimes(2);
     expect(callback).toHaveBeenLastCalledWith(expect.objectContaining({ kind: 'slow' }));
+  });
+});
+
+describe('stream preview following', () => {
+  it('follows output while the preview is at or near the bottom', () => {
+    expect(shouldFollowStreamPreview({
+      scrollTop: 280,
+      scrollHeight: 500,
+      clientHeight: 200,
+    })).toBe(true);
+    expect(shouldFollowStreamPreview({
+      scrollTop: 300,
+      scrollHeight: 500,
+      clientHeight: 200,
+    })).toBe(true);
+  });
+
+  it('preserves the reader position after they scroll away from the bottom', () => {
+    expect(shouldFollowStreamPreview({
+      scrollTop: 120,
+      scrollHeight: 500,
+      clientHeight: 200,
+    })).toBe(false);
+  });
+
+  it('treats a non-scrolling or newly revealed preview as following output', () => {
+    expect(shouldFollowStreamPreview({
+      scrollTop: 0,
+      scrollHeight: 160,
+      clientHeight: 200,
+    })).toBe(true);
   });
 });

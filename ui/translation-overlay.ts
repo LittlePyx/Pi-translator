@@ -48,6 +48,7 @@ import {
   normalizeLatexForClipboard,
 } from './latex-copy';
 import {
+  shouldFollowStreamPreview,
   TRANSLATION_PROGRESS_MESSAGES,
   TranslationProgressFeedbackController,
   type TranslationProgressFeedback,
@@ -393,7 +394,7 @@ export class TranslationOverlay {
     if(!isCurrent){this.beginProgressFeedback(identity,nextStage,Boolean(retainedPartial))}
     else if(stageChanged){this.progressFeedback=undefined;this.progressFeedbackController.enterStage(identity,nextStage,{hasPartial:Boolean(retainedPartial)&&nextStage==='provider'})}
     else if(nextStage==='provider'&&retainedPartial){this.progressFeedbackController.providerPartial(identity)}
-    const status=this.root.querySelector<HTMLElement>('.loading-status');if(status)status.textContent=this.progressStatus(this.progressState);const preview=this.root.querySelector<HTMLElement>('.stream-preview');if(preview&&this.progressState.partialText){preview.hidden=false;preview.textContent=this.progressState.partialText;preview.scrollTop=preview.scrollHeight}else if(!this.sidebarCollapsed&&!this.root.querySelector('.progress'))this.renderProgress()
+    const status=this.root.querySelector<HTMLElement>('.loading-status');if(status)status.textContent=this.progressStatus(this.progressState);const preview=this.root.querySelector<HTMLElement>('.stream-preview');if(preview&&this.progressState.partialText){const followOutput=preview.hidden||shouldFollowStreamPreview(preview);preview.hidden=false;preview.textContent=this.progressState.partialText;if(followOutput)preview.scrollTop=preview.scrollHeight}else if(!this.sidebarCollapsed&&!this.root.querySelector('.progress'))this.renderProgress()
   }
 
   showSensitiveNotice(rect?:ViewportRect):void { this.finishActiveProgressFeedback();this.progressState=undefined;if(rect)this.lastRect=rect;const surface=this.surface('连续翻译');const notice=document.createElement('div');notice.className='notice';const title=document.createElement('strong');title.textContent='已跳过敏感输入区域';const text=document.createElement('span');text.textContent='检测到密码、验证码或支付字段，内容没有发送到翻译 API。手动右键翻译仍由你决定。';notice.append(title,text);surface.append(notice);this.showSurface(surface); }
