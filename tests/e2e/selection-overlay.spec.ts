@@ -2957,6 +2957,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   expect(restoredSelection.height).toBeCloseTo(resizedSelection.height, 0);
   await firstPage.locator('.region-confirm .confirm').click();
   await expect(overlay.locator('.cache-badge')).toHaveText('会话缓存');
+  await expect(overlay.locator('.meta')).not.toContainText(/(?:毫秒|秒)/);
   await expect(overlay.locator('.body')).toHaveText('重新识别后修正的学术翻译结果。');
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.recognized-text')).toHaveText('Re-recognized academic source text.');
@@ -3871,7 +3872,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('流式译文应当显示在原生 PDF 阅读器旁边');
   await expect(sidePanel.locator('#translation-state'))
-    .not.toContainText(/正在(?:请求模型|接收译文|校验公式|整理结果|渲染公式)/);
+    .toHaveText('850 毫秒');
   await expect(sidePanel.locator('#correct')).toBeVisible();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#translation-text .pi-math-inline math')).toBeVisible();

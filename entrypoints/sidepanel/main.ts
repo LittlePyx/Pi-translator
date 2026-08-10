@@ -41,6 +41,7 @@ import {
   type TranslationProgressStage,
 } from '../../ui/translation-progress-feedback';
 import { normalizeLatexForClipboard } from '../../ui/latex-copy';
+import { translationCompletionStatus } from '../../ui/translation-timing';
 import {
   applyManualCorrection,
   createManualCorrectionDraft,
@@ -549,11 +550,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     return;
   }
 
-  const completedState = session.result?.cached
-    ? '会话缓存'
-    : session.result?.latencyMs
-      ? `${(session.result.latencyMs / 1000).toFixed(1)} 秒`
-      : '已完成';
+  const completedState = translationCompletionStatus(session.result ?? {});
   translationState.textContent = completedState;
   const translatedText = presentationText(
     session,
