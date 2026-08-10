@@ -3914,6 +3914,52 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   expect(contextLayout.height).toBeLessThanOrEqual(51);
   expect(contextLayout.buttonHeight).toBe(28);
 
+  const sendStreamingPartial = async (partialText: string) => messageSender.evaluate(
+    async ({ session, partial }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+      }).chrome;
+      await api.runtime.sendMessage({
+        type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+        payload: { ...session, partialText: partial },
+      });
+    },
+    { session: streamingSession, partial: partialText },
+  );
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
+  await sidePanel.evaluate(() => {
+    const scrollRoot = document.scrollingElement;
+    if (scrollRoot) scrollRoot.scrollTop = scrollRoot.scrollHeight;
+  });
+  const followedPartial = Array.from(
+    { length: 24 },
+    (_, index) => `流式段落 ${index + 1}：最新译文应在读者停留末尾时保持可见。`,
+  ).join('\n');
+  await sendStreamingPartial(followedPartial);
+  await expect(sidePanel.locator('#translation-text')).toContainText('流式段落 24');
+  await expect.poll(() => sidePanel.evaluate(
+    () => document.scrollingElement?.scrollTop ?? 0,
+  )).toBeGreaterThan(0);
+  expect(await sidePanel.evaluate(() => {
+    const scrollRoot = document.scrollingElement;
+    if (!scrollRoot) return Number.POSITIVE_INFINITY;
+    return scrollRoot.scrollHeight - scrollRoot.clientHeight - scrollRoot.scrollTop;
+  })).toBeLessThanOrEqual(1);
+
+  await sidePanel.evaluate(() => { if (document.scrollingElement) document.scrollingElement.scrollTop = 0; });
+  const pausedPartial = `${followedPartial}\n${Array.from(
+    { length: 8 },
+    (_, index) => `后续段落 ${index + 1}：向上阅读后不应被自动拉回底部。`,
+  ).join('\n')}`;
+  await sendStreamingPartial(pausedPartial);
+  await expect(sidePanel.locator('#translation-text')).toContainText('后续段落 8');
+  await sidePanel.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(await sidePanel.evaluate(() => document.scrollingElement?.scrollTop ?? -1)).toBe(0);
+  await sidePanel.evaluate(() => {
+    const scrollRoot = document.scrollingElement;
+    if (scrollRoot) scrollRoot.scrollTop = scrollRoot.scrollHeight;
+  });
+
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
       chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
@@ -3940,6 +3986,11 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#session-actions')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toHaveText('复制部分译文');
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  expect(await sidePanel.evaluate(() => {
+    const scrollRoot = document.scrollingElement;
+    if (!scrollRoot) return Number.POSITIVE_INFINITY;
+    return scrollRoot.scrollHeight - scrollRoot.clientHeight - scrollRoot.scrollTop;
+  })).toBeLessThanOrEqual(1);
   expect(await sidePanel.locator('#copy').evaluate(
     (element) => element.getBoundingClientRect().height,
   )).toBe(28);

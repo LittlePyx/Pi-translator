@@ -36,6 +36,7 @@ import {
   type TranslationRenderPerformance,
 } from '../../ui/translation-content';
 import {
+  shouldFollowStreamPreview,
   TranslationProgressFeedbackController,
   type TranslationProgressFeedback,
   type TranslationProgressIdentity,
@@ -449,6 +450,23 @@ function syncSourceDisclosure(session: PdfSidePanelSession, renderRevision: numb
   });
 }
 
+function scheduleStreamViewportFollow(
+  session: PdfSidePanelSession,
+  renderRevision: number,
+  shouldFollow: boolean,
+): void {
+  if (!shouldFollow) return;
+  queueMicrotask(() => {
+    const scrollRoot = document.scrollingElement;
+    if (
+      !scrollRoot
+      || renderRevision !== translationRenderRevision
+      || !isSamePdfSidePanelSession(currentSession, session)
+    ) return;
+    scrollRoot.scrollTop = scrollRoot.scrollHeight;
+  });
+}
+
 function hidePdfAccessAlert(): void {
   pdfAccessAlert.hidden = true;
 }
@@ -534,6 +552,17 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
 
 function render(session: PdfSidePanelSession | null | undefined): void {
   const sameSession = Boolean(session && isSamePdfSidePanelSession(currentSession, session));
+  const scrollRoot = document.scrollingElement;
+  const followStreamOutput = Boolean(
+    sameSession
+    && currentSession?.status === 'translating'
+    && scrollRoot
+    && shouldFollowStreamPreview({
+      scrollTop: scrollRoot.scrollTop,
+      scrollHeight: scrollRoot.scrollHeight,
+      clientHeight: scrollRoot.clientHeight,
+    }),
+  );
   if (!sameSession) {
     formulaRenderOverride = undefined;
     sourceExpanded = false;
@@ -544,6 +573,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   clearCopyFeedback();
   currentSession = session ?? undefined;
   const renderRevision = ++translationRenderRevision;
+  if (session) scheduleStreamViewportFollow(session, renderRevision, followStreamOutput);
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
