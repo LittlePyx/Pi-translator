@@ -1576,7 +1576,7 @@ export async function startSelectionTranslator(
       snapshot.normalizedText,
       metadata?.sourceLocation,
     );
-    overlay.showLoading(selectionRect(snapshot));
+    overlay.showLoading(snapshot.requestId, selectionRect(snapshot));
     const sourceLabel = metadata?.sourceLabel ?? options.sourceLabel?.();
     const documentId = options.documentId?.();
     const requestText = surface === 'pdf'
@@ -1752,7 +1752,7 @@ export async function startSelectionTranslator(
     } else if (capture.sourceSelection) {
       rememberMarkerAnchor(requestId, capture.sourceSelection.normalizedText);
     }
-    overlay.showLoading(capture.rect);
+    overlay.showLoading(requestId, capture.rect);
     const documentId = options.documentId?.();
     try {
       const response = (await browser.runtime.sendMessage({
@@ -1957,9 +1957,11 @@ export async function startSelectionTranslator(
           activePartialText = typed.payload.partialText;
         }
         overlay.showProgress(
+          typed.payload.requestId,
           typed.payload.partialText,
           typed.payload.completedChunks,
           typed.payload.totalChunks,
+          typed.payload.progressStage,
         );
       }
       return;

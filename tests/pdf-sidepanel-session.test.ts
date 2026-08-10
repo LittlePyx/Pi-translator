@@ -72,6 +72,31 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('native PDF side-panel sessions', () => {
+  it('restores a known progress stage and rejects an unknown one', async () => {
+    await storePdfSidePanelSession(session({
+      status: 'error',
+      progressStage: 'validating-latex',
+      error: { code: 'REQUEST_ABORTED', message: 'Interrupted.', retryable: true },
+    }));
+
+    await expect(restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }])).resolves.toMatchObject([{
+      requestId: 'request-1',
+      progressStage: 'validating-latex',
+    }]);
+
+    await storePdfSidePanelSession(session({
+      requestId: 'invalid-stage',
+      progressStage: 'unknown-stage' as NonNullable<PdfSidePanelSession['progressStage']>,
+    }));
+    await expect(restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/paper.pdf#page=2',
+    }])).resolves.toEqual([]);
+  });
+
   it('surfaces a durable storage failure and serializes the next session write', async () => {
     const set = vi.mocked(browser.storage.session.set);
     set.mockRejectedValueOnce(new Error('session storage unavailable'));

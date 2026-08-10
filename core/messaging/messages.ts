@@ -109,6 +109,11 @@ export interface LocalRenderPerformancePayload {
   errorCode?: 'INVALID_RESPONSE';
 }
 
+export type TranslationProgressStage =
+  | 'provider'
+  | 'validating-latex'
+  | 'committing';
+
 export interface PdfSidePanelSession {
   tabId: number;
   requestId: string;
@@ -121,6 +126,8 @@ export interface PdfSidePanelSession {
   partialText?: string;
   completedChunks?: number;
   totalChunks?: number;
+  /** Transient translation stage; contains no user or provider content. */
+  progressStage?: TranslationProgressStage;
   providerContext?: {
     role: 'text' | 'vision';
     profileName: string;
@@ -240,6 +247,7 @@ export type RuntimeMessage =
         partialText?: string;
         completedChunks: number;
         totalChunks: number;
+        progressStage?: TranslationProgressStage;
         result?: TranslateResult;
       };
     }
@@ -545,6 +553,36 @@ function validLocalRenderPerformancePayload(value: unknown): boolean {
   );
 }
 
+function validTranslationProgressStage(value: unknown): value is TranslationProgressStage {
+  return value === 'provider' || value === 'validating-latex' || value === 'committing';
+}
+
+function validTranslationProgressPayload(value: unknown): boolean {
+  const payload = record(value);
+  if (!payload || !hasOnlyKeys(payload, [
+    'requestId',
+    'partialText',
+    'completedChunks',
+    'totalChunks',
+    'progressStage',
+    'result',
+  ])) return false;
+  return Boolean(
+    nonEmptyString(payload.requestId, 256) &&
+    (payload.partialText === undefined || (
+      typeof payload.partialText === 'string' &&
+      payload.partialText.length <= MAX_SELECTION_LENGTH * 4
+    )) &&
+    Number.isSafeInteger(payload.completedChunks) &&
+    (payload.completedChunks as number) >= 0 &&
+    Number.isSafeInteger(payload.totalChunks) &&
+    (payload.totalChunks as number) >= 1 &&
+    (payload.completedChunks as number) <= (payload.totalChunks as number) &&
+    (payload.progressStage === undefined || validTranslationProgressStage(payload.progressStage)) &&
+    (payload.result === undefined || validCorrectionResult(payload.result))
+  );
+}
+
 export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (!value || typeof value !== 'object' || !('type' in value)) {
     return false;
@@ -572,6 +610,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   if (type === 'RECORD_LOCAL_PERFORMANCE') {
     return validLocalRenderPerformancePayload(message.payload);
+  }
+  if (type === 'TRANSLATION_PROGRESS') {
+    return validTranslationProgressPayload(message.payload);
   }
   return (
     type === 'TRANSLATE_SELECTION' ||
@@ -601,7 +642,6 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CLEAR_DOCUMENT_MEMORY' ||
     type === 'RENDER_LATEX_MATHML' ||
     type === 'RENDER_LATEX_MATHML_BATCH' ||
-    type === 'TRANSLATION_PROGRESS' ||
     type === 'CONTEXT_MENU_TRANSLATE' ||
     type === 'GET_PUBLIC_SETTINGS' ||
     type === 'PUBLIC_SETTINGS_UPDATED' ||

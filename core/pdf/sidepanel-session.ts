@@ -23,6 +23,10 @@ function validSession(value: unknown): value is PdfSidePanelSession {
     typeof session.sourceLabel === 'string' &&
     typeof session.startedAt === 'number' &&
     ['translating', 'complete', 'error'].includes(session.status ?? '') &&
+    (
+      session.progressStage === undefined ||
+      ['provider', 'validating-latex', 'committing'].includes(session.progressStage)
+    ) &&
     (recovery === undefined || Boolean(
       recovery &&
       typeof recovery.failedRequestId === 'string' &&

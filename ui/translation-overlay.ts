@@ -28,7 +28,11 @@ import { detectPageTheme } from '../core/theme/page-theme';
 import { containsRenderableLatex } from '../core/translation/latex-display';
 import { validateImageFormulaResult } from '../core/translation/formula-output-validation';
 import type { SettingsFocus } from '../core/messaging/user-facing-error';
-import type { RuntimeMessage, SettingsRecoveryRequest } from '../core/messaging/messages';
+import type {
+  RuntimeMessage,
+  SettingsRecoveryRequest,
+  TranslationProgressStage as RemoteTranslationProgressStage,
+} from '../core/messaging/messages';
 import {
   renderTranslationContent,
   renderTranslationContents,
@@ -43,6 +47,12 @@ import {
   normalizeFormulaLatexForClipboard,
   normalizeLatexForClipboard,
 } from './latex-copy';
+import {
+  TRANSLATION_PROGRESS_MESSAGES,
+  TranslationProgressFeedbackController,
+  type TranslationProgressFeedback,
+  type TranslationProgressIdentity,
+} from './translation-progress-feedback';
 
 function normalizeResultForPresentation(
   result: TranslateResult,
@@ -176,9 +186,12 @@ interface ErrorDisplay {
   settingsRecovery?: SettingsRecoveryRequest;
 }
 interface OverlayProgressState {
+  requestId: string;
+  revisionKey: number;
   partialText?: string;
   completedChunks: number;
   totalChunks: number;
+  progressStage: RemoteTranslationProgressStage;
 }
 export interface TranslationAdjustmentRequest {
   kind: Exclude<TranslationRevisionKind, 'manual'>;
@@ -312,6 +325,12 @@ export class TranslationOverlay {
   private progressState: OverlayProgressState | undefined;
   private correctionUndo: TranslationCorrectionReceipt | undefined;
   private translationEpoch = 0;
+  private resultRenderRevision = 0;
+  private activeFeedbackIdentity: TranslationProgressIdentity | undefined;
+  private progressFeedback: TranslationProgressFeedback | undefined;
+  private readonly progressFeedbackController = new TranslationProgressFeedbackController(
+    (feedback) => this.applyProgressFeedback(feedback),
+  );
   private readonly buttonFeedbackTimers = new WeakMap<HTMLButtonElement, number>();
   private readonly recordedRenderPerformance = new Set<string>();
   private cardReturnFocus: HTMLElement | undefined;
@@ -349,22 +368,38 @@ export class TranslationOverlay {
   }
 
   showTrigger(rect:ViewportRect):void {
-    if(this.sidebarActive)return;this.lastRect=rect;this.cardPosition=undefined;const active=document.activeElement;this.cardReturnFocus=active instanceof HTMLElement&&active!==this.host&&active!==document.body&&active!==document.documentElement?active:undefined;this.clear();
+    if(this.sidebarActive)return;if(!this.progressState)this.finishActiveProgressFeedback();this.lastRect=rect;this.cardPosition=undefined;const active=document.activeElement;this.cardReturnFocus=active instanceof HTMLElement&&active!==this.host&&active!==document.body&&active!==document.documentElement?active:undefined;this.clear();
     const button=this.button('', 'trigger','翻译选中的文本');const sparkle=document.createElement('span');sparkle.className='sparkle';sparkle.textContent='✦';
     button.append(this.logo('trigger-logo'),sparkle);button.addEventListener('pointerdown',e=>e.preventDefault());button.addEventListener('click',this.actions.onTranslate);
     this.refreshViewportInsets();this.root.append(button);this.place(button,rect);this.observeSize(button);this.setView('trigger');
   }
 
-  showLoading(rect?:ViewportRect):void {
-    this.translationEpoch+=1;this.correctionUndo=undefined;this.documentMemoryActive=false;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;this.progressState={completedChunks:0,totalChunks:1};this.renderProgress();
+  showLoading(requestId:string,rect?:ViewportRect):void {
+    this.translationEpoch+=1;this.correctionUndo=undefined;this.documentMemoryActive=false;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;
+    const identity={requestId,revisionKey:this.translationEpoch};
+    this.progressState={requestId,revisionKey:identity.revisionKey,completedChunks:0,totalChunks:1,progressStage:'provider'};
+    this.beginProgressFeedback(identity,'provider');this.renderProgress();
   }
 
-  showProgress(partialText:string|undefined,completedChunks:number,totalChunks:number):void { this.progressState={...(partialText?{partialText}:this.progressState?.partialText?{partialText:this.progressState.partialText}:{}),completedChunks,totalChunks};const status=this.root.querySelector<HTMLElement>('.loading-status');if(status)status.textContent=this.progressStatus(this.progressState);const preview=this.root.querySelector<HTMLElement>('.stream-preview');if(preview&&this.progressState.partialText){preview.hidden=false;preview.textContent=this.progressState.partialText;preview.scrollTop=preview.scrollHeight}else if(!this.sidebarCollapsed&&!this.root.querySelector('.progress'))this.renderProgress() }
+  showProgress(requestId:string,partialText:string|undefined,completedChunks:number,totalChunks:number,progressStage?:RemoteTranslationProgressStage):void {
+    const previous=this.progressState;
+    const isCurrent=previous?.requestId===requestId;
+    const revisionKey=isCurrent?previous.revisionKey:++this.translationEpoch;
+    const nextStage=progressStage??(isCurrent?previous.progressStage:'provider');
+    const retainedPartial=partialText||(isCurrent?previous.partialText:undefined);
+    const identity={requestId,revisionKey};
+    const stageChanged=isCurrent&&previous.progressStage!==nextStage;
+    this.progressState={requestId,revisionKey,...(retainedPartial?{partialText:retainedPartial}:{}),completedChunks,totalChunks,progressStage:nextStage};
+    if(!isCurrent){this.beginProgressFeedback(identity,nextStage,Boolean(retainedPartial))}
+    else if(stageChanged){this.progressFeedback=undefined;this.progressFeedbackController.enterStage(identity,nextStage,{hasPartial:Boolean(retainedPartial)&&nextStage==='provider'})}
+    else if(nextStage==='provider'&&retainedPartial){this.progressFeedbackController.providerPartial(identity)}
+    const status=this.root.querySelector<HTMLElement>('.loading-status');if(status)status.textContent=this.progressStatus(this.progressState);const preview=this.root.querySelector<HTMLElement>('.stream-preview');if(preview&&this.progressState.partialText){preview.hidden=false;preview.textContent=this.progressState.partialText;preview.scrollTop=preview.scrollHeight}else if(!this.sidebarCollapsed&&!this.root.querySelector('.progress'))this.renderProgress()
+  }
 
-  showSensitiveNotice(rect?:ViewportRect):void { this.progressState=undefined;if(rect)this.lastRect=rect;const surface=this.surface('连续翻译');const notice=document.createElement('div');notice.className='notice';const title=document.createElement('strong');title.textContent='已跳过敏感输入区域';const text=document.createElement('span');text.textContent='检测到密码、验证码或支付字段，内容没有发送到翻译 API。手动右键翻译仍由你决定。';notice.append(title,text);surface.append(notice);this.showSurface(surface); }
+  showSensitiveNotice(rect?:ViewportRect):void { this.finishActiveProgressFeedback();this.progressState=undefined;if(rect)this.lastRect=rect;const surface=this.surface('连续翻译');const notice=document.createElement('div');notice.className='notice';const title=document.createElement('strong');title.textContent='已跳过敏感输入区域';const text=document.createElement('span');text.textContent='检测到密码、验证码或支付字段，内容没有发送到翻译 API。手动右键翻译仍由你决定。';notice.append(title,text);surface.append(notice);this.showSurface(surface); }
 
   showResult(result:TranslateResult,rect?:ViewportRect,history:TranslationHistoryEntry[]=[],alignedByDefault=false):void {
-    this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
+    this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
     if(result.documentId&&this.documentMemory?.documentId!==result.documentId)delete this.documentMemory;
     this.rememberResultVersion(result);
     this.historyIndex=history.findIndex(entry=>entry.requestId===result.requestId);this.alignedView=alignedByDefault&&Boolean(result.alignedSegments?.length);
@@ -428,7 +463,7 @@ export class TranslationOverlay {
   }
 
   showError(error:ErrorDisplay,rect?:ViewportRect):void {
-    this.progressState=undefined;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?'翻译中断':'翻译失败');
+    this.finishActiveProgressFeedback();this.progressState=undefined;if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?'翻译中断':'翻译失败');
     const body=document.createElement('div');body.className='error';body.setAttribute('role','alert');body.setAttribute('aria-live','assertive');body.textContent=error.message;surface.append(body);
     if(partialText){const partial=document.createElement('section');partial.className='partial-result';const label=document.createElement('div');label.className='partial-result-label';label.textContent='已保留收到的部分译文';const preview=document.createElement('div');preview.className='stream-preview';preview.textContent=partialText;partial.append(label,preview);surface.append(partial)}
     const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;
@@ -439,6 +474,7 @@ export class TranslationOverlay {
   }
 
   showStopped(partialText?:string,rect?:ViewportRect):void {
+    this.finishActiveProgressFeedback();
     this.progressState=undefined;
     if(rect)this.lastRect=rect;
     if(this.sidebarActive)this.sidebarCollapsed=false;
@@ -476,6 +512,7 @@ export class TranslationOverlay {
   }
 
   showSettingsRecoveryConfirmation(partialText?:string,rect?:ViewportRect):void {
+    this.finishActiveProgressFeedback();
     this.progressState=undefined;
     if(rect)this.lastRect=rect;
     if(this.sidebarActive)this.sidebarCollapsed=false;
@@ -540,9 +577,9 @@ export class TranslationOverlay {
     });
   }
 
-  hide():void { this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.clear();this.setView('hidden'); }
+  hide():void { this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.clear();this.setView('hidden'); }
   resetSession():void {
-    this.documentMemoryRequestRevision+=1;this.translationEpoch+=1;this.correctionUndo=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.sidebarActive=false;this.sidebarCollapsed=false;this.history=[];this.historyIndex=-1;this.resultVersions.clear();this.latexViewOverrides.clear();this.cardReturnFocus=undefined;delete this.currentResult;delete this.latestRequestId;delete this.documentMemory;this.documentMemoryError=undefined;this.clear();this.setView('hidden');
+    this.finishActiveProgressFeedback();this.documentMemoryRequestRevision+=1;this.translationEpoch+=1;this.correctionUndo=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.sidebarActive=false;this.sidebarCollapsed=false;this.history=[];this.historyIndex=-1;this.resultVersions.clear();this.latexViewOverrides.clear();this.cardReturnFocus=undefined;delete this.currentResult;delete this.latestRequestId;delete this.documentMemory;this.documentMemoryError=undefined;this.clear();this.setView('hidden');
   }
   hideTrigger():void { if(this.view==='trigger')this.hide(); }
   resetCardPosition():void { this.cardPosition=undefined; }
@@ -556,7 +593,7 @@ export class TranslationOverlay {
     if(surface)surface.scrollTop=scrollTop;
   }
 
-  destroy():void { if(this.themeTimer)clearTimeout(this.themeTimer);this.clear();this.themeObserver?.disconnect();this.colorSchemeQuery?.removeEventListener('change',this.onColorSchemeChange);window.removeEventListener('keydown',this.onKeyDown,true);document.removeEventListener('pointerdown',this.onDocumentPointerDown,true);window.removeEventListener('resize',this.onViewportChange);window.removeEventListener('scroll',this.onViewportChange,true);window.visualViewport?.removeEventListener('resize',this.onViewportChange);window.visualViewport?.removeEventListener('scroll',this.onViewportChange);this.host.remove(); }
+  destroy():void { this.progressFeedbackController.dispose();this.activeFeedbackIdentity=undefined;this.progressFeedback=undefined;if(this.themeTimer)clearTimeout(this.themeTimer);this.clear();this.themeObserver?.disconnect();this.colorSchemeQuery?.removeEventListener('change',this.onColorSchemeChange);window.removeEventListener('keydown',this.onKeyDown,true);document.removeEventListener('pointerdown',this.onDocumentPointerDown,true);window.removeEventListener('resize',this.onViewportChange);window.removeEventListener('scroll',this.onViewportChange,true);window.visualViewport?.removeEventListener('resize',this.onViewportChange);window.visualViewport?.removeEventListener('scroll',this.onViewportChange);this.host.remove(); }
 
   private renderSidebarIdle():void {
     const surface=this.surface('连续翻译');const idle=document.createElement('div');idle.className='idle';const logo=this.logo('logo');
@@ -662,9 +699,72 @@ export class TranslationOverlay {
     this.showSurface(surface);
   }
 
-  private progressStatus(progress:OverlayProgressState):string { return progress.totalChunks>1?`正在翻译长文本 ${Math.min(progress.completedChunks+1,progress.totalChunks)}/${progress.totalChunks}…`:progress.partialText?'正在接收译文…':'正在连接翻译 API…' }
+  private sameFeedbackIdentity(
+    left:TranslationProgressIdentity|undefined,
+    right:TranslationProgressIdentity|undefined,
+  ):boolean {
+    return Boolean(left&&right&&left.requestId===right.requestId&&left.revisionKey===right.revisionKey);
+  }
 
-  private renderProgress():void { const progressState=this.progressState??{completedChunks:0,totalChunks:1};const surface=this.surface('正在翻译');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const stop=this.button('停止','stop-translation','停止翻译并保留已收到的译文');stop.dataset.piFocusKey='stop-translation';stop.addEventListener('pointerdown',event=>event.preventDefault());stop.addEventListener('click',()=>{if(stop.disabled)return;stop.disabled=true;stop.textContent='停止中…';this.actions.onStop()});const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text,stop);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
+  private clearRenderStageStatus():void {
+    const status=this.root.querySelector<HTMLElement>('.render-stage-status');
+    const meta=status?.parentElement;
+    status?.remove();
+    if(meta?.classList.contains('meta')&&meta.childElementCount===0&&!meta.textContent?.trim())meta.remove();
+  }
+
+  private applyProgressFeedback(feedback:TranslationProgressFeedback):void {
+    if(!this.sameFeedbackIdentity(this.activeFeedbackIdentity,feedback))return;
+    this.progressFeedback=feedback;
+    if(feedback.stage!=='rendering'){
+      const progress=this.progressState;
+      if(!progress||progress.requestId!==feedback.requestId||progress.revisionKey!==feedback.revisionKey)return;
+      const status=this.root.querySelector<HTMLElement>('.loading-status');
+      if(status)status.textContent=this.progressStatus(progress);
+      return;
+    }
+    const topLine=this.root.querySelector<HTMLElement>('.result-topline');
+    if(!topLine)return;
+    let meta=topLine.querySelector<HTMLElement>('.meta');
+    if(!meta){meta=document.createElement('div');meta.className='meta';topLine.prepend(meta)}
+    let status=meta.querySelector<HTMLElement>('.render-stage-status');
+    if(!status){status=document.createElement('span');status.className='render-stage-status cache-badge';meta.append(status)}
+    status.textContent=feedback.message;
+  }
+
+  private beginProgressFeedback(
+    identity:TranslationProgressIdentity,
+    stage:RemoteTranslationProgressStage|'rendering',
+    hasPartial=false,
+  ):void {
+    this.clearRenderStageStatus();
+    this.activeFeedbackIdentity={...identity};
+    this.progressFeedback=undefined;
+    this.progressFeedbackController.begin(identity,stage,{hasPartial});
+  }
+
+  private finishProgressFeedback(identity:TranslationProgressIdentity):void {
+    this.progressFeedbackController.finish(identity);
+    if(!this.sameFeedbackIdentity(this.activeFeedbackIdentity,identity))return;
+    this.activeFeedbackIdentity=undefined;
+    this.progressFeedback=undefined;
+    this.clearRenderStageStatus();
+  }
+
+  private finishActiveProgressFeedback():void {
+    const identity=this.activeFeedbackIdentity;
+    if(identity)this.finishProgressFeedback(identity);
+  }
+
+  private progressStatus(progress:OverlayProgressState):string {
+    const feedback=this.progressFeedback;
+    if(feedback&&feedback.stage===progress.progressStage&&feedback.requestId===progress.requestId&&feedback.revisionKey===progress.revisionKey)return feedback.message;
+    if(progress.progressStage==='provider'&&progress.partialText)return TRANSLATION_PROGRESS_MESSAGES.provider.receiving;
+    if(progress.totalChunks>1)return `正在翻译长文本 ${Math.min(progress.completedChunks+1,progress.totalChunks)}/${progress.totalChunks}…`;
+    return '正在翻译…';
+  }
+
+  private renderProgress():void { const progressState=this.progressState;if(!progressState)return;const surface=this.surface('正在翻译');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const stop=this.button('停止','stop-translation','停止翻译并保留已收到的译文');stop.dataset.piFocusKey='stop-translation';stop.addEventListener('pointerdown',event=>event.preventDefault());stop.addEventListener('click',()=>{if(stop.disabled)return;stop.disabled=true;stop.textContent='停止中…';this.actions.onStop()});const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text,stop);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
 
   private resultContainsLatex(result:TranslateResult):boolean {
     return containsRenderableLatex(result.translatedText)||Boolean(
@@ -712,7 +812,7 @@ export class TranslationOverlay {
   }
 
   private renderResult(result:TranslateResult):void {
-    result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
+    this.finishActiveProgressFeedback();const renderRevision=++this.resultRenderRevision;result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;const surface=this.surface('翻译结果');const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
     if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.dataset.piFocusKey='marked-filter';filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
     const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);if(tools&&versions.length>1&&versionIndex>=0){const older=this.button('‹','icon','查看上一版译文');older.dataset.piFocusKey='older-version';older.disabled=versionIndex>=versions.length-1;older.addEventListener('click',()=>this.navigateVersion(result,1));const counter=document.createElement('span');counter.className='counter version-counter';counter.textContent=`v${versionIndex+1}/${versions.length}`;const newer=this.button('›','icon','查看下一版译文');newer.dataset.piFocusKey='newer-version';newer.disabled=versionIndex<=0;newer.addEventListener('click',()=>this.navigateVersion(result,-1));tools.prepend(older,counter,newer)}
@@ -721,6 +821,9 @@ export class TranslationOverlay {
     if(result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label','译文显示方式');const full=this.button('全文',`view-button${this.alignedView?'':' active'}`,'显示完整译文');full.dataset.piFocusKey='full-view';const aligned=this.button('逐句',`view-button${this.alignedView?' active':''}`,'显示逐句对照');aligned.dataset.piFocusKey='aligned-view';full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.renderResult(result)});switcher.append(full,aligned);topLine.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?'源码':'公式',`view-button formula-view${rendered?' active':''}`,rendered?'显示可编辑的 LaTeX 源码':'渲染译文中的 LaTeX 公式');formulaView.dataset.piFocusKey='formula-view';formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResult(result)});topLine.append(formulaView)}if(topLine.childElementCount)surface.append(topLine);
     if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text')surface.append(this.recognizedSource(result,result.sourceKind==='image-region'?'查看识别原文':'查看提取原文'));
     const renderLatex=this.shouldRenderLatex(result);
+    const renderIdentity=renderLatex&&this.resultContainsLatex(result)?{requestId:result.requestId,revisionKey:renderRevision}:undefined;
+    if(renderIdentity)this.beginProgressFeedback(renderIdentity,'rendering');
+    const onRenderPerformance=(metrics:TranslationRenderPerformance)=>{this.recordResultRenderPerformance(result,metrics);if(renderIdentity)this.finishProgressFeedback(renderIdentity)};
     if(this.alignedView&&result.alignedSegments?.length){
       const list=document.createElement('div');list.className='aligned-list';
       const renderTargets:TranslationContentTarget[]=[];
@@ -749,14 +852,14 @@ export class TranslationOverlay {
       }
       void renderTranslationContents(
         renderTargets,
-        (metrics) => this.recordResultRenderPerformance(result, metrics),
+        onRenderPerformance,
       );
       surface.append(list);
     }else{surface.append(this.translatedTextElement(
       result.translatedText,
       'body',
       renderLatex,
-      (metrics) => this.recordResultRenderPerformance(result, metrics),
+      onRenderPerformance,
     ))}
     if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?'公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。':`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;surface.append(uncertain)}
     if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent='部分 LaTeX 使用了保守保护策略，请复制后检查。';surface.append(warning)}

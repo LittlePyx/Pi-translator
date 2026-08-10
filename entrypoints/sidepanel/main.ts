@@ -34,6 +34,12 @@ import {
   renderTranslationContent,
   type TranslationRenderPerformance,
 } from '../../ui/translation-content';
+import {
+  TranslationProgressFeedbackController,
+  type TranslationProgressFeedback,
+  type TranslationProgressIdentity,
+  type TranslationProgressStage,
+} from '../../ui/translation-progress-feedback';
 import { normalizeLatexForClipboard } from '../../ui/latex-copy';
 import {
   applyManualCorrection,
@@ -87,6 +93,90 @@ let retryStatusFocusPending = false;
 let retryFocusTabId: number | undefined;
 let stopPendingRequestId: string | undefined;
 const sessionLoadGate = createLatestRequestGate();
+let activeProgressIdentity: TranslationProgressIdentity | undefined;
+let activeProgressStage: TranslationProgressStage | undefined;
+let activeProgressFeedback: TranslationProgressFeedback | undefined;
+let translationRenderRevision = 0;
+
+function progressIdentity(session: PdfSidePanelSession): TranslationProgressIdentity {
+  return {
+    requestId: session.requestId,
+    revisionKey: session.startedAt,
+  };
+}
+
+function isSameProgressIdentity(
+  left: TranslationProgressIdentity | undefined,
+  right: TranslationProgressIdentity,
+): boolean {
+  return left?.requestId === right.requestId && left.revisionKey === right.revisionKey;
+}
+
+function isCurrentProgressFeedback(feedback: TranslationProgressFeedback): boolean {
+  const session = currentSession;
+  if (!session) return false;
+  return session.requestId === feedback.requestId && session.startedAt === feedback.revisionKey;
+}
+
+const progressFeedback = new TranslationProgressFeedbackController((feedback) => {
+  if (!isCurrentProgressFeedback(feedback)) return;
+  const session = currentSession;
+  if (
+    session?.status !== 'translating'
+    && !(session?.status === 'complete' && feedback.stage === 'rendering')
+  ) {
+    return;
+  }
+  activeProgressFeedback = feedback;
+  translationState.textContent = feedback.message;
+});
+
+function finishProgress(): void {
+  if (activeProgressIdentity) progressFeedback.finish(activeProgressIdentity);
+  activeProgressIdentity = undefined;
+  activeProgressStage = undefined;
+  activeProgressFeedback = undefined;
+}
+
+function baseTranslationProgressText(session: PdfSidePanelSession): string {
+  const total = session.totalChunks ?? 1;
+  const completed = session.completedChunks ?? 0;
+  return total > 1
+    ? `翻译中 ${Math.min(completed + 1, total)}/${total}`
+    : '翻译中';
+}
+
+function syncTranslationProgress(session: PdfSidePanelSession): void {
+  const identity = progressIdentity(session);
+  const stage = session.progressStage ?? 'provider';
+  const hasPartial = Boolean(session.partialText);
+  const identityChanged = !isSameProgressIdentity(activeProgressIdentity, identity);
+  const stageChanged = activeProgressStage !== stage;
+
+  if (identityChanged) {
+    finishProgress();
+    activeProgressIdentity = identity;
+    activeProgressStage = stage;
+    translationState.textContent = baseTranslationProgressText(session);
+    progressFeedback.begin(identity, stage, { hasPartial });
+    return;
+  }
+
+  if (stageChanged) {
+    activeProgressStage = stage;
+    activeProgressFeedback = undefined;
+    translationState.textContent = baseTranslationProgressText(session);
+    progressFeedback.enterStage(identity, stage, { hasPartial });
+    return;
+  }
+
+  if (activeProgressFeedback?.stage === stage) {
+    translationState.textContent = activeProgressFeedback.message;
+  } else {
+    translationState.textContent = baseTranslationProgressText(session);
+  }
+  if (stage === 'provider' && hasPartial) progressFeedback.providerPartial(identity);
+}
 
 function recoveryRole(session: PdfSidePanelSession): TranslationProviderRole {
   if (session.providerContext?.role) return session.providerContext.role;
@@ -147,8 +237,12 @@ function recordResultRenderPerformance(
   } satisfies RuntimeMessage).catch(() => undefined);
 }
 
-function renderTranslationText(text: string, renderLatex: boolean, requestId: string): void {
-  void renderTranslationContent(
+function renderTranslationText(
+  text: string,
+  renderLatex: boolean,
+  requestId: string,
+): Promise<TranslationRenderPerformance> {
+  return renderTranslationContent(
     translationText,
     text,
     renderLatex,
@@ -278,9 +372,11 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
 function render(session: PdfSidePanelSession | null | undefined): void {
   if (session?.requestId !== currentSession?.requestId) formulaRenderOverride = undefined;
   currentSession = session ?? undefined;
+  const renderRevision = ++translationRenderRevision;
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
+    finishProgress();
     retryFocusPending = false;
     retryStatusFocusPending = false;
     retryFocusTabId = undefined;
@@ -357,12 +453,8 @@ function render(session: PdfSidePanelSession | null | undefined): void {
 
   if (isTranslating) {
     formulaView.hidden = true;
-    const total = session.totalChunks ?? 1;
-    const completed = session.completedChunks ?? 0;
-    translationState.textContent = total > 1
-      ? `翻译中 ${Math.min(completed + 1, total)}/${total}`
-      : '正在流式接收';
-    translationText.textContent = session.partialText || '正在连接翻译接口…';
+    syncTranslationProgress(session);
+    translationText.textContent = session.partialText || '';
     if (retryStatusFocusPending) {
       queueMicrotask(() => {
         if (!retryStatusFocusPending) return;
@@ -374,6 +466,8 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     }
     return;
   }
+
+  finishProgress();
 
   if (session.status === 'error' && session.error) {
     formulaView.hidden = true;
@@ -455,11 +549,12 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     return;
   }
 
-  translationState.textContent = session.result?.cached
+  const completedState = session.result?.cached
     ? '会话缓存'
     : session.result?.latencyMs
       ? `${(session.result.latencyMs / 1000).toFixed(1)} 秒`
       : '已完成';
+  translationState.textContent = completedState;
   const translatedText = presentationText(
     session,
     session.result?.translatedText ?? session.partialText ?? '',
@@ -470,11 +565,30 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   formulaView.textContent = renderLatex ? '源码' : '公式';
   formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
   formulaView.setAttribute('aria-pressed', String(renderLatex));
-  renderTranslationText(
+  const renderPromise = renderTranslationText(
     translatedText,
     hasLatex && renderLatex,
     session.result?.requestId ?? session.requestId,
   );
+  if (hasLatex && renderLatex) {
+    const identity = progressIdentity(session);
+    activeProgressIdentity = identity;
+    activeProgressStage = 'rendering';
+    activeProgressFeedback = undefined;
+    progressFeedback.begin(identity, 'rendering');
+    void renderPromise.finally(() => {
+      if (
+        renderRevision !== translationRenderRevision
+        || currentSession?.status !== 'complete'
+        || currentSession.requestId !== identity.requestId
+        || currentSession.startedAt !== identity.revisionKey
+      ) {
+        return;
+      }
+      finishProgress();
+      translationState.textContent = completedState;
+    }).catch(() => undefined);
+  }
   if (retryFocusPending) {
     const shouldRestoreFocus = retryStatusFocusPending || document.activeElement === translationState;
     retryFocusPending = false;

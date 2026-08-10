@@ -400,6 +400,7 @@ function publishTranslationProgress(
   publishPdfSidePanelSession({
     ...session,
     ...(payload.partialText ? { partialText: payload.partialText } : {}),
+    ...(payload.progressStage ? { progressStage: payload.progressStage } : {}),
     completedChunks: payload.completedChunks,
     totalChunks: payload.totalChunks,
   }, false);
@@ -423,14 +424,16 @@ async function commitTranslationResultState(
   await writeTranslationHead(nextHead);
   try {
     if (session?.requestId === result.requestId) {
-      await publishPdfSidePanelSessionDurably({
+      const completedSession: PdfSidePanelSession = {
         ...session,
         status: 'complete',
         result,
         partialText: result.translatedText,
         completedChunks: result.chunkCount ?? session.totalChunks ?? 1,
         totalChunks: result.chunkCount ?? session.totalChunks ?? 1,
-      }, assertCurrent);
+      };
+      delete completedSession.progressStage;
+      await publishPdfSidePanelSessionDurably(completedSession, assertCurrent);
     } else {
       assertCurrent();
     }
@@ -577,6 +580,7 @@ function preparePdfSidePanelTranslation(
     ...(pageNumber ? { pageNumber } : {}),
     sourceLabel: pdfSourceLabel(sourceUrl),
     status: 'translating',
+    progressStage: 'provider',
     startedAt: Date.now(),
     completedChunks: 0,
     totalChunks: 1,
@@ -924,6 +928,7 @@ async function retryPdfSidePanelTranslation(
       ...session,
       requestId: crypto.randomUUID(),
       status: 'translating',
+      progressStage: 'provider',
       startedAt: Date.now(),
       completedChunks: 0,
       totalChunks: 1,
@@ -1341,6 +1346,14 @@ async function translate(
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
         performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+        queueProgress({
+          requestId: request.requestId,
+          completedChunks: cached.chunkCount ?? 1,
+          totalChunks: cached.chunkCount ?? 1,
+          progressStage: 'committing',
+        });
+        await progressDeliveryTail;
+        assertActiveRequest(tabId, request.requestId, controller);
         const commitStartedAt = performance.now();
         const finalization = startCommittedTask(
           (operation) => runTranslationCommit(tabId, operation),
@@ -1533,6 +1546,14 @@ async function translate(
           performanceTimings.latexValidationMs =
             chunkValidationBaseMs + diagnostic.latexValidationMs;
         },
+        (phase) => {
+          queueProgress({
+            requestId: request.requestId,
+            completedChunks: chunkIndex,
+            totalChunks: chunks.length,
+            progressStage: phase,
+          });
+        },
       );
       assertActiveRequest(tabId, request.requestId, controller);
       latexValidationMs += diagnostics.latexValidationMs;
@@ -1661,6 +1682,14 @@ async function translate(
           }
         : {}),
     };
+    assertActiveRequest(tabId, request.requestId, controller);
+    queueProgress({
+      requestId: request.requestId,
+      completedChunks: chunks.length,
+      totalChunks: chunks.length,
+      progressStage: 'committing',
+    });
+    await progressDeliveryTail;
     assertActiveRequest(tabId, request.requestId, controller);
     const commitStartedAt = performance.now();
     const finalization = startCommittedTask(
@@ -2680,6 +2709,14 @@ async function translateImageRegion(
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
         performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
+        queueProgress({
+          requestId: request.requestId,
+          completedChunks: 1,
+          totalChunks: 1,
+          progressStage: 'committing',
+        });
+        await progressDeliveryTail;
+        assertActiveRequest(tabId, request.requestId, controller);
         const commitStartedAt = performance.now();
         const finalization = startCommittedTask(
           (operation) => runTranslationCommit(tabId, operation),
@@ -2731,6 +2768,12 @@ async function translateImageRegion(
         `Permission for ${apiPermission} is required.`,
       );
     }
+    queueProgress({
+      requestId: request.requestId,
+      completedChunks: 0,
+      totalChunks: 1,
+      progressStage: 'provider',
+    });
     const startedAt = performance.now();
     performanceTimings.preflightMs = Math.max(0, startedAt - performanceStartedAt);
     let lastPartial = '';
@@ -2839,6 +2882,14 @@ async function translateImageRegion(
           }
         : {}),
     };
+    queueProgress({
+      requestId: request.requestId,
+      completedChunks: 1,
+      totalChunks: 1,
+      progressStage: 'committing',
+    });
+    await progressDeliveryTail;
+    assertActiveRequest(tabId, request.requestId, controller);
     const commitStartedAt = performance.now();
     const finalization = startCommittedTask(
       (operation) => runTranslationCommit(tabId, operation),

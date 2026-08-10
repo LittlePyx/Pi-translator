@@ -15,6 +15,8 @@ export interface LatexSafeTranslationDiagnostics {
   latexValidationMs: number;
 }
 
+export type LatexSafeTranslationPhase = 'provider' | 'validating-latex';
+
 export interface LatexSafeTranslationResult {
   providerResult: ProviderTranslationResult;
   restored: RestoredLatex;
@@ -36,6 +38,17 @@ function notifyDiagnostics(
     callback?.({ latexValidationMs });
   } catch {
     // Local performance diagnostics must never affect translation.
+  }
+}
+
+function notifyPhase(
+  callback: ((phase: LatexSafeTranslationPhase) => void) | undefined,
+  phase: LatexSafeTranslationPhase,
+): void {
+  try {
+    callback?.(phase);
+  } catch {
+    // Presentation-only phase feedback must never affect translation.
   }
 }
 
@@ -82,9 +95,11 @@ async function translateLatexProseFallback(
   credentials: ProviderCredentials,
   signal: AbortSignal,
   protectedLatex: ProtectedLatex,
+  onPhase?: (phase: LatexSafeTranslationPhase) => void,
 ): Promise<LatexSafeTranslationResult | undefined> {
   const { parts, segments } = buildLatexFallbackParts(protectedLatex);
   if (!segments.length) return undefined;
+  notifyPhase(onPhase, 'provider');
   const fallbackResult = await translator.translate(
     {
       text: segments.map((segment) => segment.text).join('\n'),
@@ -138,12 +153,14 @@ export async function translateWithLatexRetry(
   protectedLatex: ProtectedLatex | undefined,
   callbacks: TranslationCallbacks | undefined,
   onDiagnostics?: (diagnostics: LatexSafeTranslationDiagnostics) => void,
+  onPhase?: (phase: LatexSafeTranslationPhase) => void,
 ): Promise<LatexSafeTranslationResult> {
   const attempts = protectedLatex ? 2 : 1;
   let lastValidationError: ReturnType<typeof toTranslationError> | undefined;
   let latexValidationMs = 0;
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    notifyPhase(onPhase, 'provider');
     const providerResult = await translator.translate(
       attempt === 0 ? input : { ...input, strictPlaceholderPreservation: true },
       options,
@@ -160,6 +177,7 @@ export async function translateWithLatexRetry(
       };
     }
 
+    notifyPhase(onPhase, 'validating-latex');
     const validationStartedAt = performance.now();
     try {
       const restored = restoreLatex(providerResult.translatedText, protectedLatex);
@@ -187,6 +205,7 @@ export async function translateWithLatexRetry(
       credentials,
       signal,
       protectedLatex,
+      onPhase,
     );
     if (fallback) {
       return {

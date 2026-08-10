@@ -3749,7 +3749,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     sourceLabel: 'native-reader.pdf',
     status: 'translating',
     startedAt: Date.now(),
-    partialText: '流式译文应当',
+    progressStage: 'provider',
     completedChunks: 0,
     totalChunks: 1,
     providerContext: {
@@ -3770,7 +3770,22 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
 
   await expect(sidePanel.locator('#session')).toBeVisible();
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
-  await expect(sidePanel.locator('#translation-state')).toHaveText('正在流式接收');
+  await expect(sidePanel.locator('#translation-state')).toContainText('正在请求模型');
+  await expect(sidePanel.locator('#translation-text')).toBeEmpty();
+  const streamingSession = {
+    ...baseSession,
+    partialText: '流式译文应当',
+  } as const;
+  await messageSender.evaluate(async (session) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload: session,
+    });
+  }, streamingSession);
+  await expect(sidePanel.locator('#translation-state')).toContainText('正在接收译文');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#stop-translation')).toBeVisible();
   await expect(sidePanel.locator('#correct')).toBeHidden();
@@ -3795,7 +3810,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
         },
       },
     });
-  }, baseSession);
+  }, streamingSession);
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('翻译中断 · 已保留部分译文');
   await expect(sidePanel.locator('#stop-translation')).toBeHidden();
@@ -3823,7 +3838,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
         },
       },
     });
-  }, baseSession);
+  }, streamingSession);
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('已停止 · 已保留部分译文');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
@@ -3852,9 +3867,11 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
         },
       },
     });
-  }, baseSession);
+  }, streamingSession);
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('流式译文应当显示在原生 PDF 阅读器旁边');
+  await expect(sidePanel.locator('#translation-state'))
+    .not.toContainText(/正在(?:请求模型|接收译文|校验公式|整理结果|渲染公式)/);
   await expect(sidePanel.locator('#correct')).toBeVisible();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#translation-text .pi-math-inline math')).toBeVisible();
@@ -4133,14 +4150,16 @@ test('stops a streaming translation without discarding received output', async (
       .toBeVisible();
     const pin = overlay.getByTitle('固定到连续翻译侧栏');
     await expect(pin).toHaveText('固定侧栏');
+    await expect(overlay.locator('.loading-status')).toContainText('正在请求模型');
     await pin.click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await expect(overlay.locator('.progress')).toBeVisible();
-    await expect(overlay.locator('.loading-status')).toContainText('正在连接');
+    await expect(overlay.locator('.loading-status')).toContainText('正在请求模型');
 
     releaseFirst?.();
     await expect.poll(() => requestIndex).toBeGreaterThanOrEqual(2);
-    await expect(overlay.locator('.loading-status')).toContainText('2/2');
+    await expect(overlay.locator('.loading-status')).toContainText('正在接收译文');
+    await expect(overlay.locator('.stream-preview')).toHaveText('已经返回的第一段译文。');
     await expect(overlay.locator('.progress')).toBeVisible();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     const stop = overlay.getByRole('button', {

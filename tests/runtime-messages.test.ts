@@ -37,6 +37,53 @@ function correctionReceipt() {
 }
 
 describe('runtime message guard', () => {
+  it('strictly validates staged translation progress messages', () => {
+    const basePayload = {
+      requestId: 'translation-1',
+      partialText: 'Partial translation.',
+      completedChunks: 0,
+      totalChunks: 2,
+    };
+
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: basePayload,
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: { ...basePayload, progressStage: 'provider' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: { ...basePayload, progressStage: 'validating-latex' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: { ...basePayload, progressStage: 'committing' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: {
+        ...basePayload,
+        completedChunks: 2,
+        result: {
+          requestId: 'translation-1',
+          originalText: 'Source text.',
+          translatedText: 'Translated text.',
+          warnings: [],
+        },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: { ...basePayload, progressStage: 'unknown-stage' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'TRANSLATION_PROGRESS',
+      payload: { ...basePayload, privateSourceText: 'must not be accepted' },
+    })).toBe(false);
+  });
+
   it('accepts the dedicated vision-capability test message', () => {
     expect(isRuntimeMessage({
       type: 'TEST_VISION_CAPABILITY',
