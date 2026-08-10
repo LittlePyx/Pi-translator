@@ -2745,6 +2745,8 @@ test('optionally restores and clears persistent Pi PDF translation markers', asy
     await markerNote.getByRole('button', { name: '跳转到原文' }).click();
     await expect(markerLayer.locator('.marker.focused')).toBeVisible();
     await markerNote.getByRole('button', { name: '删除这条标记' }).click();
+    await expect(markerLayer.locator('.marker')).toHaveCount(1);
+    await markerNote.getByRole('button', { name: '再次点击删除这条标记' }).click();
     await expect(overlay).toContainText('本文暂无标记');
     await expect(markerLayer.locator('.marker')).toHaveCount(0);
 
@@ -2837,11 +2839,13 @@ test('keeps 100 persistent markers responsive across a long lazily rendered PDF'
 
     const lastMarker = overlay.locator('.marker-note').last();
     await expect(lastMarker).toContainText('第 100 页');
+    await expect(lastMarker).toContainText('点击定位');
     await lastMarker.getByRole('button', { name: '跳转到原文' }).click();
     await expect(reader.locator('#page-number')).toHaveValue('100');
     await expect(reader.locator('.pdf-page[data-page-number="100"]'))
       .toHaveAttribute('data-rendered', 'ready');
     await expect(markerLayer.locator('.marker.focused')).toBeVisible();
+    await expect(lastMarker).not.toContainText('点击定位');
     await expect.poll(() => reader.locator('.pdf-page[data-rendered="ready"]').count())
       .toBeLessThanOrEqual(5);
   } finally {
@@ -2860,6 +2864,8 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
   const sourceText = 'A narrow marker preserves an '
     + 'ExtremelyLongAcademicIdentifierWithoutNaturalBreakpoints for later review.';
   const translatedText = '这条较长的标记译文用于核对窄屏下的截断、复制、定位与删除焦点是否保持清晰。';
+  const missingSourceText = 'The original sentence changed after this marker was saved.';
+  const missingTranslatedText = '这条标记的原文位置已经变化，但仍应允许跳回原页并安全清理。';
   await context.route(sourceUrl, async (route) => {
     await route.fulfill({
       contentType: 'application/pdf',
@@ -2870,34 +2876,67 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
   const documentId = createHash('sha256').update(identity).digest('hex').slice(0, 32);
   const seed = await context.newPage();
   await seed.goto(`chrome-extension://${extensionId}/popup.html`);
-  await seed.evaluate(async ({ id, anchor, originalText, targetText }) => {
+  await seed.evaluate(async ({
+    id,
+    anchor,
+    originalText,
+    targetText,
+    missingOriginalText,
+    missingTargetText,
+  }) => {
     const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
     await api.storage.local.set({
       piPdfTranslationMarkersV1: {
         [id]: {
           enabled: true,
-          markers: [{
-            markerId: 'narrow-marker-note',
-            anchor: {
-              kind: 'text-quote',
-              pageNumber: 1,
-              sourceText: anchor,
-              prefix: '',
-              suffix: '',
+          markers: [
+            {
+              markerId: 'narrow-marker-note',
+              anchor: {
+                kind: 'text-quote',
+                pageNumber: 1,
+                sourceText: anchor,
+                prefix: '',
+                suffix: '',
+              },
+              content: {
+                originalText,
+                translatedText: targetText,
+                sourceTitle: 'narrow-marker-notes.pdf',
+                pageNumber: 1,
+              },
+              createdAt: 1,
             },
-            content: {
-              originalText,
-              translatedText: targetText,
-              sourceTitle: 'narrow-marker-notes.pdf',
-              pageNumber: 1,
+            {
+              markerId: 'missing-marker-note',
+              anchor: {
+                kind: 'text-quote',
+                pageNumber: 1,
+                sourceText: 'This sentence no longer exists in the PDF.',
+                prefix: '',
+                suffix: '',
+              },
+              content: {
+                originalText: missingOriginalText,
+                translatedText: missingTargetText,
+                sourceTitle: 'narrow-marker-notes.pdf',
+                pageNumber: 1,
+              },
+              createdAt: 2,
             },
-            createdAt: 1,
-          }],
+          ],
           updatedAt: Date.now(),
         },
       },
     });
-  }, { id: documentId, anchor: anchorText, originalText: sourceText, targetText: translatedText });
+  }, {
+    id: documentId,
+    anchor: anchorText,
+    originalText: sourceText,
+    targetText: translatedText,
+    missingOriginalText: missingSourceText,
+    missingTargetText: missingTranslatedText,
+  });
   await seed.close();
 
   const reader = await context.newPage();
@@ -2923,11 +2962,20 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     const overlay = reader.locator('#tex-selection-translator-root');
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
     await overlay.locator('details.more > summary').click();
-    await overlay.getByRole('button', { name: '查看本文标记（1）' }).click();
+    await overlay.getByRole('button', { name: '查看本文标记（2）' }).click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
-    const markerNote = overlay.locator('.marker-note');
+    await expect(overlay.locator('.marker-note')).toHaveCount(2);
+    const markerNote = overlay.locator('.marker-note').filter({ hasText: sourceText });
+    const missingMarkerNote = overlay.locator('.marker-note').filter({ hasText: missingSourceText });
     await expect(markerNote).toContainText(sourceText);
     await expect(markerNote).toContainText(translatedText);
+    await expect(missingMarkerNote).toContainText('原文位置已变化');
+    await expect(missingMarkerNote).toContainText(missingTranslatedText);
+    const missingMarkerMain = missingMarkerNote.getByRole('button', {
+      name: '原文位置已变化，仍可跳转到原页',
+    });
+    expect(await missingMarkerMain.evaluate((element) => getComputedStyle(element).cursor))
+      .toBe('pointer');
     const layout = await overlay.locator('.surface').evaluate((surface) => {
       const toolbar = surface.querySelector<HTMLElement>('.marker-notes-toolbar');
       const note = surface.querySelector<HTMLElement>('.marker-note');
@@ -2967,7 +3015,7 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await expect(copy).toHaveText('已复制');
     const copyAll = overlay.getByRole('button', { name: '复制本文标记为 Markdown' });
     await copyAll.click();
-    await expect(copyAll).toHaveText('已复制 1 条');
+    await expect(copyAll).toHaveText('已复制 2 条');
 
     await markerNote.getByRole('button', { name: '跳转到原文' }).click();
     await expect(markerLayer.locator('.marker.focused')).toBeVisible();
@@ -2977,10 +3025,54 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     }
     await overlay.getByRole('button', { name: '展开 Pi Translator 本文标记侧栏' }).click();
     await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
-    await overlay.locator('.marker-note').getByRole('button', { name: '删除这条标记' }).click();
-    await expect(overlay).toContainText('本文暂无标记');
-    await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
+    const removeReady = overlay.locator('.marker-note').filter({ hasText: sourceText })
+      .getByRole('button', { name: '删除这条标记' });
+    await removeReady.click();
+    const confirmRemove = overlay.locator('.marker-note').filter({ hasText: sourceText })
+      .getByRole('button', { name: '再次点击删除这条标记' });
+    await expect(confirmRemove).toHaveText('确认');
+    if (process.env.PI_VISUAL_QA) {
+      await reader.screenshot({ path: testInfo.outputPath('pdf-marker-delete-confirm-360-light.png') });
+    }
+    await expect(overlay.locator('.marker-note')).toHaveCount(2);
+    await confirmRemove.click();
+    await expect(overlay.locator('.marker-note')).toHaveCount(1);
+    const remainingMarker = overlay.locator('.marker-note').filter({ hasText: missingSourceText });
+    await expect(remainingMarker.getByRole('button', {
+      name: '原文位置已变化，仍可跳转到原页',
+    })).toBeFocused();
     await expect(markerLayer.locator('.marker')).toHaveCount(0);
+
+    await remainingMarker.getByRole('button', {
+      name: '原文位置已变化，仍可跳转到原页',
+    }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    await expect(reader.locator('#page-number')).toHaveValue('1');
+    await overlay.getByRole('button', { name: '展开 Pi Translator 本文标记侧栏' }).click();
+    await overlay.getByRole('button', { name: '返回翻译结果' }).click();
+
+    const more = overlay.locator('details.more > summary');
+    await more.click();
+    const clear = overlay.getByRole('button', { name: '清除本文标记' });
+    await clear.click();
+    const confirmClear = overlay.getByRole('button', { name: '再次点击清除全部本文标记' });
+    await expect(confirmClear).toHaveText('再次点击清除全部');
+    if (process.env.PI_VISUAL_QA) {
+      await reader.screenshot({ path: testInfo.outputPath('pdf-marker-clear-confirm-360-light.png') });
+    }
+    await expect(overlay.getByRole('button', { name: '查看本文标记（1）' })).toBeVisible();
+    await confirmClear.click();
+    await expect(more).toBeFocused();
+    await more.click();
+    await expect(overlay.getByRole('button', { name: '查看本文标记（1）' })).toHaveCount(0);
+    await expect(overlay.getByRole('button', { name: '清除本文标记' })).toHaveCount(0);
+    await expect.poll(() => reader.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      const stored = await api.storage.local.get('piPdfTranslationMarkersV1');
+      return JSON.stringify(stored.piPdfTranslationMarkersV1?.[id] ?? {}).includes(
+        'missing-marker-note',
+      );
+    }, documentId)).toBe(false);
   } finally {
     await reader.evaluate(async () => {
       const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;

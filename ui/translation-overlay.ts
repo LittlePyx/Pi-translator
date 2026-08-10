@@ -151,6 +151,7 @@ const STYLES = `
   @media(max-width:420px){.card.menu-open{min-height:min(360px,calc(100vh - var(--pi-viewport-top) - var(--pi-viewport-bottom) - 24px))}.correction-term-fields,.document-edit{grid-template-columns:minmax(0,1fr)}.document-edit-actions{justify-content:flex-end}.revision-scope select,.revision-choice{min-height:var(--compact-hit)}.revision-custom textarea{min-height:96px}.revision-actions{position:sticky;bottom:0;padding:6px 0;background:var(--surface)}}
   :host([data-pi-theme="dark"]) .live-badge{color:#8de7f7;background:#173b44}:host([data-pi-theme="dark"]) .notice{color:#f1d68e;background:#3c321c;border-color:#655326}
   :host([data-pi-theme="dark"]) .document-memory-action.has-review,:host([data-pi-theme="dark"]) .document-review-meta strong{color:#f1d68e}:host([data-pi-theme="dark"]) .document-review-actions .review-resolve{color:var(--muted)}
+  .marker-note.missing .marker-note-main{cursor:pointer}.marker-note-actions button[data-confirm-delete="true"],.menu button[data-confirm-clear="true"]{color:#a33b30;background:#fff4f2}:host([data-pi-theme="dark"]) .marker-note-actions button[data-confirm-delete="true"],:host([data-pi-theme="dark"]) .menu button[data-confirm-clear="true"]{color:#ff9aa4;background:rgba(127,29,29,.22)}
   button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,.segment:focus-visible{outline:2px solid #6366f1;outline-offset:2px}
   .recognized-text{overflow-wrap:anywhere}.recognized-text::-webkit-scrollbar,.formula-latex::-webkit-scrollbar,.recognized-editor::-webkit-scrollbar{width:5px;height:5px}.recognized-text::-webkit-scrollbar-track,.formula-latex::-webkit-scrollbar-track,.recognized-editor::-webkit-scrollbar-track{background:transparent}.recognized-text::-webkit-scrollbar-thumb,.formula-latex::-webkit-scrollbar-thumb,.recognized-editor::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(101,115,138,.48)}.recognized-text::-webkit-scrollbar-button,.formula-latex::-webkit-scrollbar-button,.recognized-editor::-webkit-scrollbar-button{width:0;height:0}:host([data-pi-theme="dark"]) .recognized-text::-webkit-scrollbar-thumb,:host([data-pi-theme="dark"]) .formula-latex::-webkit-scrollbar-thumb,:host([data-pi-theme="dark"]) .recognized-editor::-webkit-scrollbar-thumb{background:rgba(169,181,199,.48)}
   @media(max-width:620px){:host{--compact-hit:32px}.sidebar{top:calc(var(--pi-viewport-top) + 8px)!important;right:calc(var(--pi-viewport-right) + 8px)!important;bottom:calc(var(--pi-viewport-bottom) + 8px)!important;left:calc(var(--pi-viewport-left) + 8px)!important;width:auto!important}.sidebar-resizer{display:none}.icon{width:var(--compact-hit);height:var(--compact-hit)}.stop-translation{padding:0 8px;border:1px solid var(--line);border-radius:6px;font-size:10.5px}.recognized-source summary{display:flex;align-items:center;min-height:var(--compact-hit)}.recognized-source summary::after{float:none;margin-left:auto}.segment-actions{opacity:1}}
@@ -643,10 +644,15 @@ export class TranslationOverlay {
       const copy=this.button('复制','', '复制这条标记');
       copy.addEventListener('click',()=>{const sourceText=normalizeLatexForClipboard(summary.originalText).replace(/\r?\n/gu,'\n> ');const targetText=normalizeLatexForClipboard(summary.translatedText);this.copyWithFeedback(copy,`> ${sourceText}\n\n${targetText}`)});
       const remove=this.button('删除','', '删除这条标记');
+      const resetRemove=()=>{delete remove.dataset.confirmDelete;remove.textContent='删除';remove.ariaLabel='删除这条标记'};
       remove.addEventListener('click',()=>{
+        if(remove.dataset.confirmDelete!=='true'){
+          remove.dataset.confirmDelete='true';remove.textContent='确认';remove.ariaLabel='再次点击删除这条标记';return;
+        }
         const task=this.actions.onRemoveSourceMark?.(summary.markerId);if(!task)return;
-        void task.then(()=>{this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index))});
+        void task.then(()=>{this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index))}).catch(()=>{resetRemove();this.flashButtonFeedback(remove,'删除失败',3200)});
       });
+      remove.addEventListener('blur',()=>{if(remove.dataset.confirmDelete==='true')resetRemove()});
       actions.append(copy,remove);item.append(main,actions);list.append(item);
     }
     surface.append(list);this.showSurface(surface);
@@ -973,7 +979,28 @@ export class TranslationOverlay {
     if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation)menu.append(this.menuButton('让模型调整…',()=>this.openModelAdjustment(result)));const repeatLabel=result.sourceKind==='image-region'?'重新识别此区域':'重新翻译';menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton('采用当前版本',()=>this.adoptTranslationVersion(result)))}
     const markerCount=this.actions.getSourceMarkSummaries?.().length??0;if(markerCount&&this.actions.canPersistSourceMarks?.())menu.append(this.menuButton(`查看本文标记（${markerCount}）`,()=>this.openMarkerNavigator()));
     if(this.actions.hasAnySourceMarks?.()&&this.actions.onCopyMarkedNotes){menu.append(this.menuButton('复制标记笔记',()=>{void this.actions.onCopyMarkedNotes?.().then((count)=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,`已复制 ${count} 条标记`)}).catch(()=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,'复制失败',3200)})}));const exportButton=menu.lastElementChild;if(exportButton instanceof HTMLElement)exportButton.dataset.markExport='true'}
-    if(this.actions.canPersistSourceMarks?.()&&this.actions.onSetSourceMarkPersistence){const enabled=Boolean(this.actions.isSourceMarkPersistenceEnabled?.());const markCurrent=!enabled&&Boolean(this.actions.canMarkSource?.(result))&&!Boolean(this.actions.isSourceMarked?.(result));menu.append(this.menuButton(enabled?'停止保存本文标记':markCurrent?'标记当前译句并保存':'保存本文标记',()=>{if(markCurrent)this.actions.onToggleSourceMark?.(result);void this.actions.onSetSourceMarkPersistence?.(!enabled).then(()=>this.renderResult(result))}));if((this.actions.hasAnySourceMarks?.()||this.actions.hasStoredSourceMarks?.())&&this.actions.onClearSourceMarks)menu.append(this.menuButton('清除本文标记',()=>{void this.actions.onClearSourceMarks?.().then(()=>this.renderResult(result))}))}
+    if(this.actions.canPersistSourceMarks?.()&&this.actions.onSetSourceMarkPersistence){
+      const enabled=Boolean(this.actions.isSourceMarkPersistenceEnabled?.());
+      const markCurrent=!enabled&&Boolean(this.actions.canMarkSource?.(result))&&!Boolean(this.actions.isSourceMarked?.(result));
+      menu.append(this.menuButton(enabled?'停止保存本文标记':markCurrent?'标记当前译句并保存':'保存本文标记',()=>{if(markCurrent)this.actions.onToggleSourceMark?.(result);void this.actions.onSetSourceMarkPersistence?.(!enabled).then(()=>this.renderResult(result))}));
+      if((this.actions.hasAnySourceMarks?.()||this.actions.hasStoredSourceMarks?.())&&this.actions.onClearSourceMarks){
+        const clearMarks=this.menuButton('清除本文标记',()=>{
+          if(clearMarks.dataset.confirmClear!=='true'){
+            clearMarks.dataset.confirmClear='true';clearMarks.textContent='再次点击清除全部';clearMarks.ariaLabel='再次点击清除全部本文标记';return;
+          }
+          clearMarks.disabled=true;
+          void this.actions.onClearSourceMarks!().then(()=>{
+            this.renderResult(result);
+            queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus({preventScroll:true}));
+          }).catch(()=>{
+            clearMarks.disabled=false;delete clearMarks.dataset.confirmClear;clearMarks.textContent='清除本文标记';clearMarks.ariaLabel='清除本文标记';
+            this.flashButtonFeedback(clearMarks,'清除失败',3200);
+          });
+        });
+        clearMarks.addEventListener('blur',()=>{if(clearMarks.dataset.confirmClear==='true'&&!clearMarks.disabled){delete clearMarks.dataset.confirmClear;clearMarks.textContent='清除本文标记';clearMarks.ariaLabel='清除本文标记'}});
+        menu.append(clearMarks);
+      }
+    }
     const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const [value,label] of LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
     language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
     if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface())));const settings=this.menuButton('完整设置',()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);details.append(summary,menu);details.addEventListener('toggle',()=>{const surface=details.closest<HTMLElement>('.surface');surface?.classList.toggle('menu-open',details.open);if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
