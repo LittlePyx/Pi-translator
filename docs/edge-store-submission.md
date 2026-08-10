@@ -1,12 +1,12 @@
 # Pi Translator：Microsoft Edge Add-ons 提交材料
 
-> 适用版本：0.9.0
+> 适用版本：0.11.0
 >
-> 更新日期：2026-08-06
+> 更新日期：2026-08-10
 
 ## 1. 上传文件
 
-- 扩展包：`.output/tex-selection-translator-0.9.0-edge.zip`
+- 扩展包：`.output/tex-selection-translator-0.11.0-edge.zip`
 - 商店 Logo：`store-assets/logo-300.png`
 - 小型宣传图：`store-assets/small-promo-440x280.png`
 - 大型宣传图：`store-assets/large-promo-1400x560.png`
@@ -83,7 +83,7 @@ All executable JavaScript, PDF.js, KaTeX, workers, and other required resources 
 3. 不要把 Key 写进源码、文档、截图、GitHub、ZIP 或商店描述。
 4. 保证接口至少在预计审核期内可用；审核完成后立即撤销。
 
-可直接使用 `docs/edge-certification-notes-v0.9.0.txt` 中不超过 2,000 字符的英文审核说明，并只在 Partner Center 内替换 API Key、模型和到期日期占位符。不要把填写过真实 Key 的副本保存到项目目录。
+可直接使用 `docs/edge-certification-notes-v0.11.0.txt` 中不超过 2,000 字符的英文审核说明，并只在 Partner Center 内替换 API Key、模型和到期日期占位符。不要把填写过真实 Key 的副本保存到项目目录。
 
 下面保留较完整的说明版本，供需要补充审核信息时参考：
 

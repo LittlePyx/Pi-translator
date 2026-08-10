@@ -1,6 +1,6 @@
 # Pi Translator 隐私政策
 
-更新日期：2026 年 8 月 7 日
+更新日期：2026 年 8 月 10 日
 
 Pi Translator 是由 P&I Lab 开发的 Microsoft Edge 扩展。本政策说明 Pi Translator 如何处理用户数据。
 
