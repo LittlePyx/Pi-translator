@@ -80,6 +80,7 @@ const correct = element<HTMLButtonElement>('correct');
 const correctionUndo = element<HTMLElement>('correction-undo');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
 const status = element<HTMLElement>('status');
+const sessionActions = element<HTMLElement>('session-actions');
 const openPiReader = element<HTMLButtonElement>('open-pi-reader');
 const readerHintText = element<HTMLElement>('reader-hint-text');
 const openSettings = element<HTMLButtonElement>('open-settings');
@@ -378,11 +379,19 @@ function providerErrorContext(session: PdfSidePanelSession): string | undefined 
   return `本次使用：${role}「${context.profileName}」 · ${context.model}`;
 }
 
+function syncSessionActions(): void {
+  const hasAction = !copy.hidden || !correct.hidden || !correctionUndo.hidden;
+  sessionActions.hidden = !hasAction && !status.textContent;
+}
+
 function setStatus(message: string, timeoutMs = 2_200): void {
   status.textContent = message;
+  syncSessionActions();
   if (!message || timeoutMs <= 0) return;
   window.setTimeout(() => {
-    if (status.textContent === message) status.textContent = '';
+    if (status.textContent !== message) return;
+    status.textContent = '';
+    syncSessionActions();
   }, timeoutMs);
 }
 
@@ -548,6 +557,8 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     errorMessage.textContent = '';
     correct.hidden = true;
     correctionUndo.hidden = true;
+    copy.hidden = true;
+    sessionActions.hidden = true;
     sourceToggle.hidden = true;
     sourceText.classList.remove('expanded');
     return;
@@ -602,12 +613,14 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   errorSettings.textContent = '检查设置';
   errorSettings.classList.remove('primary');
   errorSettings.classList.add('secondary');
+  copy.hidden = !copyableText;
   copy.disabled = !copyableText;
   copy.textContent = copyActionLabel(session);
   correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
   correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
   undoCorrection.disabled = correctionUndo.hidden;
+  syncSessionActions();
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle(
     'error',
@@ -925,9 +938,11 @@ function openCorrectionEditor(): void {
   panel.append(parts, note, scopeLabel, termDisclosure, actions);
   translationText.replaceChildren(panel);
   formulaView.hidden = true;
+  copy.hidden = true;
   copy.disabled = true;
   correct.hidden = true;
   correctionUndo.hidden = true;
+  syncSessionActions();
 
   cancel.addEventListener('click', () => {
     if (!isSamePdfSidePanelSession(currentSession, session)) return;

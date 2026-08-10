@@ -3881,6 +3881,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
   await expect(sidePanel.locator('#translation-state')).toContainText('正在请求模型');
   await expect(sidePanel.locator('#translation-text')).toBeEmpty();
+  await expect(sidePanel.locator('#session-actions')).toBeHidden();
   const streamingSession = {
     ...baseSession,
     partialText: '流式译文应当',
@@ -3936,6 +3937,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#error-message')).toContainText('响应超时');
   await expect(sidePanel.locator('#retry')).toBeVisible();
+  await expect(sidePanel.locator('#session-actions')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toHaveText('复制部分译文');
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   expect(await sidePanel.locator('#copy').evaluate(
@@ -4034,6 +4036,10 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
             '**命题 2.8**',
             '\\[Q^{\\Pi^*}=\\operatorname{argmin}P\\in P(V,\\Omega) \\left\\{KL(P\\Vert Q):=E_P\\left[\\log \\frac{dP}{dQ}(Z_\\tau)\\right]\\right\\},\\quad \\mathrm{s.t.}\\ P_\\Omega=\\Pi^*,\\tag{12}\\]',
             '\\[KL(P\\Vert Q^{\\Pi^*})=KL(P\\Vert Q)-E_P[\\log\\pi^*(Z_\\tau)],\\tag{13}\\]',
+            ...Array.from(
+              { length: 18 },
+              (_, index) => `补充说明 ${index + 1}：长译文阅读时，常用操作应始终保持可达。`,
+            ),
           ].join('\\n'),
           warnings: [],
           latencyMs: 850,
@@ -4090,6 +4096,28 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     optimizerLayout!.tagLeftAfterScroll - optimizerLayout!.tagLeftBeforeScroll,
   )).toBeLessThan(1);
   expect(optimizerLayout!.tagRight).toBeLessThanOrEqual(optimizerLayout!.viewportWidth + 1);
+  await sidePanel.evaluate(() => window.scrollTo(0, 0));
+  const stickyActionLayout = await sidePanel.locator('#session-actions').evaluate((footer) => {
+    const rect = footer.getBoundingClientRect();
+    return {
+      position: getComputedStyle(footer).position,
+      bottom: rect.bottom,
+      viewportHeight: document.documentElement.clientHeight,
+      pageScrollHeight: document.documentElement.scrollHeight,
+    };
+  });
+  expect(stickyActionLayout.position).toBe('sticky');
+  expect(stickyActionLayout.pageScrollHeight).toBeGreaterThan(stickyActionLayout.viewportHeight + 1);
+  expect(stickyActionLayout.bottom).toBeLessThanOrEqual(stickyActionLayout.viewportHeight + 1);
+  expect(stickyActionLayout.bottom).toBeGreaterThan(stickyActionLayout.viewportHeight - 2);
+  await sidePanel.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+  const actionEndLayout = await sidePanel.evaluate(() => ({
+    translationBottom: document.querySelector('#translation-text')?.getBoundingClientRect().bottom,
+    footerTop: document.querySelector('#session-actions')?.getBoundingClientRect().top,
+  }));
+  expect(actionEndLayout.translationBottom).toBeDefined();
+  expect(actionEndLayout.footerTop).toBeDefined();
+  expect(actionEndLayout.translationBottom!).toBeLessThanOrEqual(actionEndLayout.footerTop! + 1);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   const completedActionStyles = await sidePanel.locator('footer').evaluate((footer) => {
     const copyAction = footer.querySelector<HTMLElement>('#copy');
@@ -4141,6 +4169,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await sidePanel.locator('#correct').click();
   const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
   await expect(nativeCorrection).toBeVisible();
+  await expect(sidePanel.locator('#session-actions')).toBeHidden();
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
     .toContainText('Q^{\\Pi^*}');
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
@@ -4160,6 +4189,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(nativeTermScope).toHaveValue('global');
   await nativeCorrection.press('Escape');
   await expect(sidePanel.locator('#correct')).toBeFocused();
+  await expect(sidePanel.locator('#session-actions')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toHaveCount(3);
   if (process.env.PI_VISUAL_QA) {
