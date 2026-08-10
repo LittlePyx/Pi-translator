@@ -1574,8 +1574,8 @@ button:hover { background: #f1f3f6; }
   border-radius: 0;
   font-size: 11px;
 }
-.vision-setup > p {
-  margin: 8px 0 0;
+.vision-setup-guide {
+  margin: 0 0 11px;
   color: #69768a;
   font-size: 11px;
   line-height: 1.55;
@@ -1628,7 +1628,7 @@ button:hover { background: #f1f3f6; }
 .connection-advanced summary small { font-size: 10px; }
 .connection-advanced-content { display: grid; gap: 14px; padding: 2px 2px 16px; border-top: 1px solid #edf0f5; }
 .connection-advanced-content > .grid { margin-top: 12px; }
-.connection-advanced-content > .text-button { justify-self: start; }
+.connection-advanced-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 
 @media (max-width: 640px) {
   .settings-recovery-banner { padding: 11px 12px 10px; }
@@ -1647,7 +1647,7 @@ button:hover { background: #f1f3f6; }
   .onboarding-step .onboarding-vision-note { border-color: #2d3747; }
   .connection-step-number { color: #a5b4fc; }
   .vision-setup-heading strong { color: #e5e7eb; }
-  .vision-setup > p,
+  .vision-setup-guide,
   .vision-setup-status,
   .vision-setup-details > summary { color: #9ca9bc; }
   .connect-model-button { color: #c7d2fe; border-color: #465268; background: #171f2c; }

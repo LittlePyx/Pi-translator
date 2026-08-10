@@ -151,6 +151,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     await textStatus.click();
     focusedOptions = await optionsPromise;
     await focusedOptions.waitForLoadState('domcontentloaded');
+    await expect(focusedOptions.locator('#connection-advanced')).toHaveAttribute('open', '');
     await expect(focusedOptions.locator('#test-connection')).toBeFocused();
   } finally {
     if (focusedOptions && !focusedOptions.isClosed()) await focusedOptions.close();

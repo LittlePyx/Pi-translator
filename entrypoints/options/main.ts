@@ -855,7 +855,9 @@ async function applyRequestedSettingsFocus():Promise<void>{
       : focus==='api-permission'
         ? testButton
         : apiKeyInput;
-    showSettingsSection('connection');queueMicrotask(()=>{target.scrollIntoView({block:'center'});target.focus()});
+    showSettingsSection('connection');
+    if(focus==='api-permission')connectionAdvanced.open=true;
+    queueMicrotask(()=>{target.scrollIntoView({block:'center'});target.focus()});
   }
 }
 void load()

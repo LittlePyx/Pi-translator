@@ -591,6 +591,7 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     await options.goto(
       `chrome-extension://${extensionId}/options.html?focus=api-permission#connection`,
     );
+    await expect(options.locator('#connection-advanced')).toHaveAttribute('open', '');
     await expect(options.locator('#test-connection')).toBeFocused();
     await options.goto(`chrome-extension://${extensionId}/options.html?focus=vision#connection`);
     await expect(options.locator('#vision-setup-details')).toHaveAttribute('open', '');
@@ -4358,6 +4359,11 @@ test('keeps advanced options collapsed until requested', async () => {
   await expect(options.locator('.connection-step').nth(0)).toContainText('服务商');
   await expect(options.locator('.connection-step').nth(1)).toContainText('API Key');
   await expect(options.locator('.connection-step').nth(2)).toContainText('连接并保存');
+  await expect(options.locator('#connection-advanced #test-connection')).toHaveCount(1);
+  await expect(options.locator('#vision-setup-guide')).not.toBeVisible();
+  await options.locator('#vision-setup-details > summary').click();
+  await expect(options.locator('#vision-setup-guide')).toBeVisible();
+  await options.locator('#vision-setup-details > summary').click();
   const providerSelect = options.locator('#api-preset');
   await expect(providerSelect.locator('option').first()).toHaveAttribute('value', 'deepseek');
   await expect(providerSelect.locator('option').last()).toHaveAttribute('value', 'custom');

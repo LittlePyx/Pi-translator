@@ -121,7 +121,7 @@
               <div><span class="section-kicker">连接</span><h2>文字翻译 API（必需）</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>
             </div>
-            <p class="section-intro">普通网页、Overleaf 和可直接选中文字的 PDF 只需完成这里：选择服务商，粘贴 Key，再连接保存。扩展不会根据 Key 猜测或尝试其他服务商。</p>
+            <p class="section-intro">选择服务商，粘贴 Key，再连接保存。Key 只会发送到当前选择的接口。</p>
             <div class="profile-bar">
               <label><span>API 配置</span><select id="api-profile"></select></label>
               <button id="add-profile" class="small-button" type="button">新增</button>
@@ -174,11 +174,11 @@
                 </div>
                 <button id="setup-qwen" class="text-button vision-setup-button" type="button">配置 Qwen</button>
               </div>
-              <p>网页、Overleaf 和可直接选中文字的 PDF 不需要 Qwen；只有框选扫描件或模糊公式时才需要视觉模型，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
               <div id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
               <details id="vision-setup-details" class="vision-setup-details">
                 <summary><span>手动选择或检查视觉配置</span></summary>
                 <div class="vision-setup-content">
+                  <p id="vision-setup-guide" class="vision-setup-guide">网页、Overleaf 和文字型 PDF 不需要视觉模型；框选扫描件或模糊公式时才需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
                   <div class="grid">
                     <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。</small></label>
                     <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>
@@ -190,17 +190,17 @@
                 </div>
               </details>
             </section>
-            <div class="section-actions">
-              <button id="test-connection" type="button">仅验证当前模型</button>
-            </div>
             <details id="connection-advanced" class="connection-advanced">
-              <summary><span><strong>高级接口设置</strong><small>自定义地址、配置名称与兼容性诊断</small></span></summary>
+              <summary><span><strong>高级与诊断</strong><small>自定义地址、仅验证与兼容性检查</small></span></summary>
               <div class="connection-advanced-content">
                 <div class="grid">
                   <label><span>配置名称</span><input id="profile-name" type="text" maxlength="30" placeholder="例如：日常翻译" /></label>
                   <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" /><small>调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
                 </div>
-                <button id="diagnose-api" class="text-button" type="button">运行兼容性诊断</button>
+                <div class="connection-advanced-actions">
+                  <button id="test-connection" class="text-button" type="button">仅验证当前模型</button>
+                  <button id="diagnose-api" class="text-button" type="button">运行兼容性诊断</button>
+                </div>
                 <section id="diagnostic-report" class="diagnostic-report" hidden aria-live="polite"></section>
               </div>
             </details>
@@ -208,7 +208,6 @@
 
           <section id="settings-translation" class="card settings-section" role="tabpanel" data-settings-section="translation" hidden>
             <div class="section-heading"><div><span class="section-kicker">翻译</span><h2>语言与内容偏好</h2></div></div>
-            <p class="section-intro">这些设置会应用到浮动卡片和连续翻译侧栏。</p>
             <div class="grid">
               <label><span>源语言</span><select id="source-language"><option value="auto">自动识别</option><option value="en">English</option><option value="zh-CN">简体中文</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
               <label><span>目标语言</span><select id="target-language"><option value="zh-CN">简体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
@@ -226,7 +225,6 @@
 
           <section id="settings-results" class="card settings-section" role="tabpanel" data-settings-section="results" hidden>
             <div class="section-heading"><div><span class="section-kicker">体验</span><h2>结果与连续侧栏</h2></div></div>
-            <p class="section-intro">常用选项保持可见，缓存、上下文和侧栏细节按需展开。</p>
             <div class="preference-panel">
               <label class="check-row preference-row"><input id="remember-history" type="checkbox" /><span><strong>记住最近翻译</strong><small>仅限当前标签页和浏览器会话。</small></span></label>
               <label class="check-row preference-row"><input id="alignment-default" type="checkbox" /><span><strong>默认打开逐句对照</strong><small>仍可在翻译卡片中即时切换。</small></span></label>
@@ -263,7 +261,6 @@
 
           <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>
             <div class="section-heading"><div><span class="section-kicker">维护</span><h2>支持与配置迁移</h2></div></div>
-            <p class="section-intro">这些低频工具不会影响日常翻译；需要时再展开使用。</p>
             <details class="support-disclosure">
               <summary><span><strong>配置迁移与故障排查</strong><small>导入、导出、诊断报告与首次向导</small></span></summary>
               <div class="support-content">
