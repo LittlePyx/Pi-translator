@@ -5864,6 +5864,112 @@ test('pins continuous translation to a collapsible sidebar', async () => {
   await clearBrowserSelection();
 });
 
+test('keeps narrow sidebar history navigation bounded and recoverable', async () => {
+  const historyPage = await context.newPage();
+  try {
+    await historyPage.setViewportSize({ width: 360, height: 700 });
+    await historyPage.route(OVERLEAF_FIXTURE_URL, async (route) => {
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html><html><body>
+          <p id="history-one">A consistent academic translation improves the readability of research papers.</p>
+          <p id="history-two">First important sentence. Second supporting sentence.</p>
+          <p id="history-three">The adaptive sensing policy is stable in this document.</p>
+        </body></html>`,
+      });
+    });
+    await historyPage.goto(OVERLEAF_FIXTURE_URL);
+    const selectText = async (selector: string): Promise<void> => {
+      await historyPage.locator(selector).evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+    };
+    const overlay = historyPage.locator('#tex-selection-translator-root');
+    await selectText('#history-one');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await selectText('#history-two');
+    await expect(overlay.locator('.body')).toContainText('第一句重要译文');
+    await selectText('#history-three');
+    await expect(overlay.locator('.body')).toContainText('一致的技术术语与推理边界');
+
+    const counter = overlay.locator('.history-counter');
+    const older = overlay.getByTitle('上一条翻译（Alt+↑）');
+    const newer = overlay.getByTitle('下一条翻译（Alt+↓）');
+    await expect(counter).toHaveText('1/3');
+    await expect(counter).toHaveAttribute('aria-label', '第 1 条，共 3 条');
+    await expect(older).toBeEnabled();
+    await expect(newer).toBeDisabled();
+    const navigationLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const tools = surface.querySelector<HTMLElement>('.header-tools')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      const toolsBounds = tools.getBoundingClientRect();
+      const controls = [...tools.querySelectorAll<HTMLElement>('button')];
+      return {
+        surfaceLeft: surfaceBounds.left,
+        surfaceRight: surfaceBounds.right,
+        scrollWidth: surface.scrollWidth,
+        clientWidth: surface.clientWidth,
+        toolsLeft: toolsBounds.left,
+        toolsRight: toolsBounds.right,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+      };
+    });
+    expect(navigationLayout.surfaceLeft).toBeGreaterThanOrEqual(8);
+    expect(navigationLayout.surfaceRight).toBeLessThanOrEqual(352);
+    expect(navigationLayout.scrollWidth).toBeLessThanOrEqual(navigationLayout.clientWidth + 1);
+    expect(navigationLayout.toolsLeft).toBeGreaterThanOrEqual(navigationLayout.surfaceLeft);
+    expect(navigationLayout.toolsRight).toBeLessThanOrEqual(navigationLayout.surfaceRight);
+    expect(navigationLayout.controlHeights.every((height) => height >= 32)).toBe(true);
+
+    await overlay.getByTitle('收起侧栏').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    await historyPage.keyboard.press('Alt+ArrowUp');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    await overlay.getByTitle('展开 Pi Translator 连续翻译侧栏').click();
+    await expect(counter).toHaveText('1/3');
+    await expect(overlay.locator('.body')).toContainText('一致的技术术语与推理边界');
+
+    await overlay.getByTitle('查看本文术语和最近翻译').click();
+    await expect(overlay.locator('.document-meta')).toContainText('仅保存在本机');
+    await historyPage.keyboard.press('Alt+ArrowUp');
+    await expect(overlay.locator('.document-meta')).toContainText('仅保存在本机');
+    await overlay.getByTitle('返回翻译结果').click();
+    await expect(counter).toHaveText('1/3');
+
+    await older.focus();
+    await older.click();
+    await expect(counter).toHaveText('2/3');
+    await expect(overlay.locator('.body')).toContainText('第一句重要译文');
+    await expect(older).toBeFocused();
+    await older.click();
+    await expect(counter).toHaveText('3/3');
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await expect(older).toBeDisabled();
+    await expect(newer).toBeFocused();
+    await newer.click();
+    await expect(counter).toHaveText('2/3');
+    await expect(newer).toBeFocused();
+    await newer.click();
+    await expect(counter).toHaveText('1/3');
+    await expect(newer).toBeDisabled();
+    await expect(older).toBeFocused();
+
+    await historyPage.keyboard.press('Alt+ArrowUp');
+    await expect(counter).toHaveText('2/3');
+    await expect(older).toBeFocused();
+  } finally {
+    await historyPage.close();
+  }
+});
+
 test('keeps document terminology behind a compact sidebar drawer', async () => {
   const initialRequests = textRequests.length;
   await page.locator('#term-source').evaluate((element) => {
