@@ -38,7 +38,15 @@
           title="框选图片或扫描文字进行翻译"
           disabled
         >框选翻译</button>
-        <button id="region-queue" class="queue-action" type="button" aria-expanded="false" hidden>
+        <button
+          id="region-queue"
+          class="queue-action"
+          type="button"
+          aria-controls="region-queue-panel"
+          aria-expanded="false"
+          title="查看框选翻译队列"
+          hidden
+        >
           队列 <span id="region-queue-count">0</span>
         </button>
         <section id="region-queue-panel" class="queue-panel" aria-label="框选翻译队列" hidden>

@@ -2908,7 +2908,7 @@ test('keeps a manually opened PDF when an older inherited request finishes later
   }
 });
 
-test('translates a confirmed PDF image region without storing the screenshot', async () => {
+test('translates a confirmed PDF image region without storing the screenshot', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
   await pdfPage.locator('#file-input').setInputFiles({
@@ -2932,6 +2932,29 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await expect(recognizePage).toBeVisible();
   expect(await scanHint.evaluate((element) => getComputedStyle(element).position)).toBe('fixed');
   expect(visionRequests).toHaveLength(requestCount);
+  await pdfPage.setViewportSize({ width: 360, height: 700 });
+  const scanHintLayout = await scanHint.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    const action = element.querySelector<HTMLElement>('.notice-action');
+    return {
+      left: bounds.left,
+      right: bounds.right,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      actionHeight: action?.getBoundingClientRect().height ?? 0,
+    };
+  });
+  expect(scanHintLayout.left).toBeGreaterThanOrEqual(13);
+  expect(scanHintLayout.right).toBeLessThanOrEqual(347);
+  expect(scanHintLayout.scrollWidth).toBe(scanHintLayout.clientWidth);
+  expect(scanHintLayout.actionHeight).toBeGreaterThanOrEqual(28);
+  if (process.env.PI_VISUAL_QA) {
+    await pdfPage.screenshot({ path: testInfo.outputPath('pdf-scan-hint-360-light.png') });
+    await pdfPage.emulateMedia({ colorScheme: 'dark' });
+    await pdfPage.screenshot({ path: testInfo.outputPath('pdf-scan-hint-360-dark.png') });
+    await pdfPage.emulateMedia({ colorScheme: 'light' });
+  }
+  await pdfPage.setViewportSize({ width: 1280, height: 720 });
 
   await recognizePage.click();
   const suggestedRegion = firstPage.locator('.region-selection-box');
@@ -3654,7 +3677,7 @@ test('normalizes optimizer limits when Pi PDF falls back to text translation', a
   await pdfPage.close();
 });
 
-test('shows a compact PDF region queue and lets waiting or active tasks be cancelled', async () => {
+test('shows a compact PDF region queue and lets waiting or active tasks be cancelled', async ({}, testInfo) => {
   const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
   let releaseResponse: (() => void) | undefined;
   const responseGate = new Promise<void>((resolve) => { releaseResponse = resolve; });
@@ -3703,17 +3726,56 @@ test('shows a compact PDF region queue and lets waiting or active tasks be cance
     await drawAndSend(300, 420);
     await expect(pdfPage.locator('#region-queue-count')).toHaveText('2');
 
+    await pdfPage.setViewportSize({ width: 420, height: 700 });
     await queueButton.click();
     const queuePanel = pdfPage.locator('#region-queue-panel');
     await expect(queuePanel).toBeVisible();
+    await expect(pdfPage.locator('#notice')).toBeHidden();
     await expect(queuePanel.locator('.queue-item')).toHaveCount(2);
     await expect(queuePanel.locator('.queue-item').first()).toContainText('翻译中');
     await expect(queuePanel.locator('.queue-item').nth(1)).toContainText('等待中');
+    await expect(pdfPage.locator('.brand img')).toBeVisible();
+    await expect(pdfPage.locator('#recognize-page')).toBeHidden();
+    await expect(queueButton).toHaveAttribute('aria-controls', 'region-queue-panel');
+    expect(await queueButton.evaluate((button) =>
+      getComputedStyle(button, '::before').content)).toBe('"队"');
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-queue-420-light.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'dark' });
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-queue-420-dark.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'light' });
+    }
+
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    const narrowLayout = await pdfPage.locator('#pdf-toolbar').evaluate((toolbar) => {
+      const panel = document.querySelector<HTMLElement>('#region-queue-panel');
+      const brand = document.querySelector<HTMLElement>('.brand img');
+      const cancel = panel?.querySelector<HTMLElement>('.queue-item button');
+      return {
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+        brandWidth: brand?.getBoundingClientRect().width ?? 0,
+        panelLeft: panel?.getBoundingClientRect().left ?? 0,
+        panelRight: panel?.getBoundingClientRect().right ?? Infinity,
+        cancelHeight: cancel?.getBoundingClientRect().height ?? 0,
+      };
+    });
+    expect(narrowLayout.scrollWidth).toBe(narrowLayout.clientWidth);
+    expect(narrowLayout.brandWidth).toBeGreaterThanOrEqual(24);
+    expect(narrowLayout.panelLeft).toBeGreaterThanOrEqual(8);
+    expect(narrowLayout.panelRight).toBeLessThanOrEqual(352);
+    expect(narrowLayout.cancelHeight).toBeGreaterThanOrEqual(30);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-queue-360-light.png') });
+    }
     await queuePanel.locator('.queue-item').nth(1).getByRole('button', { name: '取消' }).click();
     await expect(pdfPage.locator('#region-queue-count')).toHaveText('1');
+    await expect(pdfPage.locator('#notice')).toBeHidden();
     await queuePanel.locator('.queue-item').first().getByRole('button', { name: '取消' }).click();
     releaseResponse?.();
     await expect(queueButton).toBeHidden();
+    await expect(pdfPage.locator('#recognize-page')).toBeVisible();
+    await expect(pdfPage.locator('#notice')).toContainText('正在取消当前框选翻译');
   } finally {
     releaseResponse?.();
     await context.unroute(apiPattern, delayedVisionHandler);

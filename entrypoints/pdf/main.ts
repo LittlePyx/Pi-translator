@@ -356,15 +356,19 @@ function closeRegionQueuePanel(): void {
 
 function cancelRegionTranslation(taskId: string): void {
   const queuedIndex = regionTranslationQueue.findIndex((task) => task.id === taskId);
+  let feedback: { message: string; tone: PdfNoticeTone } | undefined;
   if (queuedIndex >= 0) {
     regionTranslationQueue.splice(queuedIndex, 1);
-    showNotice('已从翻译队列移除。', { transient: true, tone: 'success' });
+    feedback = { message: '已从翻译队列移除。', tone: 'success' };
   } else if (activeRegionTranslation?.id === taskId) {
     activeRegionTranslation.cancelled = true;
     void selectionTranslator.then((controller) => controller.cancelActiveTranslation());
-    showNotice('正在取消当前框选翻译…', { transient: true, tone: 'info' });
+    feedback = { message: '正在取消当前框选翻译…', tone: 'info' };
   }
   updateRegionAction();
+  if (feedback && regionQueuePanel.hidden) {
+    showNotice(feedback.message, { transient: true, tone: feedback.tone });
+  }
 }
 
 function renderRegionQueue(): void {
@@ -2031,6 +2035,7 @@ recognizePage.addEventListener('click', () => {
 });
 regionQueueButton.addEventListener('click', () => {
   const open = regionQueuePanel.hidden;
+  if (open && notice.classList.contains('transient')) showNotice(undefined);
   regionQueuePanel.hidden = !open;
   regionQueueButton.setAttribute('aria-expanded', String(open));
 });

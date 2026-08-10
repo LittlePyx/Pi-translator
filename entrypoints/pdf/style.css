@@ -106,7 +106,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .queue-item span { display: grid; gap: 2px; min-width: 0; }
 .queue-item strong { overflow: hidden; font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .queue-item small { color: var(--muted); font-size: 9px; }
-.toolbar .queue-item button { min-height: 23px; padding: 2px 6px; color: #a33b47; font-size: 9px; }
+.toolbar .queue-item button { min-height: 30px; padding: 4px 8px; color: #a33b47; font-size: 10px; }
 .zoom-controls button { width: 28px; padding-inline: 0; font-size: 15px; }
 .zoom-controls output { width: 42px; color: var(--muted); font-size: 10px; text-align: center; }
 
@@ -191,8 +191,11 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 
 .notice-action {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
   margin-left: 10px;
-  padding: 2px 7px;
+  padding: 3px 8px;
   border: 0;
   border-left: 1px solid currentColor;
   border-radius: 0;
@@ -384,9 +387,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
 @media (max-width: 460px) {
   .brand { gap: 0; }
   .brand > span { display: none; }
+  .region-tools:has(.queue-action:not([hidden])) #recognize-page { display: none; }
+  .toolbar .queue-action { width: 32px; min-height: 30px; padding-inline: 0; font-size: 0; }
+  .toolbar .queue-action::before { content: "队"; font-size: 10px; }
+  .toolbar .queue-action span { margin-left: 2px; font-size: 9px; }
 }
 
 @media (max-width: 400px) {
+  .queue-panel { position: fixed; top: 62px; right: auto; left: 9px; }
   .zoom-controls output { display: none; }
 }
 
@@ -399,6 +407,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .notice[data-tone="error"] { color: #ffb1bd; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .toolbar .region-action[aria-pressed="true"] { color: #a5b4fc; border-color: #6568bf; background: #292d57; }
   .toolbar .region-action[aria-pressed="true"]::before { color: #a5b4fc; }
+  .toolbar .queue-action { color: #a5b4fc; }
+  .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
 }
 
 @media (prefers-reduced-motion: reduce) {
