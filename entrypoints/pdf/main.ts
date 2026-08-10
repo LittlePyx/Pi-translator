@@ -180,6 +180,7 @@ type RegionInteraction =
     kind: 'resize';
     pointerId: number;
     handle: RegionResizeHandle;
+    start: Point;
     initialRegion: RegionRect;
   };
 
@@ -1189,10 +1190,22 @@ function positionRegionConfirmation(selection: ActiveRegionSelection): void {
 }
 
 function renderRegionBox(selection: ActiveRegionSelection): void {
+  const bounds = pageRegionBounds(selection);
+  const handleRadius = 16;
   selection.box.style.left = `${selection.region.left}px`;
   selection.box.style.top = `${selection.region.top}px`;
   selection.box.style.width = `${selection.region.width}px`;
   selection.box.style.height = `${selection.region.height}px`;
+  selection.box.classList.toggle('edge-left', selection.region.left <= handleRadius);
+  selection.box.classList.toggle('edge-top', selection.region.top <= handleRadius);
+  selection.box.classList.toggle(
+    'edge-right',
+    selection.region.right >= bounds.width - handleRadius,
+  );
+  selection.box.classList.toggle(
+    'edge-bottom',
+    selection.region.bottom >= bounds.height - handleRadius,
+  );
   positionRegionConfirmation(selection);
 }
 
@@ -1209,10 +1222,18 @@ function updateRegionFromPointer(selection: ActiveRegionSelection, point: Point)
       bounds,
     );
   } else {
+    const resizePoint = {
+      x: (interaction.handle.includes('w')
+        ? interaction.initialRegion.left
+        : interaction.initialRegion.right) + point.x - interaction.start.x,
+      y: (interaction.handle.includes('n')
+        ? interaction.initialRegion.top
+        : interaction.initialRegion.bottom) + point.y - interaction.start.y,
+    };
     selection.region = resizeRegion(
       interaction.initialRegion,
       interaction.handle,
-      point,
+      resizePoint,
       bounds,
     );
   }
@@ -1664,6 +1685,7 @@ function createRegionConfirmation(
   selection: ActiveRegionSelection,
   noteText = '优先本地提取文字，必要时仅发送此区域',
 ): void {
+  if (notice.classList.contains('transient')) showNotice(undefined);
   selection.confirm?.remove();
   const confirmation = document.createElement('div');
   confirmation.className = 'region-confirm';
@@ -1941,7 +1963,13 @@ viewer.addEventListener('pointerdown', (event) => {
     const handle = handleElement?.dataset.regionHandle as RegionResizeHandle | undefined;
     const point = pointWithinPage(event, existing.pageElement);
     existing.interaction = handle
-      ? { kind: 'resize', pointerId: event.pointerId, handle, initialRegion: existing.region }
+      ? {
+        kind: 'resize',
+        pointerId: event.pointerId,
+        handle,
+        start: point,
+        initialRegion: existing.region,
+      }
       : {
         kind: 'move',
         pointerId: event.pointerId,

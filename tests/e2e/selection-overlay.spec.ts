@@ -3839,8 +3839,9 @@ test('clears an unsent PDF image selection on Escape, zoom, and document replace
   await pdfPage.close();
 });
 
-test('creates and adjusts a PDF image region with the keyboard and touch-safe mode', async () => {
+test('creates and adjusts a PDF image region with the keyboard and touch-safe mode', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
+  await pdfPage.setViewportSize({ width: 360, height: 700 });
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'keyboard-region.pdf',
@@ -3849,12 +3850,47 @@ test('creates and adjusts a PDF image region with the keyboard and touch-safe mo
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  await pdfPage.locator('#fit-width').click();
+  await expect.poll(() => firstPage.evaluate((element) =>
+    element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
   const regionButton = pdfPage.locator('#region-translate');
   await regionButton.focus();
   await regionButton.press('Enter');
   const selection = firstPage.locator('.region-selection-box');
   await expect(selection).toBeFocused();
-  await expect(firstPage.locator('.region-confirm')).toBeVisible();
+  const confirmation = firstPage.locator('.region-confirm');
+  await expect(confirmation).toBeVisible();
+  await expect(pdfPage.locator('#notice')).toBeHidden();
+  const controls = await firstPage.evaluate((element) => {
+    const pageBounds = element.getBoundingClientRect();
+    const confirmationElement = element.querySelector<HTMLElement>('.region-confirm');
+    const buttons = [...confirmationElement?.querySelectorAll<HTMLElement>('button') ?? []];
+    const handles = [...element.querySelectorAll<HTMLElement>('.region-resize-handle')];
+    return {
+      page: pageBounds.toJSON(),
+      confirmation: confirmationElement?.getBoundingClientRect().toJSON(),
+      buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      handles: handles.map((handle) => handle.getBoundingClientRect().toJSON()),
+    };
+  });
+  expect(controls.confirmation).toBeDefined();
+  if (controls.confirmation) {
+    expect(controls.confirmation.left).toBeGreaterThanOrEqual(controls.page.left);
+    expect(controls.confirmation.right).toBeLessThanOrEqual(controls.page.right);
+  }
+  expect(controls.buttonHeights.every((height) => height >= 30)).toBe(true);
+  expect(controls.handles.every((handle) => (
+    handle.left >= controls.page.left &&
+    handle.top >= controls.page.top &&
+    handle.right <= controls.page.right &&
+    handle.bottom <= controls.page.bottom
+  ))).toBe(true);
+  if (process.env.PI_VISUAL_QA) {
+    await pdfPage.screenshot({ path: testInfo.outputPath('pdf-region-controls-360-light.png') });
+    await pdfPage.emulateMedia({ colorScheme: 'dark' });
+    await pdfPage.screenshot({ path: testInfo.outputPath('pdf-region-controls-360-dark.png') });
+    await pdfPage.emulateMedia({ colorScheme: 'light' });
+  }
   expect(await firstPage.evaluate((element) => getComputedStyle(element).touchAction)).toBe('none');
   const before = await selection.boundingBox();
   expect(before).not.toBeNull();
@@ -3870,6 +3906,28 @@ test('creates and adjusts a PDF image region with the keyboard and touch-safe mo
   expect(resized).not.toBeNull();
   if (!resized) return;
   expect(resized.width).toBeCloseTo(moved.width + 6, 0);
+  const northWestHandle = selection.locator('.region-resize-handle.nw');
+  const northWestBounds = await northWestHandle.boundingBox();
+  expect(northWestBounds).not.toBeNull();
+  if (!northWestBounds) return;
+  await pdfPage.mouse.move(
+    northWestBounds.x + northWestBounds.width / 2,
+    northWestBounds.y + northWestBounds.height / 2,
+  );
+  await pdfPage.mouse.down();
+  await pdfPage.mouse.move(
+    northWestBounds.x + northWestBounds.width / 2 + 8,
+    northWestBounds.y + northWestBounds.height / 2 + 6,
+    { steps: 3 },
+  );
+  await pdfPage.mouse.up();
+  const pointerResized = await selection.boundingBox();
+  expect(pointerResized).not.toBeNull();
+  if (!pointerResized) return;
+  expect(pointerResized.x).toBeCloseTo(resized.x + 8, 0);
+  expect(pointerResized.y).toBeCloseTo(resized.y + 6, 0);
+  expect(pointerResized.width).toBeCloseTo(resized.width - 8, 0);
+  expect(pointerResized.height).toBeCloseTo(resized.height - 6, 0);
   await selection.press('Tab');
   await expect(firstPage.locator('.region-confirm .confirm')).toBeFocused();
   await pdfPage.keyboard.press('Escape');

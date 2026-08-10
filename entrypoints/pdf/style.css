@@ -265,8 +265,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .region-resize-handle {
   position: absolute;
   display: grid;
-  width: 28px;
-  height: 28px;
+  width: 32px;
+  height: 32px;
   place-items: center;
   border: 0;
   background: transparent;
@@ -281,10 +281,14 @@ button { color: inherit; font: inherit; cursor: pointer; }
   box-shadow: 0 1px 4px rgba(20, 30, 50, .28);
   content: "";
 }
-.region-resize-handle.nw { top: -14px; left: -14px; cursor: nwse-resize; }
-.region-resize-handle.ne { top: -14px; right: -14px; cursor: nesw-resize; }
-.region-resize-handle.se { right: -14px; bottom: -14px; cursor: nwse-resize; }
-.region-resize-handle.sw { bottom: -14px; left: -14px; cursor: nesw-resize; }
+.region-resize-handle.nw { top: -16px; left: -16px; cursor: nwse-resize; }
+.region-resize-handle.ne { top: -16px; right: -16px; cursor: nesw-resize; }
+.region-resize-handle.se { right: -16px; bottom: -16px; cursor: nwse-resize; }
+.region-resize-handle.sw { bottom: -16px; left: -16px; cursor: nesw-resize; }
+.region-selection-box.edge-left :is(.nw, .sw) { left: 0; }
+.region-selection-box.edge-top :is(.nw, .ne) { top: 0; }
+.region-selection-box.edge-right :is(.ne, .se) { right: 0; }
+.region-selection-box.edge-bottom :is(.se, .sw) { bottom: 0; }
 .region-confirm {
   position: absolute;
   z-index: 4;
@@ -307,7 +311,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .region-confirm-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 4px; }
 .region-confirm button {
-  min-height: 26px;
+  min-height: 30px;
   padding: 4px 9px;
   border: 0;
   border-radius: 4px;
@@ -409,6 +413,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .region-action[aria-pressed="true"]::before { color: #a5b4fc; }
   .toolbar .queue-action { color: #a5b4fc; }
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
+  .region-confirm button { color: #cbd5e1; }
 }
 
 @media (prefers-reduced-motion: reduce) {
