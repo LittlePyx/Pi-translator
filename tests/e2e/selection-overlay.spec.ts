@@ -4225,6 +4225,115 @@ test('keeps narrow PDF document memory readable with long terms', async ({}, tes
   }
 });
 
+test('keeps narrow OCR review and source editing readable', async ({}, testInfo) => {
+  const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const longToken = 'ExtremelyLongRecognizedAcademicIdentifierWithoutNaturalBreakpointsForNarrowLayout';
+  const longFormula = String.raw`\operatorname{ELBO}(\theta,\phi)=\mathbb{E}_{q_\phi(z\mid x)}[\log p_\theta(x,z)-\log q_\phi(z\mid x)]+\lambda\sum_{i=1}^{n}\lVert x_i-\hat{x}_i\rVert_2^2`;
+  const pdfPage = await context.newPage();
+  const longVisionHandler = async (route: Route): Promise<void> => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          translation: `该识别结果包含长标识符 ${longToken} 与公式 \\[${longFormula}\\]。`,
+          recognizedText: `${longToken} appears with \\[${longFormula}\\] in the scanned source.`,
+          formulaLatex: [longFormula],
+          uncertainSpans: ['The trailing identifier is not fully legible.'],
+        }) } }],
+      }),
+    }).catch(() => undefined);
+  };
+  await context.route(apiPattern, longVisionHandler);
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'narrow-ocr-review.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#fit-width').click();
+    await pdfPage.locator('#region-translate').click();
+    const pageBounds = await firstPage.boundingBox();
+    expect(pageBounds).not.toBeNull();
+    if (!pageBounds) return;
+    await pdfPage.mouse.move(pageBounds.x + 55, pageBounds.y + 105);
+    await pdfPage.mouse.down();
+    await pdfPage.mouse.move(pageBounds.x + 210, pageBounds.y + 225, { steps: 5 });
+    await pdfPage.mouse.up();
+    await expect(firstPage.locator('.region-confirm')).toBeVisible();
+    await firstPage.locator('.region-confirm .confirm').click();
+
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay.locator('.body .pi-math-display')).toBeVisible();
+    await expect(overlay.locator('.uncertain-note')).toContainText('有 1 处内容无法完全确认');
+    const summary = overlay.locator('.recognized-source summary');
+    await summary.click();
+    const sourceLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const summaryElement = surface.querySelector<HTMLElement>('.recognized-source summary');
+      const source = surface.querySelector<HTMLElement>('.recognized-text');
+      const formula = surface.querySelector<HTMLElement>('.formula-latex');
+      const actions = [...surface.querySelectorAll<HTMLElement>('.recognized-actions button')];
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        summaryHeight: summaryElement?.getBoundingClientRect().height ?? 0,
+        sourceClientWidth: source?.clientWidth ?? 0,
+        sourceScrollWidth: source?.scrollWidth ?? 0,
+        formulaClientWidth: formula?.clientWidth ?? 0,
+        formulaScrollWidth: formula?.scrollWidth ?? 0,
+        actionHeights: actions.map((action) => action.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-ocr-review-360-light.png') });
+    }
+
+    await overlay.getByRole('button', { name: '编辑后重译' }).click();
+    const editor = overlay.getByRole('textbox', { name: '编辑识别原文' });
+    await expect(editor).toBeFocused();
+    await editor.fill(`Corrected ${longToken} with \\[${longFormula}\\].`);
+    const editorLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const editorElement = surface.querySelector<HTMLElement>('.recognized-editor');
+      const actions = [...surface.querySelectorAll<HTMLElement>('.recognized-actions button')];
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        editorRight: editorElement?.getBoundingClientRect().right ?? Infinity,
+        surfaceRight: surface.getBoundingClientRect().right,
+        actionHeights: actions.map((action) => action.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-ocr-editor-360-light.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-ocr-editor-360-dark.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(sourceLayout.scrollWidth).toBeLessThanOrEqual(sourceLayout.clientWidth + 1);
+    expect(sourceLayout.summaryHeight).toBeGreaterThanOrEqual(32);
+    expect(sourceLayout.sourceScrollWidth).toBeLessThanOrEqual(sourceLayout.sourceClientWidth + 1);
+    expect(sourceLayout.formulaScrollWidth).toBeLessThanOrEqual(sourceLayout.formulaClientWidth + 1);
+    expect(sourceLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    expect(editorLayout.scrollWidth).toBeLessThanOrEqual(editorLayout.clientWidth + 1);
+    expect(editorLayout.editorRight).toBeLessThanOrEqual(editorLayout.surfaceRight);
+    expect(editorLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    await expect(overlay.locator('.pin-action')).toHaveCount(0);
+
+    await editor.press('Escape');
+    await expect(overlay.getByRole('textbox', { name: '编辑识别原文' })).toHaveCount(0);
+    await expect(summary).toBeFocused();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  } finally {
+    await context.unroute(apiPattern, longVisionHandler);
+    await pdfPage.close();
+  }
+});
+
 test('clears an unsent PDF image selection on Escape, zoom, and document replacement', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
