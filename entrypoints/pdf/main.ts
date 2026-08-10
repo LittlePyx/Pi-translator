@@ -1086,6 +1086,8 @@ async function openPdfData(
     currentSourceUrl = sourceUrl ?? location.href;
     currentSourceLabel = sourceUrl ? undefined : name;
     documentName.textContent = name;
+    documentName.title = name;
+    documentName.closest<HTMLElement>('.brand')?.setAttribute('title', name);
     document.title = `${name} - Pi PDF`;
     pageJump.hidden = false;
     pageCount.value = String(nextDocument.numPages);

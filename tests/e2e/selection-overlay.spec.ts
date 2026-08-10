@@ -2260,6 +2260,68 @@ test('opens a local PDF and exposes selectable text to the translator', async ({
   await pdfPage.close();
 });
 
+test('keeps the PDF toolbar clear and usable at narrow widths', async () => {
+  const pdfPage = await context.newPage();
+  const longName = [
+    'A-very-long-academic-paper-title-with-supplementary-results',
+    'and-appendices-2026.pdf',
+  ].join('-');
+  try {
+    await pdfPage.setViewportSize({ width: 900, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: longName,
+      mimeType: 'application/pdf',
+      buffer: createTextPdf('Narrow PDF toolbar layout.'),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await expect(pdfPage.locator('#document-name')).toHaveAttribute('title', longName);
+    await expect(pdfPage.locator('.brand')).toHaveAttribute('title', longName);
+
+    await pdfPage.setViewportSize({ width: 420, height: 700 });
+    await expect(pdfPage.locator('.brand img')).toBeVisible();
+    await expect(pdfPage.locator('.brand > span')).toBeHidden();
+    const compactActions = await pdfPage.locator('.region-action').evaluateAll((buttons) =>
+      buttons.map((button) => ({
+        label: button.textContent?.trim(),
+        compactLabel: getComputedStyle(button, '::before').content,
+        fontSize: getComputedStyle(button).fontSize,
+      })),
+    );
+    expect(compactActions).toEqual([
+      { label: '识别本页', compactLabel: '"识"', fontSize: '0px' },
+      { label: '框选翻译', compactLabel: '"框"', fontSize: '0px' },
+    ]);
+    const regionButton = pdfPage.locator('#region-translate');
+    await regionButton.click();
+    await expect(regionButton).toHaveAttribute('aria-pressed', 'true');
+    expect(await regionButton.evaluate((button) =>
+      getComputedStyle(button, '::before').content)).toBe('"框"');
+
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await expect(pdfPage.locator('.zoom-controls output')).toBeHidden();
+    const layout = await pdfPage.locator('#pdf-toolbar').evaluate((toolbar) => {
+      const visibleChildren = [...toolbar.children]
+        .filter((child) => child instanceof HTMLElement && getComputedStyle(child).display !== 'none');
+      const toolbarBounds = toolbar.getBoundingClientRect();
+      return {
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+        childrenFit: visibleChildren.every((child) => {
+          const bounds = child.getBoundingClientRect();
+          return bounds.left >= toolbarBounds.left && bounds.right <= toolbarBounds.right;
+        }),
+      };
+    });
+    expect(layout.scrollWidth).toBe(layout.clientWidth);
+    expect(layout.childrenFit).toBe(true);
+    const chooseFileBox = await pdfPage.locator('#choose-file').boundingBox();
+    expect(chooseFileBox?.height).toBeLessThanOrEqual(32);
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('returns to the same Pi PDF selection after text API configuration recovery', async () => {
   const sourceText = 'Pi PDF recovery keeps this selection.';
   const pdfPage = await context.newPage();

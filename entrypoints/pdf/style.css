@@ -31,7 +31,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
 .brand img { width: 25px; height: 22px; object-fit: contain; }
 .brand > span { display: grid; min-width: 0; }
-.brand strong { font-size: 14px; letter-spacing: -.01em; }
+.brand strong { font-size: 14px; letter-spacing: -.01em; white-space: nowrap; }
 .brand small {
   max-width: min(42vw, 520px);
   overflow: hidden;
@@ -372,10 +372,22 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
 @media (max-width: 720px) {
   .toolbar { grid-template-columns: 1fr auto auto auto; gap: 7px; padding-inline: 9px; }
   .toolbar .quiet { display: none; }
-  .toolbar .region-action { width: 32px; overflow: hidden; color: transparent; }
-  .toolbar .region-action::before { content: "⌗"; color: currentColor; color: #596277; font-size: 16px; }
+  .toolbar .region-action { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
+  .toolbar .region-action::before { color: var(--muted); font-size: 13px; line-height: 1; }
+  .toolbar #recognize-page::before { content: "识"; }
+  .toolbar #region-translate::before { content: "框"; }
+  .toolbar .region-action[aria-pressed="true"]::before { color: #4338ca; }
   .brand small { max-width: 28vw; }
   .pdf-viewer { padding-inline: 14px; }
+}
+
+@media (max-width: 460px) {
+  .brand { gap: 0; }
+  .brand > span { display: none; }
+}
+
+@media (max-width: 400px) {
+  .zoom-controls output { display: none; }
 }
 
 @media (prefers-color-scheme: dark) {
@@ -385,6 +397,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .notice[data-tone="success"] { color: #9ed8b8; border-color: #365c49; border-left-color: #66b88a; background: #1d3028; }
   .notice[data-tone="warning"] { color: #efd68f; border-color: #675724; border-left-color: #d4a53e; background: #352e1c; }
   .notice[data-tone="error"] { color: #ffb1bd; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
+  .toolbar .region-action[aria-pressed="true"] { color: #a5b4fc; border-color: #6568bf; background: #292d57; }
+  .toolbar .region-action[aria-pressed="true"]::before { color: #a5b4fc; }
 }
 
 @media (prefers-reduced-motion: reduce) {
