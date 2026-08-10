@@ -629,9 +629,29 @@ export class TranslationOverlay {
     this.refreshDocumentMemory(true);
   }
 
-  private updateDocumentMemory(task:Promise<DocumentMemorySnapshot>):void {
+  private updateDocumentMemory(task:Promise<DocumentMemorySnapshot>,restoreReviewFocus=false):void {
     this.documentMemoryError=undefined;const requestRevision=++this.documentMemoryRequestRevision;
-    void task.then((memory)=>{if(requestRevision!==this.documentMemoryRequestRevision)return;this.documentMemory=memory;if(this.documentMemoryActive)this.renderDocumentMemory();else this.updateDocumentMemoryButton()}).catch((error:unknown)=>{if(requestRevision!==this.documentMemoryRequestRevision)return;this.documentMemoryError=error instanceof Error?error.message:'操作失败';if(this.documentMemoryActive)this.renderDocumentMemory()});
+    void task.then((memory)=>{
+      if(requestRevision!==this.documentMemoryRequestRevision)return;
+      this.documentMemory=memory;
+      if(this.documentMemoryActive){
+        this.renderDocumentMemory();
+        if(restoreReviewFocus)queueMicrotask(()=>this.focusDocumentReviewFallback());
+      }else this.updateDocumentMemoryButton();
+    }).catch((error:unknown)=>{
+      if(requestRevision!==this.documentMemoryRequestRevision)return;
+      this.documentMemoryError=error instanceof Error?error.message:'操作失败';
+      if(this.documentMemoryActive){
+        this.renderDocumentMemory();
+        if(restoreReviewFocus)queueMicrotask(()=>this.focusDocumentReviewFallback());
+      }
+    });
+  }
+
+  private focusDocumentReviewFallback():void {
+    (this.root.querySelector<HTMLButtonElement>('.document-review-actions .review-resolve')
+      ??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))
+      ?.focus({preventScroll:true});
   }
 
   private pendingDocumentReviews(memory=this.documentMemory):DocumentMemoryTranslation[] {
@@ -687,7 +707,48 @@ export class TranslationOverlay {
     const memory=this.documentMemory;if(!memory){this.showSurface(surface);return}
 
     const pendingReviews=this.pendingDocumentReviews(memory);
-    if(pendingReviews.length){const reviews=document.createElement('section');reviews.className='document-section document-review-section';const head=document.createElement('div');head.className='document-section-head';const title=document.createElement('strong');title.textContent='待核对';const count=document.createElement('span');count.textContent=String(pendingReviews.length);head.append(title,count);reviews.append(head);const list=document.createElement('div');list.className='document-review-list';for(const entry of pendingReviews){const review=entry.review!;const row=document.createElement('article');row.className='document-review-row';const meta=document.createElement('div');meta.className='document-review-meta';const page=document.createElement('span');page.textContent=entry.sourceLocation?`第 ${entry.sourceLocation.pageNumber} 页`:'PDF 选区';const reason=document.createElement('strong');const reasons=[review.formulaNeedsReview?'公式结构待核对':'',review.uncertainSpans.length?`${review.uncertainSpans.length} 处内容待核对`:''].filter(Boolean);reason.textContent=reasons.join(' · ');const time=document.createElement('span');time.textContent=new Date(review.updatedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});meta.append(page,reason,time);const source=document.createElement('div');source.className='document-review-source';source.textContent=entry.originalText;const actions=document.createElement('div');actions.className='document-review-actions';if(entry.sourceLocation&&this.actions.onNavigateToPdfRegion){const locate=this.button('返回区域','','返回 PDF 原选区');locate.ariaLabel='返回区域';locate.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(entry.sourceLocation!));actions.append(locate)}const open=this.button('打开结果','','查看待核对译文');open.ariaLabel='打开结果';open.addEventListener('click',()=>this.openDocumentTranslation(entry));actions.append(open);if(this.actions.canRetryDocumentReview?.(entry)&&this.actions.onRetryDocumentReview){const retry=this.button('重新识别','','重新截图识别这个区域');retry.ariaLabel='重新识别';retry.addEventListener('click',()=>this.actions.onRetryDocumentReview?.(entry));actions.append(retry)}if(this.actions.onResolveDocumentReview){const resolve=this.button('已核对','review-resolve','标记为已人工核对');resolve.ariaLabel='已核对';resolve.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onResolveDocumentReview!(review.id)));actions.append(resolve)}row.append(meta,source,actions);list.append(row)}reviews.append(list);surface.append(reviews)}
+    if(pendingReviews.length){
+      const reviews=document.createElement('section');reviews.className='document-section document-review-section';
+      const head=document.createElement('div');head.className='document-section-head';
+      const title=document.createElement('strong');title.textContent='待核对';
+      const count=document.createElement('span');count.textContent=String(pendingReviews.length);
+      head.append(title,count);reviews.append(head);
+      const list=document.createElement('div');list.className='document-review-list';
+      for(const entry of pendingReviews){
+        const review=entry.review!;
+        const row=document.createElement('article');row.className='document-review-row';
+        const meta=document.createElement('div');meta.className='document-review-meta';
+        const page=document.createElement('span');page.textContent=entry.sourceLocation?`第 ${entry.sourceLocation.pageNumber} 页`:'PDF 选区';
+        const reason=document.createElement('strong');
+        const reasons=[review.formulaNeedsReview?'公式结构待核对':'',review.uncertainSpans.length?`${review.uncertainSpans.length} 处内容待核对`:''].filter(Boolean);
+        reason.textContent=reasons.join(' · ');
+        const time=document.createElement('span');time.textContent=new Date(review.updatedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+        meta.append(page,reason,time);
+        const source=document.createElement('div');source.className='document-review-source';source.textContent=entry.originalText;
+        const actions=document.createElement('div');actions.className='document-review-actions';
+        if(entry.sourceLocation&&this.actions.onNavigateToPdfRegion){
+          const locate=this.button('返回区域','','返回 PDF 原选区');locate.ariaLabel='返回区域';
+          locate.addEventListener('click',()=>{
+            this.actions.onNavigateToPdfRegion?.(entry.sourceLocation!);
+            const narrow=globalThis.matchMedia?.('(max-width:620px)')?.matches??innerWidth<=620;
+            if(this.sidebarActive&&narrow)this.collapseSidebar();
+          });
+          actions.append(locate);
+        }
+        const open=this.button('打开结果','','查看待核对译文');open.ariaLabel='打开结果';
+        open.addEventListener('click',()=>this.openDocumentTranslation(entry));actions.append(open);
+        if(this.actions.canRetryDocumentReview?.(entry)&&this.actions.onRetryDocumentReview){
+          const retry=this.button('重新识别','','重新截图识别这个区域');retry.ariaLabel='重新识别';
+          retry.addEventListener('click',()=>this.actions.onRetryDocumentReview?.(entry));actions.append(retry);
+        }
+        if(this.actions.onResolveDocumentReview){
+          const resolve=this.button('已核对','review-resolve','标记为已人工核对');resolve.ariaLabel='已核对';
+          resolve.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onResolveDocumentReview!(review.id),true));actions.append(resolve);
+        }
+        row.append(meta,source,actions);list.append(row);
+      }
+      reviews.append(list);surface.append(reviews);
+    }
 
     const confirmed=document.createElement('section');confirmed.className='document-section';const confirmedHead=document.createElement('div');confirmedHead.className='document-section-head';const confirmedTitle=document.createElement('strong');confirmedTitle.textContent='固定译法';const confirmedCount=document.createElement('span');confirmedCount.textContent=String(memory.confirmedTerms.length);const add=this.button('＋添加','document-action','添加本文术语');add.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId='new';this.renderDocumentMemory()});confirmedHead.append(confirmedTitle,confirmedCount,add);confirmed.append(confirmedHead);const confirmedList=document.createElement('div');
     if(this.editingDocumentTermId==='new')confirmedList.append(this.documentTermEditor('',''));
@@ -996,7 +1057,7 @@ export class TranslationOverlay {
     if(moveFocusIntoCard||hadOverlayFocus)queueMicrotask(restoreOverlayFocus);
   }
 
-  private collapseSidebar():void { const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,'展开 Pi Translator 连续翻译侧栏');const label=document.createElement('span');label.textContent='连续翻译';tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
+  private collapseSidebar():void { const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,'展开 Pi Translator 连续翻译侧栏');const label=document.createElement('span');label.textContent='连续翻译';tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
   private closeSurface():void { const restoreFocus=this.cardReturnFocus;this.cardReturnFocus=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.markedOnly=false;this.actions.onSidebarChange(false)}this.hide();this.actions.onDismiss();if(restoreFocus?.isConnected)queueMicrotask(()=>restoreFocus.focus({preventScroll:true})); }
   private navigationHistory():TranslationHistoryEntry[]{return this.markedOnly?this.history.filter(entry=>this.actions.hasSourceMarksForResult?.(entry)):this.history}
   private navigate(delta:number):void { const history=this.navigationHistory();const current=history.findIndex(entry=>entry.requestId===this.currentResult?.requestId);const next=current+delta;if(next<0||next>=history.length)return;this.historyIndex=next;this.alignedView=false;this.renderResult(history[next] as TranslationHistoryEntry); }

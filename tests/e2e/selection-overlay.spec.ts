@@ -4334,6 +4334,116 @@ test('keeps narrow OCR review and source editing readable', async ({}, testInfo)
   }
 });
 
+test('keeps narrow pending OCR reviews actionable and reveals their regions', async ({}, testInfo) => {
+  const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const longSource = 'A very long scanned academic statement with '
+    + 'ExtremelyLongUncertainIdentifierWithoutNaturalBreakpoints and an uncertain formula subscript.';
+  const pdfPage = await context.newPage();
+  const pendingReviewHandler = async (route: Route): Promise<void> => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          translation: '这是一条需要人工核对的长图像识别结果。',
+          recognizedText: longSource,
+          formulaLatex: [String.raw`q_\phi(z\mid x)=\mathcal{N}(z;\mu_\phi(x),\sigma_\phi^2(x))`],
+          uncertainSpans: [
+            'The identifier may be incomplete.',
+            'The formula subscript is not fully legible.',
+          ],
+        }) } }],
+      }),
+    }).catch(() => undefined);
+  };
+  await context.route(apiPattern, pendingReviewHandler);
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'narrow-pending-review.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#fit-width').click();
+    await pdfPage.locator('#region-translate').click();
+    const pageBounds = await firstPage.boundingBox();
+    expect(pageBounds).not.toBeNull();
+    if (!pageBounds) return;
+    await pdfPage.mouse.move(pageBounds.x + 55, pageBounds.y + 105);
+    await pdfPage.mouse.down();
+    await pdfPage.mouse.move(pageBounds.x + 225, pageBounds.y + 245, { steps: 5 });
+    await pdfPage.mouse.up();
+    await firstPage.locator('.region-confirm .confirm').click();
+
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay.locator('.uncertain-note')).toContainText('有 2 处内容无法完全确认');
+    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    const documentButton = overlay.locator('.document-memory-action');
+    await expect(documentButton).toHaveText('本文 · 待核对 1');
+    await documentButton.click();
+
+    const pendingSection = overlay.locator('.document-review-section');
+    const reviewRow = pendingSection.locator('.document-review-row');
+    await expect(reviewRow).toContainText('2 处内容待核对');
+    await expect(reviewRow).toContainText(longSource);
+    const layout = await overlay.locator('.surface').evaluate((surface) => {
+      const row = surface.querySelector<HTMLElement>('.document-review-row');
+      const source = surface.querySelector<HTMLElement>('.document-review-source');
+      const actions = surface.querySelector<HTMLElement>('.document-review-actions');
+      const buttons = [...surface.querySelectorAll<HTMLElement>('.document-review-actions button')];
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        surfaceRight: surface.getBoundingClientRect().right,
+        rowRight: row?.getBoundingClientRect().right ?? Infinity,
+        sourceClientWidth: source?.clientWidth ?? 0,
+        sourceScrollWidth: source?.scrollWidth ?? 0,
+        actionsClientWidth: actions?.clientWidth ?? 0,
+        actionsScrollWidth: actions?.scrollWidth ?? 0,
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-pending-review-360-light.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-pending-review-360-dark.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.rowRight).toBeLessThanOrEqual(layout.surfaceRight);
+    expect(layout.sourceScrollWidth).toBeLessThanOrEqual(layout.sourceClientWidth + 1);
+    expect(layout.actionsScrollWidth).toBeLessThanOrEqual(layout.actionsClientWidth + 1);
+    expect(layout.buttonHeights.every((height) => height >= 32)).toBe(true);
+
+    await reviewRow.getByRole('button', { name: '返回区域' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    await expect(firstPage.locator('.region-source-highlight')).toBeVisible();
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-pending-review-region-360-light.png') });
+    }
+    await overlay.getByRole('button', { name: '展开 Pi Translator 连续翻译侧栏' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
+
+    await overlay.locator('.document-review-row').getByRole('button', { name: '打开结果' }).click();
+    await expect(overlay.locator('.body')).toHaveText('这是一条需要人工核对的长图像识别结果。');
+    await overlay.locator('.document-memory-action').click();
+    await overlay.locator('.document-review-row').getByRole('button', { name: '已核对' }).click();
+    await expect(overlay.locator('.document-review-section')).toHaveCount(0);
+    await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
+    await overlay.getByRole('button', { name: '返回翻译结果' }).click();
+    await expect(overlay.locator('.document-memory-action')).toHaveText('本文');
+  } finally {
+    await context.unroute(apiPattern, pendingReviewHandler);
+    await pdfPage.close();
+  }
+});
+
 test('clears an unsent PDF image selection on Escape, zoom, and document replacement', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
