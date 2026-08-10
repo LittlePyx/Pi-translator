@@ -1933,9 +1933,14 @@ test('shows site pause controls only on supported webpages', async () => {
 
     const siteControl = popup.locator('#site-control');
     const pauseSite = popup.locator('#pause-site');
+    const quickActions = popup.locator('#quick-actions');
     await expect(siteControl).toBeVisible();
     await expect(popup.locator('#site-name')).toHaveText('www.overleaf.com');
     await expect(pauseSite).toBeEnabled();
+    await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
+    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
+    await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
+    await expect(popup.locator('#open-pdf')).toHaveClass(/secondary-action/);
     const pauseSwitchStyle = await pauseSite.evaluate((element) => {
       const style = getComputedStyle(element);
       return {

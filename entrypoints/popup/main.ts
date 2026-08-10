@@ -31,7 +31,7 @@ import {
   pdfInitialPage,
   pdfPermissionPattern,
 } from '../../core/pdf/source';
-import { isOverleafProjectUrl } from '../../core/settings/site-access';
+import { isInjectableWebUrl, isOverleafProjectUrl } from '../../core/settings/site-access';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -63,6 +63,7 @@ let activeUrl: string | undefined;
 let activePdfSourceUrl: string | undefined;
 let activePdfPage: number | undefined;
 let activePdfContext: 'native' | 'overleaf' | undefined;
+let generalPageMode: ExtensionSettings['generalPageMode'] = 'on-demand';
 let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
 let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
 let statusTimer: number | undefined;
@@ -224,6 +225,13 @@ function showUnavailablePdfSource(): void {
   );
 }
 
+function sidebarAvailableForActivePage(): boolean {
+  if (activePdfContext) return true;
+  if (!activeUrl) return false;
+  if (isOverleafProjectUrl(activeUrl)) return true;
+  return generalPageMode !== 'off' && isInjectableWebUrl(activeUrl);
+}
+
 function updateQuickActions(): void {
   openPdf.textContent = activePdfSourceUrl
     ? activePdfContext === 'overleaf'
@@ -234,15 +242,22 @@ function updateQuickActions(): void {
       : activePdfContext === 'native'
         ? '解决 PDF 读取权限'
         : '打开 PDF 阅读器';
-  const pdfIsPrimary = Boolean(activePdfContext);
+  const sidebarAvailable = sidebarAvailableForActivePage();
+  const pdfIsCurrent = Boolean(activePdfContext);
+  const pdfIsPrimary = pdfIsCurrent || !sidebarAvailable;
   const primaryAction = pdfIsPrimary ? openPdf : openSidebar;
   const secondaryAction = pdfIsPrimary ? openSidebar : openPdf;
+  openPdf.classList.remove('primary-action', 'secondary-action');
+  openSidebar.classList.remove('primary-action', 'secondary-action');
   primaryAction.classList.add('primary-action');
-  primaryAction.classList.remove('secondary-action');
-  secondaryAction.classList.add('secondary-action');
-  secondaryAction.classList.remove('primary-action');
-  openSidebar.textContent = pdfIsPrimary ? '打开翻译侧栏' : '打开连续翻译侧栏';
-  quickActions.dataset.primary = pdfIsPrimary ? 'pdf' : 'sidebar';
+  if (sidebarAvailable) secondaryAction.classList.add('secondary-action');
+  openSidebar.hidden = !sidebarAvailable;
+  openSidebar.textContent = pdfIsCurrent ? '打开翻译侧栏' : '打开连续翻译侧栏';
+  quickActions.dataset.primary = pdfIsCurrent
+    ? 'pdf'
+    : sidebarAvailable
+      ? 'sidebar'
+      : 'reader';
   quickActions.prepend(primaryAction);
 }
 
@@ -336,12 +351,15 @@ async function load(): Promise<void> {
   }));
   apiProfile.value = settings.activeApiProfileId;
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
+  generalPageMode = settings.generalPageMode;
   await refreshApiReadiness(settings);
   await resolveActivePdfContext(tabs[0] ?? {});
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
   else hidePdfAccessAlert();
-  const hostname = !activePdfContext && activeUrl ? siteHostFromUrl(activeUrl) : undefined;
+  const hostname = sidebarAvailableForActivePage() && !activePdfContext && activeUrl
+    ? siteHostFromUrl(activeUrl)
+    : undefined;
   if (!hostname) {
     siteControl.hidden = true;
     siteName.textContent = '';
@@ -430,7 +448,13 @@ visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettin
 
 openSidebar.addEventListener('click', () => {
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
-    .then(() => window.close())
+    .then((response: RuntimeResponse<{ opened: true }> | undefined) => {
+      if (!response?.ok) {
+        setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error');
+        return;
+      }
+      window.close();
+    })
     .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error'));
 });
 

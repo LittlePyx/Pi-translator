@@ -190,6 +190,10 @@ button {
   background: transparent;
   font-size: 12px;
 }
+.quick-actions[data-primary="reader"] .utility-action {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
 .quick-actions .utility-action:hover { color: #4338ca; background: rgba(99, 102, 241, .08); }
 
 button:hover { filter: brightness(1.06); }

@@ -307,15 +307,10 @@ test('captures the real quick panel', async () => {
   const popup = await context.newPage();
   await popup.setViewportSize({ width: 420, height: 560 });
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+  await page.bringToFront();
+  await popup.reload();
   await expect(popup.locator('#target-language')).toHaveValue('zh-CN');
-  await popup.evaluate(() => {
-    const siteControl = document.querySelector<HTMLElement>('#site-control');
-    const siteName = document.querySelector<HTMLElement>('#site-name');
-    const pauseSite = document.querySelector<HTMLInputElement>('#pause-site');
-    if (siteControl) siteControl.hidden = false;
-    if (siteName) siteName.textContent = 'www.overleaf.com';
-    if (pauseSite) pauseSite.disabled = false;
-  });
+  await expect(popup.locator('#site-name')).toHaveText('www.overleaf.com');
   await popup.screenshot({
     path: path.join(SCREENSHOT_DIRECTORY, 'product-quick-panel-420x560.png'),
   });

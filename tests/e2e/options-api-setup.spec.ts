@@ -134,32 +134,30 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
       .toHaveAttribute('aria-describedby', 'site-pause-help');
 
     const quickActions = popup.locator('#quick-actions');
-    await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
-    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
-    await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
-    await expect(popup.locator('#open-pdf')).toHaveClass(/secondary-action/);
+    await expect(quickActions).toHaveAttribute('data-primary', 'reader');
+    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-pdf');
+    await expect(popup.locator('#open-sidebar')).toBeHidden();
+    await expect(popup.locator('#open-pdf')).toHaveClass(/primary-action/);
     await expect(popup.locator('#open-settings')).toHaveClass(/utility-action/);
     const actionLayout = await quickActions.evaluate((actions) => {
       const primary = actions.querySelector<HTMLElement>('.primary-action');
-      const secondary = actions.querySelector<HTMLElement>('.secondary-action');
       const utility = actions.querySelector<HTMLElement>('.utility-action');
-      if (!primary || !secondary || !utility) return undefined;
+      if (!primary || !utility) return undefined;
       const primaryRect = primary.getBoundingClientRect();
-      const secondaryRect = secondary.getBoundingClientRect();
       const utilityRect = utility.getBoundingClientRect();
       return {
+        actionsScrollWidth: actions.scrollWidth,
         actionsWidth: actions.getBoundingClientRect().width,
         primaryWidth: primaryRect.width,
         primaryBottom: primaryRect.bottom,
-        secondaryTop: secondaryRect.top,
         utilityTop: utilityRect.top,
         utilityWidth: utilityRect.width,
       };
     });
     expect(actionLayout).toBeDefined();
+    expect(actionLayout!.actionsScrollWidth).toBeLessThanOrEqual(actionLayout!.actionsWidth + 1);
     expect(actionLayout!.primaryWidth).toBeGreaterThanOrEqual(actionLayout!.actionsWidth - 1);
-    expect(actionLayout!.primaryBottom).toBeLessThanOrEqual(actionLayout!.secondaryTop);
-    expect(Math.abs(actionLayout!.secondaryTop - actionLayout!.utilityTop)).toBeLessThan(1);
+    expect(actionLayout!.primaryBottom).toBeLessThanOrEqual(actionLayout!.utilityTop);
     expect(actionLayout!.utilityWidth).toBeLessThan(actionLayout!.actionsWidth / 2);
 
     const optionsPromise = context.waitForEvent('page');
