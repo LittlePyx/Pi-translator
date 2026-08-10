@@ -1135,6 +1135,13 @@ test('keeps translation correction compact, versioned, and synchronized with sou
 
   const more = overlay.locator('details.more');
   const moreSummary = more.locator('summary');
+  const compactControlHeights = await Promise.all([
+    copyAction,
+    overlay.locator('.mark-action'),
+    moreSummary,
+    overlay.locator('.view-button').first(),
+  ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
+  expect(compactControlHeights).toEqual([28, 28, 28, 26]);
   await moreSummary.click();
   await expect(more).toHaveAttribute('open', '');
   await page.keyboard.press('Escape');
@@ -1740,6 +1747,11 @@ test('corrects one aligned sentence locally without adding visible controls or A
   await expect.poll(() => first.locator('.segment-actions').evaluate(
     (element) => getComputedStyle(element).opacity,
   )).toBe('1');
+  const alignedControlHeights = await Promise.all([
+    first.locator('.segment-correct'),
+    first.locator('.segment-mark'),
+  ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
+  expect(alignedControlHeights).toEqual([28, 28]);
   const requestsBeforeCorrection = textRequests.length;
   await first.locator('.segment-correct').click();
   let sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
@@ -3789,6 +3801,9 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-state')).toContainText('正在接收译文');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#stop-translation')).toBeVisible();
+  expect(await sidePanel.locator('#stop-translation').evaluate(
+    (element) => element.getBoundingClientRect().height,
+  )).toBe(28);
   await expect(sidePanel.locator('#correct')).toBeHidden();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
@@ -3820,6 +3835,9 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#retry')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toHaveText('复制部分译文');
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  expect(await sidePanel.locator('#copy').evaluate(
+    (element) => element.getBoundingClientRect().height,
+  )).toBe(28);
   await sidePanel.locator('#copy').click();
   await expect(sidePanel.locator('#status')).toHaveText('已复制');
 
