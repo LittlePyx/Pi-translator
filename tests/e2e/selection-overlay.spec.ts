@@ -1409,6 +1409,101 @@ test('keeps narrow translation correction fields and actions visible', async ({}
   }
 });
 
+test('keeps narrow model adjustment drafts visible and recoverable', async ({}, testInfo) => {
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await page.setViewportSize({ width: 360, height: 700 });
+    await clearBrowserSelection();
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await selectElementText('#source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+
+    const moreSummary = overlay.locator('details.more > summary');
+    await moreSummary.click();
+    const menu = overlay.locator('.menu');
+    await expect(menu).toBeVisible();
+    const menuLayout = await menu.evaluate((element) => {
+      const surface = element.closest<HTMLElement>('.surface');
+      const bounds = element.getBoundingClientRect();
+      const surfaceBounds = surface?.getBoundingClientRect();
+      const buttons = [...element.querySelectorAll<HTMLElement>('button')];
+      return {
+        bounds: bounds.toJSON(),
+        surfaceBounds: surfaceBounds?.toJSON(),
+        clientHeight: element.clientHeight,
+        scrollHeight: element.scrollHeight,
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('translation-more-menu-360-light.png') });
+    }
+    expect(menuLayout.surfaceBounds).toBeDefined();
+    if (menuLayout.surfaceBounds) {
+      expect(menuLayout.bounds.left).toBeGreaterThanOrEqual(menuLayout.surfaceBounds.left);
+      expect(menuLayout.bounds.right).toBeLessThanOrEqual(menuLayout.surfaceBounds.right);
+    }
+    expect(menuLayout.bounds.top).toBeGreaterThanOrEqual(8);
+    expect(menuLayout.bounds.bottom).toBeLessThanOrEqual(692);
+    expect(menuLayout.scrollHeight).toBeLessThanOrEqual(menuLayout.clientHeight + 1);
+    expect(menuLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+
+    await overlay.getByRole('button', { name: '让模型调整…' }).click();
+    await expect(overlay.getByText('模型调整会发送原文和当前译稿')).toBeVisible();
+    await overlay.getByRole('button', { name: '自定义调整要求…' }).click();
+    const customInput = overlay.getByRole('textbox', { name: '自定义调整要求' });
+    await expect(customInput).toBeFocused();
+    const customDraft = '保留限定条件和公式编号，并统一关键术语；语言保持正式、简洁，避免增加原文没有的结论。'.repeat(3);
+    await customInput.fill(customDraft);
+    await expect(overlay.locator('.revision-custom span')).toHaveText(`${customDraft.length}/500`);
+    const adjustmentLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const custom = surface.querySelector<HTMLElement>('.revision-custom');
+      const actions = surface.querySelector<HTMLElement>('.revision-actions');
+      const controls = [...surface.querySelectorAll<HTMLElement>(
+        '.revision-scope select,.revision-choice,.revision-custom button,.revision-actions button',
+      )];
+      const bounds = surface.getBoundingClientRect();
+      return {
+        bounds: bounds.toJSON(),
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        customBottom: custom?.getBoundingClientRect().bottom ?? Infinity,
+        actionsBottom: actions?.getBoundingClientRect().bottom ?? Infinity,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('translation-model-adjustment-360-light.png') });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('translation-model-adjustment-360-dark.png') });
+      await page.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(adjustmentLayout.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(adjustmentLayout.bounds.right).toBeLessThanOrEqual(352);
+    expect(adjustmentLayout.scrollWidth).toBeLessThanOrEqual(adjustmentLayout.clientWidth + 1);
+    expect(adjustmentLayout.customBottom).toBeLessThanOrEqual(adjustmentLayout.bounds.bottom);
+    expect(adjustmentLayout.actionsBottom).toBeLessThanOrEqual(adjustmentLayout.bounds.bottom);
+    expect(adjustmentLayout.controlHeights.every((height) => height >= 32)).toBe(true);
+    await expect(overlay.locator('.pin-action')).toHaveCount(0);
+
+    await customInput.press('Escape');
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await expect(moreSummary).toBeFocused();
+  } finally {
+    await page.emulateMedia({ colorScheme: 'light' });
+    if (await overlay.locator('.correction-cancel').count()) {
+      await overlay.locator('.correction-cancel').click();
+    }
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await clearBrowserSelection();
+    await page.setViewportSize(originalViewport);
+  }
+});
+
 test('keeps a newer translation when an old correction save is rejected', async () => {
   await clearBrowserSelection();
   const overlay = page.locator('#tex-selection-translator-root');
