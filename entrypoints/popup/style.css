@@ -25,7 +25,7 @@ header {
 
 header > span:last-child { display: grid; gap: 2px; }
 header strong { font-size: 16px; }
-header small { color: #7c889e; font-size: 10px; letter-spacing: .1em; text-transform: uppercase; }
+header small { color: #7c889e; font-size: 10px; letter-spacing: .08em; }
 
 .capability-status {
   display: flex;
@@ -116,11 +116,43 @@ select {
   display: flex;
   align-items: center;
   gap: 9px;
+  min-height: 28px;
   margin-top: 13px;
   color: #334155;
+  cursor: pointer;
 }
 
-.switch-row input { width: 17px; height: 17px; accent-color: #4f46e5; }
+.switch-row input {
+  position: relative;
+  flex: 0 0 auto;
+  width: 34px;
+  height: 20px;
+  margin: 0;
+  appearance: none;
+  border: 1px solid #c6cfdd;
+  border-radius: 999px;
+  background: #dfe5ee;
+  cursor: pointer;
+  transition: border-color .16s ease, background-color .16s ease;
+}
+
+.switch-row input::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .22);
+  content: "";
+  transition: transform .16s ease;
+}
+
+.switch-row input:checked { border-color: #4f46e5; background: #4f46e5; }
+.switch-row input:checked::before { transform: translateX(14px); }
+.switch-row input:disabled { opacity: .48; cursor: not-allowed; }
+.switch-row:has(input:disabled) { color: #7c889e; cursor: default; }
 .site-control p { margin: 9px 0 0; color: #7a879a; font-size: 11px; line-height: 1.5; }
 
 button {
@@ -181,6 +213,10 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .logo img { filter: brightness(0) invert(1); }
   header small, .site-control > div, .site-control p { color: #93a1b6; }
   .site-control strong, .switch-row { color: #e2e8f0; }
+  .switch-row input { border-color: #4a566a; background: #364154; }
+  .switch-row input::before { background: #f8fafc; }
+  .switch-row input:checked { border-color: #7168ec; background: #7168ec; }
+  .switch-row:has(input:disabled) { color: #93a1b6; }
   select { border-color: #465269; color: #eef2f7; background: #182131; }
   button { border-color: #465269; color: #e2e8f0; background: #202938; }
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
@@ -194,4 +230,9 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .capability-item[data-tone="issue"] { color: #f0b879; }
   .capability-item[data-tone="issue"] .capability-dot { background: #e39a50; }
   .capability-item[data-tone="issue"] .capability-value { color: #e1a768; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .switch-row input,
+  .switch-row input::before { transition: none; }
 }

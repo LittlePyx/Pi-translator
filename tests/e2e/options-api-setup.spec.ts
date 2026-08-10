@@ -129,6 +129,24 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     expect(await textStatus.evaluate((element) => getComputedStyle(element).borderRadius))
       .toBe('0px');
 
+    const pauseSite = popup.locator('#pause-site');
+    await expect(pauseSite).toHaveAttribute('aria-describedby', 'site-pause-help');
+    const pauseSwitchStyle = await pauseSite.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        appearance: style.appearance,
+        borderRadius: style.borderRadius,
+        height: element.getBoundingClientRect().height,
+        width: element.getBoundingClientRect().width,
+      };
+    });
+    expect(pauseSwitchStyle).toEqual({
+      appearance: 'none',
+      borderRadius: '999px',
+      height: 20,
+      width: 34,
+    });
+
     const optionsPromise = context.waitForEvent('page');
     await textStatus.click();
     focusedOptions = await optionsPromise;

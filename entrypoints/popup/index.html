@@ -12,7 +12,7 @@
         <span class="logo"><img src="/brand/pi_logo.png" alt="" /></span>
         <span>
           <strong>Pi Translator</strong>
-          <small>Quick controls</small>
+          <small>快捷控制</small>
         </span>
       </header>
 
@@ -51,10 +51,10 @@
           <strong id="site-name">正在读取…</strong>
         </div>
         <label class="switch-row">
-          <input id="pause-site" type="checkbox" />
+          <input id="pause-site" type="checkbox" aria-describedby="site-pause-help" />
           <span>暂停本网站自动划词</span>
         </label>
-        <p>暂停后不再自动显示浮动按钮，右键菜单和快捷键仍可使用。</p>
+        <p id="site-pause-help">暂停后不再自动显示浮动按钮，右键菜单和快捷键仍可使用。</p>
       </section>
 
       <p id="status" class="status" role="status" aria-live="polite"></p>
