@@ -94,25 +94,30 @@ main {
 .empty-status:empty { visibility: hidden; }
 .empty-status[role="alert"] { color: #b4233b; }
 
-#session { padding-top: 18px; }
-.document-line { display: grid; gap: 3px; margin-bottom: 14px; }
-.document-line span { color: #8a93a4; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
-.document-line strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-
-.reader-hint {
+#session { padding-top: 14px; }
+.session-context {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 14px;
-  margin: 0 -18px 22px;
-  padding: 13px 18px;
-  border-block: 1px solid #dfe3ec;
-  background: rgba(238, 240, 255, .72);
+  gap: 12px;
+  min-height: 40px;
+  margin-bottom: 18px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid #e2e6ee;
 }
-.reader-hint div { min-width: 0; }
-.reader-hint strong { font-size: 11px; font-weight: 700; }
-.reader-hint p { margin: 3px 0 0; color: #6f7890; font-size: 10px; line-height: 1.5; }
-.reader-hint button,
+.document-line { display: grid; min-width: 0; gap: 2px; margin: 0; }
+.document-line span { color: #8a93a4; font-size: 10px; letter-spacing: .08em; text-transform: uppercase; }
+.document-line strong { overflow: hidden; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+
+.session-context-note {
+  margin: -8px 0 18px;
+  padding-left: 9px;
+  border-left: 2px solid #c9cdee;
+  color: #6f7890;
+  font-size: 10px;
+  line-height: 1.55;
+}
+.session-context button,
 .copy-action,
 .error-actions button {
   flex: 0 0 auto;
@@ -126,7 +131,7 @@ main {
   font-size: 11px;
   font-weight: 680;
 }
-.reader-hint button:hover,
+.session-context button:hover,
 .copy-action:hover:not(:disabled),
 .error-actions button:hover { border-color: #8179eb; }
 
@@ -332,12 +337,13 @@ button:focus-visible {
   #stop-translation:disabled { color: #777f8e; }
   .text-action { color: #a6afbd; }
   .empty-mark { border-color: #42436b; color: #a9a1ff; background: #252440; }
-  .empty-state p, .reader-hint p { color: #9aa5b5; }
+  .empty-state p, .session-context-note { color: #9aa5b5; }
   .empty-action { color: #fff; border-color: #7367ed; background: #6558dc; }
   .empty-action:hover { border-color: #8d83f2; background: #7468e4; }
   .empty-status[role="alert"] { color: #ff9aaa; }
-  .reader-hint { border-color: #333b4a; background: rgba(45, 45, 78, .72); }
-  .reader-hint button, .copy-action, .error-actions button {
+  .session-context { border-color: #303846; }
+  .session-context-note { border-left-color: #4d4f76; }
+  .session-context button, .copy-action, .error-actions button {
     border-color: #4d4f76;
     color: #c1bcff;
     background: #1a2230;

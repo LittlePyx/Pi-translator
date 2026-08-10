@@ -3903,8 +3903,15 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#correct')).toBeHidden();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
+  await expect(sidePanel.locator('#reader-hint-text')).toBeVisible();
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('未提供选区图像');
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('第 6 页');
+  const contextLayout = await sidePanel.locator('.session-context').evaluate((context) => ({
+    height: context.getBoundingClientRect().height,
+    buttonHeight: context.querySelector('button')?.getBoundingClientRect().height,
+  }));
+  expect(contextLayout.height).toBeLessThanOrEqual(51);
+  expect(contextLayout.buttonHeight).toBe(28);
 
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
@@ -4078,6 +4085,21 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await sidePanel.locator('#copy').click();
   await expect(sidePanel.locator('#status')).toHaveText('已复制');
   await sidePanel.setViewportSize({ width: 360, height: 820 });
+  const sessionContextLayout = await sidePanel.locator('.session-context').evaluate((context) => {
+    const rect = context.getBoundingClientRect();
+    return {
+      clientWidth: context.clientWidth,
+      scrollWidth: context.scrollWidth,
+      left: rect.left,
+      right: rect.right,
+      viewportWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(sessionContextLayout.scrollWidth)
+    .toBeLessThanOrEqual(sessionContextLayout.clientWidth + 1);
+  expect(sessionContextLayout.left).toBeGreaterThanOrEqual(-1);
+  expect(sessionContextLayout.right)
+    .toBeLessThanOrEqual(sessionContextLayout.viewportWidth + 1);
   const footerLayout = await sidePanel.locator('footer').evaluate((footer) => {
     const rect = footer.getBoundingClientRect();
     return {
@@ -4157,7 +4179,7 @@ test('clears native PDF side-panel actions as soon as the active tab changes', a
         tabId: sessionTabId,
         requestId: 'activation-race-session',
         sourceText: 'Text from the previously active PDF.',
-        pageUrl: 'https://www.overleaf.com/previous.pdf',
+        pageUrl: 'edge://pdf',
         sourceLabel: 'previous.pdf',
         status: 'error',
         startedAt: Date.now(),
@@ -4172,6 +4194,9 @@ test('clears native PDF side-panel actions as soon as the active tab changes', a
   }, tabId);
   await expect(sidePanel.locator('#session')).toBeVisible();
   await expect(sidePanel.locator('#retry')).toBeVisible();
+  await expect(sidePanel.locator('#reader-hint-text')).toBeHidden();
+  await expect(sidePanel.locator('#pdf-access-alert')).toBeVisible();
+  await expect(sidePanel.locator('#open-pi-reader')).toHaveText('解决 PDF 读取权限');
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('本次使用：文字 API「DeepSeek text」 · deepseek-test-model');
 

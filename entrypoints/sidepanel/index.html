@@ -28,18 +28,14 @@
       </section>
 
       <section id="session" hidden>
-        <div class="document-line">
-          <span>当前 PDF</span>
-          <strong id="source-label"></strong>
-        </div>
-
-        <aside class="reader-hint">
-          <div>
-            <strong>需要浮动按钮或更顺畅的跨行选择？</strong>
-            <p id="reader-hint-text">可按需改用 Pi PDF 阅读器，不会自动替换当前页面。</p>
+        <section class="session-context" aria-label="当前 PDF">
+          <div class="document-line">
+            <span>当前 PDF</span>
+            <strong id="source-label"></strong>
           </div>
           <button id="open-pi-reader" type="button">用 Pi 打开</button>
-        </aside>
+        </section>
+        <p id="reader-hint-text" class="session-context-note" hidden></p>
 
         <aside id="pdf-access-alert" class="access-alert" role="alert" hidden>
           <strong id="pdf-access-title">需要 PDF 读取权限</strong>

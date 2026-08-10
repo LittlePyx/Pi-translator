@@ -493,13 +493,11 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   sourceText.textContent = presentationText(session, session.sourceText);
   const pdfSource = parsePdfSourceUrl(session.pageUrl);
   const pageNumber = session.pageNumber ?? pdfInitialPage(session.pageUrl);
-  readerHintText.textContent = session.providerContext?.role === 'vision'
+  const needsVisionHint = session.providerContext?.role === 'vision';
+  readerHintText.hidden = !needsVisionHint;
+  readerHintText.textContent = needsVisionHint
     ? `Edge 原生阅读器未提供选区图像；本次只传递选中文字。复杂公式可用 Pi 打开后截图识别${pageNumber ? `，并定位到第 ${pageNumber} 页` : ''}。`
-    : pdfSource
-    ? pageNumber
-      ? `将直接继承当前 PDF，并定位到第 ${pageNumber} 页。`
-      : '将直接继承当前 PDF，并在打开后收起此侧边栏。'
-    : 'Edge 没有提供原 PDF 地址；若为本地文件，请先开启文件 URL 权限。';
+    : '';
   openPiReader.textContent = pdfSource ? '用 Pi 打开' : '解决 PDF 读取权限';
   if (!pdfSource) showHiddenPdfSourceAlert();
   else hidePdfAccessAlert();
