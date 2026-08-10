@@ -135,6 +135,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
 
     const quickActions = popup.locator('#quick-actions');
     await expect(quickActions).toHaveAttribute('data-primary', 'reader');
+    await expect(quickActions).not.toHaveAttribute('aria-busy', 'true');
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-pdf');
     await expect(popup.locator('#open-sidebar')).toBeHidden();
     await expect(popup.locator('#open-pdf')).toHaveClass(/primary-action/);
@@ -159,6 +160,25 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     expect(actionLayout!.primaryWidth).toBeGreaterThanOrEqual(actionLayout!.actionsWidth - 1);
     expect(actionLayout!.primaryBottom).toBeLessThanOrEqual(actionLayout!.utilityTop);
     expect(actionLayout!.utilityWidth).toBeLessThan(actionLayout!.actionsWidth / 2);
+
+    await popup.emulateMedia({ reducedMotion: 'reduce' });
+    const loadingLayout = await quickActions.evaluate((actions) => {
+      const loadedHeight = actions.getBoundingClientRect().height;
+      actions.dataset.primary = 'loading';
+      actions.setAttribute('aria-busy', 'true');
+      const loadingHeight = actions.getBoundingClientRect().height;
+      const firstButton = actions.querySelector<HTMLElement>('button');
+      const skeleton = getComputedStyle(actions, '::before');
+      return {
+        loadedHeight,
+        loadingHeight,
+        buttonVisibility: firstButton ? getComputedStyle(firstButton).visibility : undefined,
+        animationName: skeleton.animationName,
+      };
+    });
+    expect(Math.abs(loadingLayout.loadedHeight - loadingLayout.loadingHeight)).toBeLessThan(1);
+    expect(loadingLayout.buttonVisibility).toBe('hidden');
+    expect(loadingLayout.animationName).toBe('none');
 
     const optionsPromise = context.waitForEvent('page');
     await textStatus.click();

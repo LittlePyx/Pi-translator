@@ -259,6 +259,7 @@ function updateQuickActions(): void {
       ? 'sidebar'
       : 'reader';
   quickActions.prepend(primaryAction);
+  quickActions.removeAttribute('aria-busy');
 }
 
 async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
@@ -352,7 +353,6 @@ async function load(): Promise<void> {
   apiProfile.value = settings.activeApiProfileId;
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
   generalPageMode = settings.generalPageMode;
-  await refreshApiReadiness(settings);
   await resolveActivePdfContext(tabs[0] ?? {});
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
@@ -365,12 +365,13 @@ async function load(): Promise<void> {
     siteName.textContent = '';
     pauseSite.checked = false;
     pauseSite.disabled = true;
-    return;
+  } else {
+    siteName.textContent = hostname;
+    pauseSite.checked = isSiteHostPaused(hostname, pausedSiteHosts);
+    pauseSite.disabled = false;
+    siteControl.hidden = false;
   }
-  siteName.textContent = hostname;
-  pauseSite.checked = isSiteHostPaused(hostname, pausedSiteHosts);
-  pauseSite.disabled = false;
-  siteControl.hidden = false;
+  await refreshApiReadiness(settings);
 }
 
 targetLanguage.addEventListener('change', () => {
@@ -509,4 +510,7 @@ retryPdfAccess.addEventListener('click', () => {
   })().catch(() => showUnavailablePdfSource());
 });
 
-void load().catch(() => setStatus('读取扩展状态失败，请重新打开面板。', 'error'));
+void load().catch(() => {
+  updateQuickActions();
+  setStatus('读取扩展状态失败，请重新打开面板。', 'error');
+});

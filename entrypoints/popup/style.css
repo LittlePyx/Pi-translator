@@ -175,9 +175,39 @@ button {
 
 .primary-action:hover { background: linear-gradient(135deg, #4338ca, #5b4bd6); }
 .quick-actions {
+  position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
   gap: 8px;
+}
+.quick-actions[data-primary="loading"] {
+  pointer-events: none;
+}
+.quick-actions[data-primary="loading"] > button {
+  visibility: hidden;
+}
+.quick-actions[data-primary="loading"]::before,
+.quick-actions[data-primary="loading"]::after {
+  position: absolute;
+  left: 0;
+  height: calc(50% - 4px);
+  border-radius: 10px;
+  background: linear-gradient(90deg, #e6eaf1 25%, #f4f6fa 50%, #e6eaf1 75%);
+  background-size: 200% 100%;
+  animation: quick-actions-loading 1.25s ease-in-out infinite;
+  content: "";
+}
+.quick-actions[data-primary="loading"]::before {
+  top: 0;
+  width: 100%;
+}
+.quick-actions[data-primary="loading"]::after {
+  bottom: 0;
+  width: 64%;
+}
+@keyframes quick-actions-loading {
+  from { background-position: 100% 0; }
+  to { background-position: -100% 0; }
 }
 .quick-actions .primary-action { grid-column: 1 / -1; }
 .quick-actions .secondary-action { grid-column: 1; }
@@ -261,6 +291,10 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   select { border-color: #465269; color: #eef2f7; background: #182131; }
   button { border-color: #465269; color: #e2e8f0; background: #202938; }
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
+  .quick-actions[data-primary="loading"]::before,
+  .quick-actions[data-primary="loading"]::after {
+    background-image: linear-gradient(90deg, #202938 25%, #2b3546 50%, #202938 75%);
+  }
   .quick-actions .utility-action { border-color: transparent; color: #aab5c5; background: transparent; }
   .quick-actions .utility-action:hover { color: #c7d2fe; background: rgba(99, 102, 241, .14); }
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
@@ -281,5 +315,7 @@ button:focus-visible, select:focus-visible, input:focus-visible {
 @media (prefers-reduced-motion: reduce) {
   .switch-row input,
   .switch-row input::before { transition: none; }
+  .quick-actions[data-primary="loading"]::before,
+  .quick-actions[data-primary="loading"]::after,
   .status[data-tone="progress"]::before { animation: none; }
 }
