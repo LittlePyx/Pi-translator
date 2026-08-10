@@ -618,8 +618,45 @@ export class TranslationOverlay {
     surface.append(toolbar);
     if(!summaries.length){const empty=document.createElement('div');empty.className='idle';const title=document.createElement('strong');title.textContent='本文暂无标记';const text=document.createElement('p');text.textContent='轻标记重要译句后，会按页码显示在这里。';empty.append(title,text);surface.append(empty);this.showSurface(surface);return}
     const list=document.createElement('div');list.className='marker-notes-list';
-    for(const summary of summaries){const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;const main=this.button('','marker-note-main',summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文');const meta=document.createElement('div');meta.className='marker-note-meta';const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);if(summary.locationState==='missing'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='原文位置已变化';meta.append(status)}else if(summary.locationState==='pending'){const status=document.createElement('span');status.className='marker-note-status';status.textContent='点击定位';meta.append(status)}const source=document.createElement('div');source.className='marker-note-source';source.textContent=summary.originalText;const target=document.createElement('div');target.className='marker-note-target';renderTranslationContent(target,summary.translatedText,false);main.append(meta,source,target);main.addEventListener('click',()=>{void this.actions.onNavigateSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});const actions=document.createElement('div');actions.className='marker-note-actions';const copy=this.button('复制','', '复制这条标记');copy.addEventListener('click',()=>{const sourceText=normalizeLatexForClipboard(summary.originalText).replace(/\r?\n/gu,'\n> ');const targetText=normalizeLatexForClipboard(summary.translatedText);this.copyWithFeedback(copy,`> ${sourceText}\n\n${targetText}`)});const remove=this.button('删除','', '删除这条标记');remove.addEventListener('click',()=>{void this.actions.onRemoveSourceMark?.(summary.markerId).then(()=>this.renderMarkerNavigator())});actions.append(copy,remove);item.append(main,actions);list.append(item)}
+    for(const [index,summary] of summaries.entries()){
+      const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;
+      const main=this.button('','marker-note-main',summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文');
+      const meta=document.createElement('div');meta.className='marker-note-meta';
+      const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);
+      if(summary.locationState==='missing'){
+        const status=document.createElement('span');status.className='marker-note-status';status.textContent='原文位置已变化';meta.append(status);
+      }else if(summary.locationState==='pending'){
+        const status=document.createElement('span');status.className='marker-note-status';status.textContent='点击定位';meta.append(status);
+      }
+      const source=document.createElement('div');source.className='marker-note-source';source.textContent=summary.originalText;
+      const target=document.createElement('div');target.className='marker-note-target';renderTranslationContent(target,summary.translatedText,false);
+      main.append(meta,source,target);
+      main.addEventListener('click',()=>{
+        const task=this.actions.onNavigateSourceMark?.(summary.markerId);if(!task)return;
+        void task.then(()=>{
+          const narrow=globalThis.matchMedia?.('(max-width:620px)')?.matches??innerWidth<=620;
+          if(narrow){this.collapseSidebar();return}
+          this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index));
+        });
+      });
+      const actions=document.createElement('div');actions.className='marker-note-actions';
+      const copy=this.button('复制','', '复制这条标记');
+      copy.addEventListener('click',()=>{const sourceText=normalizeLatexForClipboard(summary.originalText).replace(/\r?\n/gu,'\n> ');const targetText=normalizeLatexForClipboard(summary.translatedText);this.copyWithFeedback(copy,`> ${sourceText}\n\n${targetText}`)});
+      const remove=this.button('删除','', '删除这条标记');
+      remove.addEventListener('click',()=>{
+        const task=this.actions.onRemoveSourceMark?.(summary.markerId);if(!task)return;
+        void task.then(()=>{this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index))});
+      });
+      actions.append(copy,remove);item.append(main,actions);list.append(item);
+    }
     surface.append(list);this.showSurface(surface);
+  }
+
+  private focusMarkerNavigatorFallback(preferredIndex=0):void {
+    const markers=[...this.root.querySelectorAll<HTMLButtonElement>('.marker-note-main')];
+    const marker=markers[Math.min(preferredIndex,Math.max(0,markers.length-1))];
+    (marker??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))
+      ?.focus({preventScroll:true});
   }
 
   private openDocumentMemory():void {
@@ -1057,7 +1094,7 @@ export class TranslationOverlay {
     if(moveFocusIntoCard||hadOverlayFocus)queueMicrotask(restoreOverlayFocus);
   }
 
-  private collapseSidebar():void { const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,'展开 Pi Translator 连续翻译侧栏');const label=document.createElement('span');label.textContent='连续翻译';tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
+  private collapseSidebar():void { const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const collapsedLabel=this.markerNavigatorActive?'本文标记':'连续翻译';const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,`展开 Pi Translator ${collapsedLabel}侧栏`);const label=document.createElement('span');label.textContent=collapsedLabel;tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.markerNavigatorActive)this.renderMarkerNavigator();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
   private closeSurface():void { const restoreFocus=this.cardReturnFocus;this.cardReturnFocus=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.markedOnly=false;this.actions.onSidebarChange(false)}this.hide();this.actions.onDismiss();if(restoreFocus?.isConnected)queueMicrotask(()=>restoreFocus.focus({preventScroll:true})); }
   private navigationHistory():TranslationHistoryEntry[]{return this.markedOnly?this.history.filter(entry=>this.actions.hasSourceMarksForResult?.(entry)):this.history}
   private navigate(delta:number):void { const history=this.navigationHistory();const current=history.findIndex(entry=>entry.requestId===this.currentResult?.requestId);const next=current+delta;if(next<0||next>=history.length)return;this.historyIndex=next;this.alignedView=false;this.renderResult(history[next] as TranslationHistoryEntry); }

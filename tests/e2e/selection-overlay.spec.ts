@@ -2854,6 +2854,143 @@ test('keeps 100 persistent markers responsive across a long lazily rendered PDF'
   }
 });
 
+test('keeps narrow PDF marker notes readable and reveals the marked source', async ({}, testInfo) => {
+  const sourceUrl = 'https://www.overleaf.com/narrow-marker-notes.pdf';
+  const anchorText = 'Narrow PDF marker source sentence.';
+  const sourceText = 'A narrow marker preserves an '
+    + 'ExtremelyLongAcademicIdentifierWithoutNaturalBreakpoints for later review.';
+  const translatedText = '这条较长的标记译文用于核对窄屏下的截断、复制、定位与删除焦点是否保持清晰。';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'application/pdf',
+      body: createTextPdf(anchorText),
+    });
+  });
+  const identity = new URL(sourceUrl).href;
+  const documentId = createHash('sha256').update(identity).digest('hex').slice(0, 32);
+  const seed = await context.newPage();
+  await seed.goto(`chrome-extension://${extensionId}/popup.html`);
+  await seed.evaluate(async ({ id, anchor, originalText, targetText }) => {
+    const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+    await api.storage.local.set({
+      piPdfTranslationMarkersV1: {
+        [id]: {
+          enabled: true,
+          markers: [{
+            markerId: 'narrow-marker-note',
+            anchor: {
+              kind: 'text-quote',
+              pageNumber: 1,
+              sourceText: anchor,
+              prefix: '',
+              suffix: '',
+            },
+            content: {
+              originalText,
+              translatedText: targetText,
+              sourceTitle: 'narrow-marker-notes.pdf',
+              pageNumber: 1,
+            },
+            createdAt: 1,
+          }],
+          updatedAt: Date.now(),
+        },
+      },
+    });
+  }, { id: documentId, anchor: anchorText, originalText: sourceText, targetText: translatedText });
+  await seed.close();
+
+  const reader = await context.newPage();
+  const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  readerUrl.searchParams.set('url', sourceUrl);
+  try {
+    await reader.setViewportSize({ width: 360, height: 700 });
+    await reader.goto(readerUrl.href);
+    await expect(reader.locator('.pdf-page[data-page-number="1"]'))
+      .toHaveAttribute('data-rendered', 'ready');
+    await reader.locator('#fit-width').click();
+    const markerLayer = reader.locator('#pi-translation-marker-layer');
+    const sourceMarker = markerLayer.locator('.marker').first();
+    await expect(sourceMarker).toBeVisible();
+    const markerBounds = await sourceMarker.boundingBox();
+    expect(markerBounds).not.toBeNull();
+    if (!markerBounds) return;
+    await reader.mouse.click(
+      markerBounds.x + Math.min(markerBounds.width / 2, 40),
+      markerBounds.y + markerBounds.height / 2,
+    );
+
+    const overlay = reader.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button', { name: '查看本文标记（1）' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    const markerNote = overlay.locator('.marker-note');
+    await expect(markerNote).toContainText(sourceText);
+    await expect(markerNote).toContainText(translatedText);
+    const layout = await overlay.locator('.surface').evaluate((surface) => {
+      const toolbar = surface.querySelector<HTMLElement>('.marker-notes-toolbar');
+      const note = surface.querySelector<HTMLElement>('.marker-note');
+      const main = surface.querySelector<HTMLElement>('.marker-note-main');
+      const buttons = [...surface.querySelectorAll<HTMLElement>('.marker-note-actions button')];
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        toolbarClientWidth: toolbar?.clientWidth ?? 0,
+        toolbarScrollWidth: toolbar?.scrollWidth ?? 0,
+        noteRight: note?.getBoundingClientRect().right ?? Infinity,
+        surfaceRight: surface.getBoundingClientRect().right,
+        mainClientWidth: main?.clientWidth ?? 0,
+        mainScrollWidth: main?.scrollWidth ?? 0,
+        buttonSizes: buttons.map((button) => ({
+          width: button.getBoundingClientRect().width,
+          height: button.getBoundingClientRect().height,
+        })),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await reader.screenshot({ path: testInfo.outputPath('pdf-marker-notes-360-light.png') });
+      await reader.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await reader.screenshot({ path: testInfo.outputPath('pdf-marker-notes-360-dark.png') });
+      await reader.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.toolbarScrollWidth).toBeLessThanOrEqual(layout.toolbarClientWidth + 1);
+    expect(layout.noteRight).toBeLessThanOrEqual(layout.surfaceRight);
+    expect(layout.mainScrollWidth).toBeLessThanOrEqual(layout.mainClientWidth + 1);
+    expect(layout.buttonSizes.every(({ width, height }) => width >= 32 && height >= 32)).toBe(true);
+
+    const copy = markerNote.getByRole('button', { name: '复制这条标记' });
+    await copy.click();
+    await expect(copy).toHaveText('已复制');
+    const copyAll = overlay.getByRole('button', { name: '复制本文标记为 Markdown' });
+    await copyAll.click();
+    await expect(copyAll).toHaveText('已复制 1 条');
+
+    await markerNote.getByRole('button', { name: '跳转到原文' }).click();
+    await expect(markerLayer.locator('.marker.focused')).toBeVisible();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    if (process.env.PI_VISUAL_QA) {
+      await reader.screenshot({ path: testInfo.outputPath('pdf-marker-source-360-light.png') });
+    }
+    await overlay.getByRole('button', { name: '展开 Pi Translator 本文标记侧栏' }).click();
+    await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
+    await overlay.locator('.marker-note').getByRole('button', { name: '删除这条标记' }).click();
+    await expect(overlay).toContainText('本文暂无标记');
+    await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
+    await expect(markerLayer.locator('.marker')).toHaveCount(0);
+  } finally {
+    await reader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
+      await api.storage.local.set({ piPdfTranslationMarkersV1: {} });
+    }).catch(() => undefined);
+    await reader.close();
+    await context.unroute(sourceUrl);
+  }
+});
+
 test('keeps PDF selection UI quiet until a native text-layer drag finishes', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
