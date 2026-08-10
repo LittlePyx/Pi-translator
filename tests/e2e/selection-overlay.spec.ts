@@ -2724,6 +2724,9 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   const requestCount = visionRequests.length;
   const scanHint = pdfPage.locator('#notice');
   await expect(scanHint).toHaveClass(/transient/);
+  await expect(scanHint).toHaveAttribute('data-tone', 'warning');
+  await expect(scanHint).toHaveAttribute('role', 'status');
+  await expect(scanHint).toHaveAttribute('aria-atomic', 'true');
   await expect(scanHint).toContainText('扫描版 PDF');
   const recognizePage = scanHint.getByRole('button', {
     name: '识别第 1 页并生成临时文字层',
@@ -3120,6 +3123,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-rotated"]')).toHaveCount(0);
   await expect(firstPage).toHaveAttribute('data-has-text', 'true');
   await expect(pdfPage.locator('#notice')).toContainText('临时文字层');
+  await expect(pdfPage.locator('#notice')).toHaveAttribute('data-tone', 'success');
   await ocrLine.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -3683,6 +3687,7 @@ test('drops a delayed image capture after the user opens another PDF', async () 
   await pdfPage.mouse.up();
   await firstPage.locator('.region-confirm .confirm').click();
   await expect(pdfPage.locator('#notice')).toContainText('正在检查框选内容');
+  await expect(pdfPage.locator('#notice')).toHaveAttribute('data-tone', 'info');
 
   await fileInput.setInputFiles({
     name: 'new-document.pdf',
@@ -3747,6 +3752,38 @@ test('rejects a vision provider that echoes the captured PDF image', async () =>
   });
   expect(serializedStorage).not.toContain('data:image/');
   expect(serializedStorage).not.toContain(imageUrl?.slice(-80) ?? 'never-match');
+  await pdfPage.close();
+});
+
+test('keeps recoverable PDF warnings compact and document errors persistent', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  const fileInput = pdfPage.locator('#file-input');
+  const notice = pdfPage.locator('#notice');
+
+  await fileInput.setInputFiles({
+    name: 'notes.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('not a PDF'),
+  });
+  await expect(notice).toContainText('请选择 PDF 文件');
+  await expect(notice).toHaveClass(/transient/);
+  await expect(notice).toHaveAttribute('data-tone', 'warning');
+  await expect(notice).toHaveAttribute('role', 'status');
+  await expect(notice).toHaveAttribute('aria-live', 'polite');
+
+  await fileInput.setInputFiles({
+    name: 'broken.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('not a valid PDF payload'),
+  });
+  await expect(notice).toContainText('无法打开 PDF');
+  await expect(notice).not.toHaveClass(/transient/);
+  await expect(notice).toHaveAttribute('data-tone', 'error');
+  await expect(notice).toHaveAttribute('role', 'alert');
+  await expect(notice).toHaveAttribute('aria-live', 'assertive');
+  expect(await notice.evaluate((element) => parseFloat(getComputedStyle(element).borderLeftWidth)))
+    .toBeGreaterThan(2.5);
   await pdfPage.close();
 });
 

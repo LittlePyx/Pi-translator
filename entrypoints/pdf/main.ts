@@ -243,10 +243,13 @@ function setLoading(message: string | undefined): void {
   if (message) loadingText.textContent = message;
 }
 
+type PdfNoticeTone = 'info' | 'success' | 'warning' | 'error';
+
 function showNotice(
   message: string | undefined,
   options: {
     transient?: boolean;
+    tone?: PdfNoticeTone;
     action?: { label: string; ariaLabel?: string; onClick: () => void };
   } = {},
 ): void {
@@ -255,7 +258,17 @@ function showNotice(
   noticeRevision += 1;
   notice.hidden = !message;
   notice.replaceChildren();
-  if (message) notice.append(document.createTextNode(message));
+  if (!message) {
+    notice.removeAttribute('data-tone');
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
+  } else {
+    const tone = options.tone ?? 'info';
+    notice.dataset.tone = tone;
+    notice.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+    notice.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
+    notice.append(document.createTextNode(message));
+  }
   if (message && options.action) {
     const action = document.createElement('button');
     action.className = 'notice-action';
@@ -273,8 +286,11 @@ function showNotice(
     notice.hidden = true;
     notice.textContent = '';
     notice.classList.remove('transient');
+    notice.removeAttribute('data-tone');
+    notice.setAttribute('role', 'status');
+    notice.setAttribute('aria-live', 'polite');
     noticeTimer = undefined;
-  }, options.action ? 8000 : 4500);
+  }, options.action || options.tone === 'error' ? 8000 : 4500);
 }
 
 async function openPdfSettings(focus?:SettingsFocus):Promise<boolean>{
@@ -282,7 +298,9 @@ async function openPdfSettings(focus?:SettingsFocus):Promise<boolean>{
     const response=await browser.runtime.sendMessage({type:'OPEN_OPTIONS_PAGE',...(focus?{payload:{focus}}:{})} satisfies RuntimeMessage) as RuntimeResponse<{opened:true}>;
     if(response.ok)return true;
   }catch{}
-  showNotice('无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。');
+  showNotice('无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。', {
+    tone: 'error',
+  });
   return false;
 }
 
@@ -340,11 +358,11 @@ function cancelRegionTranslation(taskId: string): void {
   const queuedIndex = regionTranslationQueue.findIndex((task) => task.id === taskId);
   if (queuedIndex >= 0) {
     regionTranslationQueue.splice(queuedIndex, 1);
-    showNotice('已从翻译队列移除。', { transient: true });
+    showNotice('已从翻译队列移除。', { transient: true, tone: 'success' });
   } else if (activeRegionTranslation?.id === taskId) {
     activeRegionTranslation.cancelled = true;
     void selectionTranslator.then((controller) => controller.cancelActiveTranslation());
-    showNotice('正在取消当前框选翻译…', { transient: true });
+    showNotice('正在取消当前框选翻译…', { transient: true, tone: 'info' });
   }
   updateRegionAction();
 }
@@ -688,7 +706,7 @@ function setRegionMode(mode: RegionSelectionMode): void {
       regionMode === 'continuous'
         ? '连续框选已开启 · 可逐个发送 · Esc 退出'
         : '拖动框选一次 · Esc 取消',
-      { transient: true },
+      { transient: true, tone: 'info' },
     );
   } else {
     showNotice(undefined);
@@ -964,6 +982,7 @@ async function renderPage(
       scanHintShownForDocument = true;
       showNotice('可能是扫描版 PDF', {
         transient: true,
+        tone: 'warning',
         action: {
           label: '识别本页',
           ariaLabel: `识别第 ${pageElement.dataset.pageNumber ?? '当前'} 页并生成临时文字层`,
@@ -1100,7 +1119,9 @@ async function openPdfData(
     viewer.hidden = true;
     pageJump.hidden = true;
     setDocumentControls(false);
-    showNotice(error instanceof Error ? `无法打开 PDF：${error.message}` : '无法打开这个 PDF。');
+    showNotice(error instanceof Error ? `无法打开 PDF：${error.message}` : '无法打开这个 PDF。', {
+      tone: 'error',
+    });
   } finally {
     if (openLoadingTask && isCurrentOpen(operation)) openLoadingTask = undefined;
     completeDocumentOpen(operation);
@@ -1109,7 +1130,7 @@ async function openPdfData(
 
 async function openLocalFile(file: File): Promise<void> {
   if (file.type && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    showNotice('请选择 PDF 文件。');
+    showNotice('请选择 PDF 文件。', { transient: true, tone: 'warning' });
     return;
   }
   const operation = beginDocumentOpen('正在读取本地 PDF…');
@@ -1127,7 +1148,9 @@ async function openLocalFile(file: File): Promise<void> {
   } catch (error) {
     if (!isCurrentOpen(operation)) return;
     emptyState.hidden = false;
-    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。');
+    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。', {
+      tone: 'error',
+    });
     completeDocumentOpen(operation);
   }
 }
@@ -1227,7 +1250,7 @@ function createKeyboardRegion(): void {
   ) ?? viewer.querySelector<HTMLElement>('.pdf-page[data-rendered="ready"]');
   const canvas = pageElement?.querySelector<HTMLCanvasElement>('canvas');
   if (!pageElement || !canvas) {
-    showNotice('页面仍在渲染，请稍后再试。', { transient: true });
+    showNotice('页面仍在渲染，请稍后再试。', { transient: true, tone: 'warning' });
     return;
   }
   const bounds = pageElement.getBoundingClientRect();
@@ -1247,12 +1270,15 @@ function createKeyboardRegion(): void {
 function createPageRecognitionRegion(pageElement: HTMLElement): void {
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   if (pageElement.dataset.rendered !== 'ready' || !canvas) {
-    showNotice('页面仍在渲染，请稍后再试。', { transient: true });
+    showNotice('页面仍在渲染，请稍后再试。', { transient: true, tone: 'warning' });
     return;
   }
   const bounds = pageElement.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0) {
-    showNotice('当前页面不可见，请滚动到页面后重试。', { transient: true });
+    showNotice('当前页面不可见，请滚动到页面后重试。', {
+      transient: true,
+      tone: 'warning',
+    });
     return;
   }
   setRegionMode('single');
@@ -1442,20 +1468,26 @@ async function pageForSourceLocation(
   reference: PdfSourceLocation,
 ): Promise<HTMLElement | undefined> {
   if (reference.documentId !== currentDocumentSessionId || !pdfDocument) {
-    showNotice('原 PDF 已发生变化，无法恢复这个选区。', { transient: true });
+    showNotice('原 PDF 已发生变化，无法恢复这个选区。', {
+      transient: true,
+      tone: 'warning',
+    });
     return undefined;
   }
   const pageElement = viewer.querySelector<HTMLElement>(
     `.pdf-page[data-page-number="${reference.pageNumber}"]`,
   );
   if (!pageElement) {
-    showNotice('找不到原选区所在页面。', { transient: true });
+    showNotice('找不到原选区所在页面。', { transient: true, tone: 'warning' });
     return undefined;
   }
   scrollToPageAnchor({ pageNumber: reference.pageNumber, ratio: reference.topRatio });
   requestPageRender(pdfDocument, pageElement, renderGeneration);
   if (!await waitForPageReady(pageElement, documentEpoch)) {
-    showNotice('页面尚未渲染完成，请稍后再试。', { transient: true });
+    showNotice('页面尚未渲染完成，请稍后再试。', {
+      transient: true,
+      tone: 'warning',
+    });
     return undefined;
   }
   return pageElement;
@@ -1504,14 +1536,17 @@ async function restorePdfRegionSelection(reference: PdfSourceLocation): Promise<
   clearSourceRegionHighlight();
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   if (!canvas) {
-    showNotice('无法恢复原选区，请重新框选。', { transient: true });
+    showNotice('无法恢复原选区，请重新框选。', { transient: true, tone: 'warning' });
     return;
   }
   if (regionMode === 'off') setRegionMode('single');
   const region = regionFromSourceLocation(reference, pageElement);
   const selection = createActiveRegion(pageElement, canvas, region);
   createRegionConfirmation(selection);
-  showNotice('已恢复原选区，可拖动或调整角点后重新发送。', { transient: true });
+  showNotice('已恢复原选区，可拖动或调整角点后重新发送。', {
+    transient: true,
+    tone: 'success',
+  });
 }
 
 async function navigateToPdfRegion(reference: PdfSourceLocation): Promise<void> {
@@ -1553,7 +1588,10 @@ function enqueueRegionTranslation(
   task: Omit<QueuedRegionTranslation, 'id' | 'cancelled' | 'enqueuedAt'>,
 ): boolean {
   if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
-    showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', { transient: true });
+    showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', {
+      transient: true,
+      tone: 'warning',
+    });
     return false;
   }
   regionTranslationQueue.push({
@@ -1563,7 +1601,10 @@ function enqueueRegionTranslation(
     enqueuedAt: performance.now(),
   });
   updateRegionAction();
-  showNotice(`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, { transient: true });
+  showNotice(`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, {
+    transient: true,
+    tone: 'success',
+  });
   void drainRegionTranslationQueue();
   return true;
 }
@@ -1599,7 +1640,7 @@ async function drainRegionTranslationQueue(): Promise<void> {
         if (task.cancelled || task.documentEpoch !== documentEpoch) continue;
         showNotice(
           error instanceof Error ? error.message : '框选翻译失败，请稍后重试。',
-          { transient: true },
+          { transient: true, tone: 'error' },
         );
       } finally {
         if (activeRegionTranslation === task) activeRegionTranslation = undefined;
@@ -1684,19 +1725,25 @@ function createRegionConfirmation(
     if (activePageRecognitionRequestId) {
       clearRegionSelection();
       if (regionMode === 'single') setRegionMode('off');
-      showNotice('已取消本页识别。', { transient: true });
+      showNotice('已取消本页识别。', { transient: true, tone: 'success' });
       return;
     }
     if (regionMode === 'continuous') {
       clearRegionSelection();
-      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
+      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', {
+        transient: true,
+        tone: 'info',
+      });
     } else {
       setRegionMode('off');
     }
   });
   confirm.addEventListener('click', () => {
     if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
-      showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', { transient: true });
+      showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', {
+        transient: true,
+        tone: 'warning',
+      });
       return;
     }
     confirm.disabled = true;
@@ -1705,6 +1752,7 @@ function createRegionConfirmation(
       selection.purpose === 'page-recognition'
         ? '正在识别本页文字…'
         : '正在检查框选内容…',
+      { tone: 'info' },
     );
     const captureEpoch = selection.documentEpoch;
     const requestPageUrl = currentSourceUrl;
@@ -1725,7 +1773,10 @@ function createRegionConfirmation(
       clearRegionSelection();
       if (regionMode === 'single') setRegionMode('off');
       else if (regionMode === 'continuous') {
-        showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', { transient: true });
+        showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', {
+          transient: true,
+          tone: 'info',
+        });
       }
     };
     if (selection.purpose === 'page-recognition') {
@@ -1767,7 +1818,10 @@ function createRegionConfirmation(
           const recovery=translationErrorRecovery(response.error.code,response.error.retryable,'vision');
           showNotice(
             translationErrorMessage(response.error.code,response.error.message),
-            recovery.settingsFocus?{action:{label:recovery.settingsLabel??'检查图像 API',onClick:()=>{void openPdfSettings(recovery.settingsFocus)}}}:{},
+            {
+              tone: 'error',
+              ...(recovery.settingsFocus?{action:{label:recovery.settingsLabel??'检查图像 API',onClick:()=>{void openPdfSettings(recovery.settingsFocus)}}}:{}),
+            },
           );
           return;
         }
@@ -1786,6 +1840,7 @@ function createRegionConfirmation(
         finishSelection();
         showNotice(`已生成临时文字层 · ${lineCount} 行 · 现在可以直接划选翻译`, {
           transient: true,
+          tone: 'success',
         });
       })().catch((error: unknown) => {
         if (
@@ -1797,7 +1852,9 @@ function createRegionConfirmation(
         confirm.disabled = false;
         cancel.disabled = false;
         cancel.textContent = '取消';
-        showNotice(error instanceof Error ? error.message : '本页文字识别失败，请继续使用框选翻译。');
+        showNotice(error instanceof Error ? error.message : '本页文字识别失败，请继续使用框选翻译。', {
+          tone: 'error',
+        });
       });
       return;
     }
@@ -1857,7 +1914,9 @@ function createRegionConfirmation(
       if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
       confirm.disabled = false;
       cancel.disabled = false;
-      showNotice(error instanceof Error ? error.message : '无法处理框选区域，请重新框选。');
+      showNotice(error instanceof Error ? error.message : '无法处理框选区域，请重新框选。', {
+        tone: 'error',
+      });
     });
   });
 }
@@ -1925,7 +1984,10 @@ viewer.addEventListener('pointerup', (event) => {
   selection.interaction = undefined;
   if (interaction.kind === 'draw' && !isUsableRegion(selection.region)) {
     clearRegionSelection();
-    showNotice('框选范围太小，请拖动选择更大的文字或图片区域。');
+    showNotice('框选范围太小，请拖动选择更大的文字或图片区域。', {
+      transient: true,
+      tone: 'warning',
+    });
     return;
   }
   if (interaction.kind === 'draw') createRegionConfirmation(selection);
@@ -1960,7 +2022,7 @@ recognizePage.addEventListener('click', () => {
     `.pdf-page[data-page-number="${pageNumber}"]`,
   );
   if (!pageElement) {
-    showNotice('找不到当前页，请稍后重试。', { transient: true });
+    showNotice('找不到当前页，请稍后重试。', { transient: true, tone: 'warning' });
     return;
   }
   createPageRecognitionRegion(pageElement);
@@ -2006,7 +2068,10 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && isRegionModeActive()) {
     if (activeRegion && regionMode === 'continuous') {
       clearRegionSelection();
-      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 再次退出', { transient: true });
+      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 再次退出', {
+        transient: true,
+        tone: 'info',
+      });
     } else {
       setRegionMode('off');
     }
@@ -2043,13 +2108,16 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
       showNotice(
         'Edge 尚未允许 Pi Translator 读取本地 PDF。请在扩展详情中开启“允许访问文件 URL”，再返回重试。',
         {
+          tone: 'warning',
           action: {
             label: '打开扩展管理页',
             onClick: () => {
               void browser.tabs.create({
                 url: `edge://extensions/?id=${browser.runtime.id}`,
                 active: true,
-              }).catch(() => showNotice('请手动打开 edge://extensions，并进入 Pi Translator 详情。'));
+              }).catch(() => showNotice('请手动打开 edge://extensions，并进入 Pi Translator 详情。', {
+                tone: 'error',
+              }));
             },
           },
         },
@@ -2063,12 +2131,15 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
       showNotice(
         'Pi PDF 还没有当前 PDF 地址的读取权限。授权只针对当前文件来源。',
         {
+          tone: 'warning',
           action: {
             label: '授权并重试',
             onClick: () => {
               void browser.permissions.request({ origins: [permission] }).then((granted) => {
                 if (granted) void openPdfSource(source, initialPage);
-              }).catch(() => showNotice('未能发起 PDF 地址授权，请返回快捷面板后重试。'));
+              }).catch(() => showNotice('未能发起 PDF 地址授权，请返回快捷面板后重试。', {
+                tone: 'error',
+              }));
             },
           },
         },
@@ -2117,6 +2188,7 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     emptyState.hidden = false;
     showNotice(
       `${error instanceof Error ? error.message : '在线 PDF 读取失败'}。你仍可点击“打开 PDF”选择已下载的本地文件。`,
+      { tone: 'error' },
     );
     completeDocumentOpen(operation);
   } finally {
@@ -2195,7 +2267,9 @@ function fitDocumentToAvailableWidth(anchor = visiblePageAnchor()): void {
     rebuildAtZoom(availableWidth / Math.max(1, baseViewport.width), anchor);
   }).catch((error: unknown) => {
     if (pdfDocument !== pdf || documentEpoch !== epoch) return;
-    showNotice(error instanceof Error ? error.message : '无法计算适合宽度。');
+    showNotice(error instanceof Error ? error.message : '无法计算适合宽度。', {
+      tone: 'error',
+    });
   });
 }
 
