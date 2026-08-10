@@ -4180,6 +4180,118 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await sidePanel.close();
 });
 
+test('keeps long native PDF source text compact and expandable', async () => {
+  const sidePanel = await context.newPage();
+  await sidePanel.setViewportSize({ width: 360, height: 820 });
+  await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+  const messageSender = await context.newPage();
+  await messageSender.goto(`chrome-extension://${extensionId}/popup.html`);
+  const tabId = await messageSender.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { tabs: { getCurrent(): Promise<{ id?: number }> } };
+    }).chrome;
+    return (await api.tabs.getCurrent()).id;
+  });
+  expect(tabId).toBeDefined();
+
+  const longSource = Array.from(
+    { length: 12 },
+    (_, index) => `Long academic source sentence ${index + 1} keeps the translation below easy to reach.`,
+  ).join(' ');
+  const baseSession = {
+    tabId,
+    requestId: 'long-source-disclosure-e2e',
+    sourceText: longSource,
+    pageUrl: 'https://www.overleaf.com/long-source.pdf',
+    sourceLabel: 'long-source.pdf',
+    status: 'complete',
+    startedAt: Date.now(),
+    result: {
+      requestId: 'long-source-disclosure-e2e',
+      originalText: longSource,
+      translatedText: '长原文不会遮挡这段译文。',
+      warnings: [],
+      latencyMs: 420,
+    },
+  } as const;
+  const sendSession = async (session: unknown) => messageSender.evaluate(async (payload) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload,
+    });
+  }, session);
+
+  await sendSession(baseSession);
+  const sourceToggle = sidePanel.locator('#source-toggle');
+  const sourceText = sidePanel.locator('#source-text');
+  await expect(sourceToggle).toBeVisible();
+  await expect(sourceToggle).toHaveText('展开');
+  await expect(sourceToggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(sourceToggle).toHaveAttribute('aria-controls', 'source-text');
+  const collapsedLayout = await sourceText.evaluate((source) => ({
+    clientHeight: source.clientHeight,
+    scrollHeight: source.scrollHeight,
+    lineHeight: parseFloat(getComputedStyle(source).lineHeight),
+    overflowY: getComputedStyle(source).overflowY,
+  }));
+  expect(collapsedLayout.scrollHeight).toBeGreaterThan(collapsedLayout.clientHeight + 1);
+  expect(collapsedLayout.clientHeight).toBeLessThanOrEqual(collapsedLayout.lineHeight * 3 + 1);
+  expect(collapsedLayout.overflowY).toBe('hidden');
+  expect(await sourceToggle.evaluate((button) => button.getBoundingClientRect().height)).toBe(28);
+
+  await sourceToggle.click();
+  await expect(sourceToggle).toHaveText('收起');
+  await expect(sourceToggle).toHaveAttribute('aria-expanded', 'true');
+  const expandedLayout = await sourceText.evaluate((source) => ({
+    clientHeight: source.clientHeight,
+    scrollHeight: source.scrollHeight,
+    overflowY: getComputedStyle(source).overflowY,
+  }));
+  expect(expandedLayout.clientHeight).toBeGreaterThan(collapsedLayout.clientHeight + 20);
+  expect(expandedLayout.scrollHeight).toBeLessThanOrEqual(expandedLayout.clientHeight + 1);
+  expect(expandedLayout.overflowY).toBe('visible');
+
+  await sendSession({
+    ...baseSession,
+    result: { ...baseSession.result, latencyMs: 460 },
+  });
+  await expect(sourceToggle).toHaveText('收起');
+  await expect(sourceText).toHaveClass(/expanded/);
+
+  const nextRequestId = 'long-source-disclosure-next-e2e';
+  await sendSession({
+    ...baseSession,
+    requestId: nextRequestId,
+    startedAt: baseSession.startedAt + 1,
+    result: { ...baseSession.result, requestId: nextRequestId },
+  });
+  await expect(sourceToggle).toBeVisible();
+  await expect(sourceToggle).toHaveText('展开');
+  await expect(sourceToggle).toHaveAttribute('aria-expanded', 'false');
+
+  const shortRequestId = 'short-source-disclosure-e2e';
+  await sendSession({
+    ...baseSession,
+    requestId: shortRequestId,
+    sourceText: 'Short source text.',
+    startedAt: baseSession.startedAt + 2,
+    result: {
+      ...baseSession.result,
+      requestId: shortRequestId,
+      originalText: 'Short source text.',
+    },
+  });
+  await sidePanel.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  await expect(sourceToggle).toBeHidden();
+  expect(await sourceText.evaluate((source) => source.scrollHeight <= source.clientHeight + 1)).toBe(true);
+
+  await messageSender.close();
+  await sidePanel.close();
+});
+
 test('clears native PDF side-panel actions as soon as the active tab changes', async () => {
   const sidePanel = await context.newPage();
   await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);

@@ -65,6 +65,7 @@ const emptyStatus = element<HTMLElement>('empty-status');
 const sessionSection = element<HTMLElement>('session');
 const sourceLabel = element<HTMLElement>('source-label');
 const sourceText = element<HTMLElement>('source-text');
+const sourceToggle = element<HTMLButtonElement>('source-toggle');
 const translationState = element<HTMLElement>('translation-state');
 const stopTranslation = element<HTMLButtonElement>('stop-translation');
 const translationText = element<HTMLElement>('translation-text');
@@ -106,6 +107,9 @@ let retryStatusFocusPending = false;
 let retryFocusTabId: number | undefined;
 let stopPendingRequestId: string | undefined;
 let copyResetTimer: number | undefined;
+let sourceExpanded = false;
+let sourceCanExpand = false;
+let sourceLayoutFrame: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
@@ -415,6 +419,27 @@ function showCopySuccess(session: PdfSidePanelSession): void {
   }, 1_800);
 }
 
+function syncSourceDisclosure(session: PdfSidePanelSession, renderRevision: number): void {
+  if (sourceLayoutFrame !== undefined) window.cancelAnimationFrame(sourceLayoutFrame);
+  sourceLayoutFrame = undefined;
+  sourceText.classList.toggle('expanded', sourceExpanded);
+  sourceToggle.textContent = sourceExpanded ? '收起' : '展开';
+  sourceToggle.setAttribute('aria-expanded', String(sourceExpanded));
+  sourceToggle.setAttribute('aria-label', sourceExpanded ? '收起原文' : '展开完整原文');
+  sourceToggle.hidden = !sourceCanExpand;
+  if (sourceExpanded) return;
+
+  sourceLayoutFrame = window.requestAnimationFrame(() => {
+    sourceLayoutFrame = undefined;
+    if (
+      renderRevision !== translationRenderRevision
+      || !isSamePdfSidePanelSession(currentSession, session)
+    ) return;
+    sourceCanExpand = sourceText.scrollHeight > sourceText.clientHeight + 1;
+    sourceToggle.hidden = !sourceCanExpand;
+  });
+}
+
 function hidePdfAccessAlert(): void {
   pdfAccessAlert.hidden = true;
 }
@@ -499,7 +524,14 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
 }
 
 function render(session: PdfSidePanelSession | null | undefined): void {
-  if (session?.requestId !== currentSession?.requestId) formulaRenderOverride = undefined;
+  const sameSession = Boolean(session && isSamePdfSidePanelSession(currentSession, session));
+  if (!sameSession) {
+    formulaRenderOverride = undefined;
+    sourceExpanded = false;
+    sourceCanExpand = false;
+  }
+  if (sourceLayoutFrame !== undefined) window.cancelAnimationFrame(sourceLayoutFrame);
+  sourceLayoutFrame = undefined;
   clearCopyFeedback();
   currentSession = session ?? undefined;
   const renderRevision = ++translationRenderRevision;
@@ -516,6 +548,8 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     errorMessage.textContent = '';
     correct.hidden = true;
     correctionUndo.hidden = true;
+    sourceToggle.hidden = true;
+    sourceText.classList.remove('expanded');
     return;
   }
   if (retryFocusPending && retryFocusTabId !== session.tabId) {
@@ -527,6 +561,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
   sourceText.textContent = presentationText(session, session.sourceText);
+  syncSourceDisclosure(session, renderRevision);
   const pdfSource = parsePdfSourceUrl(session.pageUrl);
   const pageNumber = session.pageNumber ?? pdfInitialPage(session.pageUrl);
   const needsVisionHint = session.providerContext?.role === 'vision';
@@ -1189,6 +1224,18 @@ copy.addEventListener('click', () => {
       copy.textContent = copyActionLabel(session);
       setStatus('复制失败', 4_000);
     });
+});
+
+sourceToggle.addEventListener('click', () => {
+  const session = activeSession();
+  if (!session || !sourceCanExpand) return;
+  sourceExpanded = !sourceExpanded;
+  syncSourceDisclosure(session, translationRenderRevision);
+});
+window.addEventListener('resize', () => {
+  const session = currentSession;
+  if (!session) return;
+  syncSourceDisclosure(session, translationRenderRevision);
 });
 correct.addEventListener('click', openCorrectionEditor);
 undoCorrection.addEventListener('click', undoCurrentCorrection);
