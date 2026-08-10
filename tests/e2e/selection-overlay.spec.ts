@@ -1924,6 +1924,49 @@ test('gives compact progress and success feedback when updating the target langu
   await reopened.close();
 });
 
+test('promotes the current PDF action in the quick popup', async () => {
+  const sourceUrl = 'https://www.overleaf.com/popup-primary-action.pdf';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createTextPdf('Contextual popup primary action.'),
+    });
+  });
+  const nativePdfPage = await context.newPage();
+  let popup: Page | undefined;
+  try {
+    await nativePdfPage.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
+    popup = await context.newPage();
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await nativePdfPage.bringToFront();
+    await popup.reload();
+
+    const quickActions = popup.locator('#quick-actions');
+    const openPdf = popup.locator('#open-pdf');
+    const openSidebar = popup.locator('#open-sidebar');
+    await expect(quickActions).toHaveAttribute('data-primary', 'pdf');
+    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-pdf');
+    await expect(openPdf).toHaveClass(/primary-action/);
+    await expect(openPdf).toHaveText('用 Pi 打开当前 PDF');
+    await expect(openSidebar).toHaveClass(/secondary-action/);
+    await expect(openSidebar).toHaveText('打开翻译侧栏');
+    await expect(popup.locator('#open-settings')).toHaveText('完整设置');
+    const layout = await quickActions.evaluate((actions) => ({
+      clientWidth: actions.clientWidth,
+      scrollWidth: actions.scrollWidth,
+      primaryWidth: actions.querySelector<HTMLElement>('.primary-action')
+        ?.getBoundingClientRect().width,
+    }));
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.primaryWidth).toBeGreaterThanOrEqual(layout.clientWidth - 1);
+  } finally {
+    if (popup && !popup.isClosed()) await popup.close();
+    await nativePdfPage.close();
+    await context.unroute(sourceUrl);
+  }
+});
+
 test('opens the full settings page in a browser tab', async () => {
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);

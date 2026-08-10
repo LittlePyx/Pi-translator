@@ -45,6 +45,7 @@ const apiProfile = element<HTMLSelectElement>('api-profile');
 const siteName = element<HTMLElement>('site-name');
 const pauseSite = element<HTMLInputElement>('pause-site');
 const status = element<HTMLParagraphElement>('status');
+const quickActions = element<HTMLElement>('quick-actions');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const openSidebar = element<HTMLButtonElement>('open-sidebar');
 const openPdf = element<HTMLButtonElement>('open-pdf');
@@ -222,7 +223,7 @@ function showUnavailablePdfSource(): void {
   );
 }
 
-function updateOpenPdfLabel(): void {
+function updateQuickActions(): void {
   openPdf.textContent = activePdfSourceUrl
     ? activePdfContext === 'overleaf'
       ? '用 Pi 打开当前 Overleaf PDF'
@@ -232,6 +233,16 @@ function updateOpenPdfLabel(): void {
       : activePdfContext === 'native'
         ? '解决 PDF 读取权限'
         : '打开 PDF 阅读器';
+  const pdfIsPrimary = Boolean(activePdfContext);
+  const primaryAction = pdfIsPrimary ? openPdf : openSidebar;
+  const secondaryAction = pdfIsPrimary ? openSidebar : openPdf;
+  primaryAction.classList.add('primary-action');
+  primaryAction.classList.remove('secondary-action');
+  secondaryAction.classList.add('secondary-action');
+  secondaryAction.classList.remove('primary-action');
+  openSidebar.textContent = pdfIsPrimary ? '打开翻译侧栏' : '打开连续翻译侧栏';
+  quickActions.dataset.primary = pdfIsPrimary ? 'pdf' : 'sidebar';
+  quickActions.prepend(primaryAction);
 }
 
 async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
@@ -326,7 +337,7 @@ async function load(): Promise<void> {
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
   await refreshApiReadiness(settings);
   await resolveActivePdfContext(tabs[0] ?? {});
-  updateOpenPdfLabel();
+  updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
   else hidePdfAccessAlert();
   const hostname = activeUrl ? siteHostFromUrl(activeUrl) : undefined;
@@ -459,7 +470,7 @@ retryPdfAccess.addEventListener('click', () => {
     }
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     await resolveActivePdfContext(tab ?? {});
-    updateOpenPdfLabel();
+    updateQuickActions();
     if (activePdfSourceUrl) {
       hidePdfAccessAlert();
       setStatus('已重新识别当前 PDF。');

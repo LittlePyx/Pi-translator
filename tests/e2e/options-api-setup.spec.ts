@@ -147,6 +147,35 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
       width: 34,
     });
 
+    const quickActions = popup.locator('#quick-actions');
+    await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
+    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
+    await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
+    await expect(popup.locator('#open-pdf')).toHaveClass(/secondary-action/);
+    await expect(popup.locator('#open-settings')).toHaveClass(/utility-action/);
+    const actionLayout = await quickActions.evaluate((actions) => {
+      const primary = actions.querySelector<HTMLElement>('.primary-action');
+      const secondary = actions.querySelector<HTMLElement>('.secondary-action');
+      const utility = actions.querySelector<HTMLElement>('.utility-action');
+      if (!primary || !secondary || !utility) return undefined;
+      const primaryRect = primary.getBoundingClientRect();
+      const secondaryRect = secondary.getBoundingClientRect();
+      const utilityRect = utility.getBoundingClientRect();
+      return {
+        actionsWidth: actions.getBoundingClientRect().width,
+        primaryWidth: primaryRect.width,
+        primaryBottom: primaryRect.bottom,
+        secondaryTop: secondaryRect.top,
+        utilityTop: utilityRect.top,
+        utilityWidth: utilityRect.width,
+      };
+    });
+    expect(actionLayout).toBeDefined();
+    expect(actionLayout!.primaryWidth).toBeGreaterThanOrEqual(actionLayout!.actionsWidth - 1);
+    expect(actionLayout!.primaryBottom).toBeLessThanOrEqual(actionLayout!.secondaryTop);
+    expect(Math.abs(actionLayout!.secondaryTop - actionLayout!.utilityTop)).toBeLessThan(1);
+    expect(actionLayout!.utilityWidth).toBeLessThan(actionLayout!.actionsWidth / 2);
+
     const optionsPromise = context.waitForEvent('page');
     await textStatus.click();
     focusedOptions = await optionsPromise;

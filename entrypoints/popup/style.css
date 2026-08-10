@@ -174,7 +174,23 @@ button {
 }
 
 .primary-action:hover { background: linear-gradient(135deg, #4338ca, #5b4bd6); }
-#open-pdf, #open-settings { margin-top: 8px; }
+.quick-actions {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+.quick-actions .primary-action { grid-column: 1 / -1; }
+.quick-actions .secondary-action { grid-column: 1; }
+.quick-actions .utility-action {
+  grid-column: 2;
+  width: auto;
+  padding-inline: 10px;
+  border-color: transparent;
+  color: #64748b;
+  background: transparent;
+  font-size: 12px;
+}
+.quick-actions .utility-action:hover { color: #4338ca; background: rgba(99, 102, 241, .08); }
 
 button:hover { filter: brightness(1.06); }
 button:focus-visible, select:focus-visible, input:focus-visible {
@@ -241,6 +257,8 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   select { border-color: #465269; color: #eef2f7; background: #182131; }
   button { border-color: #465269; color: #e2e8f0; background: #202938; }
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
+  .quick-actions .utility-action { border-color: transparent; color: #aab5c5; background: transparent; }
+  .quick-actions .utility-action:hover { color: #c7d2fe; background: rgba(99, 102, 241, .14); }
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
   .capability-status { border-color: #2c374b; }
