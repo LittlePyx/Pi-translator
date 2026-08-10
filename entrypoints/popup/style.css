@@ -75,6 +75,7 @@ header small { color: #7c889e; font-size: 10px; letter-spacing: .08em; }
 .logo img { width: 25px; height: 22px; object-fit: contain; }
 
 label { display: grid; gap: 7px; color: #475569; font-size: 12px; font-weight: 680; }
+main > label + label { margin-top: 12px; }
 
 select {
   width: 100%;

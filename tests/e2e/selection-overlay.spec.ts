@@ -1937,6 +1937,14 @@ test('shows site pause controls only on supported webpages', async () => {
     await expect(siteControl).toBeVisible();
     await expect(popup.locator('#site-name')).toHaveText('www.overleaf.com');
     await expect(pauseSite).toBeEnabled();
+    await expect(popup.locator('#api-profile-field')).toBeVisible();
+    const fieldGap = await popup.evaluate(() => {
+      const targetField = document.querySelector<HTMLElement>('label:has(#target-language)');
+      const apiField = document.querySelector<HTMLElement>('#api-profile-field');
+      if (!targetField || !apiField) return -1;
+      return apiField.getBoundingClientRect().top - targetField.getBoundingClientRect().bottom;
+    });
+    expect(fieldGap).toBeGreaterThanOrEqual(11);
     await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
     await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
