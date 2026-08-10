@@ -433,7 +433,7 @@ test.beforeAll(async () => {
                 translation: '第二句补充译文。',
               }],
             } : isDocumentTermSelection ? {
-              translation: '自适应感知策略在该文档中保持稳定。',
+              translation: '自适应感知策略在该文档中保持稳定，并在具有层级约束的多阶段重建任务中持续保持一致的技术术语与推理边界。',
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
@@ -4349,6 +4349,23 @@ test('keeps narrow PDF translation errors readable and touch-safe', async ({}, t
 });
 
 test('keeps narrow PDF document memory readable with long terms', async ({}, testInfo) => {
+  const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const longRecentSource = 'ExtremelyLongRecognizedAcademicSourceIdentifierWithoutNaturalBreakpoints remains stable throughout every hierarchically constrained reconstruction stage.';
+  const longRecentTarget = '超长学术识别原文标识符在每个具有层级约束的多阶段重建任务中持续保持稳定，并严格维持一致的技术术语与推理边界。';
+  const longMemoryVisionHandler = async (route: Route): Promise<void> => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          translation: longRecentTarget,
+          recognizedText: longRecentSource,
+          formulaLatex: [],
+          uncertainSpans: [],
+        }) } }],
+      }),
+    });
+  };
+  await context.route(apiPattern, longMemoryVisionHandler);
   const pdfPage = await context.newPage();
   try {
     await pdfPage.setViewportSize({ width: 360, height: 700 });
@@ -4379,6 +4396,34 @@ test('keeps narrow PDF document memory readable with long terms', async ({}, tes
     await overlay.locator('.pin-action').click();
     await overlay.getByTitle('查看本文术语和最近翻译').click();
     await expect(overlay.locator('.document-meta')).toHaveText('PDF 文档 · 仅保存在本机');
+
+    const recentTranslation = overlay.locator('.document-translation').first();
+    await expect(recentTranslation.locator('.document-source'))
+      .toHaveText(longRecentSource);
+    await expect(recentTranslation.locator('.document-target'))
+      .toHaveText(longRecentTarget);
+    const recentLayout = await recentTranslation.evaluate((button) => {
+      const target = button.querySelector<HTMLElement>('.document-target')!;
+      const targetStyle = getComputedStyle(target);
+      const bounds = button.getBoundingClientRect();
+      const surfaceBounds = button.closest<HTMLElement>('.surface')!.getBoundingClientRect();
+      return {
+        insideSurface: bounds.left >= surfaceBounds.left && bounds.right <= surfaceBounds.right,
+        scrollWidth: button.scrollWidth,
+        clientWidth: button.clientWidth,
+        targetHeight: target.getBoundingClientRect().height,
+        targetLineHeight: Number.parseFloat(targetStyle.lineHeight),
+        fullTarget: target.textContent,
+      };
+    });
+    expect(recentLayout.insideSurface).toBe(true);
+    expect(recentLayout.scrollWidth).toBeLessThanOrEqual(recentLayout.clientWidth + 1);
+    expect(recentLayout.targetHeight).toBeLessThanOrEqual(recentLayout.targetLineHeight * 2 + 1);
+    expect(recentLayout.fullTarget).toBe(longRecentTarget);
+    await recentTranslation.click();
+    await expect(overlay.locator('.body')).toContainText('一致的技术术语与推理边界');
+    await expect(overlay.locator('.copy-action')).toBeFocused();
+    await overlay.getByTitle('查看本文术语和最近翻译').click();
 
     await overlay.getByTitle('添加本文术语').click();
     const longSource = 'AdaptiveSensingReconstructionObjectiveWithHierarchicalConstraints';
@@ -4446,10 +4491,50 @@ test('keeps narrow PDF document memory readable with long terms', async ({}, tes
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await expect(longTermRow.getByTitle('编辑本文术语')).toBeFocused();
 
-    const clear = overlay.getByRole('button', { name: '清空本文记忆' });
+    await pdfPage.evaluate(() => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const sendMessage = extensionChrome.runtime.sendMessage.bind(extensionChrome.runtime);
+      let failNextClear = true;
+      extensionChrome.runtime.sendMessage = async (message: unknown) => {
+        if (
+          failNextClear &&
+          typeof message === 'object' &&
+          message !== null &&
+          (message as { type?: string }).type === 'CLEAR_DOCUMENT_MEMORY'
+        ) {
+          failNextClear = false;
+          return { ok: false, error: { message: '模拟清空失败' } };
+        }
+        return sendMessage(message);
+      };
+    });
+    const clear = overlay.locator('.document-clear');
     await clear.click();
-    await overlay.getByRole('button', { name: '再次点击清空' }).click();
+    await expect(clear).toHaveText('再次点击清空');
+    await expect(clear).toHaveAttribute('data-confirm-clear', 'true');
+    await expect(clear).toBeFocused();
+    await overlay.getByTitle('返回翻译结果').focus();
+    await expect(clear).toHaveText('清空本文记忆');
+    await expect(clear).not.toHaveAttribute('data-confirm-clear', 'true');
+    await clear.click();
+    await clear.click();
+    await expect(overlay.locator('.error')).toHaveText('模拟清空失败');
+    await expect(clear).toHaveText('清空本文记忆');
+    await expect(clear).toBeFocused();
+    await expect(overlay.locator('.document-translation')).toHaveCount(1);
+    await expect(longTermRow).toBeVisible();
+    await clear.click();
+    await clear.click();
+    await expect(overlay.locator('.document-translation')).toHaveCount(0);
+    await expect(overlay.locator('.document-row')).toHaveCount(0);
+    await expect(overlay.locator('.document-clear')).toHaveCount(0);
+    await expect(overlay.locator('.document-empty'))
+      .toContainText(['确认术语后，后续译句会优先沿用这里的译法。', '本文完成的翻译会出现在这里。']);
+    await expect(overlay.getByTitle('返回翻译结果')).toBeFocused();
   } finally {
+    await context.unroute(apiPattern, longMemoryVisionHandler);
     await pdfPage.close();
   }
 });
