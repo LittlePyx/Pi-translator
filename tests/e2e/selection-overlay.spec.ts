@@ -1851,13 +1851,24 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
   await expect(markerLayer.locator('.marker')).toHaveCount(0);
 });
 
-test('updates the target language from the quick popup', async () => {
+test('gives compact progress and success feedback when updating the target language', async () => {
   const popup = await context.newPage();
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   const targetLanguage = popup.locator('#target-language');
+  const status = popup.locator('#status');
   await expect(targetLanguage).toHaveValue('zh-CN');
   await targetLanguage.selectOption('en');
-  await expect(popup.locator('#status')).toContainText('目标语言已更新');
+  await expect(status).toContainText('目标语言已更新');
+  await expect(status).toHaveAttribute('data-tone', 'success');
+  await expect(status).toHaveAttribute('role', 'status');
+  await expect(status).toHaveAttribute('aria-atomic', 'true');
+  await expect(targetLanguage).toBeEnabled();
+  expect(await status.evaluate((element) => {
+    const marker = getComputedStyle(element, '::before');
+    return { width: marker.width, height: marker.height, radius: marker.borderRadius };
+  })).toEqual({ width: '5px', height: '5px', radius: '50%' });
+  await expect(status).toHaveText('', { timeout: 4_000 });
+  await expect(status).not.toHaveAttribute('data-tone', /.+/);
   await popup.close();
 
   const reopened = await context.newPage();

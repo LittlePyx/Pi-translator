@@ -182,8 +182,29 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   outline-offset: 2px;
 }
 
-.status { min-height: 16px; margin: 10px 0; color: #4f46e5; font-size: 11px; line-height: 1.4; }
-.status.error { color: #b4233b; }
+.status {
+  display: flex;
+  min-height: 16px;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 10px 0;
+  color: #4f6f5d;
+  font-size: 11px;
+  line-height: 1.4;
+}
+.status:not(:empty)::before {
+  flex: 0 0 auto;
+  width: 5px;
+  height: 5px;
+  margin-top: 5px;
+  border-radius: 50%;
+  background: currentColor;
+  content: "";
+}
+.status[data-tone="progress"] { color: #4f46e5; }
+.status[data-tone="progress"]::before { animation: status-pulse 1.1s ease-in-out infinite; }
+.status[data-tone="error"] { color: #b4233b; }
+@keyframes status-pulse { 50% { opacity: .32; } }
 
 .access-alert {
   margin: 10px 0 12px;
@@ -230,9 +251,13 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .capability-item[data-tone="issue"] { color: #f0b879; }
   .capability-item[data-tone="issue"] .capability-dot { background: #e39a50; }
   .capability-item[data-tone="issue"] .capability-value { color: #e1a768; }
+  .status[data-tone="success"] { color: #8bc4a5; }
+  .status[data-tone="progress"] { color: #a5b4fc; }
+  .status[data-tone="error"] { color: #f59aa8; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .switch-row input,
   .switch-row input::before { transition: none; }
+  .status[data-tone="progress"]::before { animation: none; }
 }

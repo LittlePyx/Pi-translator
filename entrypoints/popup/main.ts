@@ -63,10 +63,37 @@ let activePdfPage: number | undefined;
 let activePdfContext: 'native' | 'overleaf' | undefined;
 let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
 let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
+let statusTimer: number | undefined;
 
-function setStatus(message: string, error = false): void {
+type PopupStatusTone = 'progress' | 'success' | 'error';
+
+function setStatus(message: string, tone: PopupStatusTone = 'success'): void {
+  if (statusTimer !== undefined) {
+    window.clearTimeout(statusTimer);
+    statusTimer = undefined;
+  }
+  if (!message) {
+    status.textContent = '';
+    status.removeAttribute('data-tone');
+    status.setAttribute('role', 'status');
+    status.setAttribute('aria-live', 'polite');
+    return;
+  }
+  status.dataset.tone = tone;
+  status.setAttribute('role', tone === 'error' ? 'alert' : 'status');
+  status.setAttribute('aria-live', tone === 'error' ? 'assertive' : 'polite');
   status.textContent = message;
-  status.classList.toggle('error', error);
+  if (tone === 'success') {
+    statusTimer = window.setTimeout(() => {
+      if (status.textContent !== message) return;
+      setStatus('');
+    }, 2_200);
+  }
+}
+
+function setControlPending(control: HTMLInputElement | HTMLSelectElement, pending: boolean): void {
+  control.disabled = pending;
+  control.toggleAttribute('aria-busy', pending);
 }
 
 async function providerReadinessSnapshot(
@@ -145,12 +172,12 @@ function openSettingsPage(focus?: ApiReadinessStatus['settingsFocus']): void {
   } satisfies RuntimeMessage)
     .then((response: RuntimeResponse<{ opened: true }>) => {
       if (!response.ok) {
-        setStatus('无法打开完整设置，请在扩展管理页重试。', true);
+        setStatus('无法打开完整设置，请在扩展管理页重试。', 'error');
         return;
       }
       window.close();
     })
-    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', true));
+    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', 'error'));
 }
 
 function hidePdfAccessAlert(): void {
@@ -313,20 +340,29 @@ async function load(): Promise<void> {
 }
 
 targetLanguage.addEventListener('change', () => {
+  const requestedLanguage = targetLanguage.value;
+  setControlPending(targetLanguage, true);
+  setStatus('正在更新目标语言…', 'progress');
   void (async () => {
     await mutateSettings((settings) => ({
       nextSettings: {
         ...settings,
-        targetLanguage: targetLanguage.value,
+        targetLanguage: requestedLanguage,
       },
       value: undefined,
     }));
     setStatus('目标语言已更新。');
-  })().catch(() => setStatus('目标语言更新失败。', true));
+  })().catch(async () => {
+    const settings = await getSettings().catch(() => undefined);
+    if (settings) targetLanguage.value = settings.targetLanguage;
+    setStatus('目标语言更新失败，已保留原设置。', 'error');
+  }).finally(() => setControlPending(targetLanguage, false));
 });
 
 apiProfile.addEventListener('change', () => {
   const requestedProfileId = apiProfile.value;
+  setControlPending(apiProfile, true);
+  setStatus('正在切换翻译接口…', 'progress');
   void (async () => {
     const settings = await getSettings();
     const profile = settings.apiProfiles.find((candidate) => candidate.id === requestedProfileId);
@@ -339,25 +375,34 @@ apiProfile.addEventListener('change', () => {
     await refreshApiReadiness(await getSettings());
     setStatus('翻译接口已切换。');
   })().catch(async () => {
-    apiProfile.value = (await getSettings()).activeApiProfileId;
-    setStatus('未获得该接口的访问权限，仍使用原配置。', true);
-  });
+    const settings = await getSettings().catch(() => undefined);
+    if (settings) apiProfile.value = settings.activeApiProfileId;
+    setStatus('未获得该接口的访问权限，仍使用原配置。', 'error');
+  }).finally(() => setControlPending(apiProfile, false));
 });
 
 pauseSite.addEventListener('change', () => {
   if (!activeUrl) return;
-  void setSitePaused(activeUrl, pauseSite.checked)
+  const requestedPaused = pauseSite.checked;
+  setControlPending(pauseSite, true);
+  setStatus(requestedPaused ? '正在暂停当前网站…' : '正在恢复当前网站…', 'progress');
+  void setSitePaused(activeUrl, requestedPaused)
     .then((hostname) => {
+      if (!hostname) pauseSite.checked = !requestedPaused;
       setStatus(
         hostname
-          ? pauseSite.checked
+          ? requestedPaused
             ? `已暂停 ${hostname} 的自动划词。`
             : `已恢复 ${hostname} 的自动划词。`
           : '当前页面不支持此操作。',
-        !hostname,
+        hostname ? 'success' : 'error',
       );
     })
-    .catch(() => setStatus('当前网站状态更新失败。', true));
+    .catch(() => {
+      pauseSite.checked = !requestedPaused;
+      setStatus('当前网站状态更新失败，已恢复原状态。', 'error');
+    })
+    .finally(() => setControlPending(pauseSite, false));
 });
 
 openSettings.addEventListener('click', () => {
@@ -370,7 +415,7 @@ visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettin
 openSidebar.addEventListener('click', () => {
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
     .then(() => window.close())
-    .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', true));
+    .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error'));
 });
 
 openPdf.addEventListener('click', () => {
@@ -394,14 +439,14 @@ openPdf.addEventListener('click', () => {
     } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
     window.close();
-  })().catch(() => setStatus('无法打开 PDF 阅读器，请重新加载扩展后再试。', true));
+  })().catch(() => setStatus('无法打开 PDF 阅读器，请重新加载扩展后再试。', 'error'));
 });
 
 openExtensionManagement.addEventListener('click', () => {
   void browser.tabs.create({
     url: `edge://extensions/?id=${browser.runtime.id}`,
     active: true,
-  }).catch(() => setStatus('请手动打开 edge://extensions 并进入 Pi Translator 详情。', true));
+  }).catch(() => setStatus('请手动打开 edge://extensions 并进入 Pi Translator 详情。', 'error'));
 });
 
 retryPdfAccess.addEventListener('click', () => {
@@ -424,4 +469,4 @@ retryPdfAccess.addEventListener('click', () => {
   })().catch(() => showUnavailablePdfSource());
 });
 
-void load().catch(() => setStatus('读取扩展状态失败，请重新打开面板。', true));
+void load().catch(() => setStatus('读取扩展状态失败，请重新打开面板。', 'error'));
