@@ -19,6 +19,7 @@ import {
 } from '../../core/messaging/user-facing-error';
 import {
   edgePdfSourceUrl,
+  isEdgeNativePdfContext,
   parsePdfSourceUrl,
   pdfInitialPage,
   pdfPermissionPattern,
@@ -57,6 +58,10 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const emptyState = element<HTMLElement>('empty-state');
+const emptyTitle = element<HTMLElement>('empty-title');
+const emptyDescription = element<HTMLElement>('empty-description');
+const emptyAction = element<HTMLButtonElement>('empty-action');
+const emptyStatus = element<HTMLElement>('empty-status');
 const sessionSection = element<HTMLElement>('session');
 const sourceLabel = element<HTMLElement>('source-label');
 const sourceText = element<HTMLElement>('source-text');
@@ -87,6 +92,12 @@ const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
 let activeTabId: number | undefined;
 let activeWindowId: number | undefined;
 let currentSession: PdfSidePanelSession | undefined;
+type SidePanelEmptyContext =
+  | { kind: 'loading' }
+  | { kind: 'pdf'; sourceUrl?: string; pageNumber?: number }
+  | { kind: 'other' };
+let emptyContext: SidePanelEmptyContext = { kind: 'loading' };
+let emptyContextRevision = 0;
 let autoRenderLatex = true;
 let formulaRenderOverride: boolean | undefined;
 let retryFocusPending = false;
@@ -98,6 +109,88 @@ let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
 let activeProgressFeedback: TranslationProgressFeedback | undefined;
 let translationRenderRevision = 0;
+
+function emptyContextForTabUrl(tabUrl: string | undefined): SidePanelEmptyContext {
+  if (!isEdgeNativePdfContext({ ...(tabUrl ? { tabUrl } : {}) })) {
+    return { kind: 'other' };
+  }
+  const sourceUrl = edgePdfSourceUrl({ ...(tabUrl ? { tabUrl } : {}) });
+  const pageNumber = pdfInitialPage(tabUrl) ?? pdfInitialPage(sourceUrl);
+  return {
+    kind: 'pdf',
+    ...(sourceUrl ? { sourceUrl } : {}),
+    ...(pageNumber ? { pageNumber } : {}),
+  };
+}
+
+async function resolveEmptyContext(
+  tabId: number | undefined,
+  tabUrl: string | undefined,
+): Promise<SidePanelEmptyContext> {
+  const context = emptyContextForTabUrl(tabUrl);
+  if (context.kind === 'pdf' || tabUrl || tabId === undefined) return context;
+  const options = await browser.sidePanel.getOptions({ tabId }).catch(() => undefined);
+  return options?.enabled ? { kind: 'pdf' } : context;
+}
+
+function showEmptyContext(context: SidePanelEmptyContext): void {
+  emptyContext = context;
+  emptyContextRevision += 1;
+  emptyState.dataset.context = context.kind;
+  emptyState.toggleAttribute('aria-busy', context.kind === 'loading');
+  emptyAction.disabled = false;
+  emptyAction.removeAttribute('aria-busy');
+  emptyStatus.textContent = '';
+  emptyStatus.setAttribute('role', 'status');
+  emptyStatus.setAttribute('aria-live', 'polite');
+  if (context.kind === 'loading') {
+    emptyTitle.textContent = '正在检查当前页面…';
+    emptyDescription.textContent = '确认当前标签页是否可以开始 PDF 翻译。';
+    emptyAction.hidden = true;
+    return;
+  }
+  emptyAction.hidden = false;
+  if (context.kind === 'pdf') {
+    emptyTitle.textContent = '当前 PDF 已就绪';
+    emptyDescription.textContent = '选择文字后右键翻译；需要浮动按钮或更顺畅的跨行选择时，可改用 Pi PDF。';
+    emptyAction.textContent = context.sourceUrl ? '用 Pi 打开当前 PDF' : '打开 Pi PDF 阅读器';
+    return;
+  }
+  emptyTitle.textContent = '当前没有可翻译的 PDF';
+  emptyDescription.textContent = '切换到一份 PDF 后选择文字，或直接用 Pi PDF 打开本地文件。';
+  emptyAction.textContent = '打开 Pi PDF 阅读器';
+}
+
+function setEmptyStatus(message: string, error = false): void {
+  emptyStatus.setAttribute('role', error ? 'alert' : 'status');
+  emptyStatus.setAttribute('aria-live', error ? 'assertive' : 'polite');
+  emptyStatus.textContent = message;
+}
+
+async function requestEmptyPdfSourceAccess(sourceUrl: string): Promise<boolean> {
+  const source = parsePdfSourceUrl(sourceUrl);
+  if (!source) return false;
+  if (
+    source.protocol === 'file:' &&
+    !(await browser.extension.isAllowedFileSchemeAccess())
+  ) {
+    setEmptyStatus('请先在 Edge 扩展详情中开启“允许访问文件 URL”。', true);
+    return false;
+  }
+  const origin = pdfPermissionPattern(sourceUrl);
+  if (!origin) return true;
+  let granted = false;
+  try {
+    granted = await browser.permissions.request({ origins: [origin] });
+  } catch {
+    granted = false;
+  }
+  if (!granted) {
+    setEmptyStatus('未获得当前 PDF 来源的读取权限，文件尚未打开。', true);
+    return false;
+  }
+  return true;
+}
 
 function progressIdentity(session: PdfSidePanelSession): TranslationProgressIdentity {
   return {
@@ -600,16 +693,24 @@ async function loadActiveSession(
 ): Promise<void> {
   const isCurrentLoad = sessionLoadGate.begin();
   let requestedTabId: number | undefined;
+  let requestedTabUrl: string | undefined;
   if (activated) {
     requestedTabId = activated.tabId;
     activeWindowId = activated.windowId;
+    const tab = await browser.tabs.get(requestedTabId).catch(() => undefined);
+    if (!isCurrentLoad()) return;
+    requestedTabUrl = tab?.url;
   } else {
     const [tab] = await browser.tabs.query({ active: true, currentWindow: true });
     if (!isCurrentLoad()) return;
     requestedTabId = tab?.id;
+    requestedTabUrl = tab?.url;
     activeWindowId = tab?.windowId;
   }
   activeTabId = requestedTabId;
+  const nextEmptyContext = await resolveEmptyContext(requestedTabId, requestedTabUrl);
+  if (!isCurrentLoad()) return;
+  showEmptyContext(nextEmptyContext);
   if (requestedTabId === undefined) {
     render(undefined);
     return;
@@ -621,7 +722,7 @@ async function loadActiveSession(
   if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
   if (!response.ok) {
     render(undefined);
-    setStatus(translationErrorMessage(response.error.code, response.error.message));
+    setEmptyStatus(translationErrorMessage(response.error.code, response.error.message), true);
     return;
   }
   render(response.data.session);
@@ -925,6 +1026,36 @@ function openFullSettings(
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
+emptyAction.addEventListener('click', () => {
+  if (emptyContext.kind === 'loading') return;
+  const revision = emptyContextRevision;
+  const sourceUrl = emptyContext.kind === 'pdf' ? emptyContext.sourceUrl : undefined;
+  const pageNumber = emptyContext.kind === 'pdf' ? emptyContext.pageNumber : undefined;
+  const idleLabel = emptyAction.textContent;
+  emptyAction.disabled = true;
+  emptyAction.setAttribute('aria-busy', 'true');
+  emptyAction.textContent = '正在打开…';
+  setEmptyStatus('');
+  void (async () => {
+    if (sourceUrl && !await requestEmptyPdfSourceAccess(sourceUrl)) return;
+    if (revision !== emptyContextRevision) return;
+    const response = await browser.runtime.sendMessage({
+      type: 'OPEN_PDF_VIEWER',
+      ...(sourceUrl
+        ? { payload: { url: sourceUrl, ...(pageNumber ? { page: pageNumber } : {}) } }
+        : {}),
+    } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }> | undefined;
+    if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
+  })().catch((error: unknown) => {
+    if (revision !== emptyContextRevision) return;
+    setEmptyStatus(error instanceof Error ? error.message : '无法打开 Pi PDF 阅读器。', true);
+  }).finally(() => {
+    if (revision !== emptyContextRevision) return;
+    emptyAction.disabled = false;
+    emptyAction.removeAttribute('aria-busy');
+    emptyAction.textContent = idleLabel;
+  });
+});
 errorSettings.addEventListener('click', () => {
   const session = activeSession();
   if (!session) return;
@@ -1096,8 +1227,18 @@ browser.tabs.onActivated.addListener((activated) => {
   if (activeWindowId !== undefined && activated.windowId !== activeWindowId) return;
   sessionLoadGate.invalidate();
   activeTabId = activated.tabId;
+  showEmptyContext({ kind: 'loading' });
   render(undefined);
-  void loadActiveSession(activated).catch(() => setStatus('无法读取当前 PDF 会话'));
+  void loadActiveSession(activated)
+    .catch(() => setEmptyStatus('无法读取当前 PDF 会话。', true));
+});
+
+browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
+  if (tabId !== activeTabId || !changeInfo.url || currentSession) return;
+  sessionLoadGate.invalidate();
+  showEmptyContext(emptyContextForTabUrl(changeInfo.url));
+  void loadActiveSession({ tabId, windowId: tab.windowId })
+    .catch(() => setEmptyStatus('无法刷新当前页面状态。', true));
 });
 
 browser.storage.onChanged.addListener((changes, areaName) => {
@@ -1115,5 +1256,5 @@ void getSettings().then((settings) => {
 });
 void loadActiveSession().catch(() => {
   render(undefined);
-  setStatus('无法读取当前 PDF 会话，请重新加载扩展后重试');
+  setEmptyStatus('无法读取当前 PDF 会话，请重新加载扩展后重试。', true);
 });

@@ -839,6 +839,53 @@ test('pre-enables the side panel before a native PDF context-menu gesture', asyn
   }
 });
 
+test('makes the PDF side-panel empty state contextual and directly actionable', async () => {
+  const sidePanel = await context.newPage();
+  const sourceUrl = 'https://www.overleaf.com/pi-sidepanel-empty-context.pdf';
+  let nativePdfPage: Page | undefined;
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createTextPdf('Context-aware empty state.'),
+    });
+  });
+  try {
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    const emptyState = sidePanel.locator('#empty-state');
+    const emptyAction = sidePanel.locator('#empty-action');
+    await expect(emptyState).toHaveAttribute('data-context', 'other');
+    await expect(sidePanel.locator('#empty-title')).toHaveText('当前没有可翻译的 PDF');
+    await expect(emptyAction).toHaveText('打开 Pi PDF 阅读器');
+    await expect(emptyAction).toBeVisible();
+    expect(await emptyAction.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeGreaterThanOrEqual(31);
+
+    const readerPromise = context.waitForEvent('page');
+    await emptyAction.click();
+    const reader = await readerPromise;
+    await reader.waitForURL((url) => url.pathname === '/pdf.html');
+    await expect(reader.locator('#empty-state')).toBeVisible();
+    await reader.close();
+
+    nativePdfPage = await context.newPage();
+    await nativePdfPage.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
+    await nativePdfPage.bringToFront();
+    await expect(emptyState).toHaveAttribute('data-context', 'pdf');
+    await expect(sidePanel.locator('#empty-title')).toHaveText('当前 PDF 已就绪');
+    await expect(sidePanel.locator('#empty-description')).toContainText('选择文字后右键翻译');
+    await expect(emptyAction).toHaveText('用 Pi 打开当前 PDF');
+    await emptyAction.focus();
+    await expect(emptyAction).toBeFocused();
+  } finally {
+    await nativePdfPage?.close();
+    await sidePanel.close();
+    await context.unroute(sourceUrl);
+    await page.bringToFront();
+  }
+});
+
 test('shows and hides the selection trigger with the browser selection', async () => {
   await selectSourceText();
   const overlay = page.locator('#tex-selection-translator-root');

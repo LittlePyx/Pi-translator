@@ -19,10 +19,12 @@
         <button id="open-settings" class="text-action" type="button">设置</button>
       </header>
 
-      <section id="empty-state" class="empty-state">
+      <section id="empty-state" class="empty-state" data-context="loading" aria-busy="true" aria-labelledby="empty-title">
         <div class="empty-mark">π</div>
-        <h1>在 PDF 中选择文字</h1>
-        <p>选中文字后右键，选择“使用 Pi Translator 翻译选中文本”。译文会流式显示在这里。</p>
+        <h1 id="empty-title">正在检查当前页面…</h1>
+        <p id="empty-description">确认当前标签页是否可以开始 PDF 翻译。</p>
+        <button id="empty-action" class="empty-action" type="button" hidden>打开 Pi PDF 阅读器</button>
+        <p id="empty-status" class="empty-status" role="status" aria-live="polite" aria-atomic="true"></p>
       </section>
 
       <section id="session" hidden>
