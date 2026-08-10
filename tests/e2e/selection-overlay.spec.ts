@@ -3941,8 +3941,17 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   expect(await sidePanel.locator('#copy').evaluate(
     (element) => element.getBoundingClientRect().height,
   )).toBe(28);
+  const footerHeightBeforeCopy = await sidePanel.locator('footer').evaluate(
+    (footer) => footer.getBoundingClientRect().height,
+  );
   await sidePanel.locator('#copy').click();
-  await expect(sidePanel.locator('#status')).toHaveText('已复制');
+  await expect(sidePanel.locator('#copy')).toHaveText('已复制');
+  await expect(sidePanel.locator('#copy')).toHaveAttribute('data-state', 'success');
+  await expect(sidePanel.locator('#copy-feedback')).toHaveText('译文已复制到剪贴板');
+  await expect(sidePanel.locator('#status')).toBeEmpty();
+  expect(await sidePanel.locator('footer').evaluate(
+    (footer) => footer.getBoundingClientRect().height,
+  )).toBe(footerHeightBeforeCopy);
 
   await messageSender.evaluate(async (session) => {
     const api = (globalThis as typeof globalThis & {
@@ -4082,8 +4091,22 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   )).toBeLessThan(1);
   expect(optimizerLayout!.tagRight).toBeLessThanOrEqual(optimizerLayout!.viewportWidth + 1);
   await expect(sidePanel.locator('#copy')).toBeEnabled();
+  const completedActionStyles = await sidePanel.locator('footer').evaluate((footer) => {
+    const copyAction = footer.querySelector<HTMLElement>('#copy');
+    const correctionAction = footer.querySelector<HTMLElement>('#correct');
+    if (!copyAction || !correctionAction) return undefined;
+    return {
+      copyBackground: getComputedStyle(copyAction).backgroundColor,
+      correctionBackground: getComputedStyle(correctionAction).backgroundColor,
+    };
+  });
+  expect(completedActionStyles).toBeDefined();
+  expect(completedActionStyles!.copyBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(completedActionStyles!.correctionBackground).toBe('rgba(0, 0, 0, 0)');
   await sidePanel.locator('#copy').click();
-  await expect(sidePanel.locator('#status')).toHaveText('已复制');
+  await expect(sidePanel.locator('#copy')).toHaveText('已复制');
+  await expect(sidePanel.locator('#copy-feedback')).toHaveText('译文已复制到剪贴板');
+  await expect(sidePanel.locator('#status')).toBeEmpty();
   await sidePanel.setViewportSize({ width: 360, height: 820 });
   const sessionContextLayout = await sidePanel.locator('.session-context').evaluate((context) => {
     const rect = context.getBoundingClientRect();

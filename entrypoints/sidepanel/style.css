@@ -9,6 +9,17 @@
 
 * { box-sizing: border-box; }
 [hidden] { display: none !important; }
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 body {
   min-width: 280px;
@@ -134,6 +145,21 @@ main {
 .session-context button:hover,
 .copy-action:hover:not(:disabled),
 .error-actions button:hover { border-color: #8179eb; }
+.copy-action {
+  min-width: 88px;
+  color: #fff;
+  border-color: #5145cd;
+  background: #5b4be0;
+}
+.copy-action:hover:not(:disabled) { border-color: #4338ca; background: #5145cd; }
+.copy-action[data-state="success"] { border-color: #198267; background: #1d8f71; }
+.copy-action:disabled {
+  color: #8a93a4;
+  border-color: #d7dbe4;
+  background: #eef0f5;
+  opacity: 1;
+  cursor: default;
+}
 
 .content-section { border-bottom: 1px solid #e2e6ee; padding-bottom: 20px; }
 .content-section + .content-section { padding-top: 20px; }
@@ -245,19 +271,19 @@ main {
 .error-actions .primary:hover { border-color: #4338ca; background: #5145cd; }
 
 footer { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding-top: 14px; }
-.copy-action:disabled { opacity: .45; cursor: default; }
 #status { flex: 1 1 100%; min-width: 0; color: #748094; font-size: 10px; }
 #status:empty { display: none; }
 .correction-action {
   min-height: var(--compact-hit);
   border: 0;
+  border-radius: 5px;
   padding: 0 4px;
   color: #667085;
   background: transparent;
   cursor: pointer;
   font-size: 11px;
 }
-.correction-action:hover { color: #4f46e5; }
+.correction-action:hover { color: #4f46e5; background: #f0efff; }
 .correction-undo { display: inline-flex; align-items: center; gap: 3px; color: #5f687a; font-size: 10px; }
 .correction-undo button { min-height: var(--compact-hit); border: 0; padding: 0 4px; color: #4f46e5; background: transparent; cursor: pointer; font-size: 10px; }
 .correction-editor { display: grid; gap: 8px; margin-top: 12px; }
@@ -348,6 +374,10 @@ button:focus-visible {
     color: #c1bcff;
     background: #1a2230;
   }
+  .copy-action { color: #fff; border-color: #7367ed; background: #6558dc; }
+  .copy-action:hover:not(:disabled) { border-color: #8d83f2; background: #7468e4; }
+  .copy-action[data-state="success"] { border-color: #2a9b7f; background: #237e68; }
+  .copy-action:disabled { color: #777f8e; border-color: #333b4a; background: #202734; }
   .error-actions .primary {
     color: #fff;
     border-color: #7367ed;

@@ -74,6 +74,7 @@ const progressTrack = element<HTMLElement>('progress-track');
 const errorActions = element<HTMLElement>('error-actions');
 const retry = element<HTMLButtonElement>('retry');
 const copy = element<HTMLButtonElement>('copy');
+const copyFeedback = element<HTMLElement>('copy-feedback');
 const correct = element<HTMLButtonElement>('correct');
 const correctionUndo = element<HTMLElement>('correction-undo');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
@@ -104,6 +105,7 @@ let retryFocusPending = false;
 let retryStatusFocusPending = false;
 let retryFocusTabId: number | undefined;
 let stopPendingRequestId: string | undefined;
+let copyResetTimer: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
@@ -380,6 +382,39 @@ function setStatus(message: string, timeoutMs = 2_200): void {
   }, timeoutMs);
 }
 
+function copyActionLabel(session: PdfSidePanelSession): string {
+  return session.status === 'error' && session.partialText?.trim()
+    ? '复制部分译文'
+    : '复制译文';
+}
+
+function clearCopyFeedback(): void {
+  if (copyResetTimer !== undefined) window.clearTimeout(copyResetTimer);
+  copyResetTimer = undefined;
+  copy.removeAttribute('data-state');
+  copyFeedback.textContent = '';
+}
+
+function showCopySuccess(session: PdfSidePanelSession): void {
+  if (currentSession !== session) return;
+  clearCopyFeedback();
+  setStatus('');
+  copy.dataset.state = 'success';
+  copy.textContent = '已复制';
+  window.requestAnimationFrame(() => {
+    if (currentSession === session && copy.dataset.state === 'success') {
+      copyFeedback.textContent = '译文已复制到剪贴板';
+    }
+  });
+  copyResetTimer = window.setTimeout(() => {
+    copyResetTimer = undefined;
+    if (currentSession !== session || copy.dataset.state !== 'success') return;
+    copy.removeAttribute('data-state');
+    copy.textContent = copyActionLabel(session);
+    copyFeedback.textContent = '';
+  }, 1_800);
+}
+
 function hidePdfAccessAlert(): void {
   pdfAccessAlert.hidden = true;
 }
@@ -465,6 +500,7 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
 
 function render(session: PdfSidePanelSession | null | undefined): void {
   if (session?.requestId !== currentSession?.requestId) formulaRenderOverride = undefined;
+  clearCopyFeedback();
   currentSession = session ?? undefined;
   const renderRevision = ++translationRenderRevision;
   emptyState.hidden = Boolean(session);
@@ -532,7 +568,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   errorSettings.classList.remove('primary');
   errorSettings.classList.add('secondary');
   copy.disabled = !copyableText;
-  copy.textContent = preservedPartial ? '复制部分译文' : '复制译文';
+  copy.textContent = copyActionLabel(session);
   correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
   correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
@@ -1146,8 +1182,13 @@ copy.addEventListener('click', () => {
   void navigator.clipboard.writeText(
     normalizeLatexForClipboard(presentationText(session, text)),
   )
-    .then(() => setStatus('已复制'))
-    .catch(() => setStatus('复制失败', 4_000));
+    .then(() => showCopySuccess(session))
+    .catch(() => {
+      if (currentSession !== session) return;
+      clearCopyFeedback();
+      copy.textContent = copyActionLabel(session);
+      setStatus('复制失败', 4_000);
+    });
 });
 correct.addEventListener('click', openCorrectionEditor);
 undoCorrection.addEventListener('click', undoCurrentCorrection);
