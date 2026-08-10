@@ -1924,6 +1924,38 @@ test('gives compact progress and success feedback when updating the target langu
   await reopened.close();
 });
 
+test('shows site pause controls only on supported webpages', async () => {
+  const popup = await context.newPage();
+  try {
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    await popup.reload();
+
+    const siteControl = popup.locator('#site-control');
+    const pauseSite = popup.locator('#pause-site');
+    await expect(siteControl).toBeVisible();
+    await expect(popup.locator('#site-name')).toHaveText('www.overleaf.com');
+    await expect(pauseSite).toBeEnabled();
+    const pauseSwitchStyle = await pauseSite.evaluate((element) => {
+      const style = getComputedStyle(element);
+      return {
+        appearance: style.appearance,
+        borderRadius: style.borderRadius,
+        height: element.getBoundingClientRect().height,
+        width: element.getBoundingClientRect().width,
+      };
+    });
+    expect(pauseSwitchStyle).toEqual({
+      appearance: 'none',
+      borderRadius: '999px',
+      height: 20,
+      width: 34,
+    });
+  } finally {
+    await popup.close();
+  }
+});
+
 test('promotes the current PDF action in the quick popup', async () => {
   const sourceUrl = 'https://www.overleaf.com/popup-primary-action.pdf';
   await context.route(sourceUrl, async (route) => {
@@ -1952,6 +1984,7 @@ test('promotes the current PDF action in the quick popup', async () => {
     await expect(openSidebar).toHaveClass(/secondary-action/);
     await expect(openSidebar).toHaveText('打开翻译侧栏');
     await expect(popup.locator('#open-settings')).toHaveText('完整设置');
+    await expect(popup.locator('#site-control')).toBeHidden();
     const layout = await quickActions.evaluate((actions) => ({
       clientWidth: actions.clientWidth,
       scrollWidth: actions.scrollWidth,

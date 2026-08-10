@@ -42,6 +42,7 @@ function element<T extends HTMLElement>(id: string): T {
 const targetLanguage = element<HTMLSelectElement>('target-language');
 const apiProfileField = element<HTMLElement>('api-profile-field');
 const apiProfile = element<HTMLSelectElement>('api-profile');
+const siteControl = element<HTMLElement>('site-control');
 const siteName = element<HTMLElement>('site-name');
 const pauseSite = element<HTMLInputElement>('pause-site');
 const status = element<HTMLParagraphElement>('status');
@@ -340,14 +341,18 @@ async function load(): Promise<void> {
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
   else hidePdfAccessAlert();
-  const hostname = activeUrl ? siteHostFromUrl(activeUrl) : undefined;
+  const hostname = !activePdfContext && activeUrl ? siteHostFromUrl(activeUrl) : undefined;
   if (!hostname) {
-    siteName.textContent = '当前页面不支持';
+    siteControl.hidden = true;
+    siteName.textContent = '';
+    pauseSite.checked = false;
     pauseSite.disabled = true;
     return;
   }
   siteName.textContent = hostname;
   pauseSite.checked = isSiteHostPaused(hostname, pausedSiteHosts);
+  pauseSite.disabled = false;
+  siteControl.hidden = false;
 }
 
 targetLanguage.addEventListener('change', () => {

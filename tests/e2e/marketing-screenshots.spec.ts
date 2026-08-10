@@ -309,8 +309,10 @@ test('captures the real quick panel', async () => {
   await popup.goto(`chrome-extension://${extensionId}/popup.html`);
   await expect(popup.locator('#target-language')).toHaveValue('zh-CN');
   await popup.evaluate(() => {
+    const siteControl = document.querySelector<HTMLElement>('#site-control');
     const siteName = document.querySelector<HTMLElement>('#site-name');
     const pauseSite = document.querySelector<HTMLInputElement>('#pause-site');
+    if (siteControl) siteControl.hidden = false;
     if (siteName) siteName.textContent = 'www.overleaf.com';
     if (pauseSite) pauseSite.disabled = false;
   });
