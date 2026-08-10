@@ -44,6 +44,9 @@ jobs:
       - name: Create Edge installation package
         run: npm run zip:edge
 
+      - name: Verify release package consistency
+        run: npm run check:release-artifact
+
       - name: Upload verified package
         uses: actions/upload-artifact@v4
         with:

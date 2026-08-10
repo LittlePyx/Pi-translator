@@ -15,6 +15,8 @@
     "test:live-formula": "vite-node tools/live-formula-acceptance.ts",
     "test:marketing": "npm run build:edge && playwright test tests/e2e/marketing-screenshots.spec.ts",
     "check:secrets": "node tools/check-secrets.mjs",
+    "check:release-artifact": "node tools/check-release-consistency.mjs",
+    "check:release": "npm run zip:edge && npm run check:release-artifact",
     "test:watch": "vitest"
   },
   "devDependencies": {
