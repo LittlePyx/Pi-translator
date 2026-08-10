@@ -1347,6 +1347,68 @@ test('keeps correction terms explicit and rolls a global term back with the tran
   await clearBrowserSelection();
 });
 
+test('keeps narrow translation correction fields and actions visible', async ({}, testInfo) => {
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await page.setViewportSize({ width: 360, height: 700 });
+    await clearBrowserSelection();
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await selectElementText('#source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await overlay.getByRole('button', { name: '修正译文' }).click();
+
+    const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+    await expect(editor).toBeFocused();
+    await expect(overlay.locator('.pin-action')).toHaveCount(0);
+    await editor.fill('窄屏下需要保持清晰、完整并且可以直接保存的学术译文。');
+    await overlay.getByText('＋ 固定术语（可选）').click();
+    const sourceTerm = overlay.getByRole('textbox', { name: '原文术语' });
+    const targetTerm = overlay.getByRole('textbox', { name: '固定译法' });
+    await sourceTerm.fill('AdaptiveSensingReconstructionObjectiveWithHierarchicalConstraints');
+    await targetTerm.fill('具有层级约束的自适应感知重建目标固定译法');
+
+    const correctionLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const inputs = [...surface.querySelectorAll<HTMLElement>('.correction-term-fields input')];
+      const actions = surface.querySelector<HTMLElement>('.revision-actions');
+      const buttons = [...actions?.querySelectorAll<HTMLElement>('button') ?? []];
+      const bounds = surface.getBoundingClientRect();
+      const actionBounds = actions?.getBoundingClientRect();
+      return {
+        bounds: bounds.toJSON(),
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        inputTops: inputs.map((input) => input.getBoundingClientRect().top),
+        actionBottom: actionBounds?.bottom ?? Infinity,
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('translation-correction-360-light.png') });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('translation-correction-360-dark.png') });
+      await page.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(correctionLayout.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(correctionLayout.bounds.right).toBeLessThanOrEqual(352);
+    expect(correctionLayout.scrollWidth).toBeLessThanOrEqual(correctionLayout.clientWidth + 1);
+    expect(correctionLayout.inputTops[1]).toBeGreaterThan(correctionLayout.inputTops[0] ?? 0);
+    expect(correctionLayout.actionBottom).toBeLessThanOrEqual(correctionLayout.bounds.bottom);
+    expect(correctionLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+  } finally {
+    await page.emulateMedia({ colorScheme: 'light' });
+    if (await overlay.locator('.correction-cancel').count()) {
+      await overlay.locator('.correction-cancel').click();
+    }
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await clearBrowserSelection();
+    await page.setViewportSize(originalViewport);
+  }
+});
+
 test('keeps a newer translation when an old correction save is rejected', async () => {
   await clearBrowserSelection();
   const overlay = page.locator('#tex-selection-translator-root');
@@ -3962,6 +4024,112 @@ test('keeps narrow PDF translation errors readable and touch-safe', async ({}, t
   }
 });
 
+test('keeps narrow PDF document memory readable with long terms', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: `${'a'.repeat(120)}.pdf`,
+      mimeType: 'application/pdf',
+      buffer: createTextPdf('The adaptive sensing policy is stable in this document.'),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#fit-width').click();
+    const textSpan = firstPage.locator('.textLayer span')
+      .filter({ hasText: 'The adaptive sensing policy is stable in this document.' });
+    await expect(textSpan).toBeVisible();
+    await textSpan.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toBeVisible();
+    await overlay.locator('.pin-action').click();
+    await overlay.getByTitle('查看本文术语和最近翻译').click();
+    await expect(overlay.locator('.document-meta')).toHaveText('PDF 文档 · 仅保存在本机');
+
+    await overlay.getByTitle('添加本文术语').click();
+    const longSource = 'AdaptiveSensingReconstructionObjectiveWithHierarchicalConstraints';
+    await overlay.getByRole('textbox', { name: '原文术语' }).fill(longSource);
+    await overlay.getByRole('textbox', { name: '固定译法' })
+      .fill('具有层级约束的自适应感知重建目标固定译法');
+    await overlay.getByTitle('保存本文术语').click();
+    const longTermRow = overlay.locator('.document-row').filter({ hasText: longSource });
+    await expect(longTermRow).toBeVisible();
+
+    const memoryLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const meta = surface.querySelector<HTMLElement>('.document-meta');
+      const rows = [...surface.querySelectorAll<HTMLElement>('.document-row')];
+      const buttons = [...surface.querySelectorAll<HTMLElement>(
+        '.document-row-actions button,.document-action,.document-clear',
+      )];
+      const bounds = surface.getBoundingClientRect();
+      return {
+        bounds: bounds.toJSON(),
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        metaClientWidth: meta?.clientWidth ?? 0,
+        metaScrollWidth: meta?.scrollWidth ?? 0,
+        rowsInside: rows.every((row) => {
+          const rowBounds = row.getBoundingClientRect();
+          return rowBounds.left >= bounds.left && rowBounds.right <= bounds.right;
+        }),
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-document-memory-360-light.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-document-memory-360-dark.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+    expect(memoryLayout.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(memoryLayout.bounds.right).toBeLessThanOrEqual(352);
+    expect(memoryLayout.scrollWidth).toBeLessThanOrEqual(memoryLayout.clientWidth + 1);
+    expect(memoryLayout.metaScrollWidth).toBeLessThanOrEqual(memoryLayout.metaClientWidth + 1);
+    expect(memoryLayout.rowsInside).toBe(true);
+    expect(memoryLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+
+    await longTermRow.getByTitle('编辑本文术语').click();
+    const termEditor = overlay.locator('.document-edit');
+    const sourceEditor = termEditor.getByRole('textbox', { name: '原文术语' });
+    await expect(sourceEditor).toBeFocused();
+    const editorLayout = await termEditor.evaluate((editor) => {
+      const inputs = [...editor.querySelectorAll<HTMLElement>('input')];
+      const buttons = [...editor.querySelectorAll<HTMLElement>('button')];
+      return {
+        inputTops: inputs.map((input) => input.getBoundingClientRect().top),
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    expect(editorLayout.inputTops[1]).toBeGreaterThan(editorLayout.inputTops[0] ?? 0);
+    expect(editorLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-document-memory-editor-360-light.png') });
+    }
+    await sourceEditor.press('Escape');
+    await expect(termEditor).toHaveCount(0);
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect(longTermRow.getByTitle('编辑本文术语')).toBeFocused();
+
+    const clear = overlay.getByRole('button', { name: '清空本文记忆' });
+    await clear.click();
+    await overlay.getByRole('button', { name: '再次点击清空' }).click();
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('clears an unsent PDF image selection on Escape, zoom, and document replacement', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
@@ -5098,6 +5266,11 @@ test('keeps document terminology behind a compact sidebar drawer', async () => {
     .toBeVisible();
   await expect(overlay.locator('.document-row').filter({ hasText: 'adaptive sensing' })).toBeVisible();
   const candidateRow = overlay.locator('.document-row').filter({ hasText: 'adaptive sensing' });
+  await candidateRow.getByText('修改').click();
+  const candidateEditor = candidateRow.getByLabel('修改 adaptive sensing 的候选译法');
+  await expect(candidateEditor).toBeFocused();
+  await candidateEditor.press('Escape');
+  await expect(candidateRow.getByTitle('修改候选译法后采用')).toBeFocused();
   await candidateRow.getByText('修改').click();
   await candidateRow.getByLabel('修改 adaptive sensing 的候选译法').fill('自适应感知方法');
   await candidateRow.getByTitle('保存修改并采用').click();
