@@ -3783,6 +3783,185 @@ test('shows a compact PDF region queue and lets waiting or active tasks be cance
   }
 });
 
+test('keeps narrow PDF translation states readable and touch-safe', async ({}, testInfo) => {
+  const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const longFormula = String.raw`\operatorname{ELBO}(\theta,\phi)=\mathbb{E}_{q_\phi(z\mid x)}[\log p_\theta(x,z)-\log q_\phi(z\mid x)]+\lambda\sum_{i=1}^{n}\lVert x_i-\hat{x}_i\rVert_2^2`;
+  let releaseResult: (() => void) | undefined;
+  const resultGate = new Promise<void>((resolve) => { releaseResult = resolve; });
+  let requestIndex = 0;
+  const pdfPage = await context.newPage();
+  const stateHandler = async (route: Route): Promise<void> => {
+    requestIndex += 1;
+    await resultGate;
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        choices: [{ message: { content: JSON.stringify({
+          translation: `该目标 \\[${longFormula}\\] 在长文本条件下保持稳定。`,
+          recognizedText: `The objective \\[${longFormula}\\] remains stable under long-form input.`,
+          formulaLatex: [longFormula],
+          uncertainSpans: [],
+        }) } }],
+      }),
+    }).catch(() => undefined);
+  };
+  await context.route(apiPattern, stateHandler);
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'narrow-translation-states.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#fit-width').click();
+    await expect.poll(() => firstPage.evaluate((element) =>
+      element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
+
+    const drawAndSend = async (left: number, top: number): Promise<void> => {
+      if (await pdfPage.locator('#region-translate').getAttribute('aria-pressed') !== 'true') {
+        await pdfPage.locator('#region-translate').click();
+      }
+      const bounds = await firstPage.boundingBox();
+      expect(bounds).not.toBeNull();
+      if (!bounds) return;
+      await pdfPage.mouse.move(bounds.x + left, bounds.y + top);
+      await pdfPage.mouse.down();
+      await pdfPage.mouse.move(bounds.x + left + 150, bounds.y + top + 110, { steps: 5 });
+      await pdfPage.mouse.up();
+      await expect(firstPage.locator('.region-confirm')).toBeVisible();
+      await firstPage.locator('.region-confirm .confirm').click();
+    };
+
+    await drawAndSend(55, 110);
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(overlay.locator('.loading-status')).toBeVisible();
+    await expect.poll(() => requestIndex).toBe(1);
+    const loadingCard = await overlay.locator('.surface').evaluate((surface) => {
+      const toolbar = document.querySelector<HTMLElement>('#pdf-toolbar');
+      const controls = [...surface.querySelectorAll<HTMLElement>('.pin-action,.surface-close,.stop-translation')];
+      const bounds = surface.getBoundingClientRect();
+      return {
+        bounds: bounds.toJSON(),
+        toolbarBottom: toolbar?.getBoundingClientRect().bottom ?? 0,
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+      };
+    });
+    expect(loadingCard.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(loadingCard.bounds.right).toBeLessThanOrEqual(352);
+    expect(loadingCard.bounds.top).toBeGreaterThanOrEqual(loadingCard.toolbarBottom + 8);
+    expect(loadingCard.scrollWidth).toBeLessThanOrEqual(loadingCard.clientWidth + 1);
+    expect(loadingCard.controlHeights.every((height) => height >= 32)).toBe(true);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-translation-loading-360-light.png') });
+    }
+
+    await overlay.locator('.pin-action').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    const loadingSidebar = await overlay.locator('.surface').evaluate((surface) => {
+      const bounds = surface.getBoundingClientRect();
+      const title = surface.querySelector<HTMLElement>('.title-wrap')?.getBoundingClientRect();
+      const tools = surface.querySelector<HTMLElement>('.header-tools')?.getBoundingClientRect();
+      const controls = [...surface.querySelectorAll<HTMLElement>('.header-tools button,.stop-translation')];
+      return {
+        bounds: bounds.toJSON(),
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        titleRight: title?.right ?? 0,
+        toolsLeft: tools?.left ?? Infinity,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+      };
+    });
+    expect(loadingSidebar.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(loadingSidebar.bounds.right).toBeLessThanOrEqual(352);
+    expect(loadingSidebar.scrollWidth).toBeLessThanOrEqual(loadingSidebar.clientWidth + 1);
+    expect(loadingSidebar.titleRight).toBeLessThanOrEqual(loadingSidebar.toolsLeft);
+    expect(loadingSidebar.controlHeights.every((height) => height >= 32)).toBe(true);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-translation-sidebar-loading-360-light.png') });
+    }
+
+    releaseResult?.();
+    await expect(overlay.locator('.body .pi-math-display')).toBeVisible();
+    const formulaLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const formula = surface.querySelector<HTMLElement>('.pi-math-display');
+      return {
+        surfaceClientWidth: surface.clientWidth,
+        surfaceScrollWidth: surface.scrollWidth,
+        formulaClientWidth: formula?.clientWidth ?? 0,
+        formulaScrollWidth: formula?.scrollWidth ?? 0,
+      };
+    });
+    expect(formulaLayout.surfaceScrollWidth).toBeLessThanOrEqual(formulaLayout.surfaceClientWidth + 1);
+    expect(formulaLayout.formulaScrollWidth).toBeGreaterThan(formulaLayout.formulaClientWidth);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-translation-sidebar-result-360-light.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-translation-sidebar-result-360-dark.png') });
+      await pdfPage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+  } finally {
+    releaseResult?.();
+    await context.unroute(apiPattern, stateHandler);
+    await pdfPage.close();
+  }
+});
+
+test('keeps narrow PDF translation errors readable and touch-safe', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'narrow-translation-error.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTextPdf('Energy E = mc^2 is invariant.'),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#fit-width').click();
+    const textSpan = firstPage.locator('.textLayer span')
+      .filter({ hasText: 'Energy E = mc^2 is invariant.' });
+    await expect(textSpan).toBeVisible();
+    await textSpan.evaluate((element) => {
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      const selection = window.getSelection();
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      document.dispatchEvent(new Event('selectionchange'));
+    });
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await firstPage.locator('canvas').evaluate((canvas) => canvas.remove());
+    await overlay.locator('.trigger').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(overlay.locator('.error')).toBeVisible();
+    const errorCard = await overlay.locator('.surface').evaluate((surface) => ({
+      bounds: surface.getBoundingClientRect().toJSON(),
+      clientWidth: surface.clientWidth,
+      scrollWidth: surface.scrollWidth,
+      closeHeight: surface.querySelector<HTMLElement>('.surface-close')?.getBoundingClientRect().height ?? 0,
+    }));
+    expect(errorCard.bounds.left).toBeGreaterThanOrEqual(8);
+    expect(errorCard.bounds.right).toBeLessThanOrEqual(352);
+    expect(errorCard.scrollWidth).toBeLessThanOrEqual(errorCard.clientWidth + 1);
+    expect(errorCard.closeHeight).toBeGreaterThanOrEqual(32);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-translation-error-360-light.png') });
+    }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('clears an unsent PDF image selection on Escape, zoom, and document replacement', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
