@@ -424,7 +424,7 @@ test.beforeAll(async () => {
               warnings: [],
               segments: [],
             } : isDenseMetadataSelection ? {
-              translation: '密集元信息在窄屏中保持清晰，公式 $E=mc^2$ 也可切换。',
+              translation: String.raw`密集元信息在窄屏中保持清晰，\[\operatorname{ELBO}(\theta,\phi)=\mathbb{E}_{q_\phi(z\mid x)}[\log p_\theta(x,z)-\log q_\phi(z\mid x)]+\lambda\sum_{i=1}^{n}\lVert x_i-\hat{x}_i\rVert_2^2+\gamma\prod_{j=1}^{m}\frac{p_\theta(y_j\mid z)}{q_\phi(z\mid x_j)}+\eta\sum_{k=1}^{r}\left\lVert A_kx-b_k\right\rVert_F^2\tag{12}\] 也可切换。`,
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
@@ -4265,8 +4265,107 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
 
     const aligned = overlay.getByRole('button', { name: '显示逐句对照' });
     await aligned.click();
-    await expect(overlay.locator('.segment')).toHaveCount(2);
+    const segments = overlay.locator('.segment');
+    await expect(segments).toHaveCount(2);
     await expect(aligned).toBeFocused();
+    await expect(overlay.locator('.segment-source-toggle')).toHaveCount(2);
+    const firstSegment = segments.first();
+    await expect(firstSegment.locator('.pi-math-display')).toBeVisible();
+    const alignedLayout = await firstSegment.evaluate((segment) => {
+      const surface = segment.closest<HTMLElement>('.surface')!;
+      const source = segment.querySelector<HTMLElement>('.segment-source')!;
+      const formula = segment.querySelector<HTMLElement>('.pi-math-scroll')
+        ?? segment.querySelector<HTMLElement>('.pi-math-display')!;
+      const actions = segment.querySelector<HTMLElement>('.segment-actions')!;
+      const buttons = [...actions.querySelectorAll<HTMLElement>('button')];
+      return {
+        surfaceClientWidth: surface.clientWidth,
+        surfaceScrollWidth: surface.scrollWidth,
+        segmentClientWidth: segment.clientWidth,
+        segmentScrollWidth: segment.scrollWidth,
+        sourceClientHeight: source.clientHeight,
+        sourceScrollHeight: source.scrollHeight,
+        formulaClientWidth: formula.clientWidth,
+        formulaScrollWidth: formula.scrollWidth,
+        actionClientWidth: actions.clientWidth,
+        actionScrollWidth: actions.scrollWidth,
+        actionHeights: buttons.map((button) => button.getBoundingClientRect().height),
+        actionTops: buttons.map((button) => Math.round(button.getBoundingClientRect().top)),
+      };
+    });
+    expect(alignedLayout.surfaceScrollWidth).toBeLessThanOrEqual(
+      alignedLayout.surfaceClientWidth + 1,
+    );
+    expect(alignedLayout.segmentScrollWidth).toBeLessThanOrEqual(
+      alignedLayout.segmentClientWidth + 1,
+    );
+    expect(alignedLayout.sourceClientHeight).toBeLessThanOrEqual(80);
+    expect(alignedLayout.sourceScrollHeight).toBeGreaterThan(alignedLayout.sourceClientHeight);
+    expect(alignedLayout.formulaScrollWidth).toBeGreaterThan(alignedLayout.formulaClientWidth);
+    expect(alignedLayout.actionScrollWidth).toBeLessThanOrEqual(alignedLayout.actionClientWidth + 1);
+    expect(alignedLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    expect(new Set(alignedLayout.actionTops).size).toBe(1);
+    if (process.env.PI_VISUAL_QA) {
+      await densePage.screenshot({ path: testInfo.outputPath('aligned-long-source-360-light.png') });
+      await densePage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await densePage.screenshot({ path: testInfo.outputPath('aligned-long-source-360-dark.png') });
+      await densePage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+
+    const sourceToggle = firstSegment.locator('.segment-source-toggle');
+    await expect(sourceToggle).toHaveAttribute('aria-label', '展开完整原文');
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(sourceToggle).toHaveText('收起原文');
+    await expect(sourceToggle).toBeFocused();
+    const expandedSource = await firstSegment.locator('.segment-source').evaluate((source) => ({
+      clientHeight: source.clientHeight,
+      scrollHeight: source.scrollHeight,
+    }));
+    expect(expandedSource.clientHeight).toBeGreaterThan(alignedLayout.sourceClientHeight);
+    expect(expandedSource.clientHeight).toBeLessThanOrEqual(181);
+    expect(expandedSource.scrollHeight).toBeGreaterThan(expandedSource.clientHeight);
+    await sourceToggle.click();
+    await expect(sourceToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(sourceToggle).toHaveText('展开原文');
+    await expect(sourceToggle).toBeFocused();
+
+    const segmentCopy = firstSegment.getByRole('button', { name: '复制本句译文' });
+    await segmentCopy.click();
+    await expect(segmentCopy).toHaveText('已复制');
+    await expect(segmentCopy).toBeFocused();
+    const segmentCorrect = firstSegment.getByRole('button', { name: '只修正本句，不调用 API' });
+    await segmentCorrect.click();
+    const segmentEditor = firstSegment.getByRole('group', { name: /修正第 1 句/ });
+    await expect(segmentEditor.getByLabel('受保护公式 1，不可编辑')).toBeVisible();
+    const editorLayout = await firstSegment.evaluate((segment) => {
+      const editor = segment.querySelector<HTMLElement>('.segment-correction')!;
+      const actions = editor.querySelector<HTMLElement>('.segment-correction-actions')!;
+      return {
+        clientWidth: segment.clientWidth,
+        scrollWidth: segment.scrollWidth,
+        actionClientWidth: actions.clientWidth,
+        actionScrollWidth: actions.scrollWidth,
+        actionHeights: [...actions.querySelectorAll<HTMLElement>('button')]
+          .map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    expect(editorLayout.scrollWidth).toBeLessThanOrEqual(editorLayout.clientWidth + 1);
+    expect(editorLayout.actionScrollWidth).toBeLessThanOrEqual(editorLayout.actionClientWidth + 1);
+    expect(editorLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    await segmentEditor.locator('.correction-text-part').first().press('Escape');
+    await expect(firstSegment.getByRole('button', { name: '只修正本句，不调用 API' }))
+      .toBeFocused();
+
+    let segmentMark = firstSegment.getByRole('button', { name: '轻标记本句' });
+    await segmentMark.click();
+    segmentMark = overlay.locator('.segment').first().getByRole('button', {
+      name: '取消本句标记',
+    });
+    await expect(segmentMark).toHaveAttribute('aria-pressed', 'true');
+    await expect(segmentMark).toBeFocused();
     const formula = overlay.locator('.formula-view');
     await formula.click();
     await expect(formula).toHaveText('公式');
