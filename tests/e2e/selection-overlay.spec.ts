@@ -4366,10 +4366,53 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     });
     await expect(segmentMark).toHaveAttribute('aria-pressed', 'true');
     await expect(segmentMark).toBeFocused();
+
+    const surface = overlay.locator('.surface');
+    const scrollToSecondSegment = async (): Promise<number> => surface.evaluate((element) => {
+      const second = element.querySelectorAll<HTMLElement>('.segment')[1]!;
+      const surfaceBounds = element.getBoundingClientRect();
+      const secondBounds = second.getBoundingClientRect();
+      element.scrollTop += secondBounds.top - surfaceBounds.top - 12;
+      return element.scrollTop;
+    });
+    const markScrollTop = await scrollToSecondSegment();
+    expect(markScrollTop).toBeGreaterThan(0);
+    let secondMark = overlay.locator('.segment').nth(1).getByRole('button', {
+      name: '轻标记本句',
+    });
+    await secondMark.click();
+    secondMark = overlay.locator('.segment').nth(1).getByRole('button', {
+      name: '取消本句标记',
+    });
+    await expect(secondMark).toBeFocused();
+    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(markScrollTop, 0);
     const formula = overlay.locator('.formula-view');
-    await formula.click();
+    await formula.focus();
+    const formulaScrollTop = await scrollToSecondSegment();
+    await formula.press('Enter');
     await expect(formula).toHaveText('公式');
     await expect(formula).toBeFocused();
+    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(formulaScrollTop, 0);
+
+    const secondCorrect = overlay.locator('.segment').nth(1).getByRole('button', {
+      name: '只修正本句，不调用 API',
+    });
+    await scrollToSecondSegment();
+    await secondCorrect.click();
+    const secondEditor = overlay.locator('.segment').nth(1).getByRole('group', {
+      name: /修正第 2 句/,
+    });
+    await expect(secondEditor).toBeVisible();
+    const editorScrollTop = await surface.evaluate((element) => element.scrollTop);
+    expect(editorScrollTop).toBeGreaterThan(0);
+    await secondEditor.locator('.correction-text-part').first().press('Escape');
+    await expect(overlay.locator('.segment').nth(1).getByRole('button', {
+      name: '只修正本句，不调用 API',
+    })).toBeFocused();
+    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(editorScrollTop, 0);
     const full = overlay.getByRole('button', { name: '显示完整译文' });
     await full.click();
     await expect(overlay.locator('.body')).toBeVisible();
