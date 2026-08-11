@@ -1304,7 +1304,9 @@ test('keeps correction terms explicit and rolls a global term back with the tran
   await expect(overlay.getByRole('textbox', { name: '原文术语' })).toBeHidden();
   await expect(overlay.getByRole('textbox', { name: '固定译法' })).toBeHidden();
 
-  await overlay.getByText('＋ 固定术语（可选）').click();
+  const termDisclosure = overlay.locator('details.correction-term-disclosure');
+  const termSummary = termDisclosure.locator(':scope > summary');
+  await termSummary.click();
   const sourceTerm = overlay.getByRole('textbox', { name: '原文术语' });
   const targetTerm = overlay.getByRole('textbox', { name: '固定译法' });
   await expect(sourceTerm).toBeVisible();
@@ -1315,15 +1317,24 @@ test('keeps correction terms explicit and rolls a global term back with the tran
 
   const requestsBeforeSave = textRequests.length;
   await sourceTerm.fill('incomplete term');
+  await expect(termSummary).toHaveText('！固定术语待补充');
+  await termSummary.click();
+  await expect(termDisclosure).not.toHaveAttribute('open');
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.revision-status'))
     .toContainText('请完整填写不含公式的简短术语和固定译法');
+  await expect(termSummary).toHaveText('！固定术语需检查');
+  await expect(termDisclosure).toHaveAttribute('open', '');
+  await expect(targetTerm).toBeFocused();
   expect(textRequests).toHaveLength(requestsBeforeSave);
 
   const uniqueSource = 'correction-only global phrase';
   const uniqueTarget = '仅供修正测试的全局译法';
   await sourceTerm.fill(uniqueSource);
   await targetTerm.fill(uniqueTarget);
+  await expect(termSummary).toHaveText('✓ 已填写固定术语');
+  await termSummary.click();
+  await expect(termDisclosure).not.toHaveAttribute('open');
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.body')).toHaveText('显式术语修正后的译文。');
   expect(textRequests).toHaveLength(requestsBeforeSave);
@@ -1369,12 +1380,34 @@ test('keeps narrow translation correction fields and actions visible', async ({}
     const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
     await expect(editor).toBeFocused();
     await expect(overlay.locator('.pin-action')).toHaveCount(0);
+    await overlay.locator('.correction-save').click();
+    await expect(overlay.locator('.revision-status')).toContainText('译文没有变化');
+    await expect(overlay.locator('.revision-status')).toHaveAttribute('role', 'alert');
+    await expect(editor).toHaveAttribute(
+      'aria-describedby',
+      'pi-translation-correction-status',
+    );
+    await expect(editor).toBeFocused();
     await editor.fill('窄屏下需要保持清晰、完整并且可以直接保存的学术译文。');
+    await expect(overlay.locator('.revision-status')).toBeEmpty();
+    await expect(overlay.locator('.revision-status')).toHaveAttribute('role', 'status');
     await overlay.getByText('＋ 固定术语（可选）').click();
     const sourceTerm = overlay.getByRole('textbox', { name: '原文术语' });
     const targetTerm = overlay.getByRole('textbox', { name: '固定译法' });
     await sourceTerm.fill('AdaptiveSensingReconstructionObjectiveWithHierarchicalConstraints');
+    await overlay.locator('.correction-save').click();
+    const validation = overlay.locator('.revision-status');
+    await expect(validation).toContainText('请完整填写不含公式的简短术语和固定译法');
+    await expect(validation).toHaveAttribute('role', 'alert');
+    await expect(targetTerm).toHaveAttribute('aria-invalid', 'true');
+    await expect(targetTerm).toHaveAttribute(
+      'aria-describedby',
+      'pi-translation-correction-status',
+    );
+    await expect(targetTerm).toBeFocused();
     await targetTerm.fill('具有层级约束的自适应感知重建目标固定译法');
+    await expect(targetTerm).not.toHaveAttribute('aria-invalid');
+    await expect(validation).toBeEmpty();
 
     const correctionLayout = await overlay.locator('.surface').evaluate((surface) => {
       const inputs = [...surface.querySelectorAll<HTMLElement>('.correction-term-fields input')];
@@ -1511,7 +1544,9 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
   }
 });
 
-test('keeps a newer translation when an old correction save is rejected', async () => {
+test('keeps a newer translation and recovers a rejected correction save', async () => {
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  await page.setViewportSize({ width: 360, height: 700 });
   await clearBrowserSelection();
   const overlay = page.locator('#tex-selection-translator-root');
   if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
@@ -1555,25 +1590,61 @@ test('keeps a newer translation when an old correction save is rejected', async 
     return { key, original };
   }, page.url());
 
+  let headRestored = false;
   try {
-    await overlay.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(overlay.locator('.revision-status'))
+    const save = overlay.locator('.correction-save');
+    await save.click();
+    const failure = overlay.locator('.revision-status');
+    await expect(failure)
       .toContainText('当前译文已经变化，请重新打开修正');
+    await expect(failure).toHaveAttribute('role', 'alert');
+    await expect(failure).toHaveClass(/is-error/);
     await expect(editor).toBeVisible();
-    await overlay.getByRole('button', { name: '取消', exact: true }).click();
-    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
-  } finally {
+    await expect(editor).toHaveValue('不应覆盖较新结果的旧修正。');
+    await expect(editor).toBeEnabled();
+    await expect(save).toHaveText('重试');
+    await expect(save).toBeFocused();
+    const failureLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const status = surface.querySelector<HTMLElement>('.revision-status')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      return {
+        surfaceBottom: surfaceBounds.bottom,
+        statusBottom: status.getBoundingClientRect().bottom,
+        buttonHeights: [...surface.querySelectorAll<HTMLElement>('.revision-actions button')]
+          .map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    expect(failureLayout.statusBottom).toBeLessThanOrEqual(failureLayout.surfaceBottom);
+    expect(failureLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+
     await worker.evaluate(async ({ key, original }) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { session: { set(values: Record<string, unknown>): Promise<void> } } };
       }).chrome;
       await api.storage.session.set({ [key]: original });
     }, storedHead);
+    headRestored = true;
+    await save.click();
+    await expect(overlay.locator('.body')).toContainText('不应覆盖较新结果的旧修正');
+    await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  } finally {
+    if (!headRestored) {
+      await worker.evaluate(async ({ key, original }) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { storage: { session: {
+            set(values: Record<string, unknown>): Promise<void>;
+          } } };
+        }).chrome;
+        await api.storage.session.set({ [key]: original });
+      }, storedHead);
+    }
     if (await overlay.getByRole('button', { name: '取消', exact: true }).count()) {
       await overlay.getByRole('button', { name: '取消', exact: true }).click();
     }
     if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
     await clearBrowserSelection();
+    await page.setViewportSize(originalViewport);
   }
 });
 
@@ -4482,6 +4553,10 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       });
       expect(failureLayout.statusBottom).toBeLessThanOrEqual(failureLayout.surfaceBottom);
       expect(failureLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+      await draftInput.fill('第二句修正完成后仍保持当前阅读位置，并可继续修改。');
+      await expect(failure).toBeEmpty();
+      await expect(failure).toHaveAttribute('role', 'status');
+      await expect(saveSegment).toHaveText('保存');
     } finally {
       await worker.evaluate(async ({ key, original }) => {
         const api = (globalThis as typeof globalThis & {
@@ -6493,6 +6568,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
       await expect(undoStatus).toHaveAttribute('role', 'alert');
       await expect(undoStatus).toHaveClass(/is-error/);
       await expect(undo).toBeEnabled();
+      await expect(undo).toHaveText('重试');
       await expect(undo).toBeFocused();
       const undoFailure = '模拟撤销失败：当前译文版本已经在另一处发生变化，请重新检查后再试。ExtremelyLongUndoFailureIdentifierWithoutNaturalBreakpoints';
       await undoStatus.locator('.correction-undo-message').evaluate((element, message) => {
