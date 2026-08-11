@@ -320,12 +320,15 @@ main {
 .correction-text-part {
   width: 100%;
   min-height: 48px;
+  max-height: min(240px, 36vh);
   padding: 7px 1px;
   border: 0;
   border-radius: 0;
   color: #172033;
   background: transparent;
   font: 12px/1.65 Inter, "Segoe UI", system-ui, sans-serif;
+  field-sizing: content;
+  overflow-y: auto;
   resize: vertical;
 }
 .correction-text-part:only-child { min-height: clamp(96px, 24vh, 190px); }

@@ -5966,6 +5966,23 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
   await expect(nativeCorrection).toBeVisible();
   await expect(sidePanel.locator('#session-actions')).toBeHidden();
+  const correctionTextPartLayout = await nativeCorrection.locator('.correction-text-part')
+    .evaluateAll((inputs) => inputs.map((input) => {
+      const field = input as HTMLTextAreaElement;
+      return {
+        clientHeight: field.clientHeight,
+        scrollHeight: field.scrollHeight,
+        fieldSizing: getComputedStyle(field).getPropertyValue('field-sizing'),
+      };
+    }));
+  expect(correctionTextPartLayout.length).toBeGreaterThan(1);
+  const firstCorrectionTextPart = correctionTextPartLayout.at(0)!;
+  const lastCorrectionTextPart = correctionTextPartLayout.at(-1)!;
+  expect(firstCorrectionTextPart.clientHeight).toBeLessThanOrEqual(80);
+  expect(lastCorrectionTextPart.fieldSizing).toBe('content');
+  expect(lastCorrectionTextPart.clientHeight).toBeGreaterThan(120);
+  expect(lastCorrectionTextPart.clientHeight).toBeLessThanOrEqual(240);
+  expect(lastCorrectionTextPart.scrollHeight).toBeGreaterThan(lastCorrectionTextPart.clientHeight);
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
     .toContainText('Q^{\\Pi^*}');
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
