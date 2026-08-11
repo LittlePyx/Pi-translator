@@ -4413,6 +4413,81 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     })).toBeFocused();
     await expect.poll(() => surface.evaluate((element) => element.scrollTop))
       .toBeCloseTo(editorScrollTop, 0);
+
+    await scrollToSecondSegment();
+    await overlay.locator('.segment').nth(1).getByRole('button', {
+      name: '只修正本句，不调用 API',
+    }).click();
+    const savingEditor = overlay.locator('.segment').nth(1).getByRole('group', {
+      name: /修正第 2 句/,
+    });
+    await savingEditor.locator('.correction-text-part').first()
+      .fill('第二句修正完成后仍保持当前阅读位置，');
+    const savingOffset = await overlay.locator('.segment').nth(1).evaluate((segment) => {
+      const surface = segment.closest<HTMLElement>('.surface')!;
+      return segment.getBoundingClientRect().top - surface.getBoundingClientRect().top;
+    });
+    await savingEditor.getByRole('button', { name: '保存' }).click();
+    const correctedSecond = overlay.locator('.segment').nth(1);
+    await expect(correctedSecond.locator('.segment-target'))
+      .toContainText('第二句修正完成后仍保持当前阅读位置');
+    await expect(correctedSecond.getByRole('button', {
+      name: '只修正本句，不调用 API',
+    })).toBeFocused();
+    const savedPosition = await correctedSecond.evaluate((segment) => {
+      const surface = segment.closest<HTMLElement>('.surface')!;
+      return {
+        offset: segment.getBoundingClientRect().top - surface.getBoundingClientRect().top,
+        remainingScroll: surface.scrollHeight - surface.clientHeight - surface.scrollTop,
+      };
+    });
+    expect(
+      Math.abs(savedPosition.offset - savingOffset) < 0.5
+      || savedPosition.remainingScroll < 0.5,
+    ).toBe(true);
+    const savedVisibility = await correctedSecond.evaluate((segment) => {
+      const surface = segment.closest<HTMLElement>('.surface')!;
+      const target = segment.querySelector<HTMLElement>('.segment-target')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      const headerBottom = surface.querySelector<HTMLElement>(':scope > .header')
+        ?.getBoundingClientRect().bottom ?? surfaceBounds.top;
+      const targetBounds = target.getBoundingClientRect();
+      return {
+        contentTop: Math.max(surfaceBounds.top, headerBottom),
+        surfaceBottom: surfaceBounds.bottom,
+        targetTop: targetBounds.top,
+        targetBottom: targetBounds.bottom,
+      };
+    });
+    expect(savedVisibility.targetTop).toBeGreaterThan(savedVisibility.contentTop);
+    expect(savedVisibility.targetBottom).toBeLessThanOrEqual(savedVisibility.surfaceBottom);
+
+    const undoSegmentCorrection = overlay.getByRole('button', {
+      name: '撤销上次译文修正',
+    });
+    await undoSegmentCorrection.click();
+    const restoredSecond = overlay.locator('.segment').nth(1);
+    await expect(restoredSecond.locator('.segment-target'))
+      .not.toContainText('第二句修正完成后仍保持当前阅读位置');
+    await expect(restoredSecond.getByRole('button', {
+      name: '只修正本句，不调用 API',
+    })).toBeFocused();
+    const restoredVisibility = await restoredSecond.evaluate((segment) => {
+      const surface = segment.closest<HTMLElement>('.surface')!;
+      const target = segment.querySelector<HTMLElement>('.segment-target')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      const headerBottom = surface.querySelector<HTMLElement>(':scope > .header')
+        ?.getBoundingClientRect().bottom ?? surfaceBounds.top;
+      const targetBounds = target.getBoundingClientRect();
+      return {
+        contentTop: Math.max(surfaceBounds.top, headerBottom),
+        surfaceBottom: surfaceBounds.bottom,
+        targetTop: targetBounds.top,
+        targetBottom: targetBounds.bottom,
+      };
+    });
+    expect(restoredVisibility.targetTop).toBeGreaterThan(restoredVisibility.contentTop);
+    expect(restoredVisibility.targetBottom).toBeLessThanOrEqual(restoredVisibility.surfaceBottom);
     const full = overlay.getByRole('button', { name: '显示完整译文' });
     await full.click();
     await expect(overlay.locator('.body')).toBeVisible();
