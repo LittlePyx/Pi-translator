@@ -343,6 +343,23 @@ main {
 .correction-term-fields .correction-term-scope { grid-column: 1 / -1; grid-template-columns: auto minmax(100px, 140px); align-items: center; justify-content: space-between; }
 .correction-term-fields input, .correction-term-fields select { min-width: 0; padding: 6px 1px; border: 0; border-bottom: 1px solid #d8dce7; border-radius: 0; color: #172033; background: transparent; font-family: inherit; font-size: 11px; line-height: 1.4; }
 .correction-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.translation-text.correction-mode { padding-bottom: 58px; }
+.translation-text.correction-mode .correction-actions {
+  position: fixed;
+  z-index: 3;
+  right: max(18px, calc((100vw - 620px) / 2 + 18px));
+  bottom: 0;
+  left: max(18px, calc((100vw - 620px) / 2 + 18px));
+  min-height: 54px;
+  padding: 9px 0 13px;
+  border-top: 1px solid rgba(215, 219, 228, .92);
+  background: rgba(248, 249, 252, .94);
+  box-shadow: 0 -8px 18px rgba(36, 43, 61, .045);
+  backdrop-filter: blur(12px);
+  white-space: normal;
+}
+.correction-editor textarea, .correction-editor input, .correction-editor select,
+.correction-editor summary { scroll-margin-bottom: 70px; }
 .correction-actions span { margin-right: auto; color: #5f687a; font-size: 10px; overflow-wrap: anywhere; }
 .correction-actions .correction-feedback.is-error { color: #a52b36; font-weight: 650; }
 .correction-actions button { min-height: var(--compact-hit); border: 1px solid #c9cdee; border-radius: 4px; padding: 4px 8px; color: #5f687a; background: transparent; cursor: pointer; font-size: 10px; }
@@ -437,6 +454,8 @@ button:focus-visible {
   .correction-text-part:focus { background: #202938; }
   .correction-note, .correction-scope, .correction-term-disclosure > summary, .correction-term-fields label,
   .correction-actions span, .correction-undo { color: #aeb8c7; }
+  .translation-text.correction-mode .correction-actions { border-top-color: #303846; background: rgba(17, 23, 34, .94); }
+  .correction-term-disclosure.has-value > summary { color: #c1bcff; }
   .correction-undo.is-error, .correction-actions .correction-feedback.is-error,
   .correction-term-disclosure.has-error > summary { color: #ff9aaa; }
   .correction-term-fields input[aria-invalid="true"] { border-bottom-color: #ff9aaa; box-shadow: 0 1px 0 rgba(255, 154, 170, .22); }

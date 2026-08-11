@@ -6010,6 +6010,35 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(nativeCorrectionFeedback).toBeEmpty();
   await expect(nativeTargetTerm).not.toHaveAttribute('aria-invalid');
   await expect(nativeTermSummary).toHaveText('✓ 已填写固定术语');
+  const nativeCorrectionActionLayout = await nativeCorrection.locator('.correction-actions')
+    .evaluate((actions) => {
+      const rect = actions.getBoundingClientRect();
+      return {
+        position: getComputedStyle(actions).position,
+        bottom: rect.bottom,
+        viewportHeight: document.documentElement.clientHeight,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        viewportWidth: document.documentElement.clientWidth,
+      };
+    });
+  expect(nativeCorrectionActionLayout.position).toBe('fixed');
+  expect(nativeCorrectionActionLayout.bottom)
+    .toBeGreaterThan(nativeCorrectionActionLayout.viewportHeight - 2);
+  expect(nativeCorrectionActionLayout.bottom)
+    .toBeLessThanOrEqual(nativeCorrectionActionLayout.viewportHeight + 1);
+  expect(nativeCorrectionActionLayout.pageScrollWidth)
+    .toBeLessThanOrEqual(nativeCorrectionActionLayout.viewportWidth + 1);
+  await expect.poll(() => nativeTargetTerm.evaluate((field) => {
+    const actions = document.querySelector<HTMLElement>('.correction-actions');
+    if (!actions) return false;
+    return field.getBoundingClientRect().bottom <= actions.getBoundingClientRect().top - 7;
+  })).toBe(true);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
   await nativeTermSummary.click();
   await nativeCorrectionSave.click();
   await expect(nativeCorrectionFeedback).toContainText('当前 PDF 或译文已经变化');

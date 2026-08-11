@@ -572,6 +572,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   if (sourceLayoutFrame !== undefined) window.cancelAnimationFrame(sourceLayoutFrame);
   sourceLayoutFrame = undefined;
   clearCopyFeedback();
+  translationText.classList.remove('correction-mode');
   currentSession = session ?? undefined;
   const renderRevision = ++translationRenderRevision;
   if (session) scheduleStreamViewportFollow(session, renderRevision, followStreamOutput);
@@ -978,6 +979,7 @@ function openCorrectionEditor(): void {
   for (const input of inputs.values()) input.setAttribute('aria-describedby', feedback.id);
   source.setAttribute('aria-describedby', feedback.id);
   target.setAttribute('aria-describedby', feedback.id);
+  translationText.classList.add('correction-mode');
   translationText.replaceChildren(panel);
   formulaView.hidden = true;
   copy.hidden = true;
@@ -995,6 +997,17 @@ function openCorrectionEditor(): void {
     if (event.key !== 'Escape') return;
     event.preventDefault();
     cancel.click();
+  });
+  panel.addEventListener('focusin', (event) => {
+    const control = event.target;
+    if (!(control instanceof HTMLElement) || actions.contains(control)) return;
+    window.requestAnimationFrame(() => {
+      if (!control.isConnected) return;
+      const overlap = control.getBoundingClientRect().bottom
+        - actions.getBoundingClientRect().top
+        + 8;
+      if (overlap > 0) window.scrollBy({ top: overlap, behavior: 'auto' });
+    });
   });
   const setCorrectionStatus = (message: string, isError = false): void => {
     feedback.textContent = message;
