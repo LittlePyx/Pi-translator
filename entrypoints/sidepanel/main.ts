@@ -79,6 +79,7 @@ const copy = element<HTMLButtonElement>('copy');
 const copyFeedback = element<HTMLElement>('copy-feedback');
 const correct = element<HTMLButtonElement>('correct');
 const correctionUndo = element<HTMLElement>('correction-undo');
+const correctionUndoMessage = element<HTMLElement>('correction-undo-message');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
 const status = element<HTMLElement>('status');
 const sessionActions = element<HTMLElement>('session-actions');
@@ -649,7 +650,13 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
   correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
+  correctionUndo.classList.remove('is-error');
+  correctionUndo.removeAttribute('aria-busy');
+  correctionUndo.setAttribute('role', 'status');
+  correctionUndo.setAttribute('aria-live', 'polite');
+  correctionUndoMessage.textContent = '已修正 ·';
   undoCorrection.disabled = correctionUndo.hidden;
+  undoCorrection.textContent = '撤销';
   syncSessionActions();
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle(
@@ -955,6 +962,8 @@ function openCorrectionEditor(): void {
   const actions = document.createElement('div');
   actions.className = 'correction-actions';
   const feedback = document.createElement('span');
+  feedback.id = 'pi-pdf-side-panel-correction-status';
+  feedback.className = 'correction-feedback';
   feedback.setAttribute('role', 'status');
   feedback.setAttribute('aria-live', 'polite');
   const cancel = document.createElement('button');
@@ -966,6 +975,9 @@ function openCorrectionEditor(): void {
   save.textContent = '保存';
   actions.append(feedback, cancel, save);
   panel.append(parts, note, scopeLabel, termDisclosure, actions);
+  for (const input of inputs.values()) input.setAttribute('aria-describedby', feedback.id);
+  source.setAttribute('aria-describedby', feedback.id);
+  target.setAttribute('aria-describedby', feedback.id);
   translationText.replaceChildren(panel);
   formulaView.hidden = true;
   copy.hidden = true;
@@ -984,6 +996,64 @@ function openCorrectionEditor(): void {
     event.preventDefault();
     cancel.click();
   });
+  const setCorrectionStatus = (message: string, isError = false): void => {
+    feedback.textContent = message;
+    feedback.classList.toggle('is-error', isError);
+    feedback.setAttribute('role', isError ? 'alert' : 'status');
+    feedback.setAttribute('aria-live', isError ? 'assertive' : 'polite');
+  };
+  const showSaveFailure = (message: string): void => {
+    setCorrectionStatus(message, true);
+    save.textContent = '重试';
+    queueMicrotask(() => {
+      feedback.scrollIntoView({ block: 'nearest' });
+      save.focus({ preventScroll: true });
+    });
+  };
+  const resetSaveError = (): void => {
+    if (!feedback.classList.contains('is-error')) return;
+    setCorrectionStatus('');
+    save.textContent = '保存';
+  };
+  const clearTermErrors = (): void => {
+    source.removeAttribute('aria-invalid');
+    target.removeAttribute('aria-invalid');
+  };
+  const updateTermSummary = (): void => {
+    const hasSource = Boolean(source.value.trim());
+    const hasTarget = Boolean(target.value.trim());
+    termDisclosure.classList.toggle('has-value', hasSource && hasTarget);
+    termDisclosure.classList.toggle('has-error', hasSource !== hasTarget);
+    termSummary.textContent = hasSource && hasTarget
+      ? '✓ 已填写固定术语'
+      : hasSource !== hasTarget
+        ? '！固定术语待补充'
+        : '＋ 固定术语（可选）';
+  };
+  const showTermValidationFailure = (): void => {
+    const sourceMissing = !source.value.trim();
+    const targetMissing = !target.value.trim();
+    const pairInvalid = !sourceMissing && !targetMissing;
+    source.setAttribute('aria-invalid', String(sourceMissing || pairInvalid));
+    target.setAttribute('aria-invalid', String(targetMissing || pairInvalid));
+    termDisclosure.classList.remove('has-value');
+    termDisclosure.classList.add('has-error');
+    termSummary.textContent = '！固定术语需检查';
+    termDisclosure.open = true;
+    queueMicrotask(() => (sourceMissing ? source : targetMissing ? target : source)
+      .focus({ preventScroll: true }));
+  };
+  const focusFirstTextPart = (): void => {
+    queueMicrotask(() => (inputs.values().next().value ?? scope).focus());
+  };
+  for (const input of inputs.values()) input.addEventListener('input', resetSaveError);
+  const onTermInput = (): void => {
+    clearTermErrors();
+    updateTermSummary();
+    resetSaveError();
+  };
+  source.addEventListener('input', onTermInput);
+  target.addEventListener('input', onTermInput);
   save.addEventListener('click', () => {
     const selectedScope = scope.value as TranslationMemoryScope;
     const edits: ManualCorrectionEdit[] = [...inputs].map(([partId, input]) => ({
@@ -991,11 +1061,12 @@ function openCorrectionEditor(): void {
       text: input.value,
     }));
     const hasTermInput = Boolean(source.value.trim() || target.value.trim());
-    const explicitTermCandidate = termDisclosure.open && hasTermInput
+    const explicitTermCandidate = hasTermInput
       ? { source: source.value, target: target.value }
       : undefined;
     let translatedText: string;
     let term: TranslationCorrectionTermInput | undefined;
+    clearTermErrors();
     try {
       const applied = applyManualCorrection(correctionSession, {
         revision: draft.revision,
@@ -1011,7 +1082,7 @@ function openCorrectionEditor(): void {
           }
         : undefined;
     } catch (error) {
-      feedback.textContent = error instanceof ManualCorrectionError
+      setCorrectionStatus(error instanceof ManualCorrectionError
         ? error.code === 'NO_CHANGES'
           ? '译文没有变化'
           : error.code === 'LATEX_CHANGED'
@@ -1019,9 +1090,15 @@ function openCorrectionEditor(): void {
             : error.code === 'INVALID_TERM_CANDIDATE'
               ? '请完整填写不含公式的简短术语和固定译法'
               : '修正内容不完整，请检查'
-        : '无法保存修正';
+        : '无法保存修正', true);
+      if (error instanceof ManualCorrectionError && error.code === 'INVALID_TERM_CANDIDATE') {
+        showTermValidationFailure();
+      } else {
+        focusFirstTextPart();
+      }
       return;
     }
+    save.textContent = '保存';
     panel.setAttribute('aria-busy', 'true');
     save.disabled = true;
     cancel.disabled = true;
@@ -1030,7 +1107,7 @@ function openCorrectionEditor(): void {
     for (const input of inputs.values()) input.disabled = true;
     source.disabled = true;
     target.disabled = true;
-    feedback.textContent = '正在保存…';
+    setCorrectionStatus('正在保存…');
     void (async () => {
       const response = await browser.runtime.sendMessage({
         type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
@@ -1069,7 +1146,7 @@ function openCorrectionEditor(): void {
       source.disabled = false;
       target.disabled = false;
       termScope.disabled = false;
-      feedback.textContent = error instanceof Error ? error.message : '保存失败，请重试';
+      showSaveFailure(error instanceof Error ? error.message : '保存失败，请重试');
     });
   });
   queueMicrotask(() => (inputs.values().next().value ?? scope).focus());
@@ -1080,8 +1157,14 @@ function undoCurrentCorrection(): void {
   if (!session?.correctionReceipt || !session.result) return;
   const sessionResult = session.result;
   const correctionReceipt = session.correctionReceipt;
+  correctionUndo.classList.remove('is-error');
+  correctionUndo.setAttribute('aria-busy', 'true');
+  correctionUndo.setAttribute('role', 'status');
+  correctionUndo.setAttribute('aria-live', 'polite');
+  correctionUndoMessage.textContent = '正在撤销…';
+  undoCorrection.textContent = '撤销';
   undoCorrection.disabled = true;
-  setStatus('正在撤销修正');
+  setStatus('');
   void (async () => {
     const response = await browser.runtime.sendMessage({
       type: 'UNDO_PDF_SIDE_PANEL_TRANSLATION_RESULT',
@@ -1114,8 +1197,19 @@ function undoCurrentCorrection(): void {
       rollbackSkipped ? 8_000 : 2_200,
     );
   })().catch((error: unknown) => {
+    correctionUndo.removeAttribute('aria-busy');
     undoCorrection.disabled = false;
-    setStatus(error instanceof Error ? error.message : '撤销失败', 6_000);
+    undoCorrection.textContent = '重试';
+    correctionUndo.classList.add('is-error');
+    correctionUndo.setAttribute('role', 'alert');
+    correctionUndo.setAttribute('aria-live', 'assertive');
+    correctionUndoMessage.textContent = error instanceof Error
+      ? `${error.message} ·`
+      : '撤销失败 ·';
+    queueMicrotask(() => {
+      correctionUndo.scrollIntoView({ block: 'nearest' });
+      undoCorrection.focus({ preventScroll: true });
+    });
   });
 }
 

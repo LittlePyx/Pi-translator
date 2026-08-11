@@ -293,6 +293,7 @@ test.beforeAll(async () => {
   const bootstrapPages = context.pages();
   const bootstrapPage = bootstrapPages[0] ?? await context.newPage();
   await bootstrapPage.goto(`chrome-extension://${extensionId}/options.html`);
+  await expect(bootstrapPage.locator('#api-profile option')).not.toHaveCount(0);
   const onboarding = bootstrapPage.locator('#onboarding-dialog');
   if (await onboarding.isVisible()) {
     await bootstrapPage.locator('#onboarding-skip').click();
@@ -5978,17 +5979,99 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(correctionScope).toHaveValue('document');
   await expect(correctionScope).toBeFocused();
   await expect(nativeCorrection.getByLabel('原文术语')).toBeHidden();
-  await nativeCorrection.getByText('＋ 固定术语（可选）').click();
+  const nativeTermDisclosure = nativeCorrection.locator('details.correction-term-disclosure');
+  const nativeTermSummary = nativeTermDisclosure.locator(':scope > summary');
+  await nativeTermSummary.click();
+  const nativeSourceTerm = nativeCorrection.getByLabel('原文术语');
+  const nativeTargetTerm = nativeCorrection.getByLabel('固定译法');
   const nativeTermScope = nativeCorrection.getByLabel('术语保存范围');
   await nativeTermScope.selectOption('global');
   await expect(nativeTermScope).toHaveValue('global');
+  const nativeEditor = nativeCorrection.getByLabel('可编辑译文第 1 段');
+  await nativeEditor.fill('修正后的原生 PDF 译文标题。');
+  await nativeSourceTerm.fill('native PDF');
+  await expect(nativeTermSummary).toHaveText('！固定术语待补充');
+  await nativeTermSummary.click();
+  await expect(nativeTermDisclosure).not.toHaveAttribute('open', '');
+  const nativeCorrectionSave = nativeCorrection.getByRole('button', { name: '保存', exact: true });
+  await nativeCorrectionSave.click();
+  const nativeCorrectionFeedback = nativeCorrection.locator('.correction-feedback');
+  await expect(nativeCorrectionFeedback)
+    .toContainText('请完整填写不含公式的简短术语和固定译法');
+  await expect(nativeCorrectionFeedback).toHaveAttribute('role', 'alert');
+  await expect(nativeTermDisclosure).toHaveAttribute('open', '');
+  await expect(nativeTargetTerm).toHaveAttribute('aria-invalid', 'true');
+  await expect(nativeTargetTerm).toHaveAttribute(
+    'aria-describedby',
+    'pi-pdf-side-panel-correction-status',
+  );
+  await expect(nativeTargetTerm).toBeFocused();
+  await nativeTargetTerm.fill('原生 PDF');
+  await expect(nativeCorrectionFeedback).toBeEmpty();
+  await expect(nativeTargetTerm).not.toHaveAttribute('aria-invalid');
+  await expect(nativeTermSummary).toHaveText('✓ 已填写固定术语');
+  await nativeTermSummary.click();
+  await nativeCorrectionSave.click();
+  await expect(nativeCorrectionFeedback).toContainText('当前 PDF 或译文已经变化');
+  await expect(nativeCorrectionFeedback).toHaveAttribute('role', 'alert');
+  await expect(nativeCorrection.getByRole('button', { name: '重试' })).toBeFocused();
+  await expect(nativeEditor).toBeEnabled();
+  await expect(nativeEditor).toHaveValue('修正后的原生 PDF 译文标题。');
+  await nativeEditor.fill('再次调整后的原生 PDF 译文标题。');
+  await expect(nativeCorrectionFeedback).toBeEmpty();
+  await expect(nativeCorrection.getByRole('button', { name: '保存', exact: true })).toBeVisible();
   await nativeCorrection.press('Escape');
   await expect(sidePanel.locator('#correct')).toBeFocused();
   await expect(sidePanel.locator('#session-actions')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toHaveCount(3);
+
+  await messageSender.evaluate(async (session) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+    }).chrome;
+    await api.runtime.sendMessage({
+      type: 'PDF_SIDE_PANEL_SESSION_UPDATED',
+      payload: {
+        ...session,
+        status: 'complete',
+        partialText: '已修正的原生 PDF 译文。',
+        result: {
+          requestId: 'native-pdf-corrected-e2e',
+          originalText: session.sourceText,
+          translatedText: '已修正的原生 PDF 译文。',
+          warnings: [],
+          latencyMs: 0,
+          revision: {
+            rootRequestId: session.requestId,
+            kind: 'manual',
+            label: '手动修改',
+            scope: 'current',
+          },
+        },
+        correctionReceipt: {
+          baseRequestId: session.requestId,
+          correctedRequestId: 'native-pdf-corrected-e2e',
+          scope: 'current',
+          previousTranslation: '修正前的原生 PDF 译文。',
+          correctedTranslation: '已修正的原生 PDF 译文。',
+        },
+      },
+    });
+  }, baseSession);
+  await expect(sidePanel.locator('#correction-undo')).toBeVisible();
+  await sidePanel.locator('#undo-correction').click();
+  await expect(sidePanel.locator('#correction-undo'))
+    .toContainText('没有可撤销的 PDF 译文修正');
+  await expect(sidePanel.locator('#correction-undo')).toHaveAttribute('role', 'alert');
+  await expect(sidePanel.locator('#status')).toBeEmpty();
+  await expect(sidePanel.locator('#undo-correction')).toHaveText('重试');
+  await expect(sidePanel.locator('#undo-correction')).toBeFocused();
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
   }
   const inheritedReaderPromise = context.waitForEvent('page');
   await sidePanel.locator('#open-pi-reader').click();
