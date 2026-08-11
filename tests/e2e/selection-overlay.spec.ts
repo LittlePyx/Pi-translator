@@ -353,11 +353,13 @@ test.beforeAll(async () => {
       : '';
     const isVisionProbe = imagePrompt.includes('Read the four black characters');
     const isImageTranslation = Array.isArray(imageMessageContent) && !isVisionProbe;
-    const isMultiSentenceSelection = JSON.stringify(body).includes('First important sentence');
-    const isDocumentTermSelection = JSON.stringify(body).includes('adaptive sensing');
-    const isPdfOptimizerFallback = JSON.stringify(body).includes('Optimizer fallback fixture');
-    const isTranslationRevision = JSON.stringify(body).includes('translationRevisionPreference');
-    const isPartialRecoverySelection = JSON.stringify(body).includes(
+    const serializedBody = JSON.stringify(body);
+    const isMultiSentenceSelection = serializedBody.includes('First important sentence');
+    const isDenseMetadataSelection = serializedBody.includes('Dense metadata');
+    const isDocumentTermSelection = serializedBody.includes('adaptive sensing');
+    const isPdfOptimizerFallback = serializedBody.includes('Optimizer fallback fixture');
+    const isTranslationRevision = serializedBody.includes('translationRevisionPreference');
+    const isPartialRecoverySelection = serializedBody.includes(
       'A recovery request may already contain a partial translation.',
     );
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
@@ -418,6 +420,11 @@ test.beforeAll(async () => {
               segments: [],
             } : isPdfOptimizerFallback ? {
               translation: String.raw`优化目标为 \[Q^{\Pi^*}=\operatorname{argmin}P\in P(V,\Omega)\left\{KL(P\Vert Q)\right\},\tag{12}\]`,
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
+            } : isDenseMetadataSelection ? {
+              translation: '密集元信息在窄屏中保持清晰，公式 $E=mc^2$ 也可切换。',
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
@@ -4166,6 +4173,136 @@ test('shows a compact PDF region queue and lets waiting or active tasks be cance
     releaseResponse?.();
     await context.unroute(apiPattern, delayedVisionHandler);
     await pdfPage.close();
+  }
+});
+
+test('keeps dense narrow result metadata and view controls readable', async ({}, testInfo) => {
+  const densePage = await context.newPage();
+  const denseFixtureUrl = `${OVERLEAF_FIXTURE_URL}?dense-result-metadata=1`;
+  const denseSource = [
+    `Dense metadata first sentence ${'alpha '.repeat(680)}!`,
+    `Dense metadata second sentence ${'beta '.repeat(420)}.`,
+  ].join('\n\n');
+  try {
+    await densePage.setViewportSize({ width: 360, height: 700 });
+    await densePage.route(denseFixtureUrl, async (route) => {
+      await route.fulfill({
+        contentType: 'text/html; charset=utf-8',
+        body: `<!doctype html><html><body>
+          <p id="warmup">A consistent academic translation improves the readability of research papers.</p>
+          <p id="dense-source"></p>
+        </body></html>`,
+      });
+    });
+    await densePage.goto(denseFixtureUrl);
+    await densePage.locator('#dense-source').evaluate((element, text) => {
+      element.textContent = text;
+    }, denseSource);
+    const selectText = async (selector: string): Promise<void> => {
+      await densePage.locator(selector).evaluate((element) => {
+        const range = document.createRange();
+        range.selectNodeContents(element);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+    };
+
+    const overlay = densePage.locator('#tex-selection-translator-root');
+    await selectText('#warmup');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await overlay.getByTitle('固定到连续翻译侧栏').click();
+
+    await selectText('#dense-source');
+    await expect(overlay.locator('.body')).toContainText('密集元信息在窄屏中保持清晰');
+    await expect(overlay.locator('.meta')).toContainText('2 段');
+    await expect(overlay.getByRole('group', { name: '译文显示方式' })).toBeVisible();
+    await expect(overlay.locator('.formula-view')).toBeVisible();
+    await overlay.locator('.meta').evaluate((meta) => {
+      const context = document.createElement('span');
+      context.className = 'cache-badge';
+      context.textContent = '含上下文';
+      meta.append(context);
+    });
+    await expect(overlay.locator('.meta')).toContainText('含上下文');
+    const sourceHost = overlay.locator('.source-host');
+    await expect(sourceHost).toHaveAttribute('title', 'www.overleaf.com');
+    const longSourceHost =
+      'extremely-long-research-document-origin-without-breakpoints.overleaf.example.test';
+    await sourceHost.evaluate((element, value) => {
+      element.textContent = value;
+      element.setAttribute('title', value);
+    }, longSourceHost);
+
+    const layout = await overlay.locator('.result-topline').evaluate((topLine) => {
+      const bounds = topLine.getBoundingClientRect();
+      const meta = topLine.querySelector<HTMLElement>('.meta')!;
+      const metaBounds = meta.getBoundingClientRect();
+      const controls = topLine.querySelector<HTMLElement>('.result-view-controls')!;
+      const controlBounds = controls.getBoundingClientRect();
+      const host = topLine.querySelector<HTMLElement>('.source-host')!;
+      return {
+        clientWidth: topLine.clientWidth,
+        scrollWidth: topLine.scrollWidth,
+        topLineRight: bounds.right,
+        metaBottom: metaBounds.bottom,
+        controlsTop: controlBounds.top,
+        controlsRight: controlBounds.right,
+        controlHeights: [...controls.querySelectorAll<HTMLElement>('button')]
+          .map((control) => control.getBoundingClientRect().height),
+        hostClientWidth: host.clientWidth,
+        hostScrollWidth: host.scrollWidth,
+      };
+    });
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.controlsTop).toBeGreaterThanOrEqual(layout.metaBottom - 1);
+    expect(layout.controlsRight).toBeLessThanOrEqual(layout.topLineRight + 1);
+    expect(layout.controlHeights.every((height) => height >= 32)).toBe(true);
+    expect(layout.hostScrollWidth).toBeGreaterThan(layout.hostClientWidth);
+
+    const aligned = overlay.getByRole('button', { name: '显示逐句对照' });
+    await aligned.click();
+    await expect(overlay.locator('.segment')).toHaveCount(2);
+    await expect(aligned).toBeFocused();
+    const formula = overlay.locator('.formula-view');
+    await formula.click();
+    await expect(formula).toHaveText('公式');
+    await expect(formula).toBeFocused();
+    const full = overlay.getByRole('button', { name: '显示完整译文' });
+    await full.click();
+    await expect(overlay.locator('.body')).toBeVisible();
+    await expect(full).toBeFocused();
+    if (process.env.PI_VISUAL_QA) {
+      await densePage.screenshot({ path: testInfo.outputPath('result-metadata-controls-360-light.png') });
+      await densePage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await densePage.screenshot({ path: testInfo.outputPath('result-metadata-controls-360-dark.png') });
+    }
+
+    await overlay.locator('.meta').evaluate((meta) => {
+      const latency = [...meta.querySelectorAll<HTMLElement>('.meta-dot')]
+        .find((item) => /(?:毫秒|秒)$/u.test(item.textContent?.trim() ?? ''));
+      latency?.remove();
+      const cache = document.createElement('span');
+      cache.className = 'cache-badge';
+      cache.textContent = '会话缓存';
+      meta.append(cache);
+    });
+    await expect(overlay.locator('.cache-badge').filter({ hasText: '会话缓存' })).toBeVisible();
+    await expect(overlay.locator('.meta')).toContainText('2 段');
+    const cachedLayout = await overlay.locator('.result-topline').evaluate((topLine) => ({
+      clientWidth: topLine.clientWidth,
+      scrollWidth: topLine.scrollWidth,
+      controlHeights: [...topLine.querySelectorAll<HTMLElement>('.view-button')]
+        .map((control) => control.getBoundingClientRect().height),
+    }));
+    expect(cachedLayout.scrollWidth).toBeLessThanOrEqual(cachedLayout.clientWidth + 1);
+    expect(cachedLayout.controlHeights.every((height) => height >= 32)).toBe(true);
+  } finally {
+    await densePage.close();
   }
 });
 
