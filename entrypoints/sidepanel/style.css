@@ -473,6 +473,10 @@ button:focus-visible {
   }
 }
 
+@media (max-height: 560px) {
+  .source-section p.expanded { max-height: max(88px, 22vh); }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     scroll-behavior: auto !important;

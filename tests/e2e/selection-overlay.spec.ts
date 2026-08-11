@@ -5962,6 +5962,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   expect(footerLayout.left).toBeGreaterThanOrEqual(-1);
   expect(footerLayout.right).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
   expect(footerLayout.pageScrollWidth).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
   await sidePanel.locator('#correct').click();
   const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
   await expect(nativeCorrection).toBeVisible();
@@ -5981,7 +5982,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   expect(firstCorrectionTextPart.clientHeight).toBeLessThanOrEqual(80);
   expect(lastCorrectionTextPart.fieldSizing).toBe('content');
   expect(lastCorrectionTextPart.clientHeight).toBeGreaterThan(120);
-  expect(lastCorrectionTextPart.clientHeight).toBeLessThanOrEqual(240);
+  expect(lastCorrectionTextPart.clientHeight).toBeLessThanOrEqual(152);
   expect(lastCorrectionTextPart.scrollHeight).toBeGreaterThan(lastCorrectionTextPart.clientHeight);
   await expect(nativeCorrection.getByLabel('受保护公式 1，不可编辑'))
     .toContainText('Q^{\\Pi^*}');
@@ -6050,6 +6051,13 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     if (!actions) return false;
     return field.getBoundingClientRect().bottom <= actions.getBoundingClientRect().top - 7;
   })).toBe(true);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
+  await sidePanel.setViewportSize({ width: 360, height: 820 });
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction.png') });
     await sidePanel.emulateMedia({ colorScheme: 'dark' });
@@ -6223,6 +6231,46 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-expanded-dark.png') });
     await sidePanel.emulateMedia({ colorScheme: 'light' });
   }
+
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
+  const shortViewportLayout = await sourceText.evaluate((source) => ({
+    clientHeight: source.clientHeight,
+    scrollHeight: source.scrollHeight,
+    pageScrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: document.documentElement.clientWidth,
+    viewportHeight: document.documentElement.clientHeight,
+    translationHeadingBottom: document.querySelector('.result-section .section-heading')
+      ?.getBoundingClientRect().bottom,
+    translationTextTop: document.querySelector('#translation-text')?.getBoundingClientRect().top,
+    footerTop: document.querySelector('#session-actions')?.getBoundingClientRect().top,
+  }));
+  expect(shortViewportLayout.clientHeight)
+    .toBeLessThanOrEqual(Math.max(88, shortViewportLayout.viewportHeight * 0.22) + 1);
+  expect(shortViewportLayout.scrollHeight).toBeGreaterThan(shortViewportLayout.clientHeight + 1);
+  expect(shortViewportLayout.pageScrollWidth).toBeLessThanOrEqual(shortViewportLayout.viewportWidth + 1);
+  expect(shortViewportLayout.translationHeadingBottom).toBeDefined();
+  expect(shortViewportLayout.footerTop).toBeDefined();
+  expect(shortViewportLayout.translationHeadingBottom!)
+    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 8);
+  expect(shortViewportLayout.translationTextTop).toBeDefined();
+  expect(shortViewportLayout.translationTextTop!)
+    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 16);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
+  await sourceText.hover();
+  await sidePanel.mouse.wheel(0, 5_000);
+  await expect.poll(() => sourceText.evaluate(
+    (source) => source.scrollHeight - source.clientHeight - source.scrollTop,
+  )).toBeLessThanOrEqual(1);
+  await sidePanel.mouse.wheel(0, 600);
+  await expect.poll(() => sidePanel.evaluate(
+    () => document.scrollingElement?.scrollTop ?? 0,
+  )).toBeGreaterThan(0);
+  await sidePanel.evaluate(() => window.scrollTo(0, 0));
 
   await sourceText.evaluate((source) => { source.scrollTop = source.scrollHeight; });
   expect(await sourceText.evaluate((source) => source.scrollTop)).toBeGreaterThan(0);
