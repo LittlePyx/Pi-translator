@@ -3045,14 +3045,11 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await confirmRemove.click();
     await expect(overlay.locator('.marker-note')).toHaveCount(1);
     const remainingMarker = overlay.locator('.marker-note').filter({ hasText: missingSourceText });
-    await expect(remainingMarker.getByRole('button', {
-      name: '原文位置已变化，仍可跳转到原页',
-    })).toBeFocused();
+    const remainingMarkerMain = remainingMarker.locator('.marker-note-main');
+    await expect(remainingMarkerMain).toBeFocused();
     await expect(markerLayer.locator('.marker')).toHaveCount(0);
 
-    await remainingMarker.getByRole('button', {
-      name: '原文位置已变化，仍可跳转到原页',
-    }).click();
+    await remainingMarkerMain.click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
     await expect(reader.locator('#page-number')).toHaveValue('1');
     await overlay.getByRole('button', { name: '展开 Pi Translator 本文标记侧栏' }).click();
@@ -4423,11 +4420,83 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     });
     await savingEditor.locator('.correction-text-part').first()
       .fill('第二句修正完成后仍保持当前阅读位置，');
+    const draftInput = savingEditor.locator('.correction-text-part').first();
+    const saveSegment = savingEditor.locator('.segment-correction-save');
+    const worker = context.serviceWorkers()[0]!;
+    const storedHead = await worker.evaluate(async (pageUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: Record<string, unknown>): Promise<Array<{
+            id?: number;
+            url?: string;
+          }>> };
+          storage: {
+            session: {
+              get(key: string): Promise<Record<string, unknown>>;
+              set(values: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === pageUrl);
+      if (tab?.id === undefined) throw new Error('Could not find the dense result tab.');
+      const key = `translationResultHead:${tab.id}`;
+      const original = (await api.storage.session.get(key))[key] as {
+        tabId: number;
+        currentResultRequestId: string;
+        rootRequestId: string;
+        updatedAt: number;
+      } | undefined;
+      if (!original) throw new Error('The dense result has no translation head.');
+      await api.storage.session.set({
+        [key]: {
+          ...original,
+          currentResultRequestId: 'newer-result-for-segment-failure-e2e',
+          updatedAt: Date.now(),
+        },
+      });
+      return { key, original };
+    }, densePage.url());
+    try {
+      await saveSegment.click();
+      const failure = savingEditor.locator('.segment-correction-status');
+      await expect(failure).toContainText('当前译文已经变化');
+      await expect(failure).toHaveAttribute('role', 'alert');
+      await expect(failure).toHaveClass(/is-error/);
+      await expect(draftInput).toHaveValue('第二句修正完成后仍保持当前阅读位置，');
+      await expect(draftInput).toBeEnabled();
+      await expect(saveSegment).toHaveText('重试');
+      await expect(saveSegment).toBeFocused();
+      const failureLayout = await savingEditor.evaluate((editor) => {
+        const surface = editor.closest<HTMLElement>('.surface')!;
+        const status = editor.querySelector<HTMLElement>('.segment-correction-status')!;
+        const surfaceBounds = surface.getBoundingClientRect();
+        const statusBounds = status.getBoundingClientRect();
+        return {
+          surfaceBottom: surfaceBounds.bottom,
+          statusBottom: statusBounds.bottom,
+          actionHeights: [...editor.querySelectorAll<HTMLElement>(
+            '.segment-correction-actions button',
+          )].map((button) => button.getBoundingClientRect().height),
+        };
+      });
+      expect(failureLayout.statusBottom).toBeLessThanOrEqual(failureLayout.surfaceBottom);
+      expect(failureLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    } finally {
+      await worker.evaluate(async ({ key, original }) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { storage: { session: {
+            set(values: Record<string, unknown>): Promise<void>;
+          } } };
+        }).chrome;
+        await api.storage.session.set({ [key]: original });
+      }, storedHead);
+    }
     const savingOffset = await overlay.locator('.segment').nth(1).evaluate((segment) => {
       const surface = segment.closest<HTMLElement>('.surface')!;
       return segment.getBoundingClientRect().top - surface.getBoundingClientRect().top;
     });
-    await savingEditor.getByRole('button', { name: '保存' }).click();
+    await saveSegment.click();
     const correctedSecond = overlay.locator('.segment').nth(1);
     await expect(correctedSecond.locator('.segment-target'))
       .toContainText('第二句修正完成后仍保持当前阅读位置');
