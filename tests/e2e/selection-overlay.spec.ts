@@ -5864,7 +5864,7 @@ test('pins continuous translation to a collapsible sidebar', async () => {
   await clearBrowserSelection();
 });
 
-test('keeps narrow sidebar history navigation bounded and recoverable', async () => {
+test('keeps narrow sidebar history navigation bounded and recoverable', async ({}, testInfo) => {
   const historyPage = await context.newPage();
   try {
     await historyPage.setViewportSize({ width: 360, height: 700 });
@@ -5965,6 +5965,53 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ()
     await historyPage.keyboard.press('Alt+ArrowUp');
     await expect(counter).toHaveText('2/3');
     await expect(older).toBeFocused();
+
+    await historyPage.keyboard.press('Alt+ArrowDown');
+    await expect(counter).toHaveText('1/3');
+    await overlay.locator('.mark-action').click();
+    await expect(overlay.locator('.mark-filter')).toBeVisible();
+    await overlay.getByRole('button', { name: '修正译文' }).click();
+    const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+    await editor.fill('窄屏多控件组合下仍然清晰可读的用户修订译文。');
+    await overlay.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(overlay.locator('.history-counter')).toHaveText('1/3');
+    await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
+    await expect(overlay.getByRole('group', { name: '翻译历史导航' })).toBeVisible();
+    await expect(overlay.getByRole('group', { name: '译文版本导航' })).toBeVisible();
+    await expect(overlay.locator('.mark-filter')).toBeVisible();
+    await expect(overlay.locator('.document-memory-action')).toBeVisible();
+    const denseLayout = await overlay.locator('.surface').evaluate((surface) => {
+      const header = surface.querySelector<HTMLElement>('.header')!;
+      const tools = surface.querySelector<HTMLElement>('.header-tools')!;
+      const title = surface.querySelector<HTMLElement>('.title-wrap')!;
+      const surfaceBounds = surface.getBoundingClientRect();
+      const headerBounds = header.getBoundingClientRect();
+      const toolsBounds = tools.getBoundingClientRect();
+      const titleBounds = title.getBoundingClientRect();
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        surfaceRight: surfaceBounds.right,
+        headerHeight: headerBounds.height,
+        toolsRight: toolsBounds.right,
+        titleVisible: titleBounds.width > 0 && titleBounds.height > 0,
+        historyTop: tools.querySelector<HTMLElement>('.history-navigation')
+          ?.getBoundingClientRect().top,
+        versionTop: tools.querySelector<HTMLElement>('.version-navigation')
+          ?.getBoundingClientRect().top,
+      };
+    });
+    expect(denseLayout.scrollWidth).toBeLessThanOrEqual(denseLayout.clientWidth + 1);
+    expect(denseLayout.toolsRight).toBeLessThanOrEqual(denseLayout.surfaceRight);
+    expect(denseLayout.headerHeight).toBeLessThanOrEqual(70);
+    expect(denseLayout.titleVisible).toBe(false);
+    expect(denseLayout.versionTop).toBeGreaterThan(denseLayout.historyTop ?? 0);
+    if (process.env.PI_VISUAL_QA) {
+      await historyPage.screenshot({ path: testInfo.outputPath('sidebar-dense-navigation-360-light.png') });
+      await historyPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await historyPage.screenshot({ path: testInfo.outputPath('sidebar-dense-navigation-360-dark.png') });
+    }
   } finally {
     await historyPage.close();
   }
