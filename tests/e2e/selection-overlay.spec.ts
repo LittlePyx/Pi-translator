@@ -6024,6 +6024,36 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     'pi-pdf-side-panel-correction-status',
   );
   await expect(nativeTargetTerm).toBeFocused();
+  const correctionFailureLayout = await nativeCorrection.evaluate((editor) => {
+    const actions = editor.querySelector<HTMLElement>('.correction-actions')!;
+    const feedback = editor.querySelector<HTMLElement>('.correction-feedback')!;
+    const target = editor.querySelector<HTMLInputElement>('[aria-label="固定译法"]')!;
+    const actionRect = actions.getBoundingClientRect();
+    return {
+      actionHeight: actionRect.height,
+      actionTop: actionRect.top,
+      actionBottom: actionRect.bottom,
+      feedbackBottom: feedback.getBoundingClientRect().bottom,
+      targetBottom: target.getBoundingClientRect().bottom,
+      viewportHeight: document.documentElement.clientHeight,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(correctionFailureLayout.actionBottom)
+    .toBeLessThanOrEqual(correctionFailureLayout.viewportHeight + 1);
+  expect(correctionFailureLayout.feedbackBottom)
+    .toBeLessThanOrEqual(correctionFailureLayout.actionBottom);
+  expect(correctionFailureLayout.targetBottom)
+    .toBeLessThanOrEqual(correctionFailureLayout.actionTop - 7);
+  expect(correctionFailureLayout.pageScrollWidth)
+    .toBeLessThanOrEqual(correctionFailureLayout.viewportWidth + 1);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-error-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-error-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
   await nativeTargetTerm.fill('原生 PDF');
   await expect(nativeCorrectionFeedback).toBeEmpty();
   await expect(nativeTargetTerm).not.toHaveAttribute('aria-invalid');
@@ -6064,13 +6094,44 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-correction-dark.png') });
     await sidePanel.emulateMedia({ colorScheme: 'light' });
   }
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
   await nativeTermSummary.click();
   await nativeCorrectionSave.click();
   await expect(nativeCorrectionFeedback).toContainText('当前 PDF 或译文已经变化');
   await expect(nativeCorrectionFeedback).toHaveAttribute('role', 'alert');
-  await expect(nativeCorrection.getByRole('button', { name: '重试' })).toBeFocused();
+  const correctionRetry = nativeCorrection.getByRole('button', { name: '重试' });
+  await expect(correctionRetry).toBeFocused();
   await expect(nativeEditor).toBeEnabled();
   await expect(nativeEditor).toHaveValue('修正后的原生 PDF 译文标题。');
+  const saveFailureLayout = await nativeCorrection.evaluate((editor) => {
+    const actions = editor.querySelector<HTMLElement>('.correction-actions')!;
+    const feedback = editor.querySelector<HTMLElement>('.correction-feedback')!;
+    const retry = [...actions.querySelectorAll<HTMLButtonElement>('button')]
+      .find((button) => button.textContent === '重试')!;
+    const actionRect = actions.getBoundingClientRect();
+    return {
+      actionTop: actionRect.top,
+      actionBottom: actionRect.bottom,
+      feedbackBottom: feedback.getBoundingClientRect().bottom,
+      retryTop: retry.getBoundingClientRect().top,
+      retryBottom: retry.getBoundingClientRect().bottom,
+      viewportHeight: document.documentElement.clientHeight,
+      pageScrollWidth: document.documentElement.scrollWidth,
+      viewportWidth: document.documentElement.clientWidth,
+    };
+  });
+  expect(saveFailureLayout.actionTop).toBeGreaterThanOrEqual(0);
+  expect(saveFailureLayout.actionBottom).toBeLessThanOrEqual(saveFailureLayout.viewportHeight + 1);
+  expect(saveFailureLayout.feedbackBottom).toBeLessThanOrEqual(saveFailureLayout.actionBottom);
+  expect(saveFailureLayout.retryTop).toBeGreaterThanOrEqual(saveFailureLayout.actionTop);
+  expect(saveFailureLayout.retryBottom).toBeLessThanOrEqual(saveFailureLayout.actionBottom);
+  expect(saveFailureLayout.pageScrollWidth).toBeLessThanOrEqual(saveFailureLayout.viewportWidth + 1);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-save-error-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-save-error-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
   await nativeEditor.fill('再次调整后的原生 PDF 译文标题。');
   await expect(nativeCorrectionFeedback).toBeEmpty();
   await expect(nativeCorrection.getByRole('button', { name: '保存', exact: true })).toBeVisible();
@@ -6114,6 +6175,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     });
   }, baseSession);
   await expect(sidePanel.locator('#correction-undo')).toBeVisible();
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
   await sidePanel.locator('#undo-correction').click();
   await expect(sidePanel.locator('#correction-undo'))
     .toContainText('没有可撤销的 PDF 译文修正');
@@ -6121,6 +6183,34 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#status')).toBeEmpty();
   await expect(sidePanel.locator('#undo-correction')).toHaveText('重试');
   await expect(sidePanel.locator('#undo-correction')).toBeFocused();
+  const undoFailureLayout = await sidePanel.locator('#session-actions').evaluate((footer) => {
+    const footerRect = footer.getBoundingClientRect();
+    const retryButton = footer.querySelector<HTMLElement>('#undo-correction')!;
+    const message = footer.querySelector<HTMLElement>('#correction-undo-message')!;
+    return {
+      footerTop: footerRect.top,
+      footerBottom: footerRect.bottom,
+      retryTop: retryButton.getBoundingClientRect().top,
+      retryBottom: retryButton.getBoundingClientRect().bottom,
+      messageBottom: message.getBoundingClientRect().bottom,
+      viewportHeight: document.documentElement.clientHeight,
+      clientWidth: footer.clientWidth,
+      scrollWidth: footer.scrollWidth,
+    };
+  });
+  expect(undoFailureLayout.footerTop).toBeGreaterThanOrEqual(0);
+  expect(undoFailureLayout.footerBottom).toBeLessThanOrEqual(undoFailureLayout.viewportHeight + 1);
+  expect(undoFailureLayout.retryTop).toBeGreaterThanOrEqual(undoFailureLayout.footerTop);
+  expect(undoFailureLayout.retryBottom).toBeLessThanOrEqual(undoFailureLayout.footerBottom);
+  expect(undoFailureLayout.messageBottom).toBeLessThanOrEqual(undoFailureLayout.footerBottom);
+  expect(undoFailureLayout.scrollWidth).toBeLessThanOrEqual(undoFailureLayout.clientWidth + 1);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-undo-error-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-undo-error-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
+  await sidePanel.setViewportSize({ width: 360, height: 820 });
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-side-panel.png') });
     await sidePanel.emulateMedia({ colorScheme: 'dark' });
@@ -6319,8 +6409,9 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
   await sidePanel.close();
 });
 
-test('clears native PDF side-panel actions as soon as the active tab changes', async () => {
+test('clears native PDF side-panel actions as soon as the active tab changes', async ({}, testInfo) => {
   const sidePanel = await context.newPage();
+  await sidePanel.setViewportSize({ width: 360, height: 420 });
   await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
   const messageSender = await context.newPage();
   await messageSender.goto(`chrome-extension://${extensionId}/popup.html`);
@@ -6361,6 +6452,38 @@ test('clears native PDF side-panel actions as soon as the active tab changes', a
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('解决 PDF 读取权限');
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('本次使用：文字 API「DeepSeek text」 · deepseek-test-model');
+  const accessAlert = sidePanel.locator('#pdf-access-alert');
+  const accessLayout = await accessAlert.evaluate((alert) => ({
+    clientWidth: alert.clientWidth,
+    scrollWidth: alert.scrollWidth,
+    pageScrollWidth: document.documentElement.scrollWidth,
+    viewportWidth: document.documentElement.clientWidth,
+    actionHeights: [...alert.querySelectorAll<HTMLElement>('.access-actions button')]
+      .map((button) => button.getBoundingClientRect().height),
+  }));
+  expect(accessLayout.scrollWidth).toBeLessThanOrEqual(accessLayout.clientWidth + 1);
+  expect(accessLayout.pageScrollWidth).toBeLessThanOrEqual(accessLayout.viewportWidth + 1);
+  expect(accessLayout.actionHeights).toHaveLength(2);
+  expect(accessLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+  const retryPdfAccess = accessAlert.getByRole('button', { name: '重新检测' });
+  await retryPdfAccess.focus();
+  await expect(retryPdfAccess).toBeFocused();
+  const focusedRecoveryLayout = await retryPdfAccess.evaluate((button) => {
+    const rect = button.getBoundingClientRect();
+    return {
+      top: rect.top,
+      bottom: rect.bottom,
+      viewportHeight: document.documentElement.clientHeight,
+    };
+  });
+  expect(focusedRecoveryLayout.top).toBeGreaterThanOrEqual(0);
+  expect(focusedRecoveryLayout.bottom).toBeLessThanOrEqual(focusedRecoveryLayout.viewportHeight);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-access-recovery-360x420.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-access-recovery-360x420-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
 
   const nextTab = await context.newPage();
   await nextTab.goto(`chrome-extension://${extensionId}/popup.html`);

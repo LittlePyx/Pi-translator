@@ -385,7 +385,7 @@ main {
 .access-alert p { margin: 5px 0 0; font-size: 11px; line-height: 1.55; }
 .access-alert ol { margin: 7px 0 0; padding-left: 18px; font-size: 11px; line-height: 1.55; }
 .access-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 9px; }
-.access-actions button { width: auto; min-height: 30px; padding: 6px 9px; border-radius: 5px; font-size: 11px; }
+.access-actions button { width: auto; min-height: 32px; padding: 6px 9px; border-radius: 5px; font-size: 11px; }
 .access-actions button:first-child { color: #fff; border-color: #9f2033; background: #a92437; }
 
 button:focus-visible {
