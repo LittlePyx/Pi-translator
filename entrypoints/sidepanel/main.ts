@@ -433,6 +433,7 @@ function showCopySuccess(session: PdfSidePanelSession): void {
 function syncSourceDisclosure(session: PdfSidePanelSession, renderRevision: number): void {
   if (sourceLayoutFrame !== undefined) window.cancelAnimationFrame(sourceLayoutFrame);
   sourceLayoutFrame = undefined;
+  if (!sourceExpanded) sourceText.scrollTop = 0;
   sourceText.classList.toggle('expanded', sourceExpanded);
   sourceToggle.textContent = sourceExpanded ? '收起' : '展开';
   sourceToggle.setAttribute('aria-expanded', String(sourceExpanded));

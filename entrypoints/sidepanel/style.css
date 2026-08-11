@@ -173,7 +173,7 @@ main {
   line-height: 1.65;
   white-space: pre-wrap;
 }
-.source-section p.expanded { max-height: none; overflow: visible; }
+.source-section p.expanded { max-height: min(420px, 44vh); overflow-y: auto; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .source-toggle {
   min-height: var(--compact-hit);

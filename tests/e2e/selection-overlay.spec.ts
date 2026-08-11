@@ -6134,7 +6134,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await sidePanel.close();
 });
 
-test('keeps long native PDF source text compact and expandable', async () => {
+test('keeps long native PDF source text compact and expandable', async ({}, testInfo) => {
   const sidePanel = await context.newPage();
   await sidePanel.setViewportSize({ width: 360, height: 820 });
   await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
@@ -6149,7 +6149,7 @@ test('keeps long native PDF source text compact and expandable', async () => {
   expect(tabId).toBeDefined();
 
   const longSource = Array.from(
-    { length: 12 },
+    { length: 24 },
     (_, index) => `Long academic source sentence ${index + 1} keeps the translation below easy to reach.`,
   ).join(' ');
   const baseSession = {
@@ -6195,6 +6195,9 @@ test('keeps long native PDF source text compact and expandable', async () => {
   expect(collapsedLayout.clientHeight).toBeLessThanOrEqual(collapsedLayout.lineHeight * 3 + 1);
   expect(collapsedLayout.overflowY).toBe('hidden');
   expect(await sourceToggle.evaluate((button) => button.getBoundingClientRect().height)).toBe(28);
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-collapsed.png') });
+  }
 
   await sourceToggle.click();
   await expect(sourceToggle).toHaveText('收起');
@@ -6203,10 +6206,32 @@ test('keeps long native PDF source text compact and expandable', async () => {
     clientHeight: source.clientHeight,
     scrollHeight: source.scrollHeight,
     overflowY: getComputedStyle(source).overflowY,
+    translationHeadingTop: document.querySelector('.result-section .section-heading')
+      ?.getBoundingClientRect().top,
+    viewportHeight: document.documentElement.clientHeight,
   }));
   expect(expandedLayout.clientHeight).toBeGreaterThan(collapsedLayout.clientHeight + 20);
-  expect(expandedLayout.scrollHeight).toBeLessThanOrEqual(expandedLayout.clientHeight + 1);
-  expect(expandedLayout.overflowY).toBe('visible');
+  expect(expandedLayout.scrollHeight).toBeGreaterThan(expandedLayout.clientHeight + 1);
+  expect(expandedLayout.overflowY).toBe('auto');
+  expect(expandedLayout.translationHeadingTop).toBeDefined();
+  expect(expandedLayout.translationHeadingTop!)
+    .toBeLessThan(expandedLayout.viewportHeight - 20);
+  await expect(sourceToggle).toBeFocused();
+  if (process.env.PI_VISUAL_QA) {
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-expanded.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-expanded-dark.png') });
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+  }
+
+  await sourceText.evaluate((source) => { source.scrollTop = source.scrollHeight; });
+  expect(await sourceText.evaluate((source) => source.scrollTop)).toBeGreaterThan(0);
+  await sourceToggle.click();
+  await expect(sourceToggle).toHaveText('展开');
+  await expect(sourceToggle).toHaveAttribute('aria-expanded', 'false');
+  expect(await sourceText.evaluate((source) => source.scrollTop)).toBe(0);
+  await sourceToggle.click();
+  await expect(sourceToggle).toHaveText('收起');
 
   await sendSession({
     ...baseSession,
