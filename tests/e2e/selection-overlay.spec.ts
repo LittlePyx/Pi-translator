@@ -5866,9 +5866,10 @@ test('pins continuous translation to a collapsible sidebar', async () => {
 
 test('keeps narrow sidebar history navigation bounded and recoverable', async ({}, testInfo) => {
   const historyPage = await context.newPage();
+  const historyFixtureUrl = `${OVERLEAF_FIXTURE_URL}?history-navigation=1`;
   try {
     await historyPage.setViewportSize({ width: 360, height: 700 });
-    await historyPage.route(OVERLEAF_FIXTURE_URL, async (route) => {
+    await historyPage.route(historyFixtureUrl, async (route) => {
       await route.fulfill({
         contentType: 'text/html; charset=utf-8',
         body: `<!doctype html><html><body>
@@ -5878,7 +5879,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
         </body></html>`,
       });
     });
-    await historyPage.goto(OVERLEAF_FIXTURE_URL);
+    await historyPage.goto(historyFixtureUrl);
     const selectText = async (selector: string): Promise<void> => {
       await historyPage.locator(selector).evaluate((element) => {
         const range = document.createRange();
@@ -6006,12 +6007,102 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     expect(denseLayout.headerHeight).toBeLessThanOrEqual(70);
     expect(denseLayout.titleVisible).toBe(false);
     expect(denseLayout.versionTop).toBeGreaterThan(denseLayout.historyTop ?? 0);
+    const footer = overlay.locator('.footer');
+    const undo = overlay.getByRole('button', { name: '撤销上次译文修正' });
+    const mark = overlay.locator('.mark-action');
+    const more = overlay.locator('details.more > summary');
+    await expect(undo).toBeFocused();
+    const footerLayout = await footer.evaluate((element) => {
+      const controls = [...element.querySelectorAll<HTMLElement>(
+        ':scope > button,:scope > .correction-undo > button,:scope > details.more > summary',
+      )];
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+        controlTops: controls.map((control) => Math.round(control.getBoundingClientRect().top)),
+      };
+    });
+    expect(footerLayout.scrollWidth).toBeLessThanOrEqual(footerLayout.clientWidth + 1);
+    expect(footerLayout.controlHeights.every((height) => height >= 32)).toBe(true);
+    expect(new Set(footerLayout.controlTops).size).toBe(1);
+    await historyPage.keyboard.press('Tab');
+    await expect(mark).toBeFocused();
+    await historyPage.keyboard.press('Tab');
+    await expect(more).toBeFocused();
+    const copy = overlay.locator('.copy-action');
+    await copy.click();
+    await expect(copy).toHaveText('已复制');
+    await expect(copy).toBeFocused();
     if (process.env.PI_VISUAL_QA) {
       await historyPage.screenshot({ path: testInfo.outputPath('sidebar-dense-navigation-360-light.png') });
       await historyPage.emulateMedia({ colorScheme: 'dark' });
       await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
       await historyPage.screenshot({ path: testInfo.outputPath('sidebar-dense-navigation-360-dark.png') });
     }
+
+    const worker = context.serviceWorkers()[0]!;
+    const replacedHead = await worker.evaluate(async (pageUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: Record<string, unknown>): Promise<Array<{ id?: number; url?: string }>> };
+          storage: {
+            session: {
+              get(key: string): Promise<Record<string, unknown>>;
+              set(values: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === pageUrl);
+      if (tab?.id === undefined) throw new Error('Could not find the narrow history test tab.');
+      const key = `translationResultHead:${tab.id}`;
+      const original = (await api.storage.session.get(key))[key] as Record<string, unknown> | undefined;
+      if (!original) throw new Error('The narrow history test tab has no result head.');
+      await api.storage.session.set({
+        [key]: { ...original, currentResultRequestId: 'synthetic-newer-result' },
+      });
+      return { key, original };
+    }, historyFixtureUrl);
+    const undoStatus = overlay.locator('.correction-undo');
+    try {
+      await undo.click();
+      await expect(undoStatus).toHaveAttribute('role', 'alert');
+      await expect(undoStatus).toHaveClass(/is-error/);
+      await expect(undo).toBeEnabled();
+      await expect(undo).toBeFocused();
+      const undoFailure = '模拟撤销失败：当前译文版本已经在另一处发生变化，请重新检查后再试。ExtremelyLongUndoFailureIdentifierWithoutNaturalBreakpoints';
+      await undoStatus.locator('.correction-undo-message').evaluate((element, message) => {
+        element.textContent = message;
+      }, undoFailure);
+      const failureLayout = await footer.evaluate((element) => {
+        const footerBounds = element.getBoundingClientRect();
+        const copyBounds = element.querySelector<HTMLElement>('.copy-action')!.getBoundingClientRect();
+        const statusBounds = element.querySelector<HTMLElement>('.correction-undo')!.getBoundingClientRect();
+        return {
+          clientWidth: element.clientWidth,
+          scrollWidth: element.scrollWidth,
+          statusInside: statusBounds.left >= footerBounds.left && statusBounds.right <= footerBounds.right,
+          statusBelowActions: statusBounds.top > copyBounds.top,
+        };
+      });
+      expect(failureLayout.scrollWidth).toBeLessThanOrEqual(failureLayout.clientWidth + 1);
+      expect(failureLayout.statusInside).toBe(true);
+      expect(failureLayout.statusBelowActions).toBe(true);
+      if (process.env.PI_VISUAL_QA) {
+        await historyPage.screenshot({ path: testInfo.outputPath('sidebar-undo-failure-360-dark.png') });
+      }
+    } finally {
+      await worker.evaluate(async ({ key, original }) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { storage: { session: { set(values: Record<string, unknown>): Promise<void> } } };
+        }).chrome;
+        await api.storage.session.set({ [key]: original });
+      }, replacedHead);
+    }
+    await undo.click();
+    await expect(undoStatus).toHaveCount(0);
+    await expect(overlay.getByRole('button', { name: '修正译文' })).toBeFocused();
   } finally {
     await historyPage.close();
   }
