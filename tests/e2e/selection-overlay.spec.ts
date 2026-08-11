@@ -7028,3 +7028,211 @@ test('uses and remembers a visual-capable active API on the first image translat
   })).toEqual({ profileId: 'default', model: 'e2e-model' });
   await extensionPage.close();
 });
+
+test('persists and undoes a native PDF correction through the real background session', async () => {
+  const sourceUrl = 'https://www.overleaf.com/native-correction-success.pdf';
+  const source = 'A durable correction should survive a background restart.';
+  const originalTranslation = '原始 PDF 译文保留公式 $E=mc^2$。';
+  const correctedTextPart = '修正后的 PDF 译文仍保留公式 ';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createTextPdf(source),
+    });
+  });
+  const sidePanel = await context.newPage();
+  const nativePdfPage = await context.newPage();
+  try {
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await nativePdfPage.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
+    await nativePdfPage.bringToFront();
+    const worker = context.serviceWorkers()[0];
+    expect(worker).toBeDefined();
+    const tabId = await worker!.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { query(query: object): Promise<Array<{ id?: number }>> } };
+      }).chrome;
+      return (await api.tabs.query({ active: true, lastFocusedWindow: true }))[0]?.id;
+    });
+    expect(tabId).toBeDefined();
+    const baseResultRequestId = 'native-correction-base-result-e2e';
+    const sessionRequestId = 'native-correction-session-e2e';
+    await sidePanel.evaluate(async ({ id, pageUrl, sourceText, translation, resultRequestId, requestId }) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: {
+            session: {
+              get(key: string): Promise<Record<string, unknown>>;
+              set(values: Record<string, unknown>): Promise<void>;
+            };
+          };
+        };
+      }).chrome;
+      const stored = await api.storage.session.get('pdfSidePanelSessionsByTab');
+      const sessions = stored.pdfSidePanelSessionsByTab &&
+        typeof stored.pdfSidePanelSessionsByTab === 'object'
+        ? stored.pdfSidePanelSessionsByTab as Record<string, unknown>
+        : {};
+      await api.storage.session.set({
+        pdfSidePanelSessionsByTab: {
+          ...sessions,
+          [String(id)]: {
+            tabId: id,
+            requestId,
+            sourceText,
+            pageUrl,
+            sourceLabel: 'native-correction-success.pdf',
+            status: 'complete',
+            startedAt: Date.now(),
+            partialText: translation,
+            result: {
+              requestId: resultRequestId,
+              originalText: sourceText,
+              translatedText: translation,
+              warnings: [],
+              latencyMs: 640,
+            },
+          },
+        },
+        [`translationResultHead:${id}`]: {
+          tabId: id,
+          currentResultRequestId: resultRequestId,
+          rootRequestId: resultRequestId,
+          updatedAt: Date.now(),
+        },
+      });
+    }, {
+      id: tabId!,
+      pageUrl: sourceUrl,
+      sourceText: source,
+      translation: originalTranslation,
+      resultRequestId: baseResultRequestId,
+      requestId: sessionRequestId,
+    });
+
+    const restartBackground = async (): Promise<void> => {
+      const cdp = await context.newCDPSession(sidePanel);
+      const workerVersions = new Map<string, {
+        versionId: string;
+        scriptURL: string;
+        runningStatus: 'stopped' | 'starting' | 'running' | 'stopping';
+      }>();
+      cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
+        versions.forEach((version) => workerVersions.set(version.versionId, version));
+      });
+      try {
+        await cdp.send('ServiceWorker.enable');
+        await expect.poll(() => Array.from(workerVersions.values()).find((version) => (
+          version.scriptURL.startsWith(`chrome-extension://${extensionId}/`)
+        ))?.runningStatus).toBe('running');
+        const activeVersion = Array.from(workerVersions.values()).find((version) => (
+          version.scriptURL.startsWith(`chrome-extension://${extensionId}/`)
+          && version.runningStatus === 'running'
+        ));
+        expect(activeVersion).toBeDefined();
+        await cdp.send('ServiceWorker.stopWorker', { versionId: activeVersion!.versionId });
+        await expect.poll(() => workerVersions.get(activeVersion!.versionId)?.runningStatus)
+          .toBe('stopped');
+        const response = await sidePanel.evaluate(async (id) => {
+          const api = (globalThis as typeof globalThis & {
+            chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
+          }).chrome;
+          return api.runtime.sendMessage({
+            type: 'GET_PDF_SIDE_PANEL_SESSION',
+            payload: { tabId: id },
+          });
+        }, tabId!);
+        await expect.poll(() => Array.from(workerVersions.values()).some((version) => (
+          version.scriptURL.startsWith(`chrome-extension://${extensionId}/`)
+          && version.runningStatus === 'running'
+        ))).toBe(true);
+        expect(response).toMatchObject({ ok: true });
+      } finally {
+        await cdp.detach();
+      }
+    };
+
+    await restartBackground();
+    await expect(sidePanel.locator('#session')).toBeVisible();
+    await expect(sidePanel.locator('#translation-text')).toContainText('原始 PDF 译文保留公式');
+    await sidePanel.locator('#correct').click();
+    const correction = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
+    await correction.getByLabel('可编辑译文第 1 段').fill(correctedTextPart);
+    await correction.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(sidePanel.locator('#translation-text')).toContainText('修正后的 PDF 译文仍保留公式');
+    await expect(sidePanel.locator('#translation-text')).toContainText('E=mc2');
+    await expect(sidePanel.locator('#correction-undo')).toBeVisible();
+    await expect(sidePanel.locator('#undo-correction')).toBeFocused();
+
+    const correctedSession = await sidePanel.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(keys: string[]): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.session.get([
+        'pdfSidePanelSessionsByTab',
+        `translationResultHead:${id}`,
+      ]);
+      const sessions = stored.pdfSidePanelSessionsByTab as Record<string, unknown>;
+      return {
+        session: sessions[String(id)],
+        head: stored[`translationResultHead:${id}`],
+      };
+    }, tabId!);
+    expect(correctedSession).toMatchObject({
+      session: {
+        status: 'complete',
+        partialText: `${correctedTextPart}$E=mc^2$。`,
+        correctionReceipt: {
+          baseRequestId: baseResultRequestId,
+          previousTranslation: originalTranslation,
+        },
+      },
+      head: { tabId },
+    });
+    const correctedRequestId = (
+      correctedSession.session as { result: { requestId: string } }
+    ).result.requestId;
+    expect((correctedSession.head as { currentResultRequestId: string }).currentResultRequestId)
+      .toBe(correctedRequestId);
+
+    await restartBackground();
+    await sidePanel.reload({ waitUntil: 'domcontentloaded' });
+    await expect(sidePanel.locator('#translation-text')).toContainText('修正后的 PDF 译文仍保留公式');
+    await expect(sidePanel.locator('#correction-undo')).toBeVisible();
+    await sidePanel.locator('#undo-correction').click();
+    await expect(sidePanel.locator('#translation-text')).toContainText('原始 PDF 译文保留公式');
+    await expect(sidePanel.locator('#correction-undo')).toBeHidden();
+    await expect(sidePanel.locator('#correct')).toBeFocused();
+
+    const restoredSession = await sidePanel.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(keys: string[]): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.session.get([
+        'pdfSidePanelSessionsByTab',
+        `translationResultHead:${id}`,
+      ]);
+      const sessions = stored.pdfSidePanelSessionsByTab as Record<string, unknown>;
+      return {
+        session: sessions[String(id)],
+        head: stored[`translationResultHead:${id}`],
+      };
+    }, tabId!);
+    expect(restoredSession).toMatchObject({
+      session: {
+        status: 'complete',
+        partialText: originalTranslation,
+        result: { translatedText: originalTranslation },
+      },
+      head: { tabId },
+    });
+    expect(restoredSession.session).not.toHaveProperty('correctionReceipt');
+    expect((restoredSession.head as { currentResultRequestId: string }).currentResultRequestId)
+      .not.toBe(correctedRequestId);
+  } finally {
+    await nativePdfPage.close().catch(() => undefined);
+    await sidePanel.close().catch(() => undefined);
+    await context.unroute(sourceUrl).catch(() => undefined);
+  }
+});
