@@ -8,6 +8,7 @@ export type SettingsFocus =
   | 'vision-model'
   | 'vision-permission'
   | 'vision-ocr'
+  | 'glossary'
   | 'support';
 export type TranslationProviderRole = 'text' | 'vision';
 

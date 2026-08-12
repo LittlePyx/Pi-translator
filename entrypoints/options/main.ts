@@ -849,6 +849,9 @@ async function applyRequestedSettingsFocus():Promise<void>{
   if(focus==='support'){
     showSettingsSection('support');const disclosure=copyDiagnosticReportButton.closest<HTMLDetailsElement>('details');if(disclosure)disclosure.open=true;copyDiagnosticReportButton.scrollIntoView({block:'center'});queueMicrotask(()=>copyDiagnosticReportButton.focus());return;
   }
+  if(focus==='glossary'){
+    showSettingsSection('translation');const disclosure=academicGlossary.closest<HTMLDetailsElement>('details');if(disclosure)disclosure.open=true;academicGlossary.scrollIntoView({block:'center'});queueMicrotask(()=>academicGlossary.focus());return;
+  }
   if(focus==='api'||focus==='api-model'||focus==='api-permission'){
     const target=focus==='api-model'
       ? modelInput

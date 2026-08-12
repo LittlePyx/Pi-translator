@@ -7,6 +7,7 @@ import {
   documentMemoryTranslationResult,
   getDocumentMemory,
   mergeDocumentGlossary,
+  mergeDocumentGlossaryWithScope,
   rememberDocumentCorrection,
   rememberDocumentTranslation,
   rollbackDocumentCorrectionChange,
@@ -63,6 +64,35 @@ describe('document translation memory', () => {
       { source: 'adaptive sensing', target: '自适应感知' },
       { source: 'scene', target: '场景' },
     ]);
+    expect(mergeDocumentGlossaryWithScope([
+      { source: 'adaptive sensing', target: '全局旧译法' },
+      { source: 'scene', target: '场景' },
+    ], memory)).toEqual([
+      { source: 'adaptive sensing', target: '自适应感知', scope: 'document' },
+      { source: 'scene', target: '场景', scope: 'global' },
+    ]);
+  });
+
+  it('keeps applied terminology evidence with a remembered translation', async () => {
+    const memory = await rememberDocumentTranslation(identity, {
+      requestId: 'applied-terms',
+      originalText: 'The attention layer is stable.',
+      translatedText: '注意力层很稳定。',
+      warnings: [],
+      appliedGlossaryTerms: [
+        { source: 'attention', target: '注意力', scope: 'document' },
+      ],
+    });
+
+    expect(memory.recentTranslations[0]?.appliedGlossaryTerms).toEqual([
+      { source: 'attention', target: '注意力', scope: 'document' },
+    ]);
+    expect(documentMemoryTranslationResult(memory.recentTranslations[0]!))
+      .toMatchObject({
+        appliedGlossaryTerms: [
+          { source: 'attention', target: '注意力', scope: 'document' },
+        ],
+      });
   });
 
   it('supports manual terms and remembers dismissed candidates', async () => {

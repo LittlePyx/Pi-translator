@@ -360,7 +360,9 @@ test.beforeAll(async () => {
     const serializedBody = JSON.stringify(body);
     const isMultiSentenceSelection = serializedBody.includes('First important sentence');
     const isDenseMetadataSelection = serializedBody.includes('Dense metadata');
-    const isDocumentTermSelection = serializedBody.includes('adaptive sensing');
+    const isGlobalTermSelection = serializedBody.includes('benefits every reader');
+    const isDocumentTermSelection = serializedBody.includes('The adaptive sensing policy') ||
+      serializedBody.includes('This adaptive sensing method');
     const isPdfOptimizerFallback = serializedBody.includes('Optimizer fallback fixture');
     const isTranslationRevision = serializedBody.includes('translationRevisionPreference');
     const isPartialRecoverySelection = serializedBody.includes(
@@ -443,6 +445,11 @@ test.beforeAll(async () => {
                 id: 'C1S2',
                 translation: '第二句补充译文。',
               }],
+            } : isGlobalTermSelection ? {
+              translation: '一致的学术翻译能够提升研究论文的可读性。',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isDocumentTermSelection ? {
               translation: '自适应感知策略在该文档中保持稳定，并在具有层级约束的多阶段重建任务中持续保持一致的技术术语与推理边界。',
               detectedLanguage: 'en',
@@ -535,6 +542,7 @@ test.beforeAll(async () => {
           <head><title>Pi Translator E2E Paper</title></head>
           <body style="font: 18px sans-serif; padding: 80px">
             <p id="source">A consistent academic translation improves the readability of research papers.</p>
+            <p id="global-term-source">A consistent academic translation benefits every reader.</p>
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
@@ -623,6 +631,10 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     );
     await expect(options.locator('#vision-setup-details')).toHaveAttribute('open', '');
     await expect(options.locator('#setup-qwen')).toBeFocused();
+    await options.goto(`chrome-extension://${extensionId}/options.html?focus=glossary#translation`);
+    await expect(options.locator('details').filter({ has: options.locator('#academic-glossary') }))
+      .toHaveAttribute('open', '');
+    await expect(options.locator('#academic-glossary')).toBeFocused();
     await options.goto(`chrome-extension://${extensionId}/options.html?focus=support#support`);
     await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
     await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
@@ -7573,10 +7585,10 @@ test('keeps document terminology behind a compact sidebar drawer', async () => {
   await candidateEditor.press('Escape');
   await expect(candidateRow.getByTitle('修改候选译法后采用')).toBeFocused();
   await candidateRow.getByText('修改').click();
-  await candidateRow.getByLabel('修改 adaptive sensing 的候选译法').fill('自适应感知方法');
+  await candidateRow.getByLabel('修改 adaptive sensing 的候选译法').fill('自适应感知策略');
   await candidateRow.getByTitle('保存修改并采用').click();
   await expect(overlay.locator('.document-section').filter({ hasText: '固定译法' }))
-    .toContainText('自适应感知方法');
+    .toContainText('自适应感知策略');
   await overlay.getByTitle('返回翻译结果').click();
 
   await page.locator('#term-followup').evaluate((element) => {
@@ -7589,11 +7601,125 @@ test('keeps document terminology behind a compact sidebar drawer', async () => {
   await expect.poll(() => textRequests.length).toBeGreaterThan(initialRequests + 1);
   const latestRequest = textRequests.at(-1);
   expect(JSON.stringify(latestRequest)).toContain('adaptive sensing');
-  expect(JSON.stringify(latestRequest)).toContain('自适应感知方法');
+  expect(JSON.stringify(latestRequest)).toContain('自适应感知策略');
   await expect(overlay.locator('.body')).toContainText('自适应感知策略');
+  const appliedTerms = overlay.locator('details.applied-terms');
+  await expect(appliedTerms.locator(':scope > summary')).toContainText('已采用术语 1');
+  await expect(appliedTerms.locator(':scope > summary')).toContainText('本文 1');
+  await appliedTerms.locator(':scope > summary').click();
+  const appliedRow = appliedTerms.locator('.applied-term-row');
+  await expect(appliedRow).toContainText('adaptive sensing');
+  await expect(appliedRow).toContainText('自适应感知策略');
+  await expect(appliedRow.locator('.applied-term-scope')).toHaveText('本文');
+  await appliedRow.getByTitle('调整本文术语 adaptive sensing').click();
+  const focusedTerm = overlay.getByRole('textbox', { name: '固定译法' });
+  await expect(focusedTerm).toBeFocused();
+  await expect(focusedTerm).toHaveValue('自适应感知策略');
+  await overlay.getByTitle('取消编辑本文术语').click();
+  await overlay.getByTitle('返回翻译结果').click();
   await overlay.getByTitle('查看本文术语和最近翻译').click();
   await expect.poll(() => overlay.locator('.document-translation').count()).toBeGreaterThanOrEqual(2);
   await overlay.getByTitle('返回翻译结果').click();
+});
+
+test('shows verified global terminology and opens its exact settings area', async ({}, testInfo) => {
+  const worker = context.serviceWorkers()[0]!;
+  const originalGlossary = await worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: TestChromeStorageArea } };
+    }).chrome;
+    const stored = await api.storage.local.get('extensionSettings');
+    const settings = stored.extensionSettings ?? {};
+    const glossary = Array.isArray(settings.academicGlossary)
+      ? settings.academicGlossary as Array<{ source: string; target: string }>
+      : [];
+    await api.storage.local.set({
+      extensionSettings: {
+        ...settings,
+        academicGlossary: [
+          { source: 'consistent academic translation', target: '一致的学术翻译' },
+          ...glossary.filter((term) => term.source !== 'consistent academic translation'),
+        ],
+      },
+    });
+    return glossary;
+  });
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const overlay = page.locator('#tex-selection-translator-root');
+  let options: Page | undefined;
+  try {
+    await page.setViewportSize({ width: 360, height: 700 });
+    const returnToResult = overlay.getByTitle('返回翻译结果');
+    if (await returnToResult.isVisible().catch(() => false)) await returnToResult.click();
+    await clearBrowserSelection();
+    const close = overlay.getByTitle('关闭');
+    if (await close.isVisible().catch(() => false)) await close.click();
+    await selectElementText('#global-term-source');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    const appliedTerms = overlay.locator('details.applied-terms');
+    await expect(appliedTerms.locator(':scope > summary')).toContainText('已采用术语 1');
+    await expect(appliedTerms.locator(':scope > summary')).toContainText('全局 1');
+    await appliedTerms.locator(':scope > summary').click();
+    const row = appliedTerms.locator('.applied-term-row');
+    await expect(row).toContainText('consistent academic translation');
+    await expect(row).toContainText('一致的学术翻译');
+    const layout = await appliedTerms.evaluate((element) => {
+      const action = element.querySelector<HTMLElement>('.applied-term-edit')!;
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        actionHeight: action.getBoundingClientRect().height,
+      };
+    });
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.actionHeight).toBeGreaterThanOrEqual(32);
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('applied-terms-360-light.png') });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('applied-terms-360-dark.png') });
+      await page.emulateMedia({ colorScheme: 'light' });
+    }
+    const opened = context.waitForEvent('page');
+    await row.getByTitle('在设置中调整全局术语 consistent academic translation').click();
+    options = await opened;
+    await options.waitForLoadState('domcontentloaded');
+    await expect(options).toHaveURL(/focus=glossary#translation$/);
+    await expect(options.locator('details').filter({ has: options.locator('#academic-glossary') }))
+      .toHaveAttribute('open', '');
+    await expect(options.locator('#academic-glossary')).toBeFocused();
+    await expect(options.locator('#academic-glossary')).toHaveValue(
+      /consistent academic translation = 一致的学术翻译/,
+    );
+    await options.close();
+    options = undefined;
+    await overlay.getByRole('button', { name: '修正译文' }).click();
+    await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' })
+      .fill('这是一条不沿用当前固定术语的手动译文。');
+    await overlay.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(overlay.locator('details.applied-terms')).toHaveCount(0);
+    await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+    await expect(overlay.locator('details.applied-terms > summary'))
+      .toContainText('已采用术语 1');
+    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  } finally {
+    await options?.close();
+    await worker.evaluate(async (glossary) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: TestChromeStorageArea } };
+      }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      await api.storage.local.set({
+        extensionSettings: { ...(stored.extensionSettings ?? {}), academicGlossary: glossary },
+      });
+    }, originalGlossary);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.setViewportSize(originalViewport);
+    await clearBrowserSelection();
+  }
 });
 
 test('skips sensitive form fields during continuous translation', async () => {

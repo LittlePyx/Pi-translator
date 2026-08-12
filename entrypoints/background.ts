@@ -80,6 +80,7 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
+import { findAppliedGlossaryTerms } from '../core/translation/applied-glossary';
 import {
   MAX_GLOSSARY_ENTRIES,
   normalizeGlossaryTermKey,
@@ -140,7 +141,7 @@ import {
   DocumentTermCapacityError,
   dismissDocumentTermCandidate,
   getDocumentMemory,
-  mergeDocumentGlossary,
+  mergeDocumentGlossaryWithScope,
   rememberDocumentCorrection,
   rememberDocumentTranslation,
   removeDocumentTerm,
@@ -159,6 +160,7 @@ import {
   storePdfSidePanelSession,
 } from '../core/pdf/sidepanel-session';
 import type {
+  AppliedGlossaryTerm,
   GlossaryEntry,
   TranslateRequest,
   TranslateImageRegionRequest,
@@ -1318,7 +1320,11 @@ async function translate(
     const identity = documentIdentity(request);
     const documentMemory = await getDocumentMemory(identity);
     assertActiveRequest(tabId, request.requestId, controller);
-    const glossary = mergeDocumentGlossary(settings.academicGlossary, documentMemory);
+    const scopedGlossary = mergeDocumentGlossaryWithScope(
+      settings.academicGlossary,
+      documentMemory,
+    );
+    const glossary = scopedGlossary.map(({ source, target }) => ({ source, target }));
     const contextText = buildDocumentReferenceContext(
       text,
       request.contextText,
@@ -1637,11 +1643,13 @@ async function translate(
     }
     performanceTimings.latexValidationMs = latexValidationMs;
     const sourceHost = sourceHostForRequest(request);
+    const translatedText = translatedChunks.join('\n\n');
+    const appliedGlossaryTerms = findAppliedGlossaryTerms(text, translatedText, scopedGlossary);
     const result: TranslateResult = {
       requestId: request.requestId,
       documentId: identity.documentId,
       originalText: text,
-      translatedText: translatedChunks.join('\n\n'),
+      translatedText,
       ...(detectedLanguage ? { detectedLanguage } : {}),
       warnings,
       ...(alignmentComplete && combinedSegments.length
@@ -1657,6 +1665,7 @@ async function translate(
       latencyMs: Math.round(performance.now() - startedAt),
       contextUsed: Boolean(contextText),
       chunkCount: chunks.length,
+      ...(appliedGlossaryTerms.length ? { appliedGlossaryTerms } : {}),
       ...(termCandidates.length
         ? {
             termCandidates: [...new Map(
@@ -1911,10 +1920,47 @@ interface TranslationResultCommitOptions {
   };
   preserveAlignedSegments?: boolean;
   preserveRevisionMetadata?: boolean;
+  glossaryUndo?: TranslationCorrectionTermReceipt | DocumentTermChangeReceipt;
   commitSideEffect?: (commit: {
     result: TranslateResult;
     correctionReceipt: TranslationCorrectionReceipt;
   }) => Promise<void>;
+}
+
+function effectiveGlossaryForTranslationMutation(
+  glossary: AppliedGlossaryTerm[],
+  termScope: TranslationTermScope | undefined,
+  correctionTerm: GlossaryEntry | undefined,
+  undo: TranslationCorrectionTermReceipt | DocumentTermChangeReceipt | undefined,
+): AppliedGlossaryTerm[] {
+  let source: string | undefined;
+  let replacement: AppliedGlossaryTerm | undefined;
+  if (termScope && correctionTerm) {
+    source = correctionTerm.source;
+    replacement = { ...correctionTerm, scope: termScope };
+  } else if (undo) {
+    if ('scope' in undo) {
+      source = undo.source;
+      if (undo.previousTarget !== undefined) {
+        replacement = { source: undo.source, target: undo.previousTarget, scope: undo.scope };
+      }
+    } else {
+      source = undo.applied?.source ?? undo.previous?.source ?? undo.sourceKey;
+      if (undo.previous) {
+        replacement = {
+          source: undo.previous.source,
+          target: undo.previous.target,
+          scope: 'document',
+        };
+      }
+    }
+  }
+  if (!source) return glossary;
+  const sourceKey = normalizeGlossaryTermKey(source);
+  return [
+    ...(replacement ? [replacement] : []),
+    ...glossary.filter((term) => normalizeGlossaryTermKey(term.source) !== sourceKey),
+  ];
 }
 
 async function compensateTranslationMutation(
@@ -2000,6 +2046,21 @@ async function updateTranslationResultCommitted(
     if (!options?.preserveAlignedSegments) delete result.alignedSegments;
     const settings = await getSettings();
     options?.assertCurrent?.();
+    const memoryForGlossary = await getDocumentMemory(documentIdentity(payload));
+    options?.assertCurrent?.();
+    const effectiveGlossary = effectiveGlossaryForTranslationMutation(
+      mergeDocumentGlossaryWithScope(settings.academicGlossary, memoryForGlossary),
+      termScope,
+      correctionTerm,
+      options?.glossaryUndo,
+    );
+    const appliedGlossaryTerms = findAppliedGlossaryTerms(
+      originalText,
+      translatedText,
+      effectiveGlossary,
+    );
+    if (appliedGlossaryTerms.length) result.appliedGlossaryTerms = appliedGlossaryTerms;
+    else delete result.appliedGlossaryTerms;
     let termChange: TranslationCorrectionTermReceipt | undefined;
     let documentTermChange: DocumentTermChangeReceipt | undefined;
     let termRollbackSkipped = false;
@@ -2201,6 +2262,9 @@ async function undoTranslationResultCommitted(
       ...(options?.commitSideEffect ? { commitSideEffect: options.commitSideEffect } : {}),
       ...(payload.receipt.segmentChange ? { preserveAlignedSegments: true } : {}),
       preserveRevisionMetadata: true,
+      ...(payload.receipt.termChange || payload.receipt.documentTermChange
+        ? { glossaryUndo: payload.receipt.documentTermChange ?? payload.receipt.termChange }
+        : {}),
       ...(documentUndo
         ? {
             documentUndo: {
@@ -2678,7 +2742,11 @@ async function translateImageRegion(
     const identity = documentIdentity(request);
     const documentMemory = await getDocumentMemory(identity);
     assertActiveRequest(tabId, request.requestId, controller);
-    const glossary = mergeDocumentGlossary(settings.academicGlossary, documentMemory);
+    const scopedGlossary = mergeDocumentGlossaryWithScope(
+      settings.academicGlossary,
+      documentMemory,
+    );
+    const glossary = scopedGlossary.map(({ source, target }) => ({ source, target }));
     const configuredVisionProfile = settings.apiProfiles.find(
       (candidate) => candidate.id === settings.visionApiProfileId,
     );
@@ -2827,6 +2895,11 @@ async function translateImageRegion(
       }
     })();
     assertActiveRequest(tabId, request.requestId, controller);
+    const appliedGlossaryTerms = findAppliedGlossaryTerms(
+      providerResult.recognizedText,
+      providerResult.translatedText,
+      scopedGlossary,
+    );
     const maintainVisionProfile = (): Promise<void> => autoSelectedVisionProfile
       ? mutateSettings((latestSettings) => {
           const profileStillAvailable = latestSettings.apiProfiles.some(
@@ -2875,6 +2948,7 @@ async function translateImageRegion(
       latencyMs: Math.round(performance.now() - startedAt),
       contextUsed: false,
       chunkCount: 1,
+      ...(appliedGlossaryTerms.length ? { appliedGlossaryTerms } : {}),
       ...(request.revision
         ? {
             revision: {
@@ -3767,7 +3841,13 @@ export default defineBackground(() => {
           const optionsUrl = new URL(browser.runtime.getURL('/options.html'));
           if (focus) optionsUrl.searchParams.set('focus', focus);
           if (ticket) optionsUrl.searchParams.set('recovery', ticket.token);
-          optionsUrl.hash = focus === 'support' ? 'support' : focus ? 'connection' : '';
+          optionsUrl.hash = focus === 'support'
+            ? 'support'
+            : focus === 'glossary'
+              ? 'translation'
+              : focus
+                ? 'connection'
+                : '';
           try {
             await browser.tabs.create({ url: optionsUrl.href, active: true });
           } catch (error) {

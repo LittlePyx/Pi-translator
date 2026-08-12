@@ -6,6 +6,10 @@ export interface GlossaryEntry {
   target: string;
 }
 
+export interface AppliedGlossaryTerm extends GlossaryEntry {
+  scope: 'document' | 'global';
+}
+
 export interface PdfSourceLocation {
   documentId: string;
   pageNumber: number;
@@ -166,6 +170,8 @@ export interface TranslateResult {
   formulaLatex?: string[];
   formulaNeedsReview?: boolean;
   termCandidates?: GlossaryEntry[];
+  /** Glossary mappings verified in both the source and the completed translation. */
+  appliedGlossaryTerms?: AppliedGlossaryTerm[];
   revision?: TranslationRevision;
 }
 

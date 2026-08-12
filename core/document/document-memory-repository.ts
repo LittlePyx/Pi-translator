@@ -1,4 +1,5 @@
 import type {
+  AppliedGlossaryTerm,
   GlossaryEntry,
   PdfSourceLocation,
   TranslateResult,
@@ -57,6 +58,7 @@ export interface DocumentMemoryTranslation {
   style?: TranslationStyle;
   sourceKind?: TranslateResult['sourceKind'];
   sourceLocation?: PdfSourceLocation;
+  appliedGlossaryTerms?: AppliedGlossaryTerm[];
   review?: DocumentTranslationReview;
 }
 
@@ -480,6 +482,9 @@ function withRememberedDocumentTranslationChange(
     ...(result.style ? { style: result.style } : {}),
     ...(result.sourceKind ? { sourceKind: result.sourceKind } : {}),
     ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
+    ...(result.appliedGlossaryTerms?.length
+      ? { appliedGlossaryTerms: result.appliedGlossaryTerms.map((term) => ({ ...term })) }
+      : {}),
   };
   const previous = memory.recentTranslations.find((candidate) => (
     sameTranslationSubject(candidate, baseEntry)
@@ -590,6 +595,9 @@ export function documentMemoryTranslationResult(
     ...(entry.style ? { style: entry.style } : {}),
     ...(entry.sourceKind ? { sourceKind: entry.sourceKind } : {}),
     ...(entry.sourceLocation ? { sourceLocation: entry.sourceLocation } : {}),
+    ...(entry.appliedGlossaryTerms?.length
+      ? { appliedGlossaryTerms: entry.appliedGlossaryTerms.map((term) => ({ ...term })) }
+      : {}),
     ...(entry.review?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
     ...(uncertainSpans.length
       ? { uncertainSpans: [...uncertainSpans] }
@@ -1196,10 +1204,24 @@ export function mergeDocumentGlossary(
   globalGlossary: GlossaryEntry[],
   memory: Pick<DocumentMemorySnapshot, 'confirmedTerms'>,
 ): GlossaryEntry[] {
+  return mergeDocumentGlossaryWithScope(globalGlossary, memory)
+    .map(({ source, target }) => ({ source, target }));
+}
+
+export function mergeDocumentGlossaryWithScope(
+  globalGlossary: GlossaryEntry[],
+  memory: Pick<DocumentMemorySnapshot, 'confirmedTerms'>,
+): AppliedGlossaryTerm[] {
   const documentSources = new Set(memory.confirmedTerms.map((term) => normalizedTerm(term.source)));
   return [
-    ...memory.confirmedTerms.map(({ source, target }) => ({ source, target })),
-    ...globalGlossary.filter((term) => !documentSources.has(normalizedTerm(term.source))),
+    ...memory.confirmedTerms.map(({ source, target }) => ({
+      source,
+      target,
+      scope: 'document' as const,
+    })),
+    ...globalGlossary
+      .filter((term) => !documentSources.has(normalizedTerm(term.source)))
+      .map((term) => ({ ...term, scope: 'global' as const })),
   ];
 }
 
