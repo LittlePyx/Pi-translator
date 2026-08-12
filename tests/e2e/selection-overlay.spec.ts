@@ -1047,6 +1047,145 @@ test('adapts the translation surface to dark and light webpages', async () => {
   await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
 });
 
+test('keeps first-result progress and copy feedback clear on a narrow card', async ({}, testInfo) => {
+  const apiPattern = 'https://www.overleaf.com/pi-translator-e2e-api/**';
+  const sourceText = 'A narrow first-result card should keep progress and copy actions stable.';
+  const source = page.locator('#source');
+  const originalSourceText = await source.textContent();
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const originalPageStyle = await page.evaluate(() => ({
+    background: document.body.style.background,
+    color: document.body.style.color,
+  }));
+  let releaseResult: (() => void) | undefined;
+  const resultGate = new Promise<void>((resolve) => { releaseResult = resolve; });
+  const delayedHandler = async (route: Route): Promise<void> => {
+    if (
+      route.request().method() !== 'POST'
+      || !route.request().postData()?.includes(sourceText)
+    ) {
+      await route.fallback();
+      return;
+    }
+    await resultGate;
+    await route.fallback();
+  };
+  await context.route(apiPattern, delayedHandler);
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await page.setViewportSize({ width: 320, height: 640 });
+    await clearBrowserSelection();
+    if (await overlay.getByTitle('关闭').count()) await overlay.getByTitle('关闭').click();
+    await source.evaluate((element, text) => { element.textContent = text; }, sourceText);
+    await selectElementText('#source');
+    await overlay.locator('.trigger').focus();
+    await overlay.locator('.trigger').press('Enter');
+
+    const surface = overlay.locator('.surface');
+    const loading = overlay.locator('.loading');
+    await expect(surface).toHaveAttribute('aria-busy', 'true');
+    await expect(loading).toHaveAttribute('role', 'status');
+    await expect(loading).toHaveAttribute('aria-live', 'polite');
+    await expect(loading).toHaveAttribute('aria-atomic', 'true');
+    await expect(overlay.locator('.stop-translation')).toBeVisible();
+    await expect(overlay.locator('.stop-translation')).toBeFocused();
+    const loadingLayout = await surface.evaluate((card) => {
+      const loadingRow = card.querySelector<HTMLElement>('.loading')!;
+      const stop = card.querySelector<HTMLElement>('.stop-translation')!;
+      const cardRect = card.getBoundingClientRect();
+      const stopRect = stop.getBoundingClientRect();
+      return {
+        cardClientWidth: card.clientWidth,
+        cardScrollWidth: card.scrollWidth,
+        loadingClientWidth: loadingRow.clientWidth,
+        loadingScrollWidth: loadingRow.scrollWidth,
+        stopRight: stopRect.right,
+        cardRight: cardRect.right,
+        stopHeight: stopRect.height,
+      };
+    });
+    expect(loadingLayout.cardScrollWidth).toBeLessThanOrEqual(loadingLayout.cardClientWidth + 1);
+    expect(loadingLayout.loadingScrollWidth)
+      .toBeLessThanOrEqual(loadingLayout.loadingClientWidth + 1);
+    expect(loadingLayout.stopRight).toBeLessThanOrEqual(loadingLayout.cardRight + 1);
+    expect(loadingLayout.stopHeight).toBeGreaterThanOrEqual(32);
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('first-result-loading-320-light.png') });
+    }
+
+    releaseResult?.();
+    await expect(overlay.locator('.body'))
+      .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
+    await expect(surface).not.toHaveAttribute('aria-busy', 'true');
+    await expect(surface).toHaveAttribute('data-state', 'complete');
+    await expect(overlay.locator('.result-feedback')).toHaveText('翻译完成，译文已显示');
+    await expect(overlay.locator('.result-feedback')).toHaveAttribute('role', 'status');
+
+    const copy = overlay.locator('.copy-action');
+    await expect(copy).toHaveText('复制译文');
+    await expect(copy).toBeFocused();
+    const resultLayout = await surface.evaluate((card) => {
+      const footer = card.querySelector<HTMLElement>('.footer')!;
+      const copyAction = card.querySelector<HTMLElement>('.copy-action')!;
+      return {
+        cardClientWidth: card.clientWidth,
+        cardScrollWidth: card.scrollWidth,
+        footerClientWidth: footer.clientWidth,
+        footerScrollWidth: footer.scrollWidth,
+        footerHeight: footer.getBoundingClientRect().height,
+        copyWidth: copyAction.getBoundingClientRect().width,
+        actionHeights: [...footer.querySelectorAll<HTMLElement>('button')]
+          .map((button) => button.getBoundingClientRect().height),
+        copyBackground: getComputedStyle(copyAction).backgroundColor,
+      };
+    });
+    expect(resultLayout.cardScrollWidth).toBeLessThanOrEqual(resultLayout.cardClientWidth + 1);
+    expect(resultLayout.footerScrollWidth).toBeLessThanOrEqual(resultLayout.footerClientWidth + 1);
+    expect(resultLayout.actionHeights.every((height) => height >= 32)).toBe(true);
+    expect(resultLayout.copyBackground).not.toBe('rgba(0, 0, 0, 0)');
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('first-result-complete-320-light.png') });
+      await page.evaluate(() => {
+        document.body.style.background = 'rgb(15, 23, 42)';
+        document.body.style.color = 'rgb(241, 245, 249)';
+      });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('first-result-complete-320-dark.png') });
+    }
+
+    await copy.click();
+    await expect(copy).toHaveText('已复制');
+    await expect(copy).toHaveAttribute('data-state', 'success');
+    await expect(copy).toBeEnabled();
+    await expect(copy).toBeFocused();
+    await expect(overlay.locator('.copy-feedback')).toHaveText('译文已复制到剪贴板');
+    await expect(overlay.locator('.copy-feedback')).toHaveAttribute('aria-live', 'polite');
+    const copiedLayout = await surface.evaluate((card) => {
+      const footer = card.querySelector<HTMLElement>('.footer')!;
+      const copyAction = card.querySelector<HTMLElement>('.copy-action')!;
+      return {
+        footerHeight: footer.getBoundingClientRect().height,
+        copyWidth: copyAction.getBoundingClientRect().width,
+      };
+    });
+    expect(copiedLayout).toEqual({
+      footerHeight: resultLayout.footerHeight,
+      copyWidth: resultLayout.copyWidth,
+    });
+  } finally {
+    releaseResult?.();
+    await context.unroute(apiPattern, delayedHandler);
+    await page.evaluate((style) => {
+      document.body.style.background = style.background;
+      document.body.style.color = style.color;
+    }, originalPageStyle);
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await clearBrowserSelection();
+    await source.evaluate((element, text) => { element.textContent = text; }, originalSourceText);
+    await page.setViewportSize(originalViewport);
+  }
+});
+
 test('recovers embedded TeX from rendered web mathematics before translation', async () => {
   const initialTextRequests = textRequests.length;
   const initialVisionRequests = visionRequests.length;
