@@ -322,6 +322,8 @@ export class TranslationOverlay {
   private alignedView = false;
   private readonly resultVersions = new Map<string, TranslateResult[]>();
   private readonly latexViewOverrides = new Map<string, boolean>();
+  private readonly resultViewModes = new Map<string, boolean>();
+  private readonly resultReadingPositions = new Map<string, number>();
   private readonly expandedAlignedSources = new Set<string>();
   private markedOnly = false;
   private themeObserver?: MutationObserver;
@@ -413,7 +415,7 @@ export class TranslationOverlay {
     this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
     if(result.documentId&&this.documentMemory?.documentId!==result.documentId)delete this.documentMemory;
     this.rememberResultVersion(result);
-    this.historyIndex=history.findIndex(entry=>entry.requestId===result.requestId);this.alignedView=alignedByDefault&&Boolean(result.alignedSegments?.length);
+    this.historyIndex=history.findIndex(entry=>entry.requestId===result.requestId);this.alignedView=this.rememberedAlignedView(result,alignedByDefault);this.rememberResultViewMode(result,this.alignedView);
     if(this.sidebarActive)this.sidebarCollapsed=false;this.renderResult(result,true);
   }
 
@@ -439,14 +441,44 @@ export class TranslationOverlay {
       ? history.findIndex(entry=>entry.requestId===this.currentResult?.requestId)
       : -1;
     if(this.currentResult&&!this.progressState&&this.isShowingCard()){
-      const scrollTop=this.resultScrollContainer()?.scrollTop??0;
       this.renderResult(this.currentResult);
-      const scroll=this.resultScrollContainer();if(scroll)scroll.scrollTop=scrollTop;
     }
   }
 
   private resultRootRequestId(result:TranslateResult):string {
     return result.revision?.rootRequestId??result.requestId;
+  }
+
+  private rememberedAlignedView(result:TranslateResult,fallback=false):boolean {
+    return Boolean(result.alignedSegments?.length)&&(this.resultViewModes.get(result.requestId)??fallback);
+  }
+
+  private rememberResultViewMode(result:TranslateResult,alignedView:boolean):void {
+    this.resultViewModes.delete(result.requestId);
+    this.resultViewModes.set(result.requestId,Boolean(result.alignedSegments?.length)&&alignedView);
+    while(this.resultViewModes.size>48){const oldest=this.resultViewModes.keys().next().value as string|undefined;if(!oldest)break;this.resultViewModes.delete(oldest)}
+  }
+
+  private resultReadingPositionKey(result:TranslateResult,alignedView=this.alignedView):string {
+    return `${result.requestId}:${alignedView?'aligned':'full'}`;
+  }
+
+  private rememberResultReadingPosition(key:string,scrollTop:number):void {
+    this.resultReadingPositions.delete(key);
+    this.resultReadingPositions.set(key,Math.max(0,scrollTop));
+    while(this.resultReadingPositions.size>96){const oldest=this.resultReadingPositions.keys().next().value as string|undefined;if(!oldest)break;this.resultReadingPositions.delete(oldest)}
+  }
+
+  private rememberVisibleResultReadingPosition():void {
+    const scroll=this.root.querySelector<HTMLElement>('.result-scroll');
+    const key=scroll?.dataset.readingKey;
+    if(scroll&&key)this.rememberResultReadingPosition(key,scroll.scrollTop);
+  }
+
+  private restoreResultReadingPosition(result:TranslateResult,alignedView=this.alignedView):void {
+    const key=this.resultReadingPositionKey(result,alignedView);const scrollTop=this.resultReadingPositions.get(key);if(scrollTop===undefined)return;
+    const restore=():boolean=>{if(this.currentResult?.requestId!==result.requestId||this.alignedView!==alignedView)return true;const scroll=this.root.querySelector<HTMLElement>('.result-scroll');if(scroll?.dataset.readingKey!==key)return true;scroll.scrollTop=scrollTop;return scroll.scrollTop>=scrollTop-.5};
+    restore();queueMicrotask(restore);let attempts=0;const settle=()=>{if(restore()||attempts>=12)return;attempts+=1;requestAnimationFrame(settle)};requestAnimationFrame(settle);
   }
 
   private rememberResultVersion(result:TranslateResult):void {
@@ -470,7 +502,7 @@ export class TranslationOverlay {
     const next=current+delta;
     if(next<0||next>=versions.length)return;
     const focusKey=this.root.activeElement instanceof HTMLElement?this.root.activeElement.dataset.piFocusKey:undefined;
-    this.alignedView=false;
+    this.alignedView=this.rememberedAlignedView(versions[next]!);
     this.renderResult(versions[next]!);
     if(focusKey==='older-version'||focusKey==='newer-version')queueMicrotask(()=>this.focusPairedNavigationControl(focusKey,focusKey==='older-version'?'newer-version':'older-version'));
   }
@@ -592,9 +624,9 @@ export class TranslationOverlay {
     });
   }
 
-  hide():void { this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';this.clear();this.setView('hidden'); }
+  hide():void { this.rememberVisibleResultReadingPosition();this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';this.clear();this.setView('hidden'); }
   resetSession():void {
-    this.finishActiveProgressFeedback();this.documentMemoryRequestRevision+=1;this.translationEpoch+=1;this.correctionUndo=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';this.sidebarActive=false;this.sidebarCollapsed=false;this.history=[];this.historyIndex=-1;this.resultVersions.clear();this.latexViewOverrides.clear();this.expandedAlignedSources.clear();this.cardReturnFocus=undefined;delete this.currentResult;delete this.latestRequestId;delete this.documentMemory;this.documentMemoryError=undefined;this.clear();this.setView('hidden');
+    this.finishActiveProgressFeedback();this.documentMemoryRequestRevision+=1;this.translationEpoch+=1;this.correctionUndo=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';this.sidebarActive=false;this.sidebarCollapsed=false;this.history=[];this.historyIndex=-1;this.resultVersions.clear();this.latexViewOverrides.clear();this.resultViewModes.clear();this.resultReadingPositions.clear();this.expandedAlignedSources.clear();this.cardReturnFocus=undefined;delete this.currentResult;delete this.latestRequestId;delete this.documentMemory;this.documentMemoryError=undefined;this.clear();this.setView('hidden');
   }
   hideTrigger():void { if(this.view==='trigger')this.hide(); }
   resetCardPosition():void { this.cardPosition=undefined; }
@@ -614,6 +646,7 @@ export class TranslationOverlay {
 
   private openMarkerNavigator():void {
     if(!this.actions.getSourceMarkSummaries?.().length)return;
+    this.rememberVisibleResultReadingPosition();
     this.markerNavigatorActive=true;
     this.sidebarCollapsed=false;
     this.renderMarkerNavigator();
@@ -675,6 +708,7 @@ export class TranslationOverlay {
 
   private openDocumentMemory():void {
     if(!this.actions.onGetDocumentMemory)return;
+    this.rememberVisibleResultReadingPosition();
     this.markerNavigatorActive=false;this.documentMemoryActive=true;this.sidebarCollapsed=false;this.documentMemoryError=undefined;
     this.renderDocumentMemory();
     this.refreshDocumentMemory(true);
@@ -752,9 +786,9 @@ export class TranslationOverlay {
   }
 
   private openDocumentTranslation(entry:DocumentMemoryTranslation):void {
-    this.documentMemoryActive=false;this.alignedView=false;
+    this.documentMemoryActive=false;
     const result=[this.currentResult,...this.history].find((candidate)=>candidate?.requestId===entry.requestId)??documentMemoryTranslationResult(entry,this.documentMemory?.label);
-    this.currentResult=result;this.renderResult(result);
+    this.alignedView=this.rememberedAlignedView(result);this.currentResult=result;this.renderResult(result);
   }
 
   private renderDocumentMemory():void {
@@ -934,14 +968,14 @@ export class TranslationOverlay {
   }
 
   private renderResult(result:TranslateResult,announceCompletion=false):void {
-    this.finishActiveProgressFeedback();const renderRevision=++this.resultRenderRevision;result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;if(announceCompletion){this.resultFeedback.textContent='';window.requestAnimationFrame(()=>{if(this.isShowingCard()&&this.currentResult?.requestId===result.requestId)this.resultFeedback.textContent='翻译完成，译文已显示'})}const surface=this.surface('翻译结果');surface.dataset.state='complete';surface.classList.add('result-surface');const scroll=document.createElement('div');scroll.className='result-scroll';scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.ariaLabel='译文内容';const tools=surface.querySelector<HTMLElement>('.header-tools');
+    this.rememberVisibleResultReadingPosition();this.finishActiveProgressFeedback();const renderRevision=++this.resultRenderRevision;result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;this.rememberResultViewMode(result,this.alignedView);if(announceCompletion){this.resultFeedback.textContent='';window.requestAnimationFrame(()=>{if(this.isShowingCard()&&this.currentResult?.requestId===result.requestId)this.resultFeedback.textContent='翻译完成，译文已显示'})}const surface=this.surface('翻译结果');surface.dataset.state='complete';surface.classList.add('result-surface');const scroll=document.createElement('div');scroll.className='result-scroll';scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.ariaLabel='译文内容';scroll.dataset.readingKey=this.resultReadingPositionKey(result);scroll.addEventListener('scroll',()=>{if(!scroll.isConnected||this.root.querySelector('.result-scroll')!==scroll)return;this.rememberResultReadingPosition(scroll.dataset.readingKey!,scroll.scrollTop)},{passive:true});const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
     if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.dataset.piFocusKey='marked-filter';filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
     const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);if(tools&&versions.length>1&&versionIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group version-navigation';navigation.setAttribute('role','group');navigation.ariaLabel='译文版本导航';const older=this.button('‹','icon','查看上一版译文');older.dataset.piFocusKey='older-version';older.disabled=versionIndex>=versions.length-1;older.addEventListener('click',()=>this.navigateVersion(result,1));const counter=document.createElement('span');counter.className='counter version-counter';counter.textContent=`v${versionIndex+1}/${versions.length}`;counter.setAttribute('role','status');counter.ariaLabel=`第 ${versionIndex+1} 版，共 ${versions.length} 版`;const newer=this.button('›','icon','查看下一版译文');newer.dataset.piFocusKey='newer-version';newer.disabled=versionIndex<=0;newer.addEventListener('click',()=>this.navigateVersion(result,-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-version-navigation')}
     if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group history-navigation';navigation.setAttribute('role','group');navigation.ariaLabel='翻译历史导航';const older=this.button('‹','icon','上一条翻译（Alt+↑）');older.dataset.piFocusKey='older-translation';older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=document.createElement('span');counter.className='counter history-counter';counter.textContent=`${this.historyIndex+1}/${navigationHistory.length}`;counter.setAttribute('role','status');counter.ariaLabel=`第 ${this.historyIndex+1} 条，共 ${navigationHistory.length} 条`;const newer=this.button('›','icon','下一条翻译（Alt+↓）');newer.dataset.piFocusKey='newer-translation';newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-history-navigation')}
     if(tools?.classList.contains('has-version-navigation')&&tools.classList.contains('has-history-navigation'))tools.classList.add('dense-navigation');
     const topLine=document.createElement('div');topLine.className='result-topline';const meta=document.createElement('div');meta.className='meta';if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text'){const sourceKind=document.createElement('span');sourceKind.className='source-badge';sourceKind.textContent=result.sourceKind==='image-region'?'图像识别':'文字提取';meta.append(sourceKind)}if(result.sourceHost){const host=document.createElement('span');host.className='source-host';host.textContent=result.sourceHost;host.title=result.sourceHost;meta.append(host)}if(result.sourceLocation&&this.actions.onNavigateToPdfRegion){const location=this.button(`第 ${result.sourceLocation.pageNumber} 页`,'source-location','返回 PDF 原选区');location.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(result.sourceLocation!));meta.append(location)}if(result.completedAt){const time=document.createElement('span');time.className='meta-dot';time.textContent=new Date(result.completedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});meta.append(time)}const duration=result.cached?undefined:formatTranslationDuration(result.latencyMs);if(duration){const latency=document.createElement('span');latency.className='meta-dot';latency.textContent=duration;meta.append(latency)}if(result.cached){const cache=document.createElement('span');cache.className='cache-badge';cache.textContent='会话缓存';meta.append(cache)}if(result.contextUsed){const context=document.createElement('span');context.className='cache-badge';context.textContent='含上下文';meta.append(context)}if((result.chunkCount??1)>1){const chunks=document.createElement('span');chunks.className='meta-dot';chunks.textContent=`${result.chunkCount} 段`;meta.append(chunks)}if(meta.childElementCount)topLine.append(meta);
-    const viewControls=document.createElement('div');viewControls.className='result-view-controls';if(result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label','译文显示方式');const full=this.button('全文',`view-button${this.alignedView?'':' active'}`,'显示完整译文');full.dataset.piFocusKey='full-view';const aligned=this.button('逐句',`view-button${this.alignedView?' active':''}`,'显示逐句对照');aligned.dataset.piFocusKey='aligned-view';full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.renderResult(result)});switcher.append(full,aligned);viewControls.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?'源码':'公式',`view-button formula-view${rendered?' active':''}`,rendered?'显示可编辑的 LaTeX 源码':'渲染译文中的 LaTeX 公式');formulaView.dataset.piFocusKey='formula-view';formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResultPreservingScroll(result)});viewControls.append(formulaView)}if(viewControls.childElementCount)topLine.append(viewControls);if(topLine.childElementCount)scroll.append(topLine);
+    const viewControls=document.createElement('div');viewControls.className='result-view-controls';if(result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label','译文显示方式');const full=this.button('全文',`view-button${this.alignedView?'':' active'}`,'显示完整译文');full.dataset.piFocusKey='full-view';const aligned=this.button('逐句',`view-button${this.alignedView?' active':''}`,'显示逐句对照');aligned.dataset.piFocusKey='aligned-view';full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.rememberResultViewMode(result,false);this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.rememberResultViewMode(result,true);this.renderResult(result)});switcher.append(full,aligned);viewControls.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?'源码':'公式',`view-button formula-view${rendered?' active':''}`,rendered?'显示可编辑的 LaTeX 源码':'渲染译文中的 LaTeX 公式');formulaView.dataset.piFocusKey='formula-view';formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResultPreservingScroll(result)});viewControls.append(formulaView)}if(viewControls.childElementCount)topLine.append(viewControls);if(topLine.childElementCount)scroll.append(topLine);
     if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text')scroll.append(this.recognizedSource(result,result.sourceKind==='image-region'?'查看识别原文':'查看提取原文'));
     const renderLatex=this.shouldRenderLatex(result);
     const renderIdentity=renderLatex&&this.resultContainsLatex(result)?{requestId:result.requestId,revisionKey:renderRevision}:undefined;
@@ -987,7 +1021,7 @@ export class TranslationOverlay {
     ))}
     if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?'公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。':`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;scroll.append(uncertain)}
     if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent='部分 LaTeX 使用了保守保护策略，请复制后检查。';scroll.append(warning)}
-    const footer=document.createElement('div');footer.className='footer result-footer';const copy=this.button('复制译文','action copy-action','复制译文（保留标准 LaTeX）');copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(result.translatedText),'已复制','译文已复制到剪贴板'));footer.append(copy);if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correction=this.button('修正','action correction-action','修正译文');correction.addEventListener('click',()=>this.openTranslationCorrection(result,correction));footer.append(correction)}if(this.correctionUndo?.correctedRequestId===result.requestId&&this.actions.onUndoTranslationEdit){const notice=document.createElement('span');notice.className='correction-undo';notice.setAttribute('role','status');const message=document.createElement('span');message.className='correction-undo-message';message.textContent='已修正 ·';const undo=this.button('撤销','','撤销上次译文修正');undo.addEventListener('click',()=>this.undoTranslationCorrection(result,notice));notice.append(message,undo);footer.append(notice)}if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.dataset.piFocusKey='source-mark';mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}footer.append(this.moreMenu(result));surface.append(scroll,footer);this.showSurface(surface);
+    const footer=document.createElement('div');footer.className='footer result-footer';const copy=this.button('复制译文','action copy-action','复制译文（保留标准 LaTeX）');copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(result.translatedText),'已复制','译文已复制到剪贴板'));footer.append(copy);if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correction=this.button('修正','action correction-action','修正译文');correction.addEventListener('click',()=>this.openTranslationCorrection(result,correction));footer.append(correction)}if(this.correctionUndo?.correctedRequestId===result.requestId&&this.actions.onUndoTranslationEdit){const notice=document.createElement('span');notice.className='correction-undo';notice.setAttribute('role','status');const message=document.createElement('span');message.className='correction-undo-message';message.textContent='已修正 ·';const undo=this.button('撤销','','撤销上次译文修正');undo.addEventListener('click',()=>this.undoTranslationCorrection(result,notice));notice.append(message,undo);footer.append(notice)}if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.dataset.piFocusKey='source-mark';mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}footer.append(this.moreMenu(result));surface.append(scroll,footer);this.showSurface(surface);this.restoreResultReadingPosition(result);
   }
 
   private moreMenu(result:TranslateResult):HTMLElement {
@@ -1152,12 +1186,12 @@ export class TranslationOverlay {
     if(shouldMoveFocus)queueMicrotask(restoreOverlayFocus);
   }
 
-  private collapseSidebar():void { const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const collapsedLabel=this.markerNavigatorActive?'本文标记':'连续翻译';const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,`展开 Pi Translator ${collapsedLabel}侧栏`);const label=document.createElement('span');label.textContent=collapsedLabel;tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.markerNavigatorActive)this.renderMarkerNavigator();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
+  private collapseSidebar():void { this.rememberVisibleResultReadingPosition();const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const collapsedLabel=this.markerNavigatorActive?'本文标记':'连续翻译';const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,`展开 Pi Translator ${collapsedLabel}侧栏`);const label=document.createElement('span');label.textContent=collapsedLabel;tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.markerNavigatorActive)this.renderMarkerNavigator();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
   private closeSurface():void { const restoreFocus=this.cardReturnFocus;this.cardReturnFocus=undefined;this.markerNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.markedOnly=false;this.actions.onSidebarChange(false)}this.hide();this.actions.onDismiss();if(restoreFocus?.isConnected)queueMicrotask(()=>restoreFocus.focus({preventScroll:true})); }
   private navigationHistory():TranslationHistoryEntry[]{return this.markedOnly?this.history.filter(entry=>this.actions.hasSourceMarksForResult?.(entry)):this.history}
   private focusPairedNavigationControl(primaryKey:string,fallbackKey:string):void { const primary=[...this.root.querySelectorAll<HTMLButtonElement>('[data-pi-focus-key]')].find(button=>button.dataset.piFocusKey===primaryKey);const fallback=[...this.root.querySelectorAll<HTMLButtonElement>('[data-pi-focus-key]')].find(button=>button.dataset.piFocusKey===fallbackKey);const target=primary&&!primary.disabled?primary:fallback&&!fallback.disabled?fallback:undefined;target?.focus({preventScroll:true}) }
-  private navigate(delta:number):void { const history=this.navigationHistory();const current=history.findIndex(entry=>entry.requestId===this.currentResult?.requestId);const next=current+delta;if(next<0||next>=history.length)return;const focusKey=this.root.activeElement instanceof HTMLElement?this.root.activeElement.dataset.piFocusKey:undefined;this.historyIndex=next;this.alignedView=false;this.renderResult(history[next] as TranslationHistoryEntry);if(focusKey==='older-translation'||focusKey==='newer-translation')queueMicrotask(()=>this.focusPairedNavigationControl(focusKey,focusKey==='older-translation'?'newer-translation':'older-translation')); }
-  private toggleMarkedFilter():void { const marked=this.history.filter(entry=>this.actions.hasSourceMarksForResult?.(entry));if(!marked.length){this.markedOnly=false;return}this.markedOnly=!this.markedOnly;if(this.markedOnly&&(!this.currentResult||!this.actions.hasSourceMarksForResult?.(this.currentResult))){this.alignedView=false;this.renderResult(marked[0] as TranslationHistoryEntry);return}if(this.currentResult)this.renderResult(this.currentResult) }
+  private navigate(delta:number):void { const history=this.navigationHistory();const current=history.findIndex(entry=>entry.requestId===this.currentResult?.requestId);const next=current+delta;if(next<0||next>=history.length)return;const focusKey=this.root.activeElement instanceof HTMLElement?this.root.activeElement.dataset.piFocusKey:undefined;const target=history[next] as TranslationHistoryEntry;this.historyIndex=next;this.alignedView=this.rememberedAlignedView(target);this.renderResult(target);if(focusKey==='older-translation'||focusKey==='newer-translation')queueMicrotask(()=>this.focusPairedNavigationControl(focusKey,focusKey==='older-translation'?'newer-translation':'older-translation')); }
+  private toggleMarkedFilter():void { const marked=this.history.filter(entry=>this.actions.hasSourceMarksForResult?.(entry));if(!marked.length){this.markedOnly=false;return}this.markedOnly=!this.markedOnly;if(this.markedOnly&&(!this.currentResult||!this.actions.hasSourceMarksForResult?.(this.currentResult))){const target=marked[0] as TranslationHistoryEntry;this.alignedView=this.rememberedAlignedView(target);this.renderResult(target);return}if(this.currentResult)this.renderResult(this.currentResult) }
   private resultScrollContainer():HTMLElement|undefined { return this.root.querySelector<HTMLElement>('.result-scroll')??this.root.querySelector<HTMLElement>('.surface')??undefined }
   private segmentRow(segmentId:string):HTMLElement|undefined { return [...this.root.querySelectorAll<HTMLElement>('.segment')].find(candidate=>candidate.dataset.segmentId===segmentId) }
   private segmentViewportOffset(segmentId:string):number|undefined { const scroll=this.resultScrollContainer();const row=this.segmentRow(segmentId);if(!scroll||!row)return undefined;return row.getBoundingClientRect().top-scroll.getBoundingClientRect().top }
@@ -1174,7 +1208,7 @@ export class TranslationOverlay {
     restore();queueMicrotask(restore);requestAnimationFrame(restore);queueMicrotask(()=>{if(this.currentResult?.requestId!==requestId)return;const row=this.segmentRow(segmentId);(row?.querySelector<HTMLButtonElement>('.segment-correct')??row)?.focus({preventScroll:true})})
   }
   private renderResultPreservingScroll(result:TranslateResult,scrollTop=this.resultScrollContainer()?.scrollTop??0):void { const requestId=result.requestId;this.renderResult(result);const restore=()=>{if(this.currentResult?.requestId!==requestId)return;const scroll=this.resultScrollContainer();if(scroll)scroll.scrollTop=scrollTop};restore();queueMicrotask(restore);requestAnimationFrame(restore) }
-  private renderAfterMarkToggle(result:TranslateResult,preserveScroll=false):void { const scrollTop=preserveScroll?this.resultScrollContainer()?.scrollTop??0:0;if(this.markedOnly&&!this.actions.hasSourceMarksForResult?.(result)){const next=this.history.find(entry=>this.actions.hasSourceMarksForResult?.(entry));if(next){this.alignedView=false;this.renderResult(next);return}this.markedOnly=false}if(preserveScroll)this.renderResultPreservingScroll(result,scrollTop);else this.renderResult(result) }
+  private renderAfterMarkToggle(result:TranslateResult,preserveScroll=false):void { const scrollTop=preserveScroll?this.resultScrollContainer()?.scrollTop??0:0;if(this.markedOnly&&!this.actions.hasSourceMarksForResult?.(result)){const next=this.history.find(entry=>this.actions.hasSourceMarksForResult?.(entry));if(next){this.alignedView=this.rememberedAlignedView(next);this.renderResult(next);return}this.markedOnly=false}if(preserveScroll)this.renderResultPreservingScroll(result,scrollTop);else this.renderResult(result) }
   private toggleSourceMark(result:TranslateResult):void { this.actions.onToggleSourceMark?.(result);this.renderAfterMarkToggle(result,true) }
   private toggleSegmentSourceMark(result:TranslateResult,segment:TranslationSegment):void { this.actions.onToggleSourceMark?.(result,segment);this.renderAfterMarkToggle(result,true) }
   private menuButton(text:string,action:()=>void):HTMLButtonElement{const button=this.button(text,'');button.addEventListener('click',action);return button}

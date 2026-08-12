@@ -4778,6 +4778,37 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       element.scrollTop += secondBounds.top - scrollBounds.top - 12;
       return element.scrollTop;
     });
+    const alignedReadingPosition = await scrollToSecondSegment();
+    expect(alignedReadingPosition).toBeGreaterThan(0);
+    const fullView = overlay.getByRole('button', { name: '显示完整译文' });
+    await fullView.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(overlay.locator('.body')).toBeVisible();
+    await expect(resultScroll).toHaveAttribute('data-reading-key', /:full$/u);
+    await aligned.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(segments).toHaveCount(2);
+    await expect(resultScroll).toHaveAttribute('data-reading-key', /:aligned$/u);
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(alignedReadingPosition, 0);
+
+    const olderHistory = overlay.getByTitle('上一条翻译（Alt+↑）');
+    await olderHistory.click();
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    const newerHistory = overlay.getByTitle('下一条翻译（Alt+↓）');
+    await newerHistory.click();
+    await expect(segments).toHaveCount(2);
+    await expect(aligned).toHaveAttribute('aria-pressed', 'true');
+    await expect(resultScroll).toHaveAttribute('data-reading-key', /:aligned$/u);
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(alignedReadingPosition, 0);
+
+    await overlay.getByTitle('收起侧栏').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
+    await overlay.getByTitle('展开 Pi Translator 连续翻译侧栏').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect(aligned).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(alignedReadingPosition, 0);
+
     const markScrollTop = await scrollToSecondSegment();
     expect(markScrollTop).toBeGreaterThan(0);
     let secondMark = overlay.locator('.segment').nth(1).getByRole('button', {
@@ -4940,6 +4971,22 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     });
     expect(savedVisibility.targetTop).toBeGreaterThan(savedVisibility.contentTop);
     expect(savedVisibility.targetBottom).toBeLessThanOrEqual(savedVisibility.contentBottom);
+
+    const correctedVersionPosition = await scrollToSecondSegment();
+    const olderVersion = overlay.getByTitle('查看上一版译文');
+    await olderVersion.click();
+    await expect(overlay.locator('.version-counter')).toHaveText('v2/2');
+    await expect(overlay.locator('.segment').nth(1).locator('.segment-target'))
+      .not.toContainText('第二句修正完成后仍保持当前阅读位置');
+    await resultScroll.evaluate((element) => { element.scrollTop = 24; });
+    const newerVersion = overlay.getByTitle('查看下一版译文');
+    await newerVersion.click();
+    await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
+    await expect(overlay.locator('.segment').nth(1).locator('.segment-target'))
+      .toContainText('第二句修正完成后仍保持当前阅读位置');
+    await expect(aligned).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
+      .toBeCloseTo(correctedVersionPosition, 0);
 
     const undoSegmentCorrection = overlay.getByRole('button', {
       name: '撤销上次译文修正',
