@@ -1910,6 +1910,7 @@ interface TranslationResultCommitOptions {
     rollbackResult: TranslateResult;
   };
   preserveAlignedSegments?: boolean;
+  preserveRevisionMetadata?: boolean;
   commitSideEffect?: (commit: {
     result: TranslateResult;
     correctionReceipt: TranslationCorrectionReceipt;
@@ -1987,12 +1988,14 @@ async function updateTranslationResultCommitted(
       completedAt: Date.now(),
       cached: false,
       latencyMs: 0,
-      revision: {
-        rootRequestId,
-        kind: 'manual',
-        label: '手动修改',
-        scope,
-      },
+      revision: options?.preserveRevisionMetadata && payload.result.revision
+        ? { ...payload.result.revision, rootRequestId, scope }
+        : {
+            rootRequestId,
+            kind: 'manual',
+            label: '手动修改',
+            scope,
+          },
     };
     if (!options?.preserveAlignedSegments) delete result.alignedSegments;
     const settings = await getSettings();
@@ -2197,6 +2200,7 @@ async function undoTranslationResultCommitted(
       ...(options?.assertCurrent ? { assertCurrent: options.assertCurrent } : {}),
       ...(options?.commitSideEffect ? { commitSideEffect: options.commitSideEffect } : {}),
       ...(payload.receipt.segmentChange ? { preserveAlignedSegments: true } : {}),
+      preserveRevisionMetadata: true,
       ...(documentUndo
         ? {
             documentUndo: {
@@ -2307,7 +2311,7 @@ async function updateTranslationSegment(
       scope: 'current',
       previousTranslatedText: payload.result.translatedText,
       baseRequestId: payload.result.requestId,
-    }, tabId, { preserveAlignedSegments: true });
+    }, tabId, { preserveAlignedSegments: true, preserveRevisionMetadata: true });
     if (!response.ok) return response;
     const receipt = response.data.correctionReceipt;
     if (!receipt) {

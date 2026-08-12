@@ -1488,6 +1488,15 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
   expect(textRequests).toHaveLength(requestsBeforeManualSave);
   await expect(overlay.locator('.version-counter')).toHaveText('v1/2');
+  const versionContext = overlay.locator('.version-context');
+  await expect(versionContext).toContainText('手动修改');
+  await expect(versionContext).toContainText('本文记忆');
+  await expect(versionContext).toContainText('较上一版调整全文');
+  await expect(versionContext).toHaveAttribute(
+    'aria-label',
+    '手动修改，本文记忆，较上一版调整全文',
+  );
+  await expect(overlay.locator('.version-locate')).toHaveCount(0);
   await expect(overlay.getByRole('button', { name: '撤销上次译文修正' }))
     .toBeFocused();
 
@@ -1506,6 +1515,9 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await overlay.getByRole('button', { name: '更忠实原文' }).click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
   await expect(overlay.locator('.version-counter')).toHaveText('v1/3');
+  await expect(versionContext).toContainText('更忠实');
+  await expect(versionContext).toContainText('仅当前选择');
+  await expect(versionContext).toContainText('较上一版调整全文');
   expect(JSON.stringify(textRequests.at(-1))).toContain('translationRevisionPreference');
   expect(JSON.stringify(textRequests.at(-1))).toContain('用户手动修订后的学术译文。');
   const worker = context.serviceWorkers()[0]!;
@@ -1526,6 +1538,8 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await overlay.getByTitle('查看上一版译文').click();
   await expect(overlay.locator('.body')).toHaveText('用户手动修订后的学术译文。');
   await expect(overlay.locator('.version-counter')).toHaveText('v2/3');
+  await expect(versionContext).toContainText('手动修改');
+  await expect(versionContext).toContainText('本文记忆');
   await overlay.getByTitle('查看下一版译文').click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
   await correctionAction.click();
@@ -1536,6 +1550,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(undoCorrection).toBeFocused();
   await undoCorrection.click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await expect(versionContext).toContainText('撤销修改');
   await expect(correctionAction).toBeFocused();
   await overlay.locator('.mark-action').click();
   await expect(markerLayer.locator('.marker')).toHaveCount(0);
@@ -2320,10 +2335,22 @@ test('corrects one aligned sentence locally without adding visible controls or A
   await expect(segments.nth(0).locator('.segment-target')).toHaveText('人工修正后的第一句。');
   await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
   await expect(segments.nth(0).locator('.segment-correct')).toBeFocused();
+  const versionContext = overlay.locator('.version-context');
+  await expect(versionContext).toContainText('修正本句');
+  await expect(versionContext).toContainText('仅当前选择');
+  await expect(versionContext).toContainText('较上一版调整 1 句');
+  await expect(segments.nth(0)).toHaveAttribute('data-version-changed', 'true');
+  await expect(segments.nth(1)).not.toHaveAttribute('data-version-changed', 'true');
+  await overlay.getByRole('button', { name: '显示完整译文' }).click();
+  await expect(overlay.locator('.segment')).toHaveCount(0);
+  await overlay.getByRole('button', { name: '切换逐句对照并定位第一处版本改动' }).click();
+  segments = overlay.locator('.segment');
+  await expect(segments.nth(0)).toBeFocused();
   expect(textRequests).toHaveLength(requestsBeforeCorrection);
 
   await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
   segments = overlay.locator('.segment');
+  await expect(versionContext).toContainText('撤销修改');
   await expect(segments).toHaveCount(2);
   await expect(segments.nth(0).locator('.segment-target')).toHaveText('第一句重要译文。');
   await expect(segments.nth(1).locator('.segment-target')).toHaveText('第二句补充译文。');
@@ -5037,6 +5064,30 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await expect(correctedSecond.getByRole('button', {
       name: '只修正本句，不调用 API',
     })).toBeFocused();
+    const versionContext = overlay.locator('.version-context');
+    await expect(versionContext).toContainText('修正本句');
+    await expect(versionContext).toContainText('较上一版调整 1 句');
+    await expect(overlay.locator('.segment').first())
+      .not.toHaveAttribute('data-version-changed', 'true');
+    await expect(correctedSecond).toHaveAttribute('data-version-changed', 'true');
+    const versionContextLayout = await versionContext.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+      height: element.getBoundingClientRect().height,
+      buttonHeight: element.querySelector<HTMLElement>('.version-locate')
+        ?.getBoundingClientRect().height,
+    }));
+    expect(versionContextLayout.scrollWidth).toBeLessThanOrEqual(versionContextLayout.clientWidth + 1);
+    expect(versionContextLayout.height).toBeLessThanOrEqual(64);
+    expect(versionContextLayout.buttonHeight).toBeGreaterThanOrEqual(32);
+    if (process.env.PI_VISUAL_QA) {
+      await densePage.screenshot({ path: testInfo.outputPath('version-change-aligned-360-light.png') });
+      await densePage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await densePage.screenshot({ path: testInfo.outputPath('version-change-aligned-360-dark.png') });
+      await densePage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
     const savedPosition = await correctedSecond.evaluate((segment) => {
       const scroll = segment.closest<HTMLElement>('.result-scroll')!;
       return {
@@ -5067,6 +5118,10 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     const olderVersion = overlay.getByTitle('查看上一版译文');
     await olderVersion.click();
     await expect(overlay.locator('.version-counter')).toHaveText('v2/2');
+    await expect(versionContext).toContainText('初始译文');
+    await expect(versionContext).toContainText('后续版本调整 1 句');
+    await expect(overlay.locator('.segment').nth(1))
+      .toHaveAttribute('data-version-changed', 'true');
     await expect(overlay.locator('.segment').nth(1).locator('.segment-target'))
       .not.toContainText('第二句修正完成后仍保持当前阅读位置');
     await resultScroll.evaluate((element) => { element.scrollTop = 24; });
@@ -5084,6 +5139,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     });
     await undoSegmentCorrection.click();
     const restoredSecond = overlay.locator('.segment').nth(1);
+    await expect(versionContext).toContainText('撤销修改');
     await expect(restoredSecond.locator('.segment-target'))
       .not.toContainText('第二句修正完成后仍保持当前阅读位置');
     await expect(restoredSecond.getByRole('button', {
