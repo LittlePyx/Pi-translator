@@ -7223,6 +7223,75 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     expect(navigationLayout.toolsRight).toBeLessThanOrEqual(navigationLayout.surfaceRight);
     expect(navigationLayout.controlHeights.every((height) => height >= 32)).toBe(true);
 
+    await expect(counter).toHaveAttribute('title', '查看和搜索翻译历史（Alt+/）');
+    await counter.click();
+    const historySearch = overlay.getByRole('searchbox', { name: '搜索翻译历史' });
+    const historySummary = overlay.locator('.history-summary');
+    const historyItems = overlay.locator('.history-item');
+    await expect(overlay.locator('.history-surface')).toBeVisible();
+    await expect(historySearch).toBeFocused();
+    await expect(historySummary).toHaveText('3 条历史翻译');
+    await expect(historyItems).toHaveCount(3);
+    await expect(historyItems.first()).toHaveAttribute('aria-current', 'true');
+    const historySearchLayout = await overlay.locator('.history-surface').evaluate((surface) => {
+      const input = surface.querySelector<HTMLInputElement>('.history-search-field')!;
+      const list = surface.querySelector<HTMLElement>('.history-list')!;
+      return {
+        clientWidth: surface.clientWidth,
+        scrollWidth: surface.scrollWidth,
+        inputHeight: input.getBoundingClientRect().height,
+        listHeight: list.getBoundingClientRect().height,
+      };
+    });
+    expect(historySearchLayout.scrollWidth).toBeLessThanOrEqual(historySearchLayout.clientWidth + 1);
+    expect(historySearchLayout.inputHeight).toBeGreaterThanOrEqual(32);
+    expect(historySearchLayout.listHeight).toBeGreaterThan(120);
+    if (process.env.PI_VISUAL_QA) {
+      await historyPage.screenshot({ path: testInfo.outputPath('sidebar-history-search-360-light.png') });
+      await historyPage.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await historyPage.screenshot({ path: testInfo.outputPath('sidebar-history-search-360-dark.png') });
+      await historyPage.emulateMedia({ colorScheme: 'light' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'light');
+    }
+
+    await historySearch.fill('supporting');
+    await expect(historySummary).toHaveText('1 条匹配');
+    await expect(historyItems).toHaveCount(1);
+    await expect(historyItems.first()).toContainText('Second supporting sentence');
+    await historySearch.press('ArrowDown');
+    await expect(historyItems.first()).toBeFocused();
+    await historyItems.first().press('Enter');
+    await expect(overlay.locator('.body')).toContainText('第一句重要译文');
+    await expect(counter).toHaveText('2/3');
+    await expect(counter).toBeFocused();
+
+    await historyPage.keyboard.press('Alt+/');
+    await expect(historySearch).toBeFocused();
+    await expect(historySearch).toHaveValue('supporting');
+    await overlay.getByRole('button', { name: '清空历史搜索' }).click();
+    await expect(historySummary).toHaveText('3 条历史翻译');
+    await historySearch.fill('not-in-history');
+    await expect(historySummary).toHaveText('0 条匹配');
+    await expect(overlay.locator('.history-empty')).toContainText('没有匹配的历史翻译');
+    await overlay.getByRole('button', { name: '清除搜索和标记筛选' }).click();
+    await expect(historySearch).toHaveValue('');
+    await expect(historyItems).toHaveCount(3);
+    await historySearch.press('ArrowDown');
+    await expect(historyItems.first()).toBeFocused();
+    await historyItems.first().press('ArrowDown');
+    await expect(historyItems.nth(1)).toBeFocused();
+    await historyPage.keyboard.press('Alt+/');
+    await expect(historySearch).toBeFocused();
+    await historyItems.first().click();
+    await expect(overlay.locator('.body')).toContainText('一致的技术术语与推理边界');
+    await expect(counter).toHaveText('1/3');
+    await historyPage.keyboard.press('Alt+/');
+    await expect(historySearch).toBeFocused();
+    await historyPage.keyboard.press('Escape');
+    await expect(overlay.locator('.body')).toContainText('一致的技术术语与推理边界');
+    await expect(counter).toBeFocused();
+
     await overlay.getByTitle('收起侧栏').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar-collapsed');
     await historyPage.keyboard.press('Alt+ArrowUp');
@@ -7264,6 +7333,16 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     await expect(counter).toHaveText('1/3');
     await overlay.locator('.mark-action').click();
     await expect(overlay.locator('.mark-filter')).toBeVisible();
+    await counter.click();
+    const markedHistoryFilter = overlay.getByRole('button', { name: '仅显示已标记翻译' });
+    await expect(markedHistoryFilter).toBeVisible();
+    await markedHistoryFilter.click();
+    await expect(historySummary).toHaveText('1 条匹配');
+    await expect(historyItems).toHaveCount(1);
+    await expect(historyItems.first()).toHaveAttribute('aria-current', 'true');
+    await markedHistoryFilter.click();
+    await expect(historySummary).toHaveText('3 条历史翻译');
+    await historyPage.keyboard.press('Escape');
     await overlay.getByRole('button', { name: '修正译文' }).click();
     const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
     await editor.fill('窄屏多控件组合下仍然清晰可读的用户修订译文。');
