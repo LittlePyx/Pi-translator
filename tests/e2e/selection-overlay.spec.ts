@@ -28,6 +28,7 @@ let partialRecoveryFailureGate: Promise<void> = Promise.resolve();
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
   set(values: Record<string, unknown>): Promise<void>;
+  remove(keys: string | string[]): Promise<void>;
 }
 
 interface TestChromeApi {
@@ -36,7 +37,7 @@ interface TestChromeApi {
   };
   storage: {
     local: TestChromeStorageArea;
-    session: Pick<TestChromeStorageArea, 'set'>;
+    session: Pick<TestChromeStorageArea, 'set' | 'remove'>;
   };
 }
 
@@ -264,6 +265,8 @@ async function replaceStoredApiKeys(keys: Record<string, string>): Promise<void>
       await Promise.all([
         extensionChrome.storage.session.set({ apiKeysByProfile: nextKeys }),
         extensionChrome.storage.local.set({ apiKeysByProfile: {} }),
+        extensionChrome.storage.session.remove(['apiKey', 'deepseekApiKey']),
+        extensionChrome.storage.local.remove(['apiKey', 'deepseekApiKey']),
       ]);
     }, keys);
   } finally {
@@ -726,6 +729,126 @@ test('returns to the original selection and resumes after a missing API key is c
   await options.close();
   await page.keyboard.press('Escape');
   await clearBrowserSelection();
+});
+
+test('finishes first-time setup and resumes the first interrupted translation', async () => {
+  const sourceText = 'First-time API setup should resume this interrupted translation.';
+  const recoverySource = page.locator('#recovery-source');
+  const originalSourceText = await recoverySource.textContent();
+  const worker = context.serviceWorkers()[0];
+  expect(worker).toBeDefined();
+  const originalConfiguration = await worker!.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: {
+        local: {
+          get(key: string | string[]): Promise<Record<string, unknown>>;
+          set(values: Record<string, unknown>): Promise<void>;
+        };
+        session: {
+          get(key: string | string[]): Promise<Record<string, unknown>>;
+          set(values: Record<string, unknown>): Promise<void>;
+        };
+      } };
+    }).chrome;
+    const [settings, localCredentials, sessionCredentials] = await Promise.all([
+      api.storage.local.get('extensionSettings'),
+      api.storage.local.get(['apiKeysByProfile', 'apiKey', 'deepseekApiKey']),
+      api.storage.session.get(['apiKeysByProfile', 'apiKey', 'deepseekApiKey']),
+    ]);
+    await api.storage.local.set({
+      extensionSettings: {
+        ...(settings.extensionSettings as Record<string, unknown>),
+        onboardingCompleted: false,
+      },
+    });
+    return {
+      settings: settings.extensionSettings,
+      localCredentials,
+      sessionCredentials,
+    };
+  });
+  let options: Page | undefined;
+  try {
+    await replaceStoredApiKeys({ 'vision-e2e': 'e2e-vision-key' });
+    await recoverySource.evaluate((element, text) => {
+      element.textContent = text;
+    }, sourceText);
+    const requestsBefore = textRequests.filter((request) => (
+      JSON.stringify(request).includes(sourceText)
+    )).length;
+    await selectElementText('#recovery-source');
+    const overlay = page.locator('#tex-selection-translator-root');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.error')).toContainText('API Key');
+    expect(textRequests.filter((request) => (
+      JSON.stringify(request).includes(sourceText)
+    ))).toHaveLength(requestsBefore);
+
+    const optionsPromise = context.waitForEvent('page');
+    await overlay.getByRole('button', { name: '配置 API' }).click();
+    options = await optionsPromise;
+    await options.waitForLoadState('domcontentloaded');
+    const onboarding = options.locator('#onboarding-dialog');
+    await expect(onboarding).toBeVisible();
+    await expect(options.locator('#settings-recovery-banner')).toBeVisible();
+    await expect(options.locator('#onboarding-preset')).toBeFocused();
+
+    await options.locator('#onboarding-preset').selectOption('custom');
+    await options.locator('#onboarding-next').click();
+    await expect(options.locator('#onboarding-api-key')).toBeFocused();
+    await options.locator('#onboarding-api-key').fill('e2e-first-translation-key');
+    await options.locator('#onboarding-base-url').fill(
+      'https://www.overleaf.com/pi-translator-e2e-api',
+    );
+    await options.locator('#onboarding-next').click();
+    await expect(options.locator('#onboarding-model')).toBeFocused();
+    await expect(options.locator('#onboarding-model')).toHaveValue('e2e-model');
+    await options.locator('#onboarding-next').click();
+
+    await expect(onboarding).not.toBeVisible();
+    await expect(options.locator('#settings-recovery-status'))
+      .toContainText('已返回原页面并继续翻译');
+    await expect(overlay.locator('.body')).toHaveText(
+      '一致的学术翻译能够提升研究论文的可读性。',
+    );
+    await expect.poll(() => textRequests.filter((request) => (
+      JSON.stringify(request).includes(sourceText)
+    )).length).toBe(requestsBefore + 1);
+  } finally {
+    await options?.close().catch(() => undefined);
+    await worker!.evaluate(async (snapshot) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: {
+          local: {
+            set(values: Record<string, unknown>): Promise<void>;
+            remove(keys: string[]): Promise<void>;
+          };
+          session: {
+            set(values: Record<string, unknown>): Promise<void>;
+            remove(keys: string[]): Promise<void>;
+          };
+        } };
+      }).chrome;
+      const credentialKeys = ['apiKeysByProfile', 'apiKey', 'deepseekApiKey'];
+      const definedEntries = (values: Record<string, unknown>) => Object.fromEntries(
+        Object.entries(values).filter(([, value]) => value !== undefined),
+      );
+      await Promise.all([
+        api.storage.local.set({ extensionSettings: snapshot.settings }),
+        api.storage.local.remove(credentialKeys),
+        api.storage.session.remove(credentialKeys),
+      ]);
+      await Promise.all([
+        api.storage.local.set(definedEntries(snapshot.localCredentials)),
+        api.storage.session.set(definedEntries(snapshot.sessionCredentials)),
+      ]);
+    }, originalConfiguration);
+    await page.keyboard.press('Escape').catch(() => undefined);
+    await clearBrowserSelection();
+    await recoverySource.evaluate((element, text) => {
+      element.textContent = text;
+    }, originalSourceText);
+  }
 });
 
 test('requires confirmation after partial output and does not automatically repeat the request', async () => {
@@ -7003,7 +7126,7 @@ test('skips sensitive form fields during continuous translation', async () => {
   await expect(overlay.locator('.notice')).toContainText('已跳过敏感输入区域');
 });
 
-test('keeps advanced options collapsed until requested', async () => {
+test('keeps advanced options collapsed until requested', async ({}, testInfo) => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   const onboarding = options.locator('#onboarding-dialog');
@@ -7055,6 +7178,7 @@ test('keeps advanced options collapsed until requested', async () => {
   await options.close();
 
   const reopened = await context.newPage();
+  await reopened.setViewportSize({ width: 360, height: 620 });
   await reopened.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
   await reopened.locator('[data-settings-target="support"]').click();
@@ -7064,6 +7188,7 @@ test('keeps advanced options collapsed until requested', async () => {
   await reopened.locator('#restart-onboarding').click();
   await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
   const onboardingPreset = reopened.locator('#onboarding-preset');
+  await expect(onboardingPreset).toBeFocused();
   await expect(onboardingPreset.locator('option')).toHaveCount(5);
   await expect(onboardingPreset.locator('option').first()).toHaveAttribute('value', 'deepseek');
   await expect(onboardingPreset.locator('option').last()).toHaveAttribute('value', 'custom');
@@ -7075,11 +7200,66 @@ test('keeps advanced options collapsed until requested', async () => {
     'https://api.deepseek.com',
   );
   await expect(reopened.locator('#onboarding-base-url-field')).toBeHidden();
+  const onboardingProviderLayout = await reopened.locator('#onboarding-dialog')
+    .evaluate((dialog) => {
+      const actions = dialog.querySelector<HTMLElement>('.onboarding-actions')!;
+      const next = dialog.querySelector<HTMLElement>('#onboarding-next')!;
+      const dialogRect = dialog.getBoundingClientRect();
+      return {
+        dialogLeft: dialogRect.left,
+        dialogRight: dialogRect.right,
+        pageClientWidth: document.documentElement.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        actionWidth: actions.clientWidth,
+        nextWidth: next.getBoundingClientRect().width,
+        overflowingElements: [dialog as HTMLElement, ...dialog.querySelectorAll<HTMLElement>('*')]
+          .filter((element) => !element.hidden && element.scrollWidth > element.clientWidth + 1)
+          .map((element) => ({
+            selector: element.id ? `#${element.id}` : element.className || element.tagName,
+            clientWidth: element.clientWidth,
+            scrollWidth: element.scrollWidth,
+          })),
+      };
+    });
+  expect(onboardingProviderLayout.dialogLeft).toBeGreaterThanOrEqual(0);
+  expect(onboardingProviderLayout.dialogRight)
+    .toBeLessThanOrEqual(onboardingProviderLayout.pageClientWidth + 1);
+  expect(onboardingProviderLayout.pageScrollWidth)
+    .toBeLessThanOrEqual(onboardingProviderLayout.pageClientWidth + 1);
+  expect(onboardingProviderLayout.overflowingElements).toEqual([]);
+  expect(onboardingProviderLayout.nextWidth)
+    .toBeGreaterThanOrEqual(onboardingProviderLayout.actionWidth - 1);
+  if (process.env.PI_VISUAL_QA) {
+    await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-light.png') });
+    await reopened.emulateMedia({ colorScheme: 'dark' });
+    await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-dark.png') });
+    await reopened.emulateMedia({ colorScheme: 'light' });
+  }
+  await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
+  await expect(reopened.locator('#onboarding-back')).toBeVisible();
+  if (process.env.PI_VISUAL_QA) {
+    await reopened.screenshot({ path: testInfo.outputPath('onboarding-key-360-light.png') });
+  }
+  await reopened.locator('#onboarding-back').click();
+  await expect(onboardingPreset).toBeFocused();
   await onboardingPreset.selectOption('custom');
   await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
   await expect(reopened.locator('#onboarding-base-url-field')).toBeVisible();
   await expect(reopened.locator('#onboarding-base-url')).toHaveValue('');
   await expect(reopened.locator('#onboarding-model')).toHaveValue('');
+  await reopened.locator('#onboarding-api-key').fill('e2e-onboarding-key');
+  await reopened.locator('#onboarding-base-url').fill(
+    'https://www.overleaf.com/pi-translator-e2e-api',
+  );
+  await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-model')).toBeFocused();
+  await expect(reopened.locator('#onboarding-model')).toHaveValue('e2e-model');
+  await expect(reopened.locator('#onboarding-status')).toContainText('连接成功');
+  if (process.env.PI_VISUAL_QA) {
+    await reopened.screenshot({ path: testInfo.outputPath('onboarding-model-360-light.png') });
+  }
   await reopened.close();
 });
 

@@ -25,9 +25,13 @@
   --recovery-muted: #65728a;
 }
 
+html { overflow-x: hidden; }
+
 .onboarding-dialog {
-  width: min(560px, calc(100vw - 28px));
+  width: min(560px, calc(100% - 28px));
   max-height: calc(100vh - 28px);
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 0;
   border: 0;
   border-radius: 24px;
@@ -105,6 +109,7 @@
   .onboarding-actions { grid-template-columns: 1fr 1fr; }
   .onboarding-actions > span { display: none; }
   #onboarding-skip { grid-column: 1 / -1; }
+  #onboarding-back[hidden] + #onboarding-next { grid-column: 1 / -1; }
 }
 
 @media (prefers-color-scheme: dark) {
