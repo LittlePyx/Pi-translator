@@ -4699,11 +4699,83 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await expect(segmentMark).toBeFocused();
 
     const surface = overlay.locator('.surface');
-    const scrollToSecondSegment = async (): Promise<number> => surface.evaluate((element) => {
-      const second = element.querySelectorAll<HTMLElement>('.segment')[1]!;
+    const resultScroll = overlay.locator('.result-scroll');
+    await expect(resultScroll).toHaveAttribute('role', 'region');
+    await expect(resultScroll).toHaveAttribute('aria-label', '译文内容');
+    await expect(resultScroll).toHaveAttribute('tabindex', '0');
+    const resultStructure = await surface.evaluate((element) => {
+      const header = element.querySelector<HTMLElement>(':scope > .header')!;
+      const scroll = element.querySelector<HTMLElement>(':scope > .result-scroll')!;
+      const footer = element.querySelector<HTMLElement>(':scope > .result-footer')!;
       const surfaceBounds = element.getBoundingClientRect();
+      const headerBounds = header.getBoundingClientRect();
+      const scrollBounds = scroll.getBoundingClientRect();
+      const footerBounds = footer.getBoundingClientRect();
+      return {
+        surfaceClientHeight: element.clientHeight,
+        surfaceScrollHeight: element.scrollHeight,
+        scrollClientHeight: scroll.clientHeight,
+        scrollScrollHeight: scroll.scrollHeight,
+        headerTop: headerBounds.top,
+        scrollTop: scrollBounds.top,
+        scrollBottom: scrollBounds.bottom,
+        footerTop: footerBounds.top,
+        surfaceTop: surfaceBounds.top,
+        surfaceBottom: surfaceBounds.bottom,
+      };
+    });
+    expect(resultStructure.surfaceScrollHeight).toBeLessThanOrEqual(
+      resultStructure.surfaceClientHeight + 1,
+    );
+    expect(resultStructure.scrollScrollHeight).toBeGreaterThan(resultStructure.scrollClientHeight);
+    expect(resultStructure.headerTop).toBeGreaterThanOrEqual(resultStructure.surfaceTop);
+    expect(resultStructure.scrollTop).toBeGreaterThanOrEqual(resultStructure.headerTop);
+    expect(resultStructure.footerTop).toBeGreaterThanOrEqual(resultStructure.scrollBottom - 1);
+    expect(resultStructure.surfaceBottom).toBeGreaterThanOrEqual(resultStructure.footerTop);
+    await expect(resultScroll.locator('.result-footer')).toHaveCount(0);
+    const fixedControlsBeforeScroll = await surface.evaluate((element) => {
+      const header = element.querySelector<HTMLElement>(':scope > .header')!;
+      const footer = element.querySelector<HTMLElement>(':scope > .result-footer')!;
+      return {
+        headerTop: header.getBoundingClientRect().top,
+        footerTop: footer.getBoundingClientRect().top,
+      };
+    });
+    await resultScroll.focus();
+    await expect(resultScroll).toBeFocused();
+    await resultScroll.press('PageDown');
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
+      .toBeGreaterThan(0);
+    const fixedControlsAfterScroll = await surface.evaluate((element) => {
+      const header = element.querySelector<HTMLElement>(':scope > .header')!;
+      const footer = element.querySelector<HTMLElement>(':scope > .result-footer')!;
+      return {
+        headerTop: header.getBoundingClientRect().top,
+        footerTop: footer.getBoundingClientRect().top,
+      };
+    });
+    expect(fixedControlsAfterScroll.headerTop).toBeCloseTo(fixedControlsBeforeScroll.headerTop, 0);
+    expect(fixedControlsAfterScroll.footerTop).toBeCloseTo(fixedControlsBeforeScroll.footerTop, 0);
+    await expect(surface.getByRole('button', { name: '复制译文（保留标准 LaTeX）' }))
+      .toBeVisible();
+    const bottomVisibility = await resultScroll.evaluate((element) => {
+      element.scrollTop = element.scrollHeight;
+      const lastSegment = element.querySelector<HTMLElement>('.segment:last-child')!;
+      const scrollBounds = element.getBoundingClientRect();
+      const segmentBounds = lastSegment.getBoundingClientRect();
+      return {
+        remainingScroll: element.scrollHeight - element.clientHeight - element.scrollTop,
+        scrollBottom: scrollBounds.bottom,
+        segmentBottom: segmentBounds.bottom,
+      };
+    });
+    expect(bottomVisibility.remainingScroll).toBeLessThan(0.5);
+    expect(bottomVisibility.segmentBottom).toBeLessThanOrEqual(bottomVisibility.scrollBottom + 1);
+    const scrollToSecondSegment = async (): Promise<number> => resultScroll.evaluate((element) => {
+      const second = element.querySelectorAll<HTMLElement>('.segment')[1]!;
+      const scrollBounds = element.getBoundingClientRect();
       const secondBounds = second.getBoundingClientRect();
-      element.scrollTop += secondBounds.top - surfaceBounds.top - 12;
+      element.scrollTop += secondBounds.top - scrollBounds.top - 12;
       return element.scrollTop;
     });
     const markScrollTop = await scrollToSecondSegment();
@@ -4716,7 +4788,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       name: '取消本句标记',
     });
     await expect(secondMark).toBeFocused();
-    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
       .toBeCloseTo(markScrollTop, 0);
     const formula = overlay.locator('.formula-view');
     await formula.focus();
@@ -4724,7 +4796,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await formula.press('Enter');
     await expect(formula).toHaveText('公式');
     await expect(formula).toBeFocused();
-    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
       .toBeCloseTo(formulaScrollTop, 0);
 
     const secondCorrect = overlay.locator('.segment').nth(1).getByRole('button', {
@@ -4736,14 +4808,16 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       name: /修正第 2 句/,
     });
     await expect(secondEditor).toBeVisible();
-    const editorScrollTop = await surface.evaluate((element) => element.scrollTop);
+    const editorScrollTop = await resultScroll.evaluate((element) => element.scrollTop);
     expect(editorScrollTop).toBeGreaterThan(0);
     await secondEditor.locator('.correction-text-part').first().press('Escape');
     await expect(overlay.locator('.segment').nth(1).getByRole('button', {
       name: '只修正本句，不调用 API',
     })).toBeFocused();
-    await expect.poll(() => surface.evaluate((element) => element.scrollTop))
-      .toBeCloseTo(editorScrollTop, 0);
+    await expect.poll(() => resultScroll.evaluate((element, previousScrollTop) => (
+      Math.abs(element.scrollTop - previousScrollTop) < 0.5
+      || element.scrollHeight - element.clientHeight - element.scrollTop < 0.5
+    ), editorScrollTop)).toBe(true);
 
     await scrollToSecondSegment();
     await overlay.locator('.segment').nth(1).getByRole('button', {
@@ -4802,19 +4876,19 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       await expect(saveSegment).toHaveText('重试');
       await expect(saveSegment).toBeFocused();
       const failureLayout = await savingEditor.evaluate((editor) => {
-        const surface = editor.closest<HTMLElement>('.surface')!;
+        const scroll = editor.closest<HTMLElement>('.result-scroll')!;
         const status = editor.querySelector<HTMLElement>('.segment-correction-status')!;
-        const surfaceBounds = surface.getBoundingClientRect();
+        const scrollBounds = scroll.getBoundingClientRect();
         const statusBounds = status.getBoundingClientRect();
         return {
-          surfaceBottom: surfaceBounds.bottom,
+          scrollBottom: scrollBounds.bottom,
           statusBottom: statusBounds.bottom,
           actionHeights: [...editor.querySelectorAll<HTMLElement>(
             '.segment-correction-actions button',
           )].map((button) => button.getBoundingClientRect().height),
         };
       });
-      expect(failureLayout.statusBottom).toBeLessThanOrEqual(failureLayout.surfaceBottom);
+      expect(failureLayout.statusBottom).toBeLessThanOrEqual(failureLayout.scrollBottom);
       expect(failureLayout.actionHeights.every((height) => height >= 32)).toBe(true);
       await draftInput.fill('第二句修正完成后仍保持当前阅读位置，并可继续修改。');
       await expect(failure).toBeEmpty();
@@ -4831,8 +4905,8 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       }, storedHead);
     }
     const savingOffset = await overlay.locator('.segment').nth(1).evaluate((segment) => {
-      const surface = segment.closest<HTMLElement>('.surface')!;
-      return segment.getBoundingClientRect().top - surface.getBoundingClientRect().top;
+      const scroll = segment.closest<HTMLElement>('.result-scroll')!;
+      return segment.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
     });
     await saveSegment.click();
     const correctedSecond = overlay.locator('.segment').nth(1);
@@ -4842,10 +4916,10 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       name: '只修正本句，不调用 API',
     })).toBeFocused();
     const savedPosition = await correctedSecond.evaluate((segment) => {
-      const surface = segment.closest<HTMLElement>('.surface')!;
+      const scroll = segment.closest<HTMLElement>('.result-scroll')!;
       return {
-        offset: segment.getBoundingClientRect().top - surface.getBoundingClientRect().top,
-        remainingScroll: surface.scrollHeight - surface.clientHeight - surface.scrollTop,
+        offset: segment.getBoundingClientRect().top - scroll.getBoundingClientRect().top,
+        remainingScroll: scroll.scrollHeight - scroll.clientHeight - scroll.scrollTop,
       };
     });
     expect(
@@ -4853,21 +4927,19 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       || savedPosition.remainingScroll < 0.5,
     ).toBe(true);
     const savedVisibility = await correctedSecond.evaluate((segment) => {
-      const surface = segment.closest<HTMLElement>('.surface')!;
+      const scroll = segment.closest<HTMLElement>('.result-scroll')!;
       const target = segment.querySelector<HTMLElement>('.segment-target')!;
-      const surfaceBounds = surface.getBoundingClientRect();
-      const headerBottom = surface.querySelector<HTMLElement>(':scope > .header')
-        ?.getBoundingClientRect().bottom ?? surfaceBounds.top;
+      const scrollBounds = scroll.getBoundingClientRect();
       const targetBounds = target.getBoundingClientRect();
       return {
-        contentTop: Math.max(surfaceBounds.top, headerBottom),
-        surfaceBottom: surfaceBounds.bottom,
+        contentTop: scrollBounds.top,
+        contentBottom: scrollBounds.bottom,
         targetTop: targetBounds.top,
         targetBottom: targetBounds.bottom,
       };
     });
     expect(savedVisibility.targetTop).toBeGreaterThan(savedVisibility.contentTop);
-    expect(savedVisibility.targetBottom).toBeLessThanOrEqual(savedVisibility.surfaceBottom);
+    expect(savedVisibility.targetBottom).toBeLessThanOrEqual(savedVisibility.contentBottom);
 
     const undoSegmentCorrection = overlay.getByRole('button', {
       name: '撤销上次译文修正',
@@ -4880,21 +4952,19 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       name: '只修正本句，不调用 API',
     })).toBeFocused();
     const restoredVisibility = await restoredSecond.evaluate((segment) => {
-      const surface = segment.closest<HTMLElement>('.surface')!;
+      const scroll = segment.closest<HTMLElement>('.result-scroll')!;
       const target = segment.querySelector<HTMLElement>('.segment-target')!;
-      const surfaceBounds = surface.getBoundingClientRect();
-      const headerBottom = surface.querySelector<HTMLElement>(':scope > .header')
-        ?.getBoundingClientRect().bottom ?? surfaceBounds.top;
+      const scrollBounds = scroll.getBoundingClientRect();
       const targetBounds = target.getBoundingClientRect();
       return {
-        contentTop: Math.max(surfaceBounds.top, headerBottom),
-        surfaceBottom: surfaceBounds.bottom,
+        contentTop: scrollBounds.top,
+        contentBottom: scrollBounds.bottom,
         targetTop: targetBounds.top,
         targetBottom: targetBounds.bottom,
       };
     });
     expect(restoredVisibility.targetTop).toBeGreaterThan(restoredVisibility.contentTop);
-    expect(restoredVisibility.targetBottom).toBeLessThanOrEqual(restoredVisibility.surfaceBottom);
+    expect(restoredVisibility.targetBottom).toBeLessThanOrEqual(restoredVisibility.contentBottom);
     const full = overlay.getByRole('button', { name: '显示完整译文' });
     await full.click();
     await expect(overlay.locator('.body')).toBeVisible();
