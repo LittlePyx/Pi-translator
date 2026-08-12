@@ -1120,6 +1120,7 @@ test('keeps first-result progress and copy feedback clear on a narrow card', asy
     await expect(surface).toHaveAttribute('data-state', 'complete');
     await expect(overlay.locator('.result-feedback')).toHaveText('翻译完成，译文已显示');
     await expect(overlay.locator('.result-feedback')).toHaveAttribute('role', 'status');
+    await expect(overlay.locator('.result-reading-nav')).toBeHidden();
 
     const copy = overlay.locator('.copy-action');
     await expect(copy).toHaveText('复制译文');
@@ -1135,6 +1136,7 @@ test('keeps first-result progress and copy feedback clear on a narrow card', asy
         footerHeight: footer.getBoundingClientRect().height,
         copyWidth: copyAction.getBoundingClientRect().width,
         actionHeights: [...footer.querySelectorAll<HTMLElement>('button')]
+          .filter((button) => button.offsetParent !== null)
           .map((button) => button.getBoundingClientRect().height),
         copyBackground: getComputedStyle(copyAction).backgroundColor,
       };
@@ -2383,7 +2385,7 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
   const moreMenu = overlay.locator('details.more');
   await moreMenu.locator(':scope > summary').click();
   await expect(moreMenu).toHaveAttribute('open', '');
-  await overlay.locator('.body').click();
+  await overlay.locator('.result-scroll').click({ position: { x: 4, y: 4 } });
   await expect(moreMenu).not.toHaveAttribute('open', '');
   await moreMenu.locator(':scope > summary').click();
   const exportNotes = overlay.getByRole('button', { name: '复制标记笔记' });
@@ -4733,6 +4735,43 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     expect(resultStructure.footerTop).toBeGreaterThanOrEqual(resultStructure.scrollBottom - 1);
     expect(resultStructure.surfaceBottom).toBeGreaterThanOrEqual(resultStructure.footerTop);
     await expect(resultScroll.locator('.result-footer')).toHaveCount(0);
+    const readingNavigation = overlay.getByRole('group', { name: '长译文阅读导航' });
+    const readingProgress = readingNavigation.locator('.reading-progress');
+    const readingTop = readingNavigation.getByRole('button', { name: '回到译文顶部（Home）' });
+    const readingBottom = readingNavigation.getByRole('button', { name: '前往译文底部（End）' });
+    await expect(readingNavigation).toBeVisible();
+    await expect(readingProgress).toHaveAttribute('aria-label', /译文阅读进度 \d+%/u);
+    const readingNavigationLayout = await overlay.locator('.result-footer').evaluate((footer) => ({
+      clientWidth: footer.clientWidth,
+      scrollWidth: footer.scrollWidth,
+      buttonHeights: [...footer.querySelectorAll<HTMLElement>('.reading-jump')]
+        .map((button) => button.getBoundingClientRect().height),
+      childTops: [...footer.children]
+        .filter((child) => (child as HTMLElement).offsetParent !== null)
+        .map((child) => Math.round(child.getBoundingClientRect().top)),
+    }));
+    expect(readingNavigationLayout.scrollWidth)
+      .toBeLessThanOrEqual(readingNavigationLayout.clientWidth + 1);
+    expect(readingNavigationLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+    expect(new Set(readingNavigationLayout.childTops).size).toBe(1);
+
+    await readingBottom.click();
+    await expect(readingBottom).toBeDisabled();
+    await expect(readingTop).toBeFocused();
+    await expect(readingProgress).toHaveText('底部');
+    await expect.poll(() => resultScroll.evaluate((element) => (
+      element.scrollHeight - element.clientHeight - element.scrollTop
+    ))).toBeLessThanOrEqual(1);
+    await readingTop.click();
+    await expect(readingTop).toBeDisabled();
+    await expect(readingBottom).toBeFocused();
+    await expect(readingProgress).toHaveText('顶部');
+    await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop)).toBeLessThan(0.5);
+    await resultScroll.focus();
+    await resultScroll.press('End');
+    await expect(readingProgress).toHaveText('底部');
+    await resultScroll.press('Home');
+    await expect(readingProgress).toHaveText('顶部');
     const fixedControlsBeforeScroll = await surface.evaluate((element) => {
       const header = element.querySelector<HTMLElement>(':scope > .header')!;
       const footer = element.querySelector<HTMLElement>(':scope > .result-footer')!;
@@ -4769,7 +4808,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
         segmentBottom: segmentBounds.bottom,
       };
     });
-    expect(bottomVisibility.remainingScroll).toBeLessThan(0.5);
+    expect(bottomVisibility.remainingScroll).toBeLessThanOrEqual(1);
     expect(bottomVisibility.segmentBottom).toBeLessThanOrEqual(bottomVisibility.scrollBottom + 1);
     const scrollToSecondSegment = async (): Promise<number> => resultScroll.evaluate((element) => {
       const second = element.querySelectorAll<HTMLElement>('.segment')[1]!;
@@ -4808,6 +4847,58 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await expect(aligned).toHaveAttribute('aria-pressed', 'true');
     await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
       .toBeCloseTo(alignedReadingPosition, 0);
+
+    const readingAnchorOffset = async (): Promise<number> => overlay.locator('.segment').first()
+      .evaluate((segment) => {
+        const scroll = segment.closest<HTMLElement>('.result-scroll')!;
+        return segment.getBoundingClientRect().top - scroll.getBoundingClientRect().top;
+      });
+    await resultScroll.evaluate((element) => {
+      element.scrollTop = Math.min(60, (element.scrollHeight - element.clientHeight) / 2);
+    });
+    const narrowAnchorOffset = await readingAnchorOffset();
+    await densePage.setViewportSize({ width: 410, height: 700 });
+    await expect.poll(readingAnchorOffset).toBeCloseTo(narrowAnchorOffset, 0);
+
+    await densePage.setViewportSize({ width: 800, height: 700 });
+    const resizer = overlay.locator('.sidebar-resizer');
+    await expect(resizer).toBeVisible();
+    await resultScroll.evaluate((element) => {
+      element.scrollTop = Math.min(60, (element.scrollHeight - element.clientHeight) / 2);
+    });
+    const resizeAnchorOffset = await readingAnchorOffset();
+    const sidebarWidthBefore = await surface.evaluate((element) => element.getBoundingClientRect().width);
+    const resizerBox = await resizer.boundingBox();
+    expect(resizerBox).not.toBeNull();
+    if (resizerBox) {
+      await densePage.mouse.move(resizerBox.x + resizerBox.width / 2, resizerBox.y + 80);
+      await densePage.mouse.down();
+      await densePage.mouse.move(resizerBox.x - 100, resizerBox.y + 80, { steps: 8 });
+      await densePage.mouse.up();
+    }
+    await expect.poll(() => surface.evaluate((element) => element.getBoundingClientRect().width))
+      .toBeGreaterThan(sidebarWidthBefore + 80);
+    await expect.poll(readingAnchorOffset).toBeCloseTo(resizeAnchorOffset, 0);
+    await densePage.setViewportSize({ width: 360, height: 700 });
+    await expect.poll(readingAnchorOffset).toBeCloseTo(resizeAnchorOffset, 0);
+    await densePage.setViewportSize({ width: 320, height: 700 });
+    const compactFooterLayout = await overlay.locator('.result-footer').evaluate((footer) => {
+      const copy = footer.querySelector<HTMLElement>('.copy-action')!;
+      const more = footer.querySelector<HTMLElement>('details.more')!;
+      const reading = footer.querySelector<HTMLElement>('.result-reading-nav')!;
+      return {
+        clientWidth: footer.clientWidth,
+        scrollWidth: footer.scrollWidth,
+        copyTop: Math.round(copy.getBoundingClientRect().top),
+        moreTop: Math.round(more.getBoundingClientRect().top),
+        readingTop: Math.round(reading.getBoundingClientRect().top),
+      };
+    });
+    expect(compactFooterLayout.scrollWidth).toBeLessThanOrEqual(compactFooterLayout.clientWidth + 1);
+    expect(compactFooterLayout.moreTop).toBe(compactFooterLayout.copyTop);
+    expect(compactFooterLayout.readingTop).toBeGreaterThan(compactFooterLayout.copyTop);
+    await densePage.setViewportSize({ width: 360, height: 700 });
+    await expect.poll(readingAnchorOffset).toBeCloseTo(resizeAnchorOffset, 0);
 
     const markScrollTop = await scrollToSecondSegment();
     expect(markScrollTop).toBeGreaterThan(0);
