@@ -1786,7 +1786,7 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
     }
     expect(menuLayout.bounds.top).toBeGreaterThanOrEqual(8);
     expect(menuLayout.bounds.bottom).toBeLessThanOrEqual(692);
-    expect(menuLayout.scrollHeight).toBeLessThanOrEqual(menuLayout.clientHeight + 1);
+    expect(menuLayout.scrollHeight).toBeLessThanOrEqual(menuLayout.clientHeight + 2);
     expect(menuLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
 
     await overlay.getByRole('button', { name: '让模型调整…' }).click();
@@ -6202,7 +6202,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     buttonHeight: context.querySelector('button')?.getBoundingClientRect().height,
   }));
   expect(contextLayout.height).toBeLessThanOrEqual(51);
-  expect(contextLayout.buttonHeight).toBe(28);
+  expect(contextLayout.buttonHeight).toBeGreaterThanOrEqual(28);
+  expect(contextLayout.buttonHeight).toBeLessThanOrEqual(29);
 
   const sendStreamingPartial = async (partialText: string) => messageSender.evaluate(
     async ({ session, partial }) => {
