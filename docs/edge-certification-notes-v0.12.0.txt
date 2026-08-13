@@ -1,0 +1,23 @@
+Pi Translator has no publisher-operated account, login, subscription, or backend. It is a bring-your-own-API-key client. To make all core features testable, the following temporary review-only credentials will remain active during certification.
+
+TEXT TRANSLATION
+Base URL: [TEXT API BASE URL]
+Model: [TEXT MODEL]
+API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+
+OPTIONAL PDF IMAGE/OCR
+Base URL: [VISION API BASE URL]
+Model: [VISION MODEL]
+API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+
+Expiration: [DATE AFTER REVIEW WINDOW]
+
+Test steps:
+1. Install the extension; its settings page opens automatically.
+2. Configure the text provider, paste the text Key, connect, and save.
+3. Open any public HTTPS article, select an English sentence, and choose “使用 Pi Translator 翻译选中文本” from the context menu. Verify streamed translation, copy, correction, version summary, applied terms, and the pinned sidebar.
+4. Open translation history and verify that source text, translation, website, and language can be searched locally.
+5. Optional PDF test: configure the vision provider, open “PDF 阅读器”, choose a local PDF, and translate selectable text or a user-confirmed image region.
+6. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result streams in Edge’s side panel.
+
+No Microsoft, Overleaf, or Pi Translator account is needed. API requests go directly to the selected provider. Keys are entered only in extension settings, are not bundled in the ZIP, and are not exposed to webpages. History search, version summaries, applied-term display, and review summaries are computed locally. The extension executes no remote code.
