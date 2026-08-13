@@ -82,6 +82,9 @@ describe('document translation memory', () => {
       appliedGlossaryTerms: [
         { source: 'attention', target: '注意力', scope: 'document' },
       ],
+      glossaryTermsNeedingReview: [
+        { source: 'layer', target: '层', scope: 'global' },
+      ],
     });
 
     expect(memory.recentTranslations[0]?.appliedGlossaryTerms).toEqual([
@@ -91,6 +94,9 @@ describe('document translation memory', () => {
       .toMatchObject({
         appliedGlossaryTerms: [
           { source: 'attention', target: '注意力', scope: 'document' },
+        ],
+        glossaryTermsNeedingReview: [
+          { source: 'layer', target: '层', scope: 'global' },
         ],
       });
   });

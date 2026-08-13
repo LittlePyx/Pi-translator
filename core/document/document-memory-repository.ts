@@ -2,6 +2,7 @@ import type {
   AppliedGlossaryTerm,
   GlossaryEntry,
   PdfSourceLocation,
+  ScopedGlossaryTerm,
   TranslateResult,
   TranslationCorrectionTermReceipt,
   TranslationStyle,
@@ -59,6 +60,7 @@ export interface DocumentMemoryTranslation {
   sourceKind?: TranslateResult['sourceKind'];
   sourceLocation?: PdfSourceLocation;
   appliedGlossaryTerms?: AppliedGlossaryTerm[];
+  glossaryTermsNeedingReview?: ScopedGlossaryTerm[];
   review?: DocumentTranslationReview;
 }
 
@@ -485,6 +487,9 @@ function withRememberedDocumentTranslationChange(
     ...(result.appliedGlossaryTerms?.length
       ? { appliedGlossaryTerms: result.appliedGlossaryTerms.map((term) => ({ ...term })) }
       : {}),
+    ...(result.glossaryTermsNeedingReview?.length
+      ? { glossaryTermsNeedingReview: result.glossaryTermsNeedingReview.map((term) => ({ ...term })) }
+      : {}),
   };
   const previous = memory.recentTranslations.find((candidate) => (
     sameTranslationSubject(candidate, baseEntry)
@@ -597,6 +602,9 @@ export function documentMemoryTranslationResult(
     ...(entry.sourceLocation ? { sourceLocation: entry.sourceLocation } : {}),
     ...(entry.appliedGlossaryTerms?.length
       ? { appliedGlossaryTerms: entry.appliedGlossaryTerms.map((term) => ({ ...term })) }
+      : {}),
+    ...(entry.glossaryTermsNeedingReview?.length
+      ? { glossaryTermsNeedingReview: entry.glossaryTermsNeedingReview.map((term) => ({ ...term })) }
       : {}),
     ...(entry.review?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
     ...(uncertainSpans.length

@@ -40,7 +40,7 @@ function expectCommitBarrierBeforeCompletedProgress(
     const barrierIndex = barrierIndexes[index]!;
     const sectionEnd = barrierIndexes[index + 1] ?? source.length;
     const section = source.slice(barrierIndex, sectionEnd);
-    const completedProgressOffset = section.search(/(?:result: cached|\bresult),/);
+    const completedProgressOffset = section.search(/(?:result: evidencedCached|\bresult),/);
     const finishedOffset = section.indexOf('await finalization.finished;');
 
     expect(completedProgressOffset).toBeGreaterThan(0);

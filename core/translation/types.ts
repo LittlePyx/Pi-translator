@@ -6,9 +6,11 @@ export interface GlossaryEntry {
   target: string;
 }
 
-export interface AppliedGlossaryTerm extends GlossaryEntry {
+export interface ScopedGlossaryTerm extends GlossaryEntry {
   scope: 'document' | 'global';
 }
+
+export type AppliedGlossaryTerm = ScopedGlossaryTerm;
 
 export interface PdfSourceLocation {
   documentId: string;
@@ -172,6 +174,8 @@ export interface TranslateResult {
   termCandidates?: GlossaryEntry[];
   /** Glossary mappings verified in both the source and the completed translation. */
   appliedGlossaryTerms?: AppliedGlossaryTerm[];
+  /** Source-matched glossary mappings whose configured target is absent from the result. */
+  glossaryTermsNeedingReview?: ScopedGlossaryTerm[];
   revision?: TranslationRevision;
 }
 

@@ -80,7 +80,7 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
-import { findAppliedGlossaryTerms } from '../core/translation/applied-glossary';
+import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
   MAX_GLOSSARY_ENTRIES,
   normalizeGlossaryTermKey,
@@ -160,8 +160,8 @@ import {
   storePdfSidePanelSession,
 } from '../core/pdf/sidepanel-session';
 import type {
-  AppliedGlossaryTerm,
   GlossaryEntry,
+  ScopedGlossaryTerm,
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
@@ -180,6 +180,23 @@ const GENERAL_CONTENT_SCRIPT_ID = 'pi-translator-general-pages';
 const GENERAL_CONTENT_SCRIPT_FILE = '/content-scripts/general.js';
 const PDF_SIDE_PANEL_PATH = 'sidepanel.html';
 const PI_PDF_READER_URL = browser.runtime.getURL('/pdf.html');
+
+function withGlossaryTermEvidence(
+  result: TranslateResult,
+  glossary: ScopedGlossaryTerm[],
+): TranslateResult {
+  const evidence = findGlossaryTermEvidence(
+    result.originalText,
+    result.translatedText,
+    glossary,
+  );
+  const evidenced = { ...result };
+  if (evidence.applied.length) evidenced.appliedGlossaryTerms = evidence.applied;
+  else delete evidenced.appliedGlossaryTerms;
+  if (evidence.needsReview.length) evidenced.glossaryTermsNeedingReview = evidence.needsReview;
+  else delete evidenced.glossaryTermsNeedingReview;
+  return evidenced;
+}
 const LEGACY_FAVORITES_KEY = 'translationFavorites';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
@@ -1351,11 +1368,12 @@ async function translate(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        const evidencedCached = withGlossaryTermEvidence(cached, scopedGlossary);
         performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
         queueProgress({
           requestId: request.requestId,
-          completedChunks: cached.chunkCount ?? 1,
-          totalChunks: cached.chunkCount ?? 1,
+          completedChunks: evidencedCached.chunkCount ?? 1,
+          totalChunks: evidencedCached.chunkCount ?? 1,
           progressStage: 'committing',
         });
         await progressDeliveryTail;
@@ -1365,7 +1383,7 @@ async function translate(
           (operation) => runTranslationCommit(tabId, operation),
           async () => {
             assertActiveRequest(tabId, request.requestId, controller);
-            await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+            await commitTranslationResultState(tabId, evidencedCached, assertCurrentRequest);
             performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
           },
           async () => {
@@ -1373,11 +1391,11 @@ async function translate(
             const history = await settleTranslationFinalization(
               'translate-finalization',
               settings.rememberRecentTranslations
-                ? addTranslationHistory(tabId, cached, settings.historyLimit)
+                ? addTranslationHistory(tabId, evidencedCached, settings.historyLimit)
                 : Promise.resolve([]),
               [
                 clearTranslationCheckpoint(tabId, cacheKey),
-                rememberDocumentTranslation(identity, cached),
+                rememberDocumentTranslation(identity, evidencedCached),
               ],
             );
             performanceTimings.maintenanceMs = Math.max(
@@ -1390,14 +1408,14 @@ async function translate(
         await finalization.committed;
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
-          partialText: cached.translatedText,
-          completedChunks: cached.chunkCount ?? 1,
-          totalChunks: cached.chunkCount ?? 1,
-          result: cached,
+          partialText: evidencedCached.translatedText,
+          completedChunks: evidencedCached.chunkCount ?? 1,
+          totalChunks: evidencedCached.chunkCount ?? 1,
+          result: evidencedCached,
         }, progressTarget);
         const history = await finalization.finished;
         assertActiveRequest(tabId, request.requestId, controller);
-        return { ok: true, data: { result: cached, history } };
+        return { ok: true, data: { result: evidencedCached, history } };
       }
     }
 
@@ -1644,8 +1662,7 @@ async function translate(
     performanceTimings.latexValidationMs = latexValidationMs;
     const sourceHost = sourceHostForRequest(request);
     const translatedText = translatedChunks.join('\n\n');
-    const appliedGlossaryTerms = findAppliedGlossaryTerms(text, translatedText, scopedGlossary);
-    const result: TranslateResult = {
+    const result = withGlossaryTermEvidence({
       requestId: request.requestId,
       documentId: identity.documentId,
       originalText: text,
@@ -1665,7 +1682,6 @@ async function translate(
       latencyMs: Math.round(performance.now() - startedAt),
       contextUsed: Boolean(contextText),
       chunkCount: chunks.length,
-      ...(appliedGlossaryTerms.length ? { appliedGlossaryTerms } : {}),
       ...(termCandidates.length
         ? {
             termCandidates: [...new Map(
@@ -1690,7 +1706,7 @@ async function translate(
             },
           }
         : {}),
-    };
+    }, scopedGlossary);
     assertActiveRequest(tabId, request.requestId, controller);
     queueProgress({
       requestId: request.requestId,
@@ -1928,13 +1944,13 @@ interface TranslationResultCommitOptions {
 }
 
 function effectiveGlossaryForTranslationMutation(
-  glossary: AppliedGlossaryTerm[],
+  glossary: ScopedGlossaryTerm[],
   termScope: TranslationTermScope | undefined,
   correctionTerm: GlossaryEntry | undefined,
   undo: TranslationCorrectionTermReceipt | DocumentTermChangeReceipt | undefined,
-): AppliedGlossaryTerm[] {
+): ScopedGlossaryTerm[] {
   let source: string | undefined;
-  let replacement: AppliedGlossaryTerm | undefined;
+  let replacement: ScopedGlossaryTerm | undefined;
   if (termScope && correctionTerm) {
     source = correctionTerm.source;
     replacement = { ...correctionTerm, scope: termScope };
@@ -2054,13 +2070,15 @@ async function updateTranslationResultCommitted(
       correctionTerm,
       options?.glossaryUndo,
     );
-    const appliedGlossaryTerms = findAppliedGlossaryTerms(
-      originalText,
-      translatedText,
-      effectiveGlossary,
-    );
-    if (appliedGlossaryTerms.length) result.appliedGlossaryTerms = appliedGlossaryTerms;
-    else delete result.appliedGlossaryTerms;
+    const evidencedResult = withGlossaryTermEvidence(result, effectiveGlossary);
+    delete result.appliedGlossaryTerms;
+    delete result.glossaryTermsNeedingReview;
+    if (evidencedResult.appliedGlossaryTerms?.length) {
+      result.appliedGlossaryTerms = evidencedResult.appliedGlossaryTerms;
+    }
+    if (evidencedResult.glossaryTermsNeedingReview?.length) {
+      result.glossaryTermsNeedingReview = evidencedResult.glossaryTermsNeedingReview;
+    }
     let termChange: TranslationCorrectionTermReceipt | undefined;
     let documentTermChange: DocumentTermChangeReceipt | undefined;
     let termRollbackSkipped = false;
@@ -2780,6 +2798,7 @@ async function translateImageRegion(
       );
       assertActiveRequest(tabId, request.requestId, controller);
       if (cached) {
+        const evidencedCached = withGlossaryTermEvidence(cached, scopedGlossary);
         performanceTimings.preflightMs = Math.max(0, performance.now() - performanceStartedAt);
         queueProgress({
           requestId: request.requestId,
@@ -2794,7 +2813,7 @@ async function translateImageRegion(
           (operation) => runTranslationCommit(tabId, operation),
           async () => {
             assertActiveRequest(tabId, request.requestId, controller);
-            await commitTranslationResultState(tabId, cached, assertCurrentRequest);
+            await commitTranslationResultState(tabId, evidencedCached, assertCurrentRequest);
             performanceTimings.commitMs = Math.max(0, performance.now() - commitStartedAt);
           },
           async () => {
@@ -2802,9 +2821,9 @@ async function translateImageRegion(
             const history = await settleTranslationFinalization(
               'translate-image-region-finalization',
               settings.rememberRecentTranslations
-                ? addTranslationHistory(tabId, cached, settings.historyLimit)
+                ? addTranslationHistory(tabId, evidencedCached, settings.historyLimit)
                 : Promise.resolve([]),
-              [rememberDocumentTranslation(identity, cached)],
+              [rememberDocumentTranslation(identity, evidencedCached)],
             );
             performanceTimings.maintenanceMs = Math.max(
               0,
@@ -2816,14 +2835,14 @@ async function translateImageRegion(
         await finalization.committed;
         await publishTranslationProgress(tabId, {
           requestId: request.requestId,
-          partialText: cached.translatedText,
+          partialText: evidencedCached.translatedText,
           completedChunks: 1,
           totalChunks: 1,
-          result: cached,
+          result: evidencedCached,
         }, progressTarget);
         const history = await finalization.finished;
         assertActiveRequest(tabId, request.requestId, controller);
-        return { ok: true, data: { result: cached, history } };
+        return { ok: true, data: { result: evidencedCached, history } };
       }
     }
     const apiKey = await getApiKey(profile.id);
@@ -2895,11 +2914,6 @@ async function translateImageRegion(
       }
     })();
     assertActiveRequest(tabId, request.requestId, controller);
-    const appliedGlossaryTerms = findAppliedGlossaryTerms(
-      providerResult.recognizedText,
-      providerResult.translatedText,
-      scopedGlossary,
-    );
     const maintainVisionProfile = (): Promise<void> => autoSelectedVisionProfile
       ? mutateSettings((latestSettings) => {
           const profileStillAvailable = latestSettings.apiProfiles.some(
@@ -2918,7 +2932,7 @@ async function translateImageRegion(
           return { nextSettings: null, value: undefined };
         }).then(() => undefined)
       : Promise.resolve();
-    const result: TranslateResult = {
+    const result = withGlossaryTermEvidence({
       requestId: request.requestId,
       documentId: identity.documentId,
       originalText: providerResult.recognizedText,
@@ -2948,7 +2962,6 @@ async function translateImageRegion(
       latencyMs: Math.round(performance.now() - startedAt),
       contextUsed: false,
       chunkCount: 1,
-      ...(appliedGlossaryTerms.length ? { appliedGlossaryTerms } : {}),
       ...(request.revision
         ? {
             revision: {
@@ -2959,7 +2972,7 @@ async function translateImageRegion(
             },
           }
         : {}),
-    };
+    }, scopedGlossary);
     queueProgress({
       requestId: request.requestId,
       completedChunks: 1,

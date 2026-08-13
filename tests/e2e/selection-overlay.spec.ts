@@ -361,6 +361,7 @@ test.beforeAll(async () => {
     const isMultiSentenceSelection = serializedBody.includes('First important sentence');
     const isDenseMetadataSelection = serializedBody.includes('Dense metadata');
     const isGlobalTermSelection = serializedBody.includes('benefits every reader');
+    const isGlossaryReviewSelection = serializedBody.includes('should remain stable');
     const isDocumentTermSelection = serializedBody.includes('The adaptive sensing policy') ||
       serializedBody.includes('This adaptive sensing method');
     const isPdfOptimizerFallback = serializedBody.includes('Optimizer fallback fixture');
@@ -447,6 +448,11 @@ test.beforeAll(async () => {
               }],
             } : isGlobalTermSelection ? {
               translation: '一致的学术翻译能够提升研究论文的可读性。',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
+            } : isGlossaryReviewSelection ? {
+              translation: '这种技术表达应保持稳定。',
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
@@ -543,6 +549,7 @@ test.beforeAll(async () => {
           <body style="font: 18px sans-serif; padding: 80px">
             <p id="source">A consistent academic translation improves the readability of research papers.</p>
             <p id="global-term-source">A consistent academic translation benefits every reader.</p>
+            <p id="term-review-source">A technical term should remain stable.</p>
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
@@ -1677,7 +1684,7 @@ test('keeps narrow translation correction fields and actions visible', async ({}
     await expect(overlay.locator('.revision-status')).toHaveAttribute('role', 'alert');
     await expect(editor).toHaveAttribute(
       'aria-describedby',
-      'pi-translation-correction-status',
+      /pi-translation-correction-note.*pi-translation-correction-status/,
     );
     await expect(editor).toBeFocused();
     await editor.fill('窄屏下需要保持清晰、完整并且可以直接保存的学术译文。');
@@ -7707,6 +7714,108 @@ test('shows verified global terminology and opens its exact settings area', asyn
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   } finally {
     await options?.close();
+    await worker.evaluate(async (glossary) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: TestChromeStorageArea } };
+      }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      await api.storage.local.set({
+        extensionSettings: { ...(stored.extensionSettings ?? {}), academicGlossary: glossary },
+      });
+    }, originalGlossary);
+    await page.emulateMedia({ colorScheme: 'light' });
+    await page.setViewportSize(originalViewport);
+    await clearBrowserSelection();
+  }
+});
+
+test('keeps missing configured terminology as a quiet local review', async ({}, testInfo) => {
+  const worker = context.serviceWorkers()[0]!;
+  const originalGlossary = await worker.evaluate(async () => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: TestChromeStorageArea } };
+    }).chrome;
+    const stored = await api.storage.local.get('extensionSettings');
+    const settings = stored.extensionSettings ?? {};
+    const glossary = Array.isArray(settings.academicGlossary)
+      ? settings.academicGlossary as Array<{ source: string; target: string }>
+      : [];
+    await api.storage.local.set({
+      extensionSettings: {
+        ...settings,
+        academicGlossary: [
+          { source: 'technical term', target: '固定技术译法' },
+          ...glossary.filter((term) => term.source !== 'technical term'),
+        ],
+      },
+    });
+    return glossary;
+  });
+  const originalViewport = page.viewportSize() ?? { width: 1280, height: 720 };
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await page.setViewportSize({ width: 360, height: 700 });
+    await clearBrowserSelection();
+    const close = overlay.getByTitle('关闭');
+    if (await close.isVisible().catch(() => false)) await close.click();
+    const requestsBeforeTranslation = textRequests.length;
+    await selectElementText('#term-review-source');
+    await expect.poll(async () => ['trigger', 'card', 'sidebar'].includes(
+      await overlay.getAttribute('data-pi-view') ?? '',
+    )).toBe(true);
+    if (await overlay.getAttribute('data-pi-view') === 'trigger') {
+      await overlay.locator('.trigger').click();
+    }
+    if (await overlay.getAttribute('data-pi-view') !== 'sidebar') {
+      await overlay.getByTitle('固定到连续翻译侧栏').click();
+    }
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeTranslation);
+    await expect(overlay.locator('.body')).toContainText('这种技术表达应保持稳定');
+    const review = overlay.locator('details.glossary-review');
+    await expect(review.locator(':scope > summary')).toContainText('术语待核对 1');
+    await expect(review.locator(':scope > summary')).toContainText('全局 1');
+    await expect(review).not.toHaveAttribute('open', '');
+    await review.locator(':scope > summary').click();
+    await expect(review.locator('.glossary-review-intro')).toContainText('同义表达也可能触发');
+    const row = review.locator('.glossary-review-row');
+    await expect(row).toContainText('technical term');
+    await expect(row).toContainText('固定技术译法');
+    const layout = await review.evaluate((element) => {
+      const buttons = [...element.querySelectorAll<HTMLElement>('.applied-term-edit')];
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
+      };
+    });
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+    expect(layout.buttonHeights.every((height) => height >= 32)).toBe(true);
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('glossary-review-360-light.png') });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('glossary-review-360-dark.png') });
+      await page.emulateMedia({ colorScheme: 'light' });
+    }
+
+    const requestsBeforeCorrection = textRequests.length;
+    await row.getByTitle('本地修正术语 technical term').click();
+    const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
+    await expect(editor).toBeFocused();
+    await expect(overlay.locator('.revision-note')).toContainText(
+      '请核对“technical term”的译法，并在需要时调整为“固定技术译法”',
+    );
+    await expect.poll(() => textRequests.length).toBe(requestsBeforeCorrection);
+    await editor.fill('固定技术译法应保持稳定。');
+    await overlay.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(overlay.locator('details.glossary-review')).toHaveCount(0);
+    await expect(overlay.locator('details.applied-terms > summary')).toContainText('已采用术语 1');
+    expect(textRequests).toHaveLength(requestsBeforeCorrection);
+    await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
+    await expect(overlay.locator('details.glossary-review > summary')).toContainText('术语待核对 1');
+    expect(textRequests).toHaveLength(requestsBeforeCorrection);
+  } finally {
     await worker.evaluate(async (glossary) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { local: TestChromeStorageArea } };

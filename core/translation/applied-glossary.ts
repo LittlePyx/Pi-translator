@@ -1,6 +1,11 @@
-import type { AppliedGlossaryTerm } from './types';
+import type { AppliedGlossaryTerm, ScopedGlossaryTerm } from './types';
 
 const MAX_APPLIED_GLOSSARY_TERMS = 8;
+
+export interface GlossaryTermEvidence {
+  applied: AppliedGlossaryTerm[];
+  needsReview: ScopedGlossaryTerm[];
+}
 
 function normalizedText(value: string): string {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/gu, ' ').trim();
@@ -39,20 +44,36 @@ export function findAppliedGlossaryTerms(
   glossary: AppliedGlossaryTerm[],
   maximum = MAX_APPLIED_GLOSSARY_TERMS,
 ): AppliedGlossaryTerm[] {
-  if (maximum <= 0) return [];
+  return findGlossaryTermEvidence(
+    originalText,
+    translatedText,
+    glossary,
+    maximum,
+  ).applied;
+}
+
+export function findGlossaryTermEvidence(
+  originalText: string,
+  translatedText: string,
+  glossary: ScopedGlossaryTerm[],
+  maximum = MAX_APPLIED_GLOSSARY_TERMS,
+): GlossaryTermEvidence {
+  const evidence: GlossaryTermEvidence = { applied: [], needsReview: [] };
+  if (maximum <= 0) return evidence;
   const seenSources = new Set<string>();
-  const applied: AppliedGlossaryTerm[] = [];
   for (const term of glossary) {
     const sourceKey = normalizedText(term.source);
     if (
       !sourceKey ||
       seenSources.has(sourceKey) ||
-      !containsTerm(originalText, term.source) ||
-      !containsTerm(translatedText, term.target)
+      !containsTerm(originalText, term.source)
     ) continue;
     seenSources.add(sourceKey);
-    applied.push({ source: term.source.trim(), target: term.target.trim(), scope: term.scope });
-    if (applied.length >= maximum) break;
+    const matched = { source: term.source.trim(), target: term.target.trim(), scope: term.scope };
+    if (containsTerm(translatedText, term.target)) {
+      if (evidence.applied.length < maximum) evidence.applied.push(matched);
+    } else if (evidence.needsReview.length < maximum) evidence.needsReview.push(matched);
+    if (evidence.applied.length >= maximum && evidence.needsReview.length >= maximum) break;
   }
-  return applied;
+  return evidence;
 }
