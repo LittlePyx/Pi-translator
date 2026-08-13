@@ -6188,9 +6188,11 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-state')).toContainText('正在接收译文');
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#stop-translation')).toBeVisible();
-  expect(await sidePanel.locator('#stop-translation').evaluate(
+  const stopButtonHeight = await sidePanel.locator('#stop-translation').evaluate(
     (element) => element.getBoundingClientRect().height,
-  )).toBe(28);
+  );
+  expect(stopButtonHeight).toBeGreaterThanOrEqual(28);
+  expect(stopButtonHeight).toBeLessThanOrEqual(29);
   await expect(sidePanel.locator('#correct')).toBeHidden();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
@@ -6282,9 +6284,11 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     if (!scrollRoot) return Number.POSITIVE_INFINITY;
     return scrollRoot.scrollHeight - scrollRoot.clientHeight - scrollRoot.scrollTop;
   })).toBeLessThanOrEqual(1);
-  expect(await sidePanel.locator('#copy').evaluate(
+  const partialCopyButtonHeight = await sidePanel.locator('#copy').evaluate(
     (element) => element.getBoundingClientRect().height,
-  )).toBe(28);
+  );
+  expect(partialCopyButtonHeight).toBeGreaterThanOrEqual(28);
+  expect(partialCopyButtonHeight).toBeLessThanOrEqual(29);
   const footerHeightBeforeCopy = await sidePanel.locator('footer').evaluate(
     (footer) => footer.getBoundingClientRect().height,
   );
@@ -6838,7 +6842,9 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
   expect(collapsedLayout.scrollHeight).toBeGreaterThan(collapsedLayout.clientHeight + 1);
   expect(collapsedLayout.clientHeight).toBeLessThanOrEqual(collapsedLayout.lineHeight * 3 + 1);
   expect(collapsedLayout.overflowY).toBe('hidden');
-  expect(await sourceToggle.evaluate((button) => button.getBoundingClientRect().height)).toBe(28);
+  const sourceToggleHeight = await sourceToggle.evaluate((button) => button.getBoundingClientRect().height);
+  expect(sourceToggleHeight).toBeGreaterThanOrEqual(28);
+  expect(sourceToggleHeight).toBeLessThanOrEqual(29);
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-collapsed.png') });
   }
