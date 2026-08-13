@@ -11,6 +11,14 @@ export function formatTranslationDuration(latencyMs: number | undefined): string
     : `${(roundedMs / 1_000).toFixed(1)} 秒`;
 }
 
+export function formatTranslationClockTime(timestamp: number): string {
+  return new Intl.DateTimeFormat('zh-CN', {
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).format(timestamp);
+}
+
 export function translationCompletionStatus(timing: TranslationCompletionTiming): string {
   if (timing.cached) return '会话缓存';
   return formatTranslationDuration(timing.latencyMs) ?? '已完成';

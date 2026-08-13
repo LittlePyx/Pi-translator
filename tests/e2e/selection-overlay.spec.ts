@@ -7799,6 +7799,47 @@ test('keeps missing configured terminology as a quiet local review', async ({}, 
       await page.emulateMedia({ colorScheme: 'light' });
     }
 
+    const documentButton = overlay.locator('.document-memory-action');
+    await expect(documentButton).toHaveText('本文 · 待核对 1');
+    await expect(documentButton).toHaveAttribute('title', '有 1 个术语待核对');
+    await documentButton.click();
+    const documentReview = overlay.locator('.document-term-review-section');
+    await expect(documentReview.locator('.document-section-head')).toContainText('术语待核对1');
+    await expect(documentReview.locator('.document-term-review-intro'))
+      .toContainText('同义表达也可能触发');
+    const documentReviewRow = documentReview.locator('.document-term-review-row');
+    await expect(documentReviewRow).toContainText('technical term');
+    await expect(documentReviewRow).toContainText('固定技术译法');
+    await expect(documentReviewRow).toContainText('全局');
+    const documentLayout = await documentReviewRow.evaluate((element) => {
+      const pairs = element.querySelector<HTMLElement>('.document-term-review-pairs');
+      const button = element.querySelector<HTMLElement>('.document-review-actions button');
+      return {
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+        pairsClientWidth: pairs?.clientWidth ?? 0,
+        pairsScrollWidth: pairs?.scrollWidth ?? 0,
+        buttonHeight: button?.getBoundingClientRect().height ?? 0,
+      };
+    });
+    expect(documentLayout.scrollWidth).toBeLessThanOrEqual(documentLayout.clientWidth + 1);
+    expect(documentLayout.pairsScrollWidth)
+      .toBeLessThanOrEqual(documentLayout.pairsClientWidth + 1);
+    expect(documentLayout.buttonHeight).toBeGreaterThanOrEqual(32);
+    if (process.env.PI_VISUAL_QA) {
+      await page.screenshot({ path: testInfo.outputPath('document-term-review-360-light.png') });
+      await page.emulateMedia({ colorScheme: 'dark' });
+      await expect(overlay).toHaveAttribute('data-pi-theme', 'dark');
+      await page.screenshot({ path: testInfo.outputPath('document-term-review-360-dark.png') });
+      await page.emulateMedia({ colorScheme: 'light' });
+    }
+    await documentReviewRow.getByRole('button', {
+      name: '打开含 1 个待核对术语的译文',
+    }).click();
+    await expect(overlay.locator('.body')).toContainText('这种技术表达应保持稳定');
+    await expect(review.locator(':scope > summary')).toContainText('术语待核对 1');
+    await review.locator(':scope > summary').click();
+
     const requestsBeforeCorrection = textRequests.length;
     await row.getByTitle('本地修正术语 technical term').click();
     const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });

@@ -1,10 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import {
+  formatTranslationClockTime,
   formatTranslationDuration,
   translationCompletionStatus,
 } from '../ui/translation-timing';
 
 describe('translation timing presentation', () => {
+  it('uses a stable 24-hour clock in the Chinese interface', () => {
+    expect(formatTranslationClockTime(new Date(2026, 7, 13, 14, 5).getTime())).toBe('14:05');
+  });
+
   it('uses milliseconds for sub-second translations', () => {
     expect(formatTranslationDuration(1)).toBe('1 毫秒');
     expect(formatTranslationDuration(850)).toBe('850 毫秒');

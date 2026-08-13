@@ -187,6 +187,9 @@ describe('document translation memory', () => {
       translatedText: '该估计器是稳定的。',
       warnings: [],
       completedAt: 10,
+      glossaryTermsNeedingReview: [
+        { source: 'estimator', target: '估计器', scope: 'global' },
+      ],
     });
     const memory = await rememberDocumentTranslation(identity, {
       requestId: 'revision-request',
@@ -194,6 +197,9 @@ describe('document translation memory', () => {
       translatedText: '该估计器在扰动下保持稳定。',
       warnings: [],
       completedAt: 20,
+      appliedGlossaryTerms: [
+        { source: 'estimator', target: '估计器', scope: 'global' },
+      ],
       revision: {
         rootRequestId: 'draft-request',
         kind: 'manual',
@@ -206,7 +212,11 @@ describe('document translation memory', () => {
     expect(memory.recentTranslations[0]).toMatchObject({
       requestId: 'revision-request',
       translatedText: '该估计器在扰动下保持稳定。',
+      appliedGlossaryTerms: [
+        { source: 'estimator', target: '估计器', scope: 'global' },
+      ],
     });
+    expect(memory.recentTranslations[0]?.glossaryTermsNeedingReview).toBeUndefined();
     expect(buildDocumentReferenceContext(
       'This estimator remains stable.',
       undefined,
