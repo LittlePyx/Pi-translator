@@ -8244,11 +8244,11 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(readingTop).toBeFocused();
     const requestsBeforeCleanupSelection = textRequests.length;
     await selectElementText('#source');
-    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeCleanupSelection);
     await expect(sidePanel.locator('#source-text')).toContainText(
       'A consistent academic translation',
     );
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    expect(textRequests.length - requestsBeforeCleanupSelection).toBeLessThanOrEqual(1);
     await sidePanel.setViewportSize({ width: 390, height: 760 });
 
     await sidePanel.locator('#open-pi-reader').click();
