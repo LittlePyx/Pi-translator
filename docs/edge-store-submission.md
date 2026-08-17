@@ -1,12 +1,18 @@
 # Pi Translator：Microsoft Edge Add-ons 提交材料
 
-> 适用版本：0.11.0
->
-> 更新日期：2026-08-10
+> 适用版本：`package.json` 中准备发布的当前版本。本文不写死版本号；上传前按下面的命令解析并核对文件。
 
 ## 1. 上传文件
 
-- 扩展包：`.output/tex-selection-translator-0.11.0-edge.zip`
+```powershell
+$releaseVersion = (Get-Content package.json | ConvertFrom-Json).version
+$packagePath = ".output/tex-selection-translator-$releaseVersion-edge.zip"
+$certificationNotesPath = "docs/edge-certification-notes-v$releaseVersion.txt"
+@($packagePath, $certificationNotesPath) | ForEach-Object { "$_ : $(Test-Path -LiteralPath $_)" }
+```
+
+- 扩展包：上述 `$packagePath`
+- 审核说明：上述 `$certificationNotesPath`
 - 商店 Logo：`store-assets/logo-300.png`
 - 小型宣传图：`store-assets/small-promo-440x280.png`
 - 大型宣传图：`store-assets/large-promo-1400x560.png`
@@ -84,7 +90,7 @@ All executable JavaScript, PDF.js, KaTeX, workers, and other required resources 
 3. 不要把 Key 写进源码、文档、截图、GitHub、ZIP 或商店描述。
 4. 保证接口至少在预计审核期内可用；审核完成后立即撤销。
 
-可直接使用 `docs/edge-certification-notes-v0.11.0.txt` 中不超过 2,000 字符的英文审核说明，并只在 Partner Center 内替换 API Key、模型和到期日期占位符。不要把填写过真实 Key 的副本保存到项目目录。
+可直接使用当前版本对应的 `$certificationNotesPath` 中不超过 2,000 字符的英文审核说明，并只在 Partner Center 内替换 API Key、模型和到期日期占位符。不要把填写过真实 Key 的副本保存到项目目录。
 
 下面保留较完整的说明版本，供需要补充审核信息时参考：
 
@@ -113,8 +119,9 @@ Test steps:
 5. Verify that the result streams into a translation card, can be copied, and can be switched between full translation and sentence alignment.
 6. Click “固定侧栏”, select another sentence, and verify that the pinned sidebar translates the new selection. Collapse and close the sidebar.
 7. Click the toolbar icon and verify the target language can be changed without opening the full settings page.
-8. Optional PDF test: open any public text-based PDF in Edge, select text, and choose the Pi Translator context-menu item. Verify that the native Edge side panel receives the translation while the PDF remains open.
-9. Optional packaged-reader test: click “打开 PDF 阅读器”, choose a local text-based PDF, and translate selected text. Only selected text is sent; the complete PDF remains local.
+8. Optional webpage-region test: click the toolbar icon, choose “框选网页区域”, and draw over visible article text. Verify that the confirmation identifies locally extracted text and does not send a screenshot unless image mode is explicitly selected and confirmed.
+9. Optional PDF test: open any public text-based PDF in Edge, select text, and choose the Pi Translator context-menu item. Verify that the native Edge side panel receives the translation while the PDF remains open.
+10. Optional packaged-reader test: click “打开 PDF 阅读器”, choose a local text-based PDF, and translate selected text. Only selected text is sent; the complete PDF remains local.
 
 No Microsoft, Overleaf, or Pi Translator account is needed for steps 1–7. The extension does not execute remote code. API responses are parsed as data and never executed. The review API Key is not bundled with the extension and is not exposed to webpages.
 ```

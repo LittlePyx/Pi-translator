@@ -9,18 +9,22 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: edge-extension-ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   verify-and-package:
     runs-on: windows-latest
     timeout-minutes: 20
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node.js
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v6
         with:
-          node-version: 20
+          node-version-file: .node-version
           cache: npm
 
       - name: Install dependencies
@@ -39,7 +43,7 @@ jobs:
         run: npm run build:edge
 
       - name: Run Edge end-to-end tests
-        run: npx playwright test tests/e2e/selection-overlay.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts
+        run: npm run test:e2e:built
 
       - name: Create Edge installation package
         run: npm run zip:edge
@@ -48,7 +52,7 @@ jobs:
         run: npm run check:release-artifact
 
       - name: Upload verified package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: pi-translator-edge-${{ github.sha }}
           path: .output/*-edge.zip

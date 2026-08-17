@@ -58,8 +58,10 @@ Pi Translator 是由 P&I Lab 开发的 Microsoft Edge Manifest V3 扩展，用�
 
 ## 加载扩展
 
+开发和构建使用 Node.js 24 LTS；仓库根目录的 `.node-version` 是 CI 与本地版本基准。
+
 ```powershell
-npm install
+npm ci
 npm run build:edge
 ```
 
@@ -107,7 +109,7 @@ npm run check:release
 
 `npm run check:release` 会重新打包并核对版本元数据、Manifest、ZIP 文件清单与逐文件内容，同时输出包大小和 SHA-256。GitHub Actions 会在每次提交和拉取请求中自动执行密钥扫描、类型检查、单元测试、真实 Edge 端到端测试、构建、打包与一致性检查。宣传截图生成使用独立的 `npm run test:marketing`，不会混入功能回归测试。
 
-详细设计见 [Edge MVP 设计文档](docs/edge-translation-extension-design.md)、[v0.5 历史记录、逐句对照与兼容 API 设计](docs/v0.5-history-alignment-api-design.md)、[v0.6 连续翻译侧栏与稳定性设计](docs/v0.6-continuous-sidebar-design.md)、[v0.7 稳定性、上下文与收藏设计](docs/v0.7-stability-context-favorites-design.md)、[v0.7.1 首次向导、支持工具与 CI 设计](docs/v0.7.1-onboarding-support-ci-design.md) 和 [v0.7.2 设置中心设计](docs/v0.7.2-settings-center-design.md)。发布前请查看 [更新日志](CHANGELOG.md)、[自动化验证报告](docs/verification-report.md) 和 [v0.8.0 五分钟验收清单](docs/release-checklist-v0.8.0.md)。
+详细设计见 [Edge MVP 设计文档](docs/edge-translation-extension-design.md)、[v0.5 历史记录、逐句对照与兼容 API 设计](docs/v0.5-history-alignment-api-design.md)、[v0.6 连续翻译侧栏与稳定性设计](docs/v0.6-continuous-sidebar-design.md)、[v0.7 稳定性、上下文与收藏设计](docs/v0.7-stability-context-favorites-design.md)、[v0.7.1 首次向导、支持工具与 CI 设计](docs/v0.7.1-onboarding-support-ci-design.md) 和 [v0.7.2 设置中心设计](docs/v0.7.2-settings-center-design.md)。发布前请查看 [更新日志](CHANGELOG.md)、[自动化验证报告](docs/verification-report.md) 和 [发布验收清单](docs/release-checklist.md)。
 
 ## 隐私与密钥
 
