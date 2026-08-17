@@ -46,6 +46,32 @@ describe('DeepSeek response parsing', () => {
     ]);
   });
 
+  it('keeps optional short-word lookup data without requiring it', () => {
+    const result = parseStructuredTranslation(JSON.stringify({
+      translation: '连续性',
+      detectedLanguage: 'en',
+      warnings: [],
+      lookup: {
+        pronunciation: ' /ˌkɒntɪˈnjuːəti/ ',
+        partOfSpeech: ' noun ',
+        senses: [
+          { partOfSpeech: 'noun', meaning: '连续性' },
+          { partOfSpeech: 'noun', meaning: '连贯性' },
+        ],
+      },
+    }));
+    expect(result.lexicalLookup).toEqual({
+      pronunciation: '/ˌkɒntɪˈnjuːəti/',
+      partOfSpeech: 'noun',
+      senses: [
+        { partOfSpeech: 'noun', meaning: '连续性' },
+        { partOfSpeech: 'noun', meaning: '连贯性' },
+      ],
+    });
+    expect(parseStructuredTranslation('{"translation":"普通译文"}'))
+      .not.toHaveProperty('lexicalLookup');
+  });
+
   it('extracts content from the provider envelope', () => {
     const content = parseDeepSeekEnvelope({
       choices: [{ message: { content: '{"translation":"ok"}' } }],

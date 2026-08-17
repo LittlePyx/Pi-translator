@@ -1,4 +1,5 @@
 import type { PdfSourceLocation, TranslateRequest, TranslateResult } from './types';
+import { isLexicalLookupCandidate } from './lexical-lookup';
 
 const CACHE_KEY = 'translationCacheByTab';
 const MAX_CACHE_ENTRIES = 20;
@@ -50,6 +51,7 @@ export function translationCacheKey(
     style: request.style,
     contentMode: request.contentMode,
     contextText: request.contextText?.trim() ?? '',
+    lexicalLookup: isLexicalLookupCandidate(request),
     revision: request.revision
       ? {
           kind: request.revision.kind,

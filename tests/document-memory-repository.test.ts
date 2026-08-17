@@ -101,6 +101,32 @@ describe('document translation memory', () => {
       });
   });
 
+  it('keeps compact lookup data when reopening a recent document translation', async () => {
+    const memory = await rememberDocumentTranslation(identity, {
+      requestId: 'lookup-result',
+      originalText: 'continuity',
+      translatedText: '连续性',
+      detectedLanguage: 'en',
+      warnings: [],
+      lexicalLookup: {
+        pronunciation: '/ˌkɒntɪˈnjuːəti/',
+        partOfSpeech: 'noun',
+        senses: [{ partOfSpeech: 'noun', meaning: '连贯性' }],
+      },
+    });
+
+    expect(memory.recentTranslations[0]?.lexicalLookup?.pronunciation)
+      .toBe('/ˌkɒntɪˈnjuːəti/');
+    expect(documentMemoryTranslationResult(memory.recentTranslations[0]!))
+      .toMatchObject({
+        translatedText: '连续性',
+        lexicalLookup: {
+          partOfSpeech: 'noun',
+          senses: [{ meaning: '连贯性' }],
+        },
+      });
+  });
+
   it('supports manual terms and remembers dismissed candidates', async () => {
     let memory = await upsertDocumentTerm(identity, {
       source: 'single-pixel imaging',

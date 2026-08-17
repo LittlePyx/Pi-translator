@@ -57,7 +57,7 @@
 
         <section class="content-section result-section">
           <div class="section-heading">
-            <h2>译文</h2>
+            <h2 id="translation-heading">译文</h2>
             <div class="translation-heading-tools">
               <button id="formula-view" type="button" hidden>源码</button>
               <span id="translation-state" tabindex="-1" aria-live="polite"></span>
@@ -65,6 +65,14 @@
             </div>
           </div>
           <div id="progress-track" class="progress-track" hidden><i></i></div>
+          <div id="lexical-lookup" class="lexical-lookup" hidden>
+            <div class="lexical-meta">
+              <span id="lexical-pronunciation"></span>
+              <span id="lexical-part-of-speech"></span>
+              <button id="speak-source" type="button" aria-pressed="false">朗读原文</button>
+            </div>
+            <div id="lexical-senses" class="lexical-senses"></div>
+          </div>
           <div id="translation-text" class="translation-text"></div>
           <div id="error-message" class="error-message" role="alert" aria-live="assertive" hidden></div>
           <div id="error-actions" class="error-actions" hidden>

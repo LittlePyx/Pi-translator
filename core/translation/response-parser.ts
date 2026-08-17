@@ -1,5 +1,6 @@
 import { TranslationError } from '../messaging/errors';
 import type { ProviderTranslationResult } from './types';
+import { sanitizeLexicalLookup } from './lexical-lookup';
 
 interface CompatibleApiEnvelope {
   choices?: Array<{
@@ -93,6 +94,7 @@ export function parseStructuredTranslation(content: string): ProviderTranslation
         return [{ source, target }];
       }).slice(0, 3)
     : undefined;
+  const lexicalLookup = sanitizeLexicalLookup(record.lookup);
 
   return {
     translatedText: record.translation,
@@ -101,6 +103,7 @@ export function parseStructuredTranslation(content: string): ProviderTranslation
     structuredResponse: true,
     ...(alignedSegments?.length ? { alignedSegments } : {}),
     ...(termCandidates?.length ? { termCandidates } : {}),
+    ...(lexicalLookup ? { lexicalLookup } : {}),
   };
 }
 

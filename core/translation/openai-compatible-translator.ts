@@ -922,7 +922,7 @@ export class OpenAiCompatibleTranslator implements Translator {
         { role: 'user', content: buildUserPrompt(input) },
       ],
       temperature: input.placeholderTokens.length ? 0 : 0.2,
-      max_tokens: 8192,
+      max_tokens: input.lexicalLookup ? 2048 : 8192,
       stream,
       ...directAnswerParameters(credentials.apiBaseUrl, useThinkingControl),
     });

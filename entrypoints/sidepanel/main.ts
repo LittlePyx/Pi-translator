@@ -51,6 +51,7 @@ import {
   ManualCorrectionError,
   type ManualCorrectionEdit,
 } from '../../core/translation/manual-correction';
+import { normalizedSpeechLanguage, selectLocalSpeechVoice } from '../../ui/local-speech';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -68,8 +69,14 @@ const sourceLabel = element<HTMLElement>('source-label');
 const sourceText = element<HTMLElement>('source-text');
 const sourceToggle = element<HTMLButtonElement>('source-toggle');
 const translationState = element<HTMLElement>('translation-state');
+const translationHeading = element<HTMLElement>('translation-heading');
 const stopTranslation = element<HTMLButtonElement>('stop-translation');
 const translationText = element<HTMLElement>('translation-text');
+const lexicalLookup = element<HTMLElement>('lexical-lookup');
+const lexicalPronunciation = element<HTMLElement>('lexical-pronunciation');
+const lexicalPartOfSpeech = element<HTMLElement>('lexical-part-of-speech');
+const lexicalSenses = element<HTMLElement>('lexical-senses');
+const speakSource = element<HTMLButtonElement>('speak-source');
 const errorMessage = element<HTMLElement>('error-message');
 const formulaView = element<HTMLButtonElement>('formula-view');
 const progressTrack = element<HTMLElement>('progress-track');
@@ -118,6 +125,49 @@ let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
 let activeProgressFeedback: TranslationProgressFeedback | undefined;
 let translationRenderRevision = 0;
+let activeSpeechRequestId: string | undefined;
+
+function stopSpeaking(): void {
+  if (typeof window.speechSynthesis !== 'undefined') window.speechSynthesis.cancel();
+  activeSpeechRequestId = undefined;
+  speakSource.classList.remove('active');
+  speakSource.setAttribute('aria-pressed', 'false');
+}
+
+function renderLexicalLookup(session: PdfSidePanelSession): void {
+  const result = session.result;
+  const lookup = result?.lexicalLookup;
+  translationHeading.textContent = lookup ? '当前语境' : '译文';
+  lexicalLookup.hidden = !lookup;
+  if (!lookup) {
+    lexicalPronunciation.textContent = '';
+    lexicalPartOfSpeech.textContent = '';
+    lexicalSenses.replaceChildren();
+    stopSpeaking();
+    return;
+  }
+  lexicalPronunciation.textContent = lookup.pronunciation ?? '';
+  lexicalPronunciation.hidden = !lookup.pronunciation;
+  lexicalPartOfSpeech.textContent = lookup.partOfSpeech ?? '';
+  lexicalPartOfSpeech.hidden = !lookup.partOfSpeech;
+  speakSource.hidden = typeof window.speechSynthesis === 'undefined' ||
+    typeof SpeechSynthesisUtterance === 'undefined';
+  const primary = result.translatedText.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+  const senses = lookup.senses.filter((sense) => (
+    sense.meaning.trim().replace(/\s+/gu, ' ').toLocaleLowerCase() !== primary
+  ));
+  lexicalSenses.replaceChildren(...senses.map((sense) => {
+    const row = document.createElement('div');
+    row.className = 'lexical-sense';
+    const part = document.createElement('span');
+    part.textContent = sense.partOfSpeech ?? lookup.partOfSpeech ?? '释义';
+    const meaning = document.createElement('span');
+    meaning.textContent = sense.meaning;
+    row.append(part, meaning);
+    return row;
+  }));
+  lexicalSenses.hidden = !senses.length;
+}
 
 function emptyContextForTabUrl(tabUrl: string | undefined): SidePanelEmptyContext {
   if (!isEdgeNativePdfContext({ ...(tabUrl ? { tabUrl } : {}) })) {
@@ -580,6 +630,9 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
+    translationHeading.textContent = '译文';
+    lexicalLookup.hidden = true;
+    stopSpeaking();
     finishProgress();
     retryFocusPending = false;
     retryStatusFocusPending = false;
@@ -665,6 +718,11 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     'error',
     session.status === 'error' && !preservedPartial && !explicitlyStopped,
   );
+  if (session.status !== 'complete') {
+    translationHeading.textContent = '译文';
+    lexicalLookup.hidden = true;
+    stopSpeaking();
+  }
 
   if (isTranslating) {
     formulaView.hidden = true;
@@ -765,6 +823,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   }
 
   const completedState = translationCompletionStatus(session.result ?? {});
+  renderLexicalLookup(session);
   translationState.textContent = completedState;
   const translatedText = presentationText(
     session,
@@ -808,6 +867,38 @@ function render(session: PdfSidePanelSession | null | undefined): void {
     if (shouldRestoreFocus) queueMicrotask(() => copy.focus({ preventScroll: true }));
   }
 }
+
+speakSource.addEventListener('click', () => {
+  const result = currentSession?.result;
+  if (!result || typeof window.speechSynthesis === 'undefined' ||
+      typeof SpeechSynthesisUtterance === 'undefined') return;
+  if (activeSpeechRequestId === result.requestId) {
+    stopSpeaking();
+    return;
+  }
+  stopSpeaking();
+  const language = normalizedSpeechLanguage(result.detectedLanguage);
+  const voice = selectLocalSpeechVoice(window.speechSynthesis.getVoices(), language);
+  if (!voice) {
+    setStatus('当前没有可用的本地语音，原文未发送到语音服务');
+    return;
+  }
+  activeSpeechRequestId = result.requestId;
+  speakSource.classList.add('active');
+  speakSource.setAttribute('aria-pressed', 'true');
+  const utterance = new SpeechSynthesisUtterance(result.originalText);
+  utterance.voice = voice;
+  utterance.lang = voice.lang;
+  const finish = (): void => {
+    if (activeSpeechRequestId !== result.requestId) return;
+    activeSpeechRequestId = undefined;
+    speakSource.classList.remove('active');
+    speakSource.setAttribute('aria-pressed', 'false');
+  };
+  utterance.onend = finish;
+  utterance.onerror = finish;
+  window.speechSynthesis.speak(utterance);
+});
 
 async function loadActiveSession(
   activated?: { tabId: number; windowId: number },

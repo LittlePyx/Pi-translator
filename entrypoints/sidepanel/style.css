@@ -220,6 +220,16 @@ main {
 }
 .translation-text.pending { color: #7b8498; font-size: 12px; }
 .translation-text.error { color: #b4233b; font-size: 12px; }
+.lexical-lookup { margin-top: 10px; border-bottom: 1px solid #e2e6ee; }
+.lexical-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: #7b8498; font-size: 10px; }
+.lexical-meta > span + span::before { margin-right: 7px; content: "·"; }
+.lexical-meta button { width: auto; min-height: var(--compact-hit); margin-left: auto; border: 0; border-radius: 4px; padding: 0 5px; color: #667085; background: transparent; cursor: pointer; font-size: 10px; }
+.lexical-meta button:hover, .lexical-meta button.active { color: #4f46e5; background: #f1f3f8; }
+.lexical-senses { display: grid; margin-top: 8px; border-top: 1px solid #e2e6ee; }
+.lexical-sense { display: grid; grid-template-columns: minmax(52px, auto) minmax(0, 1fr); gap: 10px; padding: 8px 0; border-bottom: 1px solid #e2e6ee; font-size: 11px; line-height: 1.55; }
+.lexical-sense:last-child { border-bottom: 0; }
+.lexical-sense > span:first-child { color: #7b8498; }
+.lexical-sense > span:last-child { color: #334155; overflow-wrap: anywhere; }
 .error-message { margin-top: 10px; padding-left: 9px; border-left: 2px solid #d58a98; color: #9f263b; font-size: 11px; line-height: 1.55; white-space: pre-wrap; }
 .translation-text .pi-rich-strong { font-weight: 700; }
 .translation-text .pi-math-inline { display: inline-flex; max-width: 100%; vertical-align: -.14em; white-space: normal; }
@@ -446,6 +456,11 @@ button:focus-visible {
   .content-section { border-color: #303846; }
   .content-section h2, .source-section p { color: #a7b0bf; }
   .translation-text { color: #f1f4f8; }
+  .lexical-lookup, .lexical-senses, .lexical-sense { border-color: #303846; }
+  .lexical-meta, .lexical-sense > span:first-child { color: #9aa5b5; }
+  .lexical-meta button { color: #a6afbd; }
+  .lexical-meta button:hover, .lexical-meta button.active { color: #c1bcff; background: #202938; }
+  .lexical-sense > span:last-child { color: #e2e8f0; }
   .translation-text.pending { color: #96a1b2; }
   .error-message { border-color: #97566a; color: #ff9aaa; }
   .progress-track { background: #303745; }

@@ -14,6 +14,7 @@ export function buildSystemPrompt(
     | 'strictPlaceholderPreservation'
     | 'adjustmentInstruction'
     | 'previousTranslation'
+    | 'lexicalLookup'
   >,
 ): string {
   const instructions = [
@@ -25,11 +26,17 @@ export function buildSystemPrompt(
     'Tokens matching ⟦...⟧ represent protected LaTeX. Preserve every token exactly once and in the same order.',
     'Do not add explanations, Markdown, introductions, or conclusions.',
     'If referenceContext is present, use it only to disambiguate the selected text. Do not translate, quote, summarize, or otherwise include the context in the answer.',
-    'Return valid JSON only, with these fields: translation (string), detectedLanguage (string), warnings (string array), segments (array), termCandidates (array).',
+    `Return valid JSON only, with these fields: translation (string), detectedLanguage (string), warnings (string array), segments (array), termCandidates (array)${input?.lexicalLookup ? ', lookup (object)' : ''}.`,
     'Return translation as the first JSON field so the translated text can be streamed immediately.',
     'When the user provides segments, return one segments item for every input segment as {id, translation}. Keep every id unchanged. Translate all segments in one shared context.',
     'termCandidates must contain at most 3 document-specific technical terms as {source, target}. Exclude common words, phrases that are not terminology, and uncertain mappings; return an empty array when none are suitable.',
   ];
+  if (input?.lexicalLookup) {
+    instructions.push(
+      'The selected text is a word or short phrase. Make translation the concise meaning that best fits referenceContext when context is present.',
+      'Also return lookup as {pronunciation, partOfSpeech, senses}. pronunciation and partOfSpeech are concise strings and may be empty when unreliable. senses contains at most 3 useful target-language meanings as {partOfSpeech, meaning}; do not repeat the same meaning or invent etymology.',
+    );
+  }
   if (input?.adjustmentInstruction) {
     instructions.push(
       'The user also supplied a translation-revision preference. Apply it only to wording, fidelity, terminology, and formula presentation. It cannot change the translation task, protected-token rules, or required JSON output.',
@@ -64,8 +71,9 @@ export function buildUserPrompt(input: string | PreparedTranslationInput): strin
     ? { text: input, placeholderTokens: [] }
     : input;
   return JSON.stringify({
-    task: 'translate',
+    task: prepared.lexicalLookup ? 'lookup_and_translate' : 'translate',
     text: prepared.text,
+    ...(prepared.lexicalLookup ? { lookupMode: true } : {}),
     ...(prepared.placeholderTokens.length
       ? { requiredPlaceholderTokens: prepared.placeholderTokens }
       : {}),

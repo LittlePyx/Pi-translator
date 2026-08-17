@@ -80,6 +80,7 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
+import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
   MAX_GLOSSARY_ENTRIES,
@@ -161,6 +162,7 @@ import {
 } from '../core/pdf/sidepanel-session';
 import type {
   GlossaryEntry,
+  LexicalLookup,
   ScopedGlossaryTerm,
   TranslateRequest,
   TranslateImageRegionRequest,
@@ -1347,6 +1349,7 @@ async function translate(
       request.contextText,
       documentMemory,
     );
+    const lexicalLookupRequested = isLexicalLookupCandidate(request);
     const effectiveRequest: TranslateRequest = contextText
       ? { ...request, contextText }
       : request;
@@ -1470,6 +1473,7 @@ async function translate(
     const termCandidates = completedCheckpointChunks.flatMap(
       (chunk) => chunk.termCandidates ?? [],
     );
+    let lexicalLookup: LexicalLookup | undefined;
 
     if (completedCheckpointChunks.length) {
       queueProgress({
@@ -1548,6 +1552,7 @@ async function translate(
             }
           : {}),
         ...(contextText ? { contextText } : {}),
+        ...(lexicalLookupRequested ? { lexicalLookup: true } : {}),
         ...(revisionInstruction ? { adjustmentInstruction: revisionInstruction } : {}),
         ...(previousTranslationChunk ? { previousTranslation: previousTranslationChunk } : {}),
       };
@@ -1587,6 +1592,9 @@ async function translate(
       warnings.push(...restored.warnings);
       if (providerResult.termCandidates?.length) {
         termCandidates.push(...providerResult.termCandidates);
+      }
+      if (lexicalLookupRequested && providerResult.lexicalLookup) {
+        lexicalLookup = providerResult.lexicalLookup;
       }
       let checkpointAlignedSegments: TranslationSegment[] | undefined;
       if (
@@ -1689,6 +1697,7 @@ async function translate(
             ).values()].slice(0, 6),
           }
         : {}),
+      ...(lexicalLookup ? { lexicalLookup } : {}),
       ...(request.revision?.formulaLatex?.length
         ? { formulaLatex: [...request.revision.formulaLatex] }
         : {}),

@@ -50,6 +50,9 @@ describe('translation cache key', () => {
     expect(translationCacheKey(request, provider)).not.toBe(
       translationCacheKey({ ...request, contextText: 'Earlier document context.' }, provider),
     );
+    expect(translationCacheKey({ ...request, text: 'continuity' }, provider)).not.toBe(
+      translationCacheKey({ ...request, text: 'continuity', contentMode: 'latex' }, provider),
+    );
     expect(translationCacheKey(request, provider)).not.toBe(
       translationCacheKey({
         ...request,

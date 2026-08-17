@@ -71,6 +71,30 @@ describe('translation prompts', () => {
     );
   });
 
+  it('requests compact lookup metadata only for a short lookup input', () => {
+    const input = {
+      text: 'continuity',
+      contextText: 'The proof follows by continuity of the objective.',
+      placeholderTokens: [],
+      lexicalLookup: true,
+    };
+    const system = buildSystemPrompt({
+      model: 'test-model',
+      sourceLanguage: 'auto',
+      targetLanguage: 'zh-CN',
+      style: 'general',
+    }, input);
+    const userData = JSON.parse(buildUserPrompt(input)) as Record<string, unknown>;
+
+    expect(system).toContain('word or short phrase');
+    expect(system).toContain('pronunciation');
+    expect(system).toContain('at most 3 useful target-language meanings');
+    expect(userData.task).toBe('lookup_and_translate');
+    expect(userData.lookupMode).toBe(true);
+    expect(userData.referenceContext).toBe(input.contextText);
+    expect(JSON.parse(buildUserPrompt('continuity')).task).toBe('translate');
+  });
+
   it('treats a revision preference as a constrained translation preference', () => {
     const input = {
       text: 'The estimator is stable.',

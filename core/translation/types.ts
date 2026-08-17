@@ -172,6 +172,8 @@ export interface TranslateResult {
   formulaLatex?: string[];
   formulaNeedsReview?: boolean;
   termCandidates?: GlossaryEntry[];
+  /** Optional compact dictionary data for a word or short phrase. */
+  lexicalLookup?: LexicalLookup;
   /** Glossary mappings verified in both the source and the completed translation. */
   appliedGlossaryTerms?: AppliedGlossaryTerm[];
   /** Source-matched glossary mappings whose configured target is absent from the result. */
@@ -208,6 +210,17 @@ export interface TranslationSegment {
   translatedText: string;
 }
 
+export interface LexicalLookupSense {
+  meaning: string;
+  partOfSpeech?: string;
+}
+
+export interface LexicalLookup {
+  pronunciation?: string;
+  partOfSpeech?: string;
+  senses: LexicalLookupSense[];
+}
+
 export interface TranslationHistoryEntry extends TranslateResult {
   historyId: string;
   createdAt: number;
@@ -220,6 +233,7 @@ export interface ProviderTranslationResult {
   alignedSegments?: ProviderTranslationSegment[];
   structuredResponse?: boolean;
   termCandidates?: GlossaryEntry[];
+  lexicalLookup?: LexicalLookup;
 }
 
 export interface ProviderTranslationSegment {
@@ -240,6 +254,7 @@ export interface PreparedTranslationInput {
   placeholderTokens: string[];
   segments?: Array<{ id: string; text: string }>;
   contextText?: string;
+  lexicalLookup?: boolean;
   strictPlaceholderPreservation?: boolean;
   adjustmentInstruction?: string;
   previousTranslation?: string;

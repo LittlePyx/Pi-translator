@@ -1,6 +1,7 @@
 import type {
   AppliedGlossaryTerm,
   GlossaryEntry,
+  LexicalLookup,
   PdfSourceLocation,
   ScopedGlossaryTerm,
   TranslateResult,
@@ -9,6 +10,7 @@ import type {
 } from '../translation/types';
 import type { DocumentIdentity } from './document-identity';
 import { normalizeGlossaryTermKey } from '../translation/glossary';
+import { sanitizeLexicalLookup } from '../translation/lexical-lookup';
 
 const STORAGE_KEY = 'documentTranslationMemoryV1';
 const SCHEMA_VERSION = 1;
@@ -61,6 +63,7 @@ export interface DocumentMemoryTranslation {
   sourceLocation?: PdfSourceLocation;
   appliedGlossaryTerms?: AppliedGlossaryTerm[];
   glossaryTermsNeedingReview?: ScopedGlossaryTerm[];
+  lexicalLookup?: LexicalLookup;
   review?: DocumentTranslationReview;
 }
 
@@ -227,6 +230,7 @@ function sameTranslationEntry(
     left.style === right.style &&
     left.sourceKind === right.sourceKind &&
     sameSourceLocation(left.sourceLocation, right.sourceLocation) &&
+    JSON.stringify(left.lexicalLookup) === JSON.stringify(right.lexicalLookup) &&
     sameReview(left.review, right.review)
   );
 }
@@ -387,8 +391,13 @@ function sanitizeMemory(value: unknown, identity: DocumentIdentity): StoredDocum
     recentTranslations: Array.isArray(record.recentTranslations)
       ? record.recentTranslations.slice(0, MAX_TRANSLATIONS).map((entry) => {
           const review = sanitizeReview(entry.review);
-          const { review: _review, ...translation } = entry;
-          return review ? { ...translation, review } : translation;
+          const lexicalLookup = sanitizeLexicalLookup(entry.lexicalLookup);
+          const { review: _review, lexicalLookup: _lookup, ...translation } = entry;
+          return {
+            ...translation,
+            ...(lexicalLookup ? { lexicalLookup } : {}),
+            ...(review ? { review } : {}),
+          };
         })
       : [],
     dismissedTermKeys: Array.isArray(record.dismissedTermKeys)
@@ -490,6 +499,7 @@ function withRememberedDocumentTranslationChange(
     ...(result.glossaryTermsNeedingReview?.length
       ? { glossaryTermsNeedingReview: result.glossaryTermsNeedingReview.map((term) => ({ ...term })) }
       : {}),
+    ...(result.lexicalLookup ? { lexicalLookup: result.lexicalLookup } : {}),
   };
   const previous = memory.recentTranslations.find((candidate) => (
     sameTranslationSubject(candidate, baseEntry)
@@ -606,6 +616,7 @@ export function documentMemoryTranslationResult(
     ...(entry.glossaryTermsNeedingReview?.length
       ? { glossaryTermsNeedingReview: entry.glossaryTermsNeedingReview.map((term) => ({ ...term })) }
       : {}),
+    ...(entry.lexicalLookup ? { lexicalLookup: entry.lexicalLookup } : {}),
     ...(entry.review?.formulaNeedsReview ? { formulaNeedsReview: true } : {}),
     ...(uncertainSpans.length
       ? { uncertainSpans: [...uncertainSpans] }
