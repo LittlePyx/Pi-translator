@@ -15,12 +15,12 @@
 | ZIP 文件结构 | 26 项；`manifest.json` 位于根目录；与当前生产构建逐文件一致 |
 | ZIP Manifest | MV3，版本 `0.13.0`；权限清单与 `v0.12.1` 一致 |
 
-安装包：`.output/tex-selection-translator-0.13.0-edge.zip`（1,039,411 bytes）
+安装包：`.output/tex-selection-translator-0.13.0-edge.zip`（1,039,761 bytes）
 
 SHA-256：
 
 ```text
-EB41B271813418D2549C5176AAA386A8CB100CE3C4F7E36DC64A2E924A5C6A7F
+59544346DDF1A228508F5C22B3BAF484587A26035D914ADAD9D6A97946415188
 ```
 
 本节记录发布候选的本地自动化结果。仍需从 Edge 工具栏真实点击扩展，在普通网页完成一次“框选网页区域”的文字优先与截图确认烟测；该项通过前不创建 Git tag、GitHub Release，也不提交 Edge 商店审核。

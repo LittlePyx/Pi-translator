@@ -1492,7 +1492,33 @@ export class TranslationOverlay {
   private markerIcon():SVGSVGElement { const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 20 20');svg.setAttribute('aria-hidden','true');const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M6.1 13.2 12.9 6.4l2.7 2.7-6.8 6.8H6.1v-2.7Zm5.8-7.8 1.3-1.3a1.2 1.2 0 0 1 1.7 0L17.9 7a1.2 1.2 0 0 1 0 1.7L16.6 10l-4.7-4.6ZM3 17h14');path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','1.6');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');svg.append(path);return svg }
   private speakerIcon():SVGSVGElement { const svg=document.createElementNS('http://www.w3.org/2000/svg','svg');svg.setAttribute('viewBox','0 0 20 20');svg.setAttribute('aria-hidden','true');const path=document.createElementNS('http://www.w3.org/2000/svg','path');path.setAttribute('d','M4 8h3l4-3v10l-4-3H4V8Zm10-1.5c1.1.9 1.7 2 1.7 3.5s-.6 2.6-1.7 3.5M12.8 8c.6.5.9 1.2.9 2s-.3 1.5-.9 2');path.setAttribute('fill','none');path.setAttribute('stroke','currentColor');path.setAttribute('stroke-width','1.5');path.setAttribute('stroke-linecap','round');path.setAttribute('stroke-linejoin','round');svg.append(path);return svg }
 
-  private makeDraggable(surface:HTMLDivElement,handle:HTMLDivElement):void { let id:number|undefined,dx=0,dy=0;const stop=()=>{if(id===undefined)return;id=undefined;surface.classList.remove('dragging');const rect=surface.getBoundingClientRect();this.cardPosition={left:rect.left,top:rect.top}};handle.addEventListener('pointerdown',event=>{const target=event.target;if(event.button!==0||!(target instanceof Element)||target.closest('button,details'))return;const rect=surface.getBoundingClientRect();id=event.pointerId;dx=event.clientX-rect.left;dy=event.clientY-rect.top;surface.classList.add('dragging');handle.setPointerCapture(event.pointerId);event.preventDefault()});handle.addEventListener('pointermove',event=>{if(id!==event.pointerId)return;const next=this.constrain(event.clientX-dx,event.clientY-dy,surface.offsetWidth,surface.offsetHeight);surface.style.left=`${next.left}px`;surface.style.top=`${next.top}px`;this.cardPosition=next});handle.addEventListener('pointerup',stop);handle.addEventListener('pointercancel',stop);handle.addEventListener('lostpointercapture',stop); }
+  private makeDraggable(surface:HTMLDivElement,handle:HTMLDivElement):void {
+    let id:number|undefined,dx=0,dy=0;
+    const move=(event:PointerEvent)=>{
+      if(id!==event.pointerId)return;
+      const next=this.constrain(event.clientX-dx,event.clientY-dy,surface.offsetWidth,surface.offsetHeight);
+      surface.style.left=`${next.left}px`;surface.style.top=`${next.top}px`;this.cardPosition=next;
+    };
+    const removeWindowListeners=()=>{
+      window.removeEventListener('pointermove',move,true);
+      window.removeEventListener('pointerup',end,true);
+      window.removeEventListener('pointercancel',end,true);
+      window.removeEventListener('blur',stop);
+    };
+    const stop=()=>{
+      if(id===undefined)return;
+      const finishedId=id;id=undefined;removeWindowListeners();surface.classList.remove('dragging');
+      if(handle.hasPointerCapture(finishedId))handle.releasePointerCapture(finishedId);
+      if(surface.isConnected){const rect=surface.getBoundingClientRect();this.cardPosition={left:rect.left,top:rect.top}}
+    };
+    const end=(event:PointerEvent)=>{if(id===event.pointerId)stop()};
+    handle.addEventListener('pointerdown',event=>{
+      const target=event.target;if(id!==undefined||event.button!==0||!(target instanceof Element)||target.closest('button,details'))return;
+      const rect=surface.getBoundingClientRect();id=event.pointerId;dx=event.clientX-rect.left;dy=event.clientY-rect.top;surface.classList.add('dragging');handle.setPointerCapture(event.pointerId);
+      window.addEventListener('pointermove',move,true);window.addEventListener('pointerup',end,true);window.addEventListener('pointercancel',end,true);window.addEventListener('blur',stop);event.preventDefault();
+    });
+    handle.addEventListener('lostpointercapture',event=>{if(id===event.pointerId&&event.buttons===0)stop()});
+  }
   private makeResizable(surface:HTMLDivElement):void {
     const handle=document.createElement('div');handle.className='sidebar-resizer';surface.append(handle);let id:number|undefined;
     handle.addEventListener('pointerdown',event=>{this.rememberVisibleResultReadingPosition();id=event.pointerId;handle.setPointerCapture(id);event.preventDefault()});
