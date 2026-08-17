@@ -766,7 +766,10 @@ function readingBounds(): {
 } | undefined {
   const scrollRoot = document.scrollingElement;
   if (!scrollRoot || resultSection.hidden) return undefined;
-  const viewportTop = appHeader.getBoundingClientRect().bottom + 8;
+  const historyHeight = webHistoryNavigation.hidden
+    ? 0
+    : webHistoryNavigation.getBoundingClientRect().height;
+  const viewportTop = appHeader.getBoundingClientRect().bottom + historyHeight + 8;
   const absoluteResultTop = scrollRoot.scrollTop + resultSection.getBoundingClientRect().top;
   const bottom = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
   const top = Math.min(bottom, Math.max(0, absoluteResultTop - viewportTop));

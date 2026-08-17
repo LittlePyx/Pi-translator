@@ -8084,8 +8084,15 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     const newResultStart = await sidePanel.locator('#result-section').evaluate((result) => ({
       resultTop: result.getBoundingClientRect().top,
       headerBottom: document.querySelector<HTMLElement>('.app-header')!.getBoundingClientRect().bottom,
+      historyHeight: document.querySelector<HTMLElement>('#web-history-navigation')!
+        .getBoundingClientRect().height,
     }));
-    expect(Math.abs(newResultStart.resultTop - newResultStart.headerBottom - 8)).toBeLessThanOrEqual(1);
+    expect(Math.abs(
+      newResultStart.resultTop
+      - newResultStart.headerBottom
+      - newResultStart.historyHeight
+      - 8,
+    )).toBeLessThanOrEqual(1);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await sidePanel.screenshot({
         path: testInfo.outputPath('web-browser-sidebar-reading-300-light.png'),
@@ -8098,11 +8105,17 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(readingBottom).toBeDisabled();
     const longResultBottom = await sidePanel.evaluate(() => document.scrollingElement?.scrollTop ?? 0);
     expect(longResultBottom).toBeGreaterThan(0);
+    const stickyHistoryPosition = await browserHistory.evaluate((history) => ({
+      historyTop: history.getBoundingClientRect().top,
+      headerBottom: document.querySelector<HTMLElement>('.app-header')!.getBoundingClientRect().bottom,
+    }));
+    expect(Math.abs(stickyHistoryPosition.historyTop - stickyHistoryPosition.headerBottom))
+      .toBeLessThanOrEqual(1);
 
-    await olderTranslation.evaluate((button: HTMLButtonElement) => button.click());
+    await olderTranslation.click();
     await expect(sidePanel.locator('#source-text')).toContainText('A browser side panel');
     await expect(readingNavigation).toBeHidden();
-    await newerTranslation.evaluate((button: HTMLButtonElement) => button.click());
+    await newerTranslation.click();
     await expect(sidePanel.locator('#source-text')).toContainText('A long browser side panel result');
     await expect(readingNavigation).toBeVisible();
     await expect(readingProgress).toHaveText('底部');
