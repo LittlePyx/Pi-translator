@@ -1,24 +1,23 @@
-Pi Translator has no publisher-operated account, login, subscription, or backend. It is a bring-your-own-API-key client. To make all core features testable, the following temporary review-only credentials will remain active during certification.
+Pi Translator requires no Pi account, login, subscription, or publisher backend. It is a bring-your-own-API-key client. For certification, use these temporary review credentials:
 
 TEXT TRANSLATION
 Base URL: [TEXT API BASE URL]
 Model: [TEXT MODEL]
-API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+API Key: [TEMPORARY REVIEW KEY]
 
 OPTIONAL PDF IMAGE/OCR
 Base URL: [VISION API BASE URL]
 Model: [VISION MODEL]
-API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+API Key: [TEMPORARY VISION KEY]
 
-Expiration: [DATE AFTER REVIEW WINDOW]
+Credentials expire: [DATE AFTER REVIEW]
 
 Test steps:
-1. Install the extension; its settings page opens automatically.
-2. Configure the text provider, paste the text Key, connect, and save.
-3. Open any public HTTPS article, select an English sentence, and choose “使用 Pi Translator 翻译选中文本” from the context menu. Verify streamed translation, short-phrase lookup, copy, correction, and pinned sidebar.
-4. In a completed result, open the browser side panel. Select more text on the same page and verify that the independent panel updates without covering page content. Use its arrows to revisit recent results and switch between full and sentence-aligned views.
-5. Open the popup and verify translation readiness. If the Edge translation shortcut is unassigned, use the provided shortcut-settings link; no translation request is sent by this check.
-6. Optional PDF test: configure the vision provider, open “PDF 阅读器”, choose a local PDF, and translate selectable text or a user-confirmed image region. On a two-column paper, verify that an accidental cross-column selection keeps the starting column.
-7. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result streams in Edge’s side panel.
+1. Install the extension. The settings page opens automatically. Enter the text provider values above, select Connect, then save.
+2. Open any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify the streamed translation, copy/correction actions, and continuous sidebar.
+3. From a completed result, open the Edge browser side panel. Select more text on the page; the independent panel updates without covering page content. Its arrows revisit recent results, and “全文 / 逐句” switches the result view without another API call.
+4. The popup reports whether the text API and Edge shortcut are ready. If Edge did not assign the suggested shortcut because of a conflict, its link opens edge://extensions/shortcuts.
+5. Optional PDF test: configure the vision values above, open “PDF 阅读器”, load a local PDF, then translate selectable text or a user-confirmed image region. Text-only PDF use does not require the vision API.
+6. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result appears in Edge’s side panel.
 
-No Microsoft, Overleaf, or Pi Translator account is needed. API requests go directly to the selected provider. Keys are entered only in extension settings, are not bundled in the ZIP, and are not exposed to webpages. Readiness checks, recent-result navigation, reading positions, and PDF text-layout safeguards are computed locally. The extension executes no remote code.
+API requests go directly to the reviewer-selected provider. Keys are stored only in extension storage, are not bundled in the package, and are not exposed to webpages. Local history navigation, readiness checks, and PDF layout safeguards do not make API requests. The extension loads no remote code.
