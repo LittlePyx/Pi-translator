@@ -41,8 +41,11 @@ test.beforeAll(async () => {
   extensionId = new URL(serviceWorker.url()).host;
   options = context.pages()[0] ?? await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
-  if (await options.locator('#onboarding-dialog').isVisible()) {
+  const onboardingDialog = options.locator('#onboarding-dialog');
+  if (await onboardingDialog.isVisible()) {
     await options.locator('#onboarding-skip').click();
+    await expect(onboardingDialog).not.toBeVisible();
+    await expect(options.locator('#status')).toContainText('已进入完整设置');
   }
   await options.evaluate(async () => {
     const extensionChrome = (
@@ -71,6 +74,8 @@ test.beforeAll(async () => {
     });
   });
   await options.reload();
+  await expect(options.locator('#nav-profile-name')).toHaveText('DeepSeek 文字翻译');
+  await expect(options.locator('#api-profile')).toHaveValue('text-api');
 });
 
 test.afterAll(async () => {
