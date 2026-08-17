@@ -145,6 +145,35 @@ main {
 .session-context button:hover,
 .copy-action:hover:not(:disabled),
 .error-actions button:hover { border-color: #8179eb; }
+.web-history-navigation {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  min-height: var(--compact-hit);
+  margin: -12px 0 8px;
+  color: #7b8498;
+}
+.web-history-navigation button {
+  width: var(--compact-hit);
+  height: var(--compact-hit);
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  color: #5d6475;
+  background: transparent;
+  cursor: pointer;
+  font-size: 18px;
+  line-height: 1;
+}
+.web-history-navigation button:hover:not(:disabled) { color: #4f46e5; background: #f0efff; }
+.web-history-navigation button:disabled { color: #c4c9d3; cursor: default; }
+.web-history-navigation output {
+  min-width: 42px;
+  color: #7b8498;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
 .copy-action {
   min-width: 88px;
   color: #fff;
@@ -433,6 +462,11 @@ button:focus-visible {
   .empty-status[role="alert"] { color: #ff9aaa; }
   .session-context { border-color: #303846; }
   .session-context-note { border-left-color: #4d4f76; }
+  .web-history-navigation { color: #8f9aab; }
+  .web-history-navigation button { color: #a6afbd; }
+  .web-history-navigation button:hover:not(:disabled) { color: #c1bcff; background: #202938; }
+  .web-history-navigation button:disabled { color: #555f6f; }
+  .web-history-navigation output { color: #8f9aab; }
   .session-context button, .copy-action, .error-actions button {
     border-color: #4d4f76;
     color: #c1bcff;

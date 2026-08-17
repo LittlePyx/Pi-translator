@@ -1,5 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { addTranslationHistory, clearTranslationHistory } from '../core/translation/history-repository';
+import {
+  addTranslationHistory,
+  clearTranslationHistory,
+  getTranslationHistory,
+} from '../core/translation/history-repository';
 
 const storage: Record<string, unknown> = {};
 
@@ -34,7 +38,9 @@ describe('recent translation history', () => {
 
     expect(latest).toHaveLength(2);
     expect(latest.map((entry) => entry.requestId)).toEqual(['request-3', 'request-2']);
+    await expect(getTranslationHistory(4)).resolves.toEqual(latest);
     await clearTranslationHistory(4);
+    await expect(getTranslationHistory(4)).resolves.toEqual([]);
     expect(JSON.stringify(storage)).not.toContain('request-3');
   });
 

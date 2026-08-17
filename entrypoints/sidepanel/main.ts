@@ -8,6 +8,7 @@ import type {
 } from '../../core/messaging/messages';
 import type {
   TranslationCorrectionTermInput,
+  TranslationHistoryEntry,
   TranslationMemoryScope,
 } from '../../core/translation/types';
 import {
@@ -52,6 +53,10 @@ import {
   type ManualCorrectionEdit,
 } from '../../core/translation/manual-correction';
 import { normalizedSpeechLanguage, selectLocalSpeechVoice } from '../../ui/local-speech';
+import {
+  getTranslationHistory,
+  TRANSLATION_HISTORY_STORAGE_KEY,
+} from '../../core/translation/history-repository';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -93,6 +98,10 @@ const undoCorrection = element<HTMLButtonElement>('undo-correction');
 const status = element<HTMLElement>('status');
 const sessionActions = element<HTMLElement>('session-actions');
 const openPiReader = element<HTMLButtonElement>('open-pi-reader');
+const webHistoryNavigation = element<HTMLElement>('web-history-navigation');
+const webHistoryOlder = element<HTMLButtonElement>('web-history-older');
+const webHistoryCounter = element<HTMLOutputElement>('web-history-counter');
+const webHistoryNewer = element<HTMLButtonElement>('web-history-newer');
 const readerHintText = element<HTMLElement>('reader-hint-text');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const errorSettings = element<HTMLButtonElement>('error-settings');
@@ -106,6 +115,12 @@ const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
 let activeTabId: number | undefined;
 let activeWindowId: number | undefined;
 let currentSession: PdfSidePanelSession | undefined;
+let latestWebSession: PdfSidePanelSession | undefined;
+let webHistory: TranslationHistoryEntry[] = [];
+let webHistoryIndex = 0;
+let webHistoryLimit = 5;
+let webHistoryLoadRevision = 0;
+let viewingWebHistory = false;
 type SidePanelEmptyContext =
   | { kind: 'loading' }
   | { kind: 'pdf'; sourceUrl?: string; pageNumber?: number }
@@ -129,6 +144,128 @@ let activeProgressStage: TranslationProgressStage | undefined;
 let activeProgressFeedback: TranslationProgressFeedback | undefined;
 let translationRenderRevision = 0;
 let activeSpeechRequestId: string | undefined;
+
+function resetWebHistoryState(): void {
+  webHistoryLoadRevision += 1;
+  latestWebSession = undefined;
+  webHistory = [];
+  webHistoryIndex = 0;
+  viewingWebHistory = false;
+  webHistoryNavigation.hidden = true;
+}
+
+function webNavigationHistory(): TranslationHistoryEntry[] {
+  const latestResult = latestWebSession?.status === 'complete'
+    ? latestWebSession.result
+    : undefined;
+  const candidates: TranslationHistoryEntry[] = [
+    ...(latestResult && latestWebSession
+      ? [{
+          ...latestResult,
+          historyId: `current-${latestResult.requestId}`,
+          createdAt: latestWebSession.startedAt,
+        }]
+      : []),
+    ...webHistory,
+  ];
+  const seen = new Set<string>();
+  return candidates.filter((entry) => {
+    if (seen.has(entry.requestId)) return false;
+    seen.add(entry.requestId);
+    return true;
+  }).slice(0, webHistoryLimit);
+}
+
+function historicalWebSession(entry: TranslationHistoryEntry): PdfSidePanelSession | undefined {
+  if (!latestWebSession) return undefined;
+  const {
+    error: _error,
+    progressStage: _progressStage,
+    settingsRecoveryConfirmation: _settingsRecoveryConfirmation,
+    correctionReceipt: _correctionReceipt,
+    ...base
+  } = latestWebSession;
+  const chunkCount = entry.chunkCount ?? 1;
+  return {
+    ...base,
+    requestId: entry.requestId,
+    sourceText: entry.originalText,
+    status: 'complete',
+    startedAt: entry.createdAt,
+    partialText: entry.translatedText,
+    completedChunks: chunkCount,
+    totalChunks: chunkCount,
+    result: entry,
+  };
+}
+
+function syncWebHistoryNavigation(session: PdfSidePanelSession | undefined): void {
+  const history = webNavigationHistory();
+  const index = session?.sourceKind === 'web' && session.status === 'complete'
+    ? history.findIndex((entry) => entry.requestId === session.requestId)
+    : -1;
+  const visible = index >= 0 && history.length > 1;
+  webHistoryNavigation.hidden = !visible;
+  if (!visible) return;
+  webHistoryIndex = index;
+  viewingWebHistory = index > 0;
+  webHistoryCounter.value = `${index + 1} / ${history.length}`;
+  webHistoryCounter.textContent = webHistoryCounter.value;
+  webHistoryCounter.setAttribute(
+    'aria-label',
+    `第 ${index + 1} 条，共 ${history.length} 条最近译文`,
+  );
+  webHistoryOlder.disabled = index >= history.length - 1;
+  webHistoryNewer.disabled = index <= 0;
+}
+
+function showWebHistoryEntry(index: number): void {
+  const history = webNavigationHistory();
+  const entry = history[index];
+  if (!entry || !latestWebSession) return;
+  const session = index === 0 && latestWebSession.result?.requestId === entry.requestId
+    ? latestWebSession
+    : historicalWebSession(entry);
+  if (!session) return;
+  webHistoryIndex = index;
+  viewingWebHistory = index > 0;
+  render(session);
+}
+
+async function refreshWebHistory(tabId: number): Promise<void> {
+  const revision = ++webHistoryLoadRevision;
+  const viewedRequestId = currentSession?.sourceKind === 'web'
+    ? currentSession.requestId
+    : undefined;
+  const history = await getTranslationHistory(tabId);
+  if (revision !== webHistoryLoadRevision || activeTabId !== tabId) return;
+  webHistory = history.slice(0, webHistoryLimit);
+  if (!latestWebSession || latestWebSession.tabId !== tabId) return;
+  if (latestWebSession.status !== 'complete') {
+    syncWebHistoryNavigation(currentSession);
+    return;
+  }
+  const navigation = webNavigationHistory();
+  const preservedIndex = viewedRequestId
+    ? navigation.findIndex((entry) => entry.requestId === viewedRequestId)
+    : -1;
+  showWebHistoryEntry(preservedIndex >= 0 ? preservedIndex : 0);
+}
+
+function renderIncomingSession(session: PdfSidePanelSession | null | undefined): void {
+  if (session?.sourceKind === 'web') {
+    latestWebSession = session;
+    webHistoryIndex = 0;
+    viewingWebHistory = false;
+    render(session);
+    if (session.status === 'complete') {
+      void refreshWebHistory(session.tabId).catch(() => undefined);
+    }
+    return;
+  }
+  resetWebHistoryState();
+  render(session);
+}
 
 function stopSpeaking(): void {
   if (typeof window.speechSynthesis !== 'undefined') window.speechSynthesis.cancel();
@@ -639,6 +776,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   clearCopyFeedback();
   translationText.classList.remove('correction-mode');
   currentSession = session ?? undefined;
+  syncWebHistoryNavigation(currentSession);
   const renderRevision = ++translationRenderRevision;
   if (session) scheduleStreamViewportFollow(session, renderRevision, followStreamOutput);
   emptyState.hidden = Boolean(session);
@@ -672,6 +810,7 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
   const isWebSession = session.sourceKind === 'web';
+  const historicalWebResult = isWebSession && viewingWebHistory;
   appSubtitle.textContent = isWebSession ? '网页划词翻译' : 'PDF 划词翻译';
   sourceKindLabel.textContent = isWebSession ? '当前网页' : '当前 PDF';
   sourceText.textContent = presentationText(session, session.sourceText);
@@ -723,9 +862,9 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   copy.hidden = !copyableText;
   copy.disabled = !copyableText;
   copy.textContent = copyActionLabel(session);
-  correct.hidden = session.status !== 'complete' || !session.result?.translatedText;
+  correct.hidden = historicalWebResult || session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
-  correctionUndo.hidden = !session.correctionReceipt || session.status !== 'complete';
+  correctionUndo.hidden = historicalWebResult || !session.correctionReceipt || session.status !== 'complete';
   correctionUndo.classList.remove('is-error');
   correctionUndo.removeAttribute('aria-busy');
   correctionUndo.setAttribute('role', 'status');
@@ -940,6 +1079,7 @@ async function loadActiveSession(
     requestedTabUrl = tab?.url;
     activeWindowId = tab?.windowId;
   }
+  if (activeTabId !== requestedTabId) resetWebHistoryState();
   activeTabId = requestedTabId;
   const nextEmptyContext = await resolveEmptyContext(requestedTabId, requestedTabUrl);
   if (!isCurrentLoad()) return;
@@ -963,7 +1103,7 @@ async function loadActiveSession(
     setEmptyStatus(translationErrorMessage(response.error.code, response.error.message), true);
     return;
   }
-  render(response.data.session);
+  renderIncomingSession(response.data.session);
 }
 
 function activeSession(): PdfSidePanelSession | undefined {
@@ -972,6 +1112,14 @@ function activeSession(): PdfSidePanelSession | undefined {
   void loadActiveSession().catch(() => setStatus('无法读取当前翻译会话'));
   return undefined;
 }
+
+webHistoryOlder.addEventListener('click', () => {
+  showWebHistoryEntry(webHistoryIndex + 1);
+});
+
+webHistoryNewer.addEventListener('click', () => {
+  showWebHistoryEntry(webHistoryIndex - 1);
+});
 
 function openCorrectionEditor(): void {
   const session = activeSession();
@@ -1598,7 +1746,7 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     typed.type === 'PDF_SIDE_PANEL_SESSION_UPDATED' &&
     typed.payload.tabId === activeTabId
   ) {
-    render(typed.payload);
+    renderIncomingSession(typed.payload);
   }
 });
 
@@ -1611,6 +1759,7 @@ browser.tabs.onActivated.addListener((activated) => {
     } satisfies RuntimeMessage).catch(() => undefined);
   }
   sessionLoadGate.invalidate();
+  resetWebHistoryState();
   activeTabId = activated.tabId;
   showEmptyContext({ kind: 'loading' });
   render(undefined);
@@ -1627,11 +1776,22 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
 });
 
 browser.storage.onChanged.addListener((changes, areaName) => {
+  if (areaName === 'session' && changes[TRANSLATION_HISTORY_STORAGE_KEY]) {
+    if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
+      void refreshWebHistory(activeTabId).catch(() => undefined);
+    }
+    return;
+  }
   if (areaName !== 'local' || !changes.extensionSettings) return;
   void getSettings().then((settings) => {
     autoRenderLatex = settings.autoRenderLatex;
+    webHistoryLimit = settings.historyLimit;
     formulaRenderOverride = undefined;
-    render(currentSession);
+    if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
+      void refreshWebHistory(activeTabId).catch(() => undefined);
+    } else {
+      render(currentSession);
+    }
   });
 });
 
@@ -1644,7 +1804,12 @@ window.addEventListener('pagehide', () => {
 
 void getSettings().then((settings) => {
   autoRenderLatex = settings.autoRenderLatex;
-  render(currentSession);
+  webHistoryLimit = settings.historyLimit;
+  if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
+    void refreshWebHistory(activeTabId).catch(() => undefined);
+  } else {
+    render(currentSession);
+  }
 });
 void loadActiveSession().catch(() => {
   render(undefined);

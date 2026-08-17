@@ -646,6 +646,7 @@ test.beforeAll(async () => {
             <p id="term-review-source">A technical term should remain stable.</p>
             <p id="lookup-source">continuity</p>
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
+            <p id="browser-history-source">A browser side panel keeps recent translations easy to revisit.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
             <p id="recovery-source">A configured API should resume this selected translation automatically.</p>
@@ -7868,6 +7869,39 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeContinuousSelection);
     await expect(sidePanel.locator('#source-text')).toContainText('First important sentence');
     await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
+
+    const browserHistory = sidePanel.locator('#web-history-navigation');
+    const browserHistoryCounter = sidePanel.locator('#web-history-counter');
+    const olderTranslation = sidePanel.getByRole('button', { name: '上一条译文' });
+    const newerTranslation = sidePanel.getByRole('button', { name: '下一条译文' });
+    await expect(browserHistory).toBeVisible();
+    await expect(browserHistoryCounter).toHaveText(/^1 \/ [2-5]$/u);
+    await expect(olderTranslation).toBeEnabled();
+    await expect(newerTranslation).toBeDisabled();
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await sidePanel.screenshot({
+        path: testInfo.outputPath('web-browser-sidebar-history-390-light.png'),
+        fullPage: true,
+      });
+    }
+    const requestsBeforeHistoryNavigation = textRequests.length;
+    await olderTranslation.click();
+    await expect(browserHistoryCounter).toHaveText(/^2 \/ [2-5]$/u);
+    await expect(sidePanel.locator('#source-text')).toContainText(
+      'A consistent academic translation',
+    );
+    await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    expect(textRequests).toHaveLength(requestsBeforeHistoryNavigation);
+    await newerTranslation.click();
+    await expect(browserHistoryCounter).toHaveText(/^1 \/ [2-5]$/u);
+    await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
+
+    await olderTranslation.click();
+    await selectElementText('#browser-history-source');
+    await expect(sidePanel.locator('#source-text')).toContainText('A browser side panel');
+    await expect(browserHistory).toBeVisible();
+    await expect(browserHistoryCounter).toHaveText(/^1 \/ [3-5]$/u);
+    await expect(newerTranslation).toBeDisabled();
 
     await sidePanel.locator('#open-pi-reader').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
