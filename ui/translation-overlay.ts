@@ -221,6 +221,7 @@ interface ErrorDisplay {
   message: string;
   showSettings: boolean;
   retryable?: boolean;
+  webRegionRecovery?: boolean;
   partialText?: string | undefined;
   settingsFocus?: SettingsFocus;
   settingsLabel?: string;
@@ -251,6 +252,9 @@ interface OverlayActions {
   onTranslate: () => void;
   onRetry: (target: OverlayRetryTarget) => void;
   onTranslateText: (text: string) => void;
+  canAdjustWebRegion?: (result: TranslateResult) => boolean;
+  onAdjustWebRegion?: (result?: TranslateResult) => void;
+  onReselectWebRegion?: (result?: TranslateResult) => void;
   onAdjustTranslation?: (
     result: TranslateResult,
     adjustment: TranslationAdjustmentRequest,
@@ -583,10 +587,11 @@ export class TranslationOverlay {
     this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?'翻译中断':'翻译失败');
     const body=document.createElement('div');body.className='error';body.setAttribute('role','alert');body.setAttribute('aria-live','assertive');body.textContent=error.message;surface.append(body);
     if(partialText){const partial=document.createElement('section');partial.className='partial-result';const label=document.createElement('div');label.className='partial-result-label';label.textContent='已保留收到的部分译文';const preview=document.createElement('div');preview.className='stream-preview';preview.textContent=partialText;partial.append(label,preview);surface.append(partial)}
-    const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;
-    if(showRetry){const retry=this.button('重试','action primary');retry.dataset.piFocusTarget='true';retry.addEventListener('click',()=>{retry.disabled=true;retry.textContent='正在重试…';this.actions.onRetry({kind:'failed'})});footer.append(retry)}
-    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry?'':' primary'}`);if(!showRetry)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
-    if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),'已复制','部分译文已复制到剪贴板'));footer.append(copy)}
+    const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;const showWebRegionRecovery=Boolean(error.webRegionRecovery&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion);
+    if(showWebRegionRecovery){const adjust=this.button('调整区域','action primary');adjust.dataset.piFocusTarget='true';adjust.addEventListener('click',()=>this.actions.onAdjustWebRegion?.());const reselect=this.button('重新框选','action');reselect.addEventListener('click',()=>this.actions.onReselectWebRegion?.());footer.append(adjust,reselect)}
+    if(showRetry){const retry=this.button(showWebRegionRecovery?'重试原区域':'重试',`action${showWebRegionRecovery?'':' primary'}`);if(!showWebRegionRecovery)retry.dataset.piFocusTarget='true';retry.addEventListener('click',()=>{retry.disabled=true;retry.textContent='正在重试…';this.actions.onRetry({kind:'failed'})});footer.append(retry)}
+    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry||showWebRegionRecovery?'':' primary'}`);if(!showRetry&&!showWebRegionRecovery)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
+    if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!showWebRegionRecovery&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),'已复制','部分译文已复制到剪贴板'));footer.append(copy)}
     if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
   }
 
@@ -1259,7 +1264,7 @@ export class TranslationOverlay {
   private moreMenu(result:TranslateResult):HTMLElement {
     const details=document.createElement('details');details.className='more';const summary=document.createElement('summary');summary.textContent='•••';summary.title='更多操作';summary.ariaLabel='更多翻译操作';const menu=document.createElement('div');menu.className='menu';
     const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);
-    if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation)menu.append(this.menuButton('让模型调整…',()=>this.openModelAdjustment(result)));const repeatLabel=result.sourceKind==='image-region'?'重新识别此区域':'重新翻译';menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton('采用当前版本',()=>this.adoptTranslationVersion(result)))}
+    if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation)menu.append(this.menuButton('让模型调整…',()=>this.openModelAdjustment(result)));if(this.actions.canAdjustWebRegion?.(result)&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion){menu.append(this.menuButton('调整区域',()=>this.actions.onAdjustWebRegion?.(result)),this.menuButton('重新框选',()=>this.actions.onReselectWebRegion?.(result)))}const repeatLabel=result.sourceKind==='image-region'?'重新识别此区域':'重新翻译';menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton('采用当前版本',()=>this.adoptTranslationVersion(result)))}
     const markerCount=this.actions.getSourceMarkSummaries?.().length??0;if(markerCount&&this.actions.canPersistSourceMarks?.())menu.append(this.menuButton(`查看本文标记（${markerCount}）`,()=>this.openMarkerNavigator()));
     if(this.actions.hasAnySourceMarks?.()&&this.actions.onCopyMarkedNotes){menu.append(this.menuButton('复制标记笔记',()=>{void this.actions.onCopyMarkedNotes?.().then((count)=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,`已复制 ${count} 条标记`)}).catch(()=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,'复制失败',3200)})}));const exportButton=menu.lastElementChild;if(exportButton instanceof HTMLElement)exportButton.dataset.markExport='true'}
     if(this.actions.canPersistSourceMarks?.()&&this.actions.onSetSourceMarkPersistence){

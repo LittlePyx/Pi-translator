@@ -11,6 +11,11 @@ export interface WebRegionSelectionResult {
   extractedText?: string;
 }
 
+export interface WebRegionSelectionSeed {
+  rect: ViewportRect;
+  mode: WebRegionSelectionMode;
+}
+
 export interface WebRegionSelectionHandle {
   result: Promise<WebRegionSelectionResult | undefined>;
   cancel(): void;
@@ -51,6 +56,24 @@ function rectWidth(rect: ViewportRect): number {
 
 function rectHeight(rect: ViewportRect): number {
   return rect.bottom - rect.top;
+}
+
+function fitRectToViewport(rect: ViewportRect): ViewportRect {
+  const viewportWidth = Math.max(1, innerWidth);
+  const viewportHeight = Math.max(1, innerHeight);
+  const width = Math.min(viewportWidth, Math.max(MIN_REGION_EDGE, rectWidth(rect)));
+  const height = Math.min(viewportHeight, Math.max(MIN_REGION_EDGE, rectHeight(rect)));
+  const left = clamp(rect.left, 0, viewportWidth - width);
+  const top = clamp(rect.top, 0, viewportHeight - height);
+  return { left, top, right: left + width, bottom: top + height };
+}
+
+function defaultKeyboardRect(): ViewportRect {
+  const width = Math.min(innerWidth, Math.max(MIN_REGION_EDGE, Math.min(560, innerWidth * 0.6)));
+  const height = Math.min(innerHeight, Math.max(MIN_REGION_EDGE, Math.min(360, innerHeight * 0.45)));
+  const left = Math.max(0, (innerWidth - width) / 2);
+  const top = Math.max(0, (innerHeight - height) / 2);
+  return { left, top, right: left + width, bottom: top + height };
 }
 
 function intersects(left: ViewportRect, right: DOMRect): boolean {
@@ -283,7 +306,9 @@ function styleText(): string {
   `;
 }
 
-export function createWebRegionSelection(): WebRegionSelectionHandle {
+export function createWebRegionSelection(
+  initialSelection?: WebRegionSelectionSeed,
+): WebRegionSelectionHandle {
   document.getElementById(WEB_REGION_SELECTION_ROOT_ID)?.remove();
   const host = document.createElement('div');
   host.id = WEB_REGION_SELECTION_ROOT_ID;
@@ -326,10 +351,18 @@ export function createWebRegionSelection(): WebRegionSelectionHandle {
   const modeButton = shadow.querySelector<HTMLButtonElement>('.mode')!;
   const cancelButton = shadow.querySelector<HTMLButtonElement>('.cancel')!;
   const confirmButton = shadow.querySelector<HTMLButtonElement>('.confirm')!;
-  let currentRect: ViewportRect | undefined;
+  selection.tabIndex = 0;
+  selection.setAttribute('role', 'group');
+  selection.setAttribute(
+    'aria-label',
+    '网页翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。',
+  );
+  let currentRect: ViewportRect | undefined = initialSelection
+    ? fitRectToViewport(initialSelection.rect)
+    : undefined;
   let extractedText: string | undefined;
-  let mode: WebRegionSelectionMode = 'image';
-  let modeExplicitlyChosen = false;
+  let mode: WebRegionSelectionMode = initialSelection?.mode ?? 'image';
+  let modeExplicitlyChosen = Boolean(initialSelection);
   let sensitive = false;
   let drag: DragState | undefined;
   let settled = false;
@@ -490,14 +523,62 @@ export function createWebRegionSelection(): WebRegionSelectionHandle {
     });
   }
 
+  function adjustWithKeyboard(event: KeyboardEvent): boolean {
+    if (!currentRect || !['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key)) {
+      return false;
+    }
+    const step = event.ctrlKey ? 1 : 6;
+    const dx = event.key === 'ArrowLeft' ? -step : event.key === 'ArrowRight' ? step : 0;
+    const dy = event.key === 'ArrowUp' ? -step : event.key === 'ArrowDown' ? step : 0;
+    if (event.shiftKey) {
+      currentRect = {
+        ...currentRect,
+        right: clamp(
+          currentRect.right + dx,
+          currentRect.left + Math.min(MIN_REGION_EDGE, innerWidth),
+          innerWidth,
+        ),
+        bottom: clamp(
+          currentRect.bottom + dy,
+          currentRect.top + Math.min(MIN_REGION_EDGE, innerHeight),
+          innerHeight,
+        ),
+      };
+    } else {
+      const width = rectWidth(currentRect);
+      const height = rectHeight(currentRect);
+      const left = clamp(currentRect.left + dx, 0, innerWidth - width);
+      const top = clamp(currentRect.top + dy, 0, innerHeight - height);
+      currentRect = { left, top, right: left + width, bottom: top + height };
+    }
+    update();
+    selection.focus({ preventScroll: true });
+    return true;
+  }
+
   function onKeyDown(event: KeyboardEvent): void {
     if (event.key === 'Escape') {
       event.preventDefault();
       event.stopPropagation();
       cancel();
-    } else if (event.key === 'Enter' && currentRect && !sensitive) {
+      return;
+    }
+    const eventTarget = event.composedPath()[0];
+    if (eventTarget instanceof HTMLButtonElement) return;
+    if (adjustWithKeyboard(event)) {
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!currentRect) {
+      currentRect = defaultKeyboardRect();
+      modeExplicitlyChosen = false;
+      update();
+      selection.focus({ preventScroll: true });
+    } else if (!sensitive) {
       confirm();
     }
   }
@@ -518,7 +599,8 @@ export function createWebRegionSelection(): WebRegionSelectionHandle {
   window.addEventListener('keydown', onKeyDown, true);
   window.addEventListener('resize', cancel, true);
   window.addEventListener('scroll', cancel, true);
-  queueMicrotask(() => stage.focus({ preventScroll: true }));
+  if (currentRect) update();
+  queueMicrotask(() => (currentRect ? selection : stage).focus({ preventScroll: true }));
 
   return { result, cancel };
 }

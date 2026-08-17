@@ -67,6 +67,7 @@ import { captureWebRegion } from './web-region-capture';
 import {
   createWebRegionSelection,
   type WebRegionSelectionHandle,
+  type WebRegionSelectionSeed,
 } from './web-region-selection';
 
 interface ContentScriptRuntimeContext {
@@ -118,6 +119,8 @@ export interface ImageRegionTranslationCapture {
   sourceLabel?: string;
   selectionReference?: PdfSourceLocation;
   sourceSelection?: SelectionSnapshot;
+  /** In-memory only; allows an explicitly selected webpage region to be adjusted. */
+  webRegionSelection?: WebRegionSelectionSeed;
   /** Numeric local timings only; never contains selection or page data. */
   clientPerformance?: { captureMs?: number; queueMs?: number };
 }
@@ -135,6 +138,8 @@ export interface PdfRegionTextTranslationCapture {
 type TextTranslationMetadata = {
   sourceLabel?: string;
   sourceLocation?: PdfSourceLocation;
+  /** In-memory only; allows an explicitly selected webpage region to be adjusted. */
+  webRegionSelection?: WebRegionSelectionSeed;
   clientPerformance?: { captureMs?: number; queueMs?: number };
 };
 
@@ -250,6 +255,7 @@ export async function startSelectionTranslator(
   let inFlightRequestId: string | undefined;
   let completedEarlyRequestId: string | undefined;
   let activeWebRegionSelection: WebRegionSelectionHandle | undefined;
+  let failedWebRegionSelection: WebRegionSelectionSeed | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
   let lastAutoSelectionHash: string | undefined;
@@ -415,6 +421,16 @@ export async function startSelectionTranslator(
     onRetry: (target) => {
       void retryTranslation(target);
     },
+    canAdjustWebRegion: (result) => Boolean(webRegionSelectionForResult(result)),
+    onAdjustWebRegion: (result) => {
+      const selection = result
+        ? webRegionSelectionForResult(result)
+        : failedWebRegionSelection ?? webRegionSelectionForContext(activeRetryContext);
+      if (selection) startWebRegionSelection(selection);
+    },
+    onReselectWebRegion: () => {
+      startWebRegionSelection();
+    },
     onTranslateText: (text) => {
       const imageRegion = activeImageRegion;
       const pdfRegionLocation = activePdfRegionLocation;
@@ -450,8 +466,13 @@ export async function startSelectionTranslator(
         ? {
             ...(pdfRegionSourceLabel ? { sourceLabel: pdfRegionSourceLabel } : {}),
             sourceLocation: pdfRegionLocation,
+            ...(imageRegion?.webRegionSelection
+              ? { webRegionSelection: imageRegion.webRegionSelection }
+              : {}),
           }
-        : undefined);
+        : imageRegion?.webRegionSelection
+          ? { webRegionSelection: imageRegion.webRegionSelection }
+          : undefined);
     },
     onAdjustTranslation: (result, adjustment) => {
       void adjustTranslation(result, adjustment);
@@ -1076,11 +1097,26 @@ export async function startSelectionTranslator(
     return snapshot.rect;
   }
 
-  function startWebRegionSelection(): void {
+  function webRegionSelectionForContext(
+    context: TranslationRetryContext | undefined,
+  ): WebRegionSelectionSeed | undefined {
+    if (context?.kind === 'image') return context.capture.webRegionSelection;
+    return context?.metadata?.webRegionSelection;
+  }
+
+  function webRegionSelectionForResult(
+    result: TranslateResult,
+  ): WebRegionSelectionSeed | undefined {
+    return webRegionSelectionForContext(retryContextForResult(result));
+  }
+
+  function startWebRegionSelection(initialSelection?: WebRegionSelectionSeed): void {
     activeWebRegionSelection?.cancel();
     cancelActiveTranslation();
+    failedWebRegionSelection = undefined;
     overlay.hide();
-    const handle = createWebRegionSelection();
+    const handle = createWebRegionSelection(initialSelection);
+    let attemptedSelection = initialSelection;
     activeWebRegionSelection = handle;
     void handle.result.then(async (region) => {
       if (activeWebRegionSelection !== handle) return;
@@ -1089,6 +1125,11 @@ export async function startSelectionTranslator(
         return;
       }
       const pageUrl = options.pageUrl?.() ?? location.href;
+      const webRegionSelection: WebRegionSelectionSeed = {
+        rect: region.rect,
+        mode: region.mode,
+      };
+      attemptedSelection = webRegionSelection;
       if (region.mode === 'text' && region.extractedText) {
         activeWebRegionSelection = undefined;
         const requestId = crypto.randomUUID();
@@ -1103,29 +1144,34 @@ export async function startSelectionTranslator(
           rect: region.rect,
         };
         latestSelection = snapshot;
-        await translate(snapshot);
+        await translate(snapshot, false, { webRegionSelection });
         return;
       }
       const capture = await captureWebRegion(region.rect, pageUrl);
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;
       if (!capture) {
+        failedWebRegionSelection = webRegionSelection;
         overlay.showError({
           message: '没有成功截取这个网页区域，请重新框选后再试。',
           showSettings: false,
           retryable: false,
+          webRegionRecovery: true,
         }, region.rect);
         return;
       }
+      capture.webRegionSelection = webRegionSelection;
       await translateImageRegion(capture);
     }).catch((error: unknown) => {
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;
+      failedWebRegionSelection = attemptedSelection;
       overlay.showError({
         message: runtimeConnectionErrorMessage(error),
         showSettings: false,
         retryable: true,
-      });
+        ...(attemptedSelection ? { webRegionRecovery: true } : {}),
+      }, attemptedSelection?.rect);
     });
   }
 
@@ -1634,6 +1680,9 @@ export async function startSelectionTranslator(
     await translate(snapshot, true, {
       ...(locator.sourceLabel ? { sourceLabel: locator.sourceLabel } : {}),
       ...(result.sourceLocation ? { sourceLocation: result.sourceLocation } : {}),
+      ...(webRegionSelectionForContext(sourceContext)
+        ? { webRegionSelection: webRegionSelectionForContext(sourceContext)! }
+        : {}),
     }, revisionRequestForResult(result, adjustment));
   }
 
@@ -1644,6 +1693,7 @@ export async function startSelectionTranslator(
     revision?: TranslationRevisionRequest,
   ): Promise<void> {
     const useBrowserSidebar = surface !== 'pdf' && browserSidebarActive;
+    failedWebRegionSelection = metadata?.webRegionSelection;
     pendingSettingsRecovery = undefined;
     activePartialText = undefined;
     if (inFlightRequestId && inFlightRequestId !== snapshot.requestId) {
@@ -1714,6 +1764,7 @@ export async function startSelectionTranslator(
       const alreadyRendered = completedEarlyRequestId === snapshot.requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        failedWebRegionSelection = undefined;
         activePartialText = undefined;
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
@@ -1768,6 +1819,7 @@ export async function startSelectionTranslator(
                 },
               }
             : {}),
+          ...(metadata?.webRegionSelection ? { webRegionRecovery: true } : {}),
         },
         selectionRect(snapshot),
       );
@@ -1782,6 +1834,7 @@ export async function startSelectionTranslator(
           showSettings: false,
           retryable: true,
           ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
+          ...(metadata?.webRegionSelection ? { webRegionRecovery: true } : {}),
         },
         selectionRect(snapshot),
       );
@@ -1829,6 +1882,7 @@ export async function startSelectionTranslator(
     revision?: TranslationRevisionRequest,
   ): Promise<void> {
     const requestId = crypto.randomUUID();
+    failedWebRegionSelection = capture.webRegionSelection;
     pendingSettingsRecovery = undefined;
     activePartialText = undefined;
     if (inFlightRequestId) {
@@ -1888,6 +1942,7 @@ export async function startSelectionTranslator(
       const alreadyRendered = completedEarlyRequestId === requestId;
       inFlightRequestId = undefined;
       if (response.ok) {
+        failedWebRegionSelection = undefined;
         activePartialText = undefined;
         rememberResultRetryContext(response.data.result, activeRetryContext);
         syncRevisionMarkers(response.data.result);
@@ -1931,6 +1986,7 @@ export async function startSelectionTranslator(
                 },
               }
             : {}),
+          ...(capture.webRegionSelection ? { webRegionRecovery: true } : {}),
         },
         capture.rect,
       );
@@ -1944,6 +2000,7 @@ export async function startSelectionTranslator(
           showSettings: false,
           retryable: true,
           ...(currentPartialOutput() ? { partialText: currentPartialOutput() } : {}),
+          ...(capture.webRegionSelection ? { webRegionRecovery: true } : {}),
         },
         capture.rect,
       );
@@ -2182,6 +2239,7 @@ export async function startSelectionTranslator(
     pendingSelectionMarkerRequestId = undefined;
     activeImageRegion = undefined;
     activeRetryContext = undefined;
+    failedWebRegionSelection = undefined;
     activePartialText = undefined;
     pendingSettingsRecovery = undefined;
     resultRetryContexts.clear();
@@ -2216,6 +2274,7 @@ export async function startSelectionTranslator(
       activePdfRegionLocation = undefined;
       activeTextMetadata = undefined;
       activeRetryContext = undefined;
+      failedWebRegionSelection = undefined;
       activePartialText = undefined;
       pendingSettingsRecovery = undefined;
       resultRetryContexts.clear();

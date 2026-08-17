@@ -2834,6 +2834,8 @@ test('frames webpage regions with local text first and screenshot only when need
   await expect(textRegion.locator('.confirm')).toHaveText('翻译截图');
   await textRegion.locator('.mode').click();
   await expect(textRegion.locator('.confirm')).toHaveText('翻译文字');
+  const originalRegionBounds = await textRegion.locator('.selection').boundingBox();
+  expect(originalRegionBounds).not.toBeNull();
   await textRegion.locator('.confirm').click();
   await expect(textRegion).toHaveCount(0);
   await expect(page.locator('#tex-selection-translator-root .body'))
@@ -2846,6 +2848,63 @@ test('frames webpage regions with local text first and screenshot only when need
   expect(selectedRegionPayload.text).toContain('A consistent academic translation');
   expect(selectedRegionPayload.text).not.toContain('research papers');
   expect(visionRequests).toHaveLength(visionBeforeText);
+
+  const resultOverlay = page.locator('#tex-selection-translator-root');
+  await resultOverlay.locator('details.more > summary').click();
+  await expect(resultOverlay.getByRole('button', { name: '调整区域' })).toBeVisible();
+  await expect(resultOverlay.getByRole('button', { name: '重新框选' })).toBeVisible();
+  await resultOverlay.getByRole('button', { name: '调整区域' }).click();
+  const adjustedRegion = page.locator('#pi-web-region-selection-root');
+  await expect(adjustedRegion.locator('.selection')).toBeVisible();
+  await expect(adjustedRegion.locator('.selection')).toBeFocused();
+  await expect(adjustedRegion.locator('.confirm')).toHaveText('翻译文字');
+  const restoredRegionBounds = await adjustedRegion.locator('.selection').boundingBox();
+  expect(restoredRegionBounds).not.toBeNull();
+  if (originalRegionBounds && restoredRegionBounds) {
+    expect(restoredRegionBounds.x).toBeCloseTo(originalRegionBounds.x, 0);
+    expect(restoredRegionBounds.y).toBeCloseTo(originalRegionBounds.y, 0);
+    expect(restoredRegionBounds.width).toBeCloseTo(originalRegionBounds.width, 0);
+    expect(restoredRegionBounds.height).toBeCloseTo(originalRegionBounds.height, 0);
+  }
+  expect(textRequests).toHaveLength(textBefore + 1);
+  await adjustedRegion.locator('.selection').press('ArrowRight');
+  const movedRegionBounds = await adjustedRegion.locator('.selection').boundingBox();
+  expect(movedRegionBounds).not.toBeNull();
+  if (restoredRegionBounds && movedRegionBounds) {
+    expect(movedRegionBounds.x).toBeCloseTo(restoredRegionBounds.x + 6, 0);
+    expect(movedRegionBounds.width).toBeCloseTo(restoredRegionBounds.width, 0);
+  }
+  await adjustedRegion.locator('.selection').press('Shift+ArrowRight');
+  const resizedRegionBounds = await adjustedRegion.locator('.selection').boundingBox();
+  expect(resizedRegionBounds).not.toBeNull();
+  if (movedRegionBounds && resizedRegionBounds) {
+    expect(resizedRegionBounds.width).toBeCloseTo(movedRegionBounds.width + 6, 0);
+  }
+  expect(textRequests).toHaveLength(textBefore + 1);
+  await adjustedRegion.locator('.confirm').click();
+  await expect.poll(() => textRequests.length).toBe(textBefore + 2);
+  await expect(resultOverlay.locator('.body'))
+    .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
+
+  await resultOverlay.locator('details.more > summary').click();
+  await resultOverlay.getByRole('button', { name: '重新框选' }).click();
+  const keyboardRegion = page.locator('#pi-web-region-selection-root');
+  await expect(keyboardRegion.locator('.selection')).toBeHidden();
+  expect(textRequests).toHaveLength(textBefore + 2);
+  await page.keyboard.press('Enter');
+  await expect(keyboardRegion.locator('.selection')).toBeVisible();
+  await expect(keyboardRegion.locator('.selection')).toBeFocused();
+  const keyboardRegionBounds = await keyboardRegion.locator('.selection').boundingBox();
+  expect(keyboardRegionBounds).not.toBeNull();
+  await keyboardRegion.locator('.selection').press('Control+ArrowRight');
+  const fineMovedRegionBounds = await keyboardRegion.locator('.selection').boundingBox();
+  expect(fineMovedRegionBounds).not.toBeNull();
+  if (keyboardRegionBounds && fineMovedRegionBounds) {
+    expect(fineMovedRegionBounds.x).toBeCloseTo(keyboardRegionBounds.x + 1, 0);
+  }
+  expect(textRequests).toHaveLength(textBefore + 2);
+  await page.keyboard.press('Escape');
+  await expect(keyboardRegion).toHaveCount(0);
   await closeVisibleTranslationSurfaceForCleanup();
 
   const visionBeforeImage = visionRequests.length;
@@ -2864,7 +2923,16 @@ test('frames webpage regions with local text first and screenshot only when need
   // are covered independently by unit and PDF image tests.
   await expect(page.locator('#tex-selection-translator-root .error'))
     .toContainText('没有成功截取这个网页区域');
+  const captureFailure = page.locator('#tex-selection-translator-root');
+  await expect(captureFailure.getByRole('button', { name: '调整区域' })).toBeVisible();
+  await expect(captureFailure.getByRole('button', { name: '重新框选' })).toBeVisible();
+  await captureFailure.getByRole('button', { name: '调整区域' }).click();
+  const restoredImageRegion = page.locator('#pi-web-region-selection-root');
+  await expect(restoredImageRegion.locator('.selection')).toBeVisible();
+  await expect(restoredImageRegion.locator('.confirm')).toHaveText('翻译截图');
   expect(visionRequests).toHaveLength(visionBeforeImage);
+  await restoredImageRegion.locator('.cancel').click();
+  await expect(restoredImageRegion).toHaveCount(0);
   await closeVisibleTranslationSurfaceForCleanup();
 
   await page.locator('#payment').scrollIntoViewIfNeeded();
