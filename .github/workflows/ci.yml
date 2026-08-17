@@ -45,6 +45,16 @@ jobs:
       - name: Run Edge end-to-end tests
         run: npm run test:e2e:built
 
+      - name: Upload Edge end-to-end diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: pi-translator-edge-e2e-diagnostics-${{ github.sha }}
+          path: test-results/**
+          if-no-files-found: ignore
+          retention-days: 7
+          include-hidden-files: true
+
       - name: Create Edge installation package
         run: npm run zip:edge
 
