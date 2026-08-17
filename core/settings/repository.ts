@@ -157,6 +157,7 @@ export async function getSettings(): Promise<ExtensionSettings> {
     model: activeProfile.model,
     historyLimit:
       value.historyLimit === 10 || value.historyLimit === 20 ? value.historyLimit : 5,
+    sidebarMode: value.sidebarMode === 'browser' ? 'browser' : 'floating',
     sidebarSide: value.sidebarSide === 'left' ? 'left' : 'right',
     sidebarWidth:
       typeof value.sidebarWidth === 'number' && Number.isFinite(value.sidebarWidth)

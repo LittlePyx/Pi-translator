@@ -72,9 +72,11 @@ const readinessNote = element<HTMLParagraphElement>('readiness-note');
 const readinessIssues = element<HTMLElement>('readiness-issues');
 
 let activeUrl: string | undefined;
+let activeTabId: number | undefined;
 let activePdfSourceUrl: string | undefined;
 let activePdfPage: number | undefined;
 let activePdfContext: 'native' | 'overleaf' | undefined;
+let sidebarMode: 'floating' | 'browser' = 'floating';
 let generalPageMode: ExtensionSettings['generalPageMode'] = 'on-demand';
 let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
 let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
@@ -317,7 +319,11 @@ function updateQuickActions(): void {
   primaryAction.classList.add('primary-action');
   if (sidebarAvailable) secondaryAction.classList.add('secondary-action');
   openSidebar.hidden = !sidebarAvailable;
-  openSidebar.textContent = pdfIsCurrent ? '打开翻译侧栏' : '打开连续翻译侧栏';
+  openSidebar.textContent = pdfIsCurrent
+    ? '打开翻译侧栏'
+    : sidebarMode === 'browser'
+      ? '打开浏览器翻译侧栏'
+      : '打开连续翻译侧栏';
   quickActions.dataset.primary = pdfIsCurrent
     ? 'pdf'
     : sidebarAvailable
@@ -419,6 +425,8 @@ async function load(): Promise<void> {
   apiProfile.value = settings.activeApiProfileId;
   apiProfileField.hidden = settings.apiProfiles.length <= 1;
   generalPageMode = settings.generalPageMode;
+  sidebarMode = settings.sidebarMode;
+  activeTabId = tabs[0]?.id;
   await resolveActivePdfContext(tabs[0] ?? {});
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
@@ -519,6 +527,12 @@ textApiStatus.addEventListener('click', () => openSettingsPage(textApiSettingsFo
 visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettingsFocus));
 
 openSidebar.addEventListener('click', () => {
+  if (sidebarMode === 'browser' && !activePdfContext && activeTabId !== undefined) {
+    void browser.sidePanel.open({ tabId: activeTabId })
+      .then(() => window.close())
+      .catch(() => setStatus('当前页面无法打开浏览器侧栏，请刷新后重试。', 'error'));
+    return;
+  }
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
     .then((response: RuntimeResponse<{ opened: true }> | undefined) => {
       if (!response?.ok) {

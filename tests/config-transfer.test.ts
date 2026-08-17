@@ -26,6 +26,7 @@ function configuredSettings(): ExtensionSettings {
     academicGlossary: [{ source: 'attention', target: '注意力' }],
     pdfRegionShortcutKey: 'q',
     autoRenderLatex: false,
+    sidebarMode: 'browser',
   };
 }
 
@@ -42,6 +43,7 @@ describe('safe settings transfer', () => {
     expect(exported).toContain('example-vision-model');
     expect(exported).toContain('pdfRegionShortcutKey');
     expect(exported).toContain('autoRenderLatex');
+    expect(exported).toContain('sidebarMode');
   });
 
   it('ignores injected key fields, regenerates ids, and requires keys to be re-entered', () => {
@@ -60,6 +62,7 @@ describe('safe settings transfer', () => {
     expect(imported.apiKeyStorage).toBe('session');
     expect(imported.pdfRegionShortcutKey).toBe('q');
     expect(imported.autoRenderLatex).toBe(false);
+    expect(imported.sidebarMode).toBe('browser');
     expect(imported.onboardingCompleted).toBe(true);
   });
 

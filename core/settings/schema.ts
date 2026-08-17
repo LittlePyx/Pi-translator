@@ -5,6 +5,7 @@ export type GeneralPageMode = 'off' | 'on-demand' | 'allowlist' | 'all-sites';
 export type ContentMode = 'auto' | 'plain' | 'latex';
 export type HistoryLimit = 5 | 10 | 20;
 export type SidebarSide = 'left' | 'right';
+export type SidebarMode = 'floating' | 'browser';
 export type ContextMode = 'off' | 'sentence' | 'paragraph';
 
 export interface ApiProfile {
@@ -39,6 +40,7 @@ export interface ExtensionSettingsV8 {
   historyLimit: HistoryLimit;
   sentenceAlignmentDefault: boolean;
   autoRenderLatex: boolean;
+  sidebarMode: SidebarMode;
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
@@ -84,6 +86,7 @@ export const DEFAULT_SETTINGS: ExtensionSettings = {
   historyLimit: 5,
   sentenceAlignmentDefault: false,
   autoRenderLatex: true,
+  sidebarMode: 'floating',
   sidebarSide: 'right',
   sidebarWidth: 390,
   contextMode: 'off',

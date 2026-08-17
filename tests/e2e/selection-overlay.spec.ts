@@ -1113,7 +1113,7 @@ test('requires confirmation after partial output and does not automatically repe
   });
 });
 
-test('keeps the native PDF side panel disabled on unrelated webpages', async () => {
+test('pre-enables the browser side panel on supported webpages', async () => {
   const worker = context.serviceWorkers()[0];
   expect(worker).toBeDefined();
   await expect.poll(() => worker!.evaluate(async (targetUrl) => {
@@ -1129,7 +1129,7 @@ test('keeps the native PDF side panel disabled on unrelated webpages', async () 
     const tab = tabs.find((candidate) => candidate.url === targetUrl);
     if (tab?.id === undefined) return undefined;
     return (await api.sidePanel.getOptions({ tabId: tab.id })).enabled;
-  }, page.url())).toBe(false);
+  }, page.url())).toBe(true);
 });
 
 test('pre-enables the side panel before a native PDF context-menu gesture', async () => {
@@ -1171,6 +1171,7 @@ test('pre-enables the side panel before a native PDF context-menu gesture', asyn
 
 test('makes the PDF side-panel empty state contextual and directly actionable', async () => {
   const sidePanel = await context.newPage();
+  const neutralPage = await context.newPage();
   const sourceUrl = 'https://www.overleaf.com/pi-sidepanel-empty-context.pdf';
   let nativePdfPage: Page | undefined;
   await context.route(sourceUrl, async (route) => {
@@ -1182,7 +1183,8 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
   });
   try {
     await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-    await page.bringToFront();
+    await neutralPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    await neutralPage.bringToFront();
     const emptyState = sidePanel.locator('#empty-state');
     const emptyAction = sidePanel.locator('#empty-action');
     await expect(emptyState).toHaveAttribute('data-context', 'other');
@@ -1199,6 +1201,12 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(reader.locator('#empty-state')).toBeVisible();
     await reader.close();
 
+    await page.bringToFront();
+    await expect(emptyState).toHaveAttribute('data-context', 'web');
+    await expect(sidePanel.locator('#empty-title')).toHaveText('浏览器侧栏已就绪');
+    await expect(sidePanel.locator('#empty-description')).toContainText('不会遮挡网页内容');
+    await expect(emptyAction).toHaveText('改用网页浮动侧栏');
+
     nativePdfPage = await context.newPage();
     await nativePdfPage.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
     await nativePdfPage.bringToFront();
@@ -1210,6 +1218,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(emptyAction).toBeFocused();
   } finally {
     await nativePdfPage?.close();
+    await neutralPage.close();
     await sidePanel.close();
     await context.unroute(sourceUrl);
     await page.bringToFront();
@@ -7819,6 +7828,64 @@ test('pins continuous translation to a collapsible sidebar', async () => {
   await overlay.getByTitle('关闭').click();
   await expect(page.locator('#blank')).toBeFocused();
   await clearBrowserSelection();
+});
+
+test('moves webpage continuous translation into browser-owned side-panel space', async ({}, testInfo) => {
+  const sidePanel = await context.newPage();
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await page.bringToFront();
+    await selectElementText('#source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    const requestsBeforeSwitch = textRequests.length;
+
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button', { name: '在浏览器侧栏中打开' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await page.waitForTimeout(250);
+    expect(textRequests).toHaveLength(requestsBeforeSwitch);
+
+    await sidePanel.setViewportSize({ width: 390, height: 760 });
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await expect(sidePanel.locator('#session')).toBeVisible();
+    await expect(sidePanel.locator('#app-subtitle')).toHaveText('网页划词翻译');
+    await expect(sidePanel.locator('#source-kind-label')).toHaveText('当前网页');
+    await expect(sidePanel.locator('#source-label')).toHaveText('www.overleaf.com');
+    await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await expect(sidePanel.locator('#open-pi-reader')).toHaveText('改用浮动侧栏');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await sidePanel.screenshot({
+        path: testInfo.outputPath('web-browser-sidebar-390-light.png'),
+        fullPage: true,
+      });
+    }
+
+    const requestsBeforeContinuousSelection = textRequests.length;
+    await selectElementText('#multi-source');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeContinuousSelection);
+    await expect(sidePanel.locator('#source-text')).toContainText('First important sentence');
+    await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
+
+    await sidePanel.locator('#open-pi-reader').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    const options = await context.newPage();
+    try {
+      await options.goto(`chrome-extension://${extensionId}/options.html`);
+      await expect(options.locator('#sidebar-mode')).toHaveValue('floating');
+    } finally {
+      await options.close();
+    }
+  } finally {
+    await page.bringToFront();
+    if (await overlay.locator('.surface-close').count()) {
+      await overlay.locator('.surface-close').click();
+    }
+    await clearBrowserSelection();
+    await sidePanel.close();
+  }
 });
 
 test('keeps narrow sidebar history navigation bounded and recoverable', async ({}, testInfo) => {

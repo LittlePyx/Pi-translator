@@ -133,6 +133,31 @@ describe('native PDF side-panel sessions', () => {
     expect(JSON.stringify(storage)).not.toContain('"status":"translating"');
   });
 
+  it('restores a browser-sidebar webpage session on the same document URL', async () => {
+    await storePdfSidePanelSession(session({
+      sourceKind: 'web',
+      pageUrl: 'https://example.com/guide?chapter=2#selection',
+      sourceLabel: 'Example Guide',
+      status: 'complete',
+      result: {
+        requestId: 'request-1',
+        originalText: 'Selected webpage text.',
+        translatedText: '网页译文。',
+        warnings: [],
+      },
+    }));
+
+    await expect(restorePdfSidePanelSessions([{
+      id: 7,
+      url: 'https://example.com/guide?chapter=2#another-selection',
+    }])).resolves.toMatchObject([{
+      sourceKind: 'web',
+      sourceLabel: 'Example Guide',
+      status: 'complete',
+      result: { translatedText: '网页译文。' },
+    }]);
+  });
+
   it('keeps an explicitly stopped session non-retryable with its partial translation', async () => {
     await storePdfSidePanelSession(session({
       status: 'error',

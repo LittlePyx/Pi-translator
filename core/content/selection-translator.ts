@@ -5,6 +5,7 @@ import type {
   DocumentMemoryLocator,
   OpenOptionsPageResponse,
   RuntimeMessage,
+  RuntimeResponse,
   SettingsRecoveryReadyPayload,
   SettingsRecoveryRequest,
   TranslateRuntimeResponse,
@@ -184,6 +185,7 @@ const DEFAULT_PUBLIC_SETTINGS: PublicSettings = {
   sentenceAlignmentDefault: false,
   autoRenderLatex: true,
   historyLimit: 5,
+  sidebarMode: 'floating',
   sidebarSide: 'right',
   sidebarWidth: 390,
   contextMode: 'off',
@@ -245,6 +247,7 @@ export async function startSelectionTranslator(
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
   let lastAutoSelectionHash: string | undefined;
+  let browserSidebarActive = false;
   let pdfSelectionPointerId: number | undefined;
   let pdfSelectionInProgress = false;
   let temporaryTargetLanguage = settings.targetLanguage;
@@ -569,6 +572,26 @@ export async function startSelectionTranslator(
               type: 'PAUSE_CURRENT_SITE',
               payload: { pageUrl: location.href },
             } satisfies RuntimeMessage);
+          },
+        }),
+    ...(surface === 'pdf'
+      ? {}
+      : {
+          onOpenBrowserSidebar: async (result: TranslateResult) => {
+            const sourceLabel = options.sourceLabel?.();
+            const response = await browser.runtime.sendMessage({
+              type: 'OPEN_BROWSER_SIDEBAR',
+              payload: {
+                result,
+                pageUrl: options.pageUrl?.() ?? location.href,
+                ...(sourceLabel ? { sourceLabel } : {}),
+              },
+            } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
+            if (!response.ok) throw new Error(response.error.message);
+            browserSidebarActive = true;
+            overlay.deactivateSidebar();
+            lastAutoSelectionHash = activeSelection?.selectionHash;
+            scheduleRefresh();
           },
         }),
     onSidebarChange: (active) => {
@@ -1076,7 +1099,7 @@ export async function startSelectionTranslator(
     const snapshot = captureSelectionSnapshot(settings.contextMode);
     latestSelection = snapshot;
     if (snapshot) rememberSelectionMarkerAnchor(snapshot);
-    if (overlay.isSidebarActive()) {
+    if (overlay.isSidebarActive() || browserSidebarActive) {
       overlay.hideTrigger();
       if (
         !snapshot ||
@@ -1089,7 +1112,7 @@ export async function startSelectionTranslator(
       }
       if (settings.protectSensitiveFields && snapshot.sensitiveField) {
         lastAutoSelectionHash = snapshot.selectionHash;
-        overlay.showSensitiveNotice(selectionRect(snapshot));
+        if (!browserSidebarActive) overlay.showSensitiveNotice(selectionRect(snapshot));
         return;
       }
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
@@ -1554,6 +1577,7 @@ export async function startSelectionTranslator(
     metadata?: TextTranslationMetadata,
     revision?: TranslationRevisionRequest,
   ): Promise<void> {
+    const useBrowserSidebar = surface !== 'pdf' && browserSidebarActive;
     pendingSettingsRecovery = undefined;
     activePartialText = undefined;
     if (inFlightRequestId && inFlightRequestId !== snapshot.requestId) {
@@ -1584,7 +1608,8 @@ export async function startSelectionTranslator(
       snapshot.normalizedText,
       metadata?.sourceLocation,
     );
-    overlay.showLoading(snapshot.requestId, selectionRect(snapshot));
+    if (useBrowserSidebar) overlay.hide();
+    else overlay.showLoading(snapshot.requestId, selectionRect(snapshot));
     const sourceLabel = metadata?.sourceLabel ?? options.sourceLabel?.();
     const documentId = options.documentId?.();
     const requestText = surface === 'pdf'
@@ -1596,9 +1621,7 @@ export async function startSelectionTranslator(
         : snapshot.contextText
       : undefined;
     try {
-      const response = (await browser.runtime.sendMessage({
-        type: 'TRANSLATE_SELECTION',
-        payload: {
+      const payload = {
           requestId: snapshot.requestId,
           ...(documentId ? { documentId } : {}),
           text: requestText,
@@ -1615,8 +1638,11 @@ export async function startSelectionTranslator(
             ? { clientPerformance: metadata.clientPerformance }
             : {}),
           ...(revision ? { revision } : {}),
-        },
-      } satisfies RuntimeMessage)) as TranslateRuntimeResponse;
+        };
+      const requestMessage: RuntimeMessage = useBrowserSidebar
+        ? { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR', payload }
+        : { type: 'TRANSLATE_SELECTION', payload };
+      const response = (await browser.runtime.sendMessage(requestMessage)) as TranslateRuntimeResponse;
 
       if (activeSelection?.requestId !== snapshot.requestId) return;
       const alreadyRendered = completedEarlyRequestId === snapshot.requestId;
@@ -1632,6 +1658,7 @@ export async function startSelectionTranslator(
           markerAnchors.set(responseRequestId, anchor);
         }
         overlayHistory = response.data.history;
+        if (useBrowserSidebar) return;
         if (alreadyRendered) {
           overlay.updateHistory(combinedOverlayHistory());
           completedEarlyRequestId = undefined;
@@ -1645,6 +1672,7 @@ export async function startSelectionTranslator(
         );
         return;
       }
+      if (useBrowserSidebar) return;
       const message = translationErrorMessage(
         response.error.code,
         response.error.message,
@@ -1681,6 +1709,7 @@ export async function startSelectionTranslator(
       if (activeSelection?.requestId !== snapshot.requestId) return;
       if (completedEarlyRequestId === snapshot.requestId) return;
       inFlightRequestId = undefined;
+      if (useBrowserSidebar) return;
       overlay.showError(
         {
           message: runtimeConnectionErrorMessage(error),
@@ -1941,6 +1970,7 @@ export async function startSelectionTranslator(
     }
     if (typed.type === 'TRANSLATION_PROGRESS') {
       if (typed.payload.requestId === inFlightRequestId) {
+        if (browserSidebarActive && surface !== 'pdf') return;
         if (typed.payload.result) {
           activePartialText = undefined;
           const result = typed.payload.result;
@@ -1976,6 +2006,7 @@ export async function startSelectionTranslator(
     }
     if (typed.type === 'PUBLIC_SETTINGS_UPDATED') {
       settings = typed.payload;
+      if (settings.sidebarMode === 'floating') browserSidebarActive = false;
       options.onPublicSettingsChange?.(settings);
       temporaryTargetLanguage = settings.targetLanguage;
       temporaryStyle = settings.style;
@@ -1987,6 +2018,20 @@ export async function startSelectionTranslator(
         autoRenderLatex: settings.autoRenderLatex,
       });
       refreshSelection();
+      return;
+    }
+    if (typed.type === 'BROWSER_SIDEBAR_ACTIVE' && surface !== 'pdf') {
+      browserSidebarActive = true;
+      overlay.deactivateSidebar();
+      lastAutoSelectionHash = activeSelection?.selectionHash;
+      scheduleRefresh();
+      return;
+    }
+    if (typed.type === 'BROWSER_SIDEBAR_CLOSED' && surface !== 'pdf') {
+      browserSidebarActive = false;
+      lastAutoSelectionHash = undefined;
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      scheduleRefresh();
       return;
     }
     if (typed.type === 'OPEN_SIDEBAR') {

@@ -300,6 +300,7 @@ function toPublicSettings(
     sentenceAlignmentDefault: settings.sentenceAlignmentDefault,
     autoRenderLatex: settings.autoRenderLatex,
     historyLimit: settings.historyLimit,
+    sidebarMode: settings.sidebarMode,
     sidebarSide: settings.sidebarSide,
     sidebarWidth: settings.sidebarWidth,
     contextMode: settings.contextMode,
@@ -518,6 +519,47 @@ async function beginPdfSidePanelTranslation(
   try {
     if (!isCurrent()) return;
     const settings = await getSettings();
+    if (session.sourceKind === 'web') {
+      const profile = settings.apiProfiles.find(
+        (candidate) => candidate.id === settings.activeApiProfileId,
+      ) ?? settings.apiProfiles[0];
+      const pending = pdfSidePanelSessions.get(tabId);
+      if (
+        !isCurrent() ||
+        pending?.requestId !== session.requestId ||
+        pending.status !== 'translating'
+      ) return;
+      if (profile) {
+        publishPdfSidePanelSession({
+          ...pending,
+          providerContext: {
+            role: 'text',
+            profileName: profile.name,
+            model: profile.model,
+          },
+        }, false);
+      }
+      const response = await translate({
+        requestId: session.requestId,
+        text: session.sourceText,
+        pageUrl: session.pageUrl,
+        sourceLabel: session.sourceLabel,
+        targetLanguage: settings.targetLanguage,
+        sourceLanguage: settings.sourceLanguage,
+        style: settings.style,
+        contentMode: settings.contentMode,
+      }, tabId, 'runtime');
+      const current = pdfSidePanelSessions.get(tabId);
+      if (
+        !response.ok &&
+        isCurrent() &&
+        current?.requestId === session.requestId &&
+        current.status === 'translating'
+      ) {
+        publishPdfSidePanelSession({ ...current, status: 'error', error: response.error });
+      }
+      return;
+    }
     const visionApiKeyConfigured = settings.visionApiProfileId
       ? Boolean(await getApiKey(settings.visionApiProfileId))
       : false;
@@ -595,6 +637,7 @@ function preparePdfSidePanelTranslation(
 ): PdfSidePanelSession {
   const session: PdfSidePanelSession = {
     tabId,
+    sourceKind: 'pdf',
     requestId: crypto.randomUUID(),
     sourceText: sourceText.trim(),
     pageUrl: sourceUrl ?? '',
@@ -607,6 +650,100 @@ function preparePdfSidePanelTranslation(
     totalChunks: 1,
   };
   return session;
+}
+
+function webSidePanelSourceLabel(
+  request: Pick<TranslateRequest, 'pageUrl' | 'sourceLabel'>,
+): string {
+  return sourceHostForRequest(request) ?? '当前网页';
+}
+
+function prepareWebSidePanelTranslation(
+  tabId: number,
+  request: TranslateRequest,
+  providerContext?: PdfSidePanelSession['providerContext'],
+): PdfSidePanelSession {
+  return {
+    tabId,
+    sourceKind: 'web',
+    requestId: request.requestId,
+    sourceText: request.text.trim(),
+    pageUrl: request.pageUrl,
+    sourceLabel: webSidePanelSourceLabel(request),
+    status: 'translating',
+    progressStage: 'provider',
+    startedAt: Date.now(),
+    completedChunks: 0,
+    totalChunks: 1,
+    ...(providerContext ? { providerContext } : {}),
+  };
+}
+
+function mirroredWebSidePanelSession(
+  tabId: number,
+  payload: NonNullable<Extract<
+    RuntimeMessage,
+    { type: 'OPEN_BROWSER_SIDEBAR' }
+  >['payload']>,
+): PdfSidePanelSession {
+  return {
+    tabId,
+    sourceKind: 'web',
+    requestId: payload.result.requestId,
+    sourceText: payload.result.originalText,
+    pageUrl: payload.pageUrl,
+    sourceLabel: payload.sourceLabel?.trim() || webSidePanelSourceLabel({
+      pageUrl: payload.pageUrl,
+    }),
+    status: 'complete',
+    startedAt: Date.now(),
+    partialText: payload.result.translatedText,
+    completedChunks: payload.result.chunkCount ?? 1,
+    totalChunks: payload.result.chunkCount ?? 1,
+    result: payload.result,
+  };
+}
+
+async function translateSelectionInBrowserSidePanel(
+  request: TranslateRequest,
+  tabId: number,
+): Promise<TranslateRuntimeResponse> {
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrentLifecycle = (): void => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('网页已经关闭或跳转，旧的侧栏翻译没有启动。');
+    }
+  };
+  try {
+    const settings = await getSettings();
+    assertCurrentLifecycle();
+    const profile = settings.apiProfiles.find(
+      (candidate) => candidate.id === settings.activeApiProfileId,
+    ) ?? settings.apiProfiles[0];
+    const session = prepareWebSidePanelTranslation(
+      tabId,
+      request,
+      profile
+        ? { role: 'text', profileName: profile.name, model: profile.model }
+        : undefined,
+    );
+    await runTranslationCommit(tabId, () =>
+      publishPdfSidePanelSessionDurably(session, assertCurrentLifecycle));
+    const response = await translate(request, tabId, 'runtime');
+    if (!response.ok) {
+      const current = pdfSidePanelSessions.get(tabId);
+      if (
+        tabLifecycles.isCurrent(lifecycleToken) &&
+        current?.requestId === request.requestId &&
+        current.status === 'translating'
+      ) {
+        publishPdfSidePanelSession({ ...current, status: 'error', error: response.error });
+      }
+    }
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  }
 }
 
 function showPdfSidePanelSelectionError(
@@ -711,7 +848,10 @@ function initializePdfSidePanelSessions(): Promise<void> {
 function queuePdfSidePanelOptionsSync(): Promise<void> {
   const next = pdfSidePanelOptionsTail.catch(() => undefined).then(async () => {
     await initializePdfSidePanelSessions();
-    const tabs = await browser.tabs.query({});
+    const [tabs, settings] = await Promise.all([
+      browser.tabs.query({}),
+      getSettings(),
+    ]);
     await Promise.all(tabs.flatMap((tab) =>
       tab.id === undefined
         ? []
@@ -720,6 +860,10 @@ function queuePdfSidePanelOptionsSync(): Promise<void> {
             !piPdfReaderTabIds.has(tab.id) && (
               pdfSidePanelSessions.has(tab.id) ||
                 isEdgePdfSidePanelTab(tab.url, PI_PDF_READER_URL) ||
+                Boolean(tab.url && (
+                  isOverleafProjectUrl(tab.url) ||
+                  (settings.generalPageMode !== 'off' && isInjectableWebUrl(tab.url))
+                )) ||
                 // Tab.url is intentionally unavailable on sites for which the
                 // user has not granted host access. Treating that as a normal
                 // page used to disable native PDF tabs before the menu click.
@@ -730,6 +874,80 @@ function queuePdfSidePanelOptionsSync(): Promise<void> {
   });
   pdfSidePanelOptionsTail = next;
   return next;
+}
+
+function openBrowserTranslationSidePanel(
+  tab: { id: number; windowId: number; url?: string },
+  mirrored?: NonNullable<Extract<
+    RuntimeMessage,
+    { type: 'OPEN_BROWSER_SIDEBAR' }
+  >['payload']>,
+): Promise<RuntimeResponse<{ opened: true }>> {
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi || !tab.url || !isInjectableWebUrl(tab.url)) {
+    return Promise.resolve(errorResponse(new TranslationError(
+      'UNSUPPORTED_PAGE',
+      '当前页面无法使用浏览器侧栏。',
+      false,
+    )));
+  }
+  let openPromise: Promise<unknown>;
+  try {
+    // This call must remain synchronous with the content-script or popup click.
+    openPromise = sidePanelApi.open({ tabId: tab.id });
+  } catch (error) {
+    openPromise = Promise.reject(error);
+  }
+  const lifecycleToken = tabLifecycles.capture(tab.id);
+  return openPromise.then(async () => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('网页已经关闭或跳转，浏览器侧栏没有继续打开。');
+    }
+    if (mirrored) {
+      await runTranslationCommit(tab.id, () => publishPdfSidePanelSessionDurably(
+        mirroredWebSidePanelSession(tab.id, mirrored),
+        () => assertTabLifecycleCurrent(lifecycleToken),
+      ));
+    }
+    await mutateSettings((settings) => ({
+      nextSettings: { ...settings, sidebarMode: 'browser' },
+      value: undefined,
+    }));
+    void browser.tabs.sendMessage(tab.id, {
+      type: 'BROWSER_SIDEBAR_ACTIVE',
+    } satisfies RuntimeMessage).catch(() => undefined);
+    return { ok: true as const, data: { opened: true as const } };
+  }).catch((error: unknown) => errorResponse(error));
+}
+
+async function useFloatingSidebar(
+  requestedTabId?: number,
+): Promise<RuntimeResponse<{ opened: true }>> {
+  try {
+    const tab = requestedTabId === undefined
+      ? (await browser.tabs.query({ active: true, currentWindow: true }))[0]
+      : await browser.tabs.get(requestedTabId).catch(() => undefined);
+    if (tab?.id === undefined || !tab.url || !isInjectableWebUrl(tab.url)) {
+      throw new TranslationError('UNSUPPORTED_PAGE', '当前页面无法打开网页浮动侧栏。');
+    }
+    await mutateSettings((settings) => ({
+      nextSettings: { ...settings, sidebarMode: 'floating' },
+      value: undefined,
+    }));
+    await sendToSelectionContentScript(tab, { type: 'OPEN_SIDEBAR' });
+    const sidePanelApi = getSidePanelApi();
+    if (sidePanelApi) {
+      await sidePanelApi.setOptions({ tabId: tab.id, enabled: false }).catch(() => undefined);
+      await sidePanelApi.setOptions({
+        tabId: tab.id,
+        enabled: true,
+        path: PDF_SIDE_PANEL_PATH,
+      }).catch(() => undefined);
+    }
+    return { ok: true, data: { opened: true } };
+  } catch (error) {
+    return errorResponse(error);
+  }
 }
 
 function beginPdfSidePanelOpenFromUserGesture(
@@ -3363,6 +3581,7 @@ export default defineBackground(() => {
     if (areaName === 'local' && 'extensionSettings' in changes) {
       void synchronizeContextMenu();
       scheduleGeneralPageAccessSync();
+      void queuePdfSidePanelOptionsSync().catch(() => undefined);
       void broadcastPublicSettings();
       const next = changes.extensionSettings?.newValue as
         | { rememberRecentTranslations?: boolean; enableSessionCache?: boolean }
@@ -4037,6 +4256,32 @@ export default defineBackground(() => {
         return undefined;
       }
 
+      if (message.type === 'OPEN_BROWSER_SIDEBAR') {
+        const tab = sender.tab;
+        if (tab?.id === undefined) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '需要从网页中的 Pi Translator 切换浏览器侧栏。',
+            false,
+          )));
+        }
+        return openBrowserTranslationSidePanel(
+          { id: tab.id, windowId: tab.windowId, ...(tab.url ? { url: tab.url } : {}) },
+          message.payload,
+        );
+      }
+
+      if (message.type === 'USE_FLOATING_SIDEBAR') {
+        return useFloatingSidebar(message.payload?.tabId);
+      }
+
+      if (
+        message.type === 'BROWSER_SIDEBAR_ACTIVE' ||
+        message.type === 'BROWSER_SIDEBAR_CLOSED'
+      ) {
+        return undefined;
+      }
+
       if (message.type === 'OPEN_SIDEBAR') {
         return browser.tabs
           .query({ active: true, currentWindow: true })
@@ -4195,6 +4440,17 @@ export default defineBackground(() => {
           );
         }
         return translate(message.payload, tabId, progressTargetForSender(sender.url));
+      }
+
+      if (message.type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            'A browser tab is required.',
+          )));
+        }
+        return translateSelectionInBrowserSidePanel(message.payload, tabId);
       }
 
       if (message.type === 'TRANSLATE_IMAGE_REGION') {

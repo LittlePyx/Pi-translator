@@ -312,6 +312,7 @@ interface OverlayActions {
     recovery?: SettingsRecoveryRequest,
   ) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
+  onOpenBrowserSidebar?: (result: TranslateResult) => Promise<void>;
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
   onSidebarLayoutChange: (expanded: boolean, side: SidebarSide, width: number) => void;
@@ -1090,6 +1091,12 @@ export class TranslationOverlay {
   private shouldRenderLatex(result:TranslateResult):boolean {
     return this.latexViewOverrides.get(result.requestId)??this.preferences.autoRenderLatex;
   }
+  deactivateSidebar(): void {
+    const wasActive=this.sidebarActive;
+    this.sidebarActive=false;this.sidebarCollapsed=false;this.markedOnly=false;
+    if(wasActive)this.actions.onSidebarChange(false);
+    this.hide();
+  }
 
   private shouldRenderLexicalLookup(result:TranslateResult):boolean {
     return Boolean(result.lexicalLookup)&&(this.lexicalViewModes.get(result.requestId)??true);
@@ -1275,6 +1282,7 @@ export class TranslationOverlay {
     }
     const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const [value,label] of LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
     language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
+    if(this.actions.onOpenBrowserSidebar){const browserSidebar=this.menuButton('在浏览器侧栏中打开',()=>{browserSidebar.disabled=true;browserSidebar.textContent='正在切换…';void this.actions.onOpenBrowserSidebar?.(result).catch(()=>{browserSidebar.disabled=false;this.flashButtonFeedback(browserSidebar,'无法打开浏览器侧栏',3200,'error')})});menu.append(browserSidebar)}
     if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface())));const settings=this.menuButton('完整设置',()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);details.append(summary,menu);details.addEventListener('toggle',()=>{const surface=details.closest<HTMLElement>('.surface');surface?.classList.toggle('menu-open',details.open);if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
   }
 

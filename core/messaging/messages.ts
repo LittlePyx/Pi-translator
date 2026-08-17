@@ -1,5 +1,11 @@
 import { MAX_SELECTION_LENGTH, type SelectionSnapshot } from '../selection/types';
-import type { ContextMode, GeneralPageMode, HistoryLimit, SidebarSide } from '../settings/schema';
+import type {
+  ContextMode,
+  GeneralPageMode,
+  HistoryLimit,
+  SidebarMode,
+  SidebarSide,
+} from '../settings/schema';
 import type {
   TranslationContentMode,
   TranslationStyle,
@@ -75,6 +81,7 @@ export interface PublicSettings {
   sentenceAlignmentDefault: boolean;
   autoRenderLatex: boolean;
   historyLimit: HistoryLimit;
+  sidebarMode: SidebarMode;
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
@@ -116,6 +123,7 @@ export type TranslationProgressStage =
 
 export interface PdfSidePanelSession {
   tabId: number;
+  sourceKind?: 'pdf' | 'web';
   requestId: string;
   sourceText: string;
   pageUrl: string;
@@ -148,6 +156,7 @@ export interface PdfSidePanelSession {
 
 export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
+  | { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR'; payload: TranslateRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
   | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
@@ -176,6 +185,17 @@ export type RuntimeMessage =
     }
   | { type: 'PDF_SIDE_PANEL_SESSION_UPDATED'; payload: PdfSidePanelSession }
   | { type: 'OPEN_SIDEBAR' }
+  | {
+      type: 'OPEN_BROWSER_SIDEBAR';
+      payload?: {
+        result: TranslateResult;
+        pageUrl: string;
+        sourceLabel?: string;
+      };
+    }
+  | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number } }
+  | { type: 'BROWSER_SIDEBAR_ACTIVE' }
+  | { type: 'BROWSER_SIDEBAR_CLOSED' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
   | { type: 'GET_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
@@ -616,6 +636,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   return (
     type === 'TRANSLATE_SELECTION' ||
+    type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
     type === 'RECOGNIZE_PDF_PAGE' ||
     type === 'CAPTURE_VISIBLE_TAB' ||
@@ -631,6 +652,10 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION' ||
     type === 'PDF_SIDE_PANEL_SESSION_UPDATED' ||
     type === 'OPEN_SIDEBAR' ||
+    type === 'OPEN_BROWSER_SIDEBAR' ||
+    type === 'USE_FLOATING_SIDEBAR' ||
+    type === 'BROWSER_SIDEBAR_ACTIVE' ||
+    type === 'BROWSER_SIDEBAR_CLOSED' ||
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||
     type === 'GET_DOCUMENT_MEMORY' ||

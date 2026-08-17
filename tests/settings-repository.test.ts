@@ -122,6 +122,7 @@ describe('settings upgrade and browser-restart storage policy', () => {
       { source: 'single-pixel imaging', target: '単一画素イメージング' },
     ]);
     expect(settings.sidebarWidth).toBe(640);
+    expect(settings.sidebarMode).toBe('floating');
     expect(settings.pdfRegionShortcutKey).toBe('q');
     expect(settings.autoRenderLatex).toBe(true);
     expect(settings.onboardingCompleted).toBe(true);

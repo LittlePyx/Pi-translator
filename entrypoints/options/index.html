@@ -234,7 +234,8 @@
               <summary><span><strong>更多结果设置</strong><small>历史数量、侧栏、上下文与流式显示</small></span></summary>
               <div class="advanced-grid">
                 <label><span>最近翻译数量</span><select id="history-limit"><option value="5">5 条</option><option value="10">10 条</option><option value="20">20 条</option></select></label>
-                <label><span>固定侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
+                <label><span>侧栏显示方式</span><select id="sidebar-mode"><option value="floating">浮动在网页上</option><option value="browser">浏览器侧栏（不遮挡网页）</option></select></label>
+                <label><span>浮动侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
                 <label class="check-row compact-check"><input id="session-cache" type="checkbox" /><span>重复选区使用会话缓存，减少等待和 API 消耗</span></label>
                 <label><span>上下文辅助</span><select id="context-mode"><option value="off">关闭（最少发送）</option><option value="sentence">使用所在句子</option><option value="paragraph">使用所在段落</option></select><small>上下文只用于消歧；最多发送 2,000 个字符。</small></label>
                 <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示译文；LaTeX 最终仍会完整校验</span></label>

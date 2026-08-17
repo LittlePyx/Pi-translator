@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pi Translator - PDF 翻译</title>
+    <title>Pi Translator - 翻译侧栏</title>
     <link rel="stylesheet" href="./style.css" />
   </head>
   <body>
@@ -13,7 +13,7 @@
           <img src="/brand/pi_logo.png" alt="" />
           <div>
             <strong>Pi Translator</strong>
-            <span>PDF 划词翻译</span>
+            <span id="app-subtitle">网页与 PDF 翻译</span>
           </div>
         </div>
         <button id="open-settings" class="text-action" type="button">设置</button>
@@ -22,15 +22,15 @@
       <section id="empty-state" class="empty-state" data-context="loading" aria-busy="true" aria-labelledby="empty-title">
         <div class="empty-mark">π</div>
         <h1 id="empty-title">正在检查当前页面…</h1>
-        <p id="empty-description">确认当前标签页是否可以开始 PDF 翻译。</p>
+        <p id="empty-description">确认当前标签页可以使用哪种翻译方式。</p>
         <button id="empty-action" class="empty-action" type="button" hidden>打开 Pi PDF 阅读器</button>
         <p id="empty-status" class="empty-status" role="status" aria-live="polite" aria-atomic="true"></p>
       </section>
 
       <section id="session" hidden>
-        <section class="session-context" aria-label="当前 PDF">
+        <section class="session-context" aria-label="当前来源">
           <div class="document-line">
-            <span>当前 PDF</span>
+            <span id="source-kind-label">当前来源</span>
             <strong id="source-label"></strong>
           </div>
           <button id="open-pi-reader" type="button">用 Pi 打开</button>
