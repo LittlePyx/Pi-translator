@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   detectPdfTwoColumnLayout,
+  isPdfTableLikeSelection,
   resolvePdfTextSelectionSnap,
   type PdfSelectionTextItem,
 } from '../core/pdf/text-selection-snap';
@@ -378,6 +379,91 @@ describe('Pi PDF smart text selection', () => {
     });
     expect(snapped?.endIndex).toBe(2);
     expect(snapped).not.toHaveProperty('retainedSpanningContent');
+  });
+
+  it('keeps a three-column table selection raw and marks its reading order as uncertain', () => {
+    const items = [
+      item('Method', 50, 100, 72),
+      item('Accuracy', 235, 100, 74),
+      item('Latency', 420, 100, 64),
+      item('Baseline', 50, 124, 70),
+      item('91.2%', 235, 124, 48),
+      item('42 ms', 420, 124, 52),
+      item('Pi model', 50, 148, 68),
+      item('94.8%', 235, 148, 48),
+      item('31 ms', 420, 148, 52),
+    ];
+    const input = {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 8,
+      endOffset: items[8]!.text.length,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 55,
+      gestureStartY: 108,
+      gestureEndX: 475,
+      gestureEndY: 156,
+    };
+    expect(isPdfTableLikeSelection(items, input)).toBe(true);
+    expect(resolvePdfTextSelectionSnap(items, input)).toMatchObject({
+      startIndex: 0,
+      endIndex: 8,
+      mode: 'word',
+      tableLike: true,
+    });
+  });
+
+  it('recognizes a compact numeric two-column table without flagging ordinary two-column prose', () => {
+    const table = [
+      item('Epoch', 90, 100, 54), item('Loss', 350, 100, 42),
+      item('1', 90, 124, 12), item('0.42', 350, 124, 36),
+      item('2', 90, 148, 12), item('0.31', 350, 148, 36),
+    ];
+    const tableInput = {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 5,
+      endOffset: table[5]!.text.length,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 92,
+      gestureStartY: 108,
+      gestureEndX: 385,
+      gestureEndY: 156,
+    };
+    expect(isPdfTableLikeSelection(table, tableInput)).toBe(true);
+
+    const prose = [
+      item('Left column sentence one.', 40, 100),
+      item('Right column sentence one.', 350, 100),
+      item('Left column sentence two.', 40, 124),
+      item('Right column sentence two.', 350, 124),
+      item('Left column sentence three.', 40, 148),
+      item('Right column sentence three.', 350, 148),
+    ];
+    expect(isPdfTableLikeSelection(prose, { ...tableInput, endIndex: 5 })).toBe(false);
+  });
+
+  it('does not treat a single horizontally aligned line as a table', () => {
+    const items = [
+      item('Metric', 50, 100, 52),
+      item('Value', 235, 100, 48),
+      item('Unit', 420, 100, 36),
+      item('Following prose is outside the drag.', 50, 180),
+    ];
+    expect(isPdfTableLikeSelection(items, {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 3,
+      endOffset: 8,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 55,
+      gestureStartY: 108,
+      gestureEndX: 455,
+      gestureEndY: 108,
+    })).toBe(false);
   });
 
   it('keeps body sentence expansion away from headers and footers', () => {

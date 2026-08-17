@@ -1093,6 +1093,10 @@ export async function startSelectionTranslator(
         return;
       }
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      if (options.selectionPreview?.(snapshot)?.suppressAutoTranslate) {
+        lastAutoSelectionHash = snapshot.selectionHash;
+        return;
+      }
       autoTranslateTimer = setTimeout(() => {
         const current = captureSelectionSnapshot(settings.contextMode);
         if (!current || current.selectionHash !== snapshot.selectionHash) return;

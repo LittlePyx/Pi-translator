@@ -29,6 +29,7 @@ export interface PdfTextSelectionSnap {
   startColumn?: PdfColumn;
   crossColumn?: 'constrained' | 'explicit';
   retainedSpanningContent?: boolean;
+  tableLike?: boolean;
 }
 
 export type PdfColumn = 'left' | 'right';
@@ -289,6 +290,118 @@ function gestureVerticallyIncludes(
   return item.bottom >= gestureTop && item.top <= gestureBottom;
 }
 
+function gestureHorizontallyIncludes(
+  item: PdfSelectionTextItem,
+  input: PdfTextSelectionRange,
+): boolean {
+  if (
+    input.gestureStartX === undefined ||
+    !Number.isFinite(input.gestureStartX) ||
+    input.gestureEndX === undefined ||
+    !Number.isFinite(input.gestureEndX)
+  ) return true;
+  const tolerance = Math.max(6, input.pageWidth * 0.012);
+  const gestureLeft = Math.min(input.gestureStartX, input.gestureEndX) - tolerance;
+  const gestureRight = Math.max(input.gestureStartX, input.gestureEndX) + tolerance;
+  return item.right >= gestureLeft && item.left <= gestureRight;
+}
+
+interface PdfTableRow {
+  centerY: number;
+  items: Array<{ item: PdfSelectionTextItem; index: number }>;
+}
+
+/**
+ * Conservatively identifies a selected grid of table cells. Ordinary two-column
+ * prose is intentionally excluded unless it also has compact repeated cells and
+ * multiple numeric or symbolic values.
+ */
+export function isPdfTableLikeSelection(
+  items: PdfSelectionTextItem[],
+  input: PdfTextSelectionRange,
+): boolean {
+  const startIndex = Math.min(input.startIndex, input.endIndex);
+  const endIndex = Math.max(input.startIndex, input.endIndex);
+  const candidates = items
+    .map((item, index) => ({ item, index }))
+    .filter(({ item, index }) => (
+      index >= startIndex &&
+      index <= endIndex &&
+      item.text.trim().length > 0 &&
+      item.right > item.left &&
+      item.bottom > item.top &&
+      gestureVerticallyIncludes(item, input) &&
+      gestureHorizontallyIncludes(item, input)
+    ));
+  if (candidates.length < 4) return false;
+
+  const medianHeight = quantile(
+    candidates.map(({ item }) => item.bottom - item.top).filter((height) => height > 0),
+    0.5,
+  );
+  if (medianHeight <= 0) return false;
+  const rowTolerance = Math.max(3, medianHeight * 0.7);
+  const rows: PdfTableRow[] = [];
+  for (const candidate of [...candidates].sort((left, right) => (
+    (left.item.top + left.item.bottom) - (right.item.top + right.item.bottom)
+  ))) {
+    const centerY = (candidate.item.top + candidate.item.bottom) / 2;
+    const row = rows.find((entry) => Math.abs(entry.centerY - centerY) <= rowTolerance);
+    if (row) {
+      row.items.push(candidate);
+      row.centerY = row.items.reduce(
+        (sum, entry) => sum + (entry.item.top + entry.item.bottom) / 2,
+        0,
+      ) / row.items.length;
+    } else {
+      rows.push({ centerY, items: [candidate] });
+    }
+  }
+
+  const minimumCellGap = Math.max(10, input.pageWidth * 0.025);
+  const gridRows = rows.filter((row) => {
+    const sorted = [...row.items].sort((left, right) => left.item.left - right.item.left);
+    return sorted.some((entry, index) => {
+      const next = sorted[index + 1];
+      return Boolean(next && next.item.left - entry.item.right >= minimumCellGap);
+    });
+  });
+  if (gridRows.length < 2) return false;
+
+  const columnTolerance = Math.max(10, input.pageWidth * 0.035);
+  const columnClusters: Array<{
+    left: number;
+    entries: Array<{ item: PdfSelectionTextItem; rowIndex: number }>;
+  }> = [];
+  gridRows.forEach((row, rowIndex) => {
+    for (const { item } of row.items) {
+      const cluster = columnClusters.find((entry) => Math.abs(entry.left - item.left) <= columnTolerance);
+      if (cluster) {
+        cluster.entries.push({ item, rowIndex });
+        cluster.left = cluster.entries.reduce((sum, entry) => sum + entry.item.left, 0) /
+          cluster.entries.length;
+      } else {
+        columnClusters.push({ left: item.left, entries: [{ item, rowIndex }] });
+      }
+    }
+  });
+  const repeatedColumns = columnClusters.filter((cluster) => (
+    new Set(cluster.entries.map(({ rowIndex }) => rowIndex)).size >= 2
+  ));
+  if (repeatedColumns.length >= 3) return true;
+  if (repeatedColumns.length !== 2 || gridRows.length < 3) return false;
+
+  const gridItems = gridRows.flatMap((row) => row.items.map(({ item }) => item));
+  const compactCount = gridItems.filter((item) => (
+    item.right - item.left <= input.pageWidth * 0.18 &&
+    item.text.trim().split(/\s+/u).length <= 5
+  )).length;
+  const dataCellCount = gridItems.filter((item) => (
+    /(?:\d|[%±=<>≤≥])/u.test(item.text)
+  )).length;
+  return compactCount / gridItems.length >= 0.7 && dataCellCount >= 2;
+}
+
 export function detectPdfTwoColumnLayout(
   items: PdfSelectionTextItem[],
   pageWidth: number,
@@ -358,6 +471,17 @@ export function resolvePdfTextSelectionSnap(
   if (!startItem || !endItem) return undefined;
   startOffset = wordBoundary(startItem.text, startOffset, 'start');
   endOffset = wordBoundary(endItem.text, endOffset, 'end');
+
+  if (isPdfTableLikeSelection(items, input)) {
+    return {
+      startIndex,
+      startOffset,
+      endIndex,
+      endOffset,
+      mode: 'word',
+      tableLike: true,
+    };
+  }
 
   const columnLayout = detectPdfTwoColumnLayout(items, input.pageWidth, input.pageHeight);
   const layoutRoles = columnLayout

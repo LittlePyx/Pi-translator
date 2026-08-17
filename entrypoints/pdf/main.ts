@@ -164,6 +164,7 @@ interface CompletedTextSelectionGesture {
   startColumn?: 'left' | 'right';
   crossColumn?: 'constrained' | 'explicit';
   retainedSpanningContent?: boolean;
+  tableLike?: boolean;
 }
 
 let completedTextSelectionGesture: CompletedTextSelectionGesture | undefined;
@@ -565,13 +566,11 @@ function rememberCompletedTextSelectionGesture(
     ...(snap?.startColumn ? { startColumn: snap.startColumn } : {}),
     ...(snap?.crossColumn ? { crossColumn: snap.crossColumn } : {}),
     ...(snap?.retainedSpanningContent ? { retainedSpanningContent: true } : {}),
+    ...(snap?.tableLike ? { tableLike: true } : {}),
   };
 }
 
-function pdfSelectionPreview(snapshot: SelectionSnapshot): {
-  text: string;
-  warning?: string;
-} | undefined {
+function pdfSelectionPreview(snapshot: SelectionSnapshot) {
   const text = compactSelectionGestureText(snapshot.sourceText);
   if (!text) return undefined;
   const gesture = completedTextSelectionGesture;
@@ -581,6 +580,15 @@ function pdfSelectionPreview(snapshot: SelectionSnapshot): {
     Date.now() - gesture.capturedAt <= 30_000 &&
     gesture.selectedText === text,
   );
+  if (matchesGesture && gesture?.tableLike) {
+    return {
+      text,
+      warning: '检测到表格或多列内容，划词顺序可能不可靠',
+      actionLabel: '改用框选',
+      onAction: useCompletedTextSelectionAsRegion,
+      suppressAutoTranslate: true,
+    };
+  }
   const warning = matchesGesture
     ? gesture?.crossColumn === 'constrained'
       ? `已保留${gesture.startColumn === 'right' ? '右' : '左'}栏${gesture.retainedSpanningContent ? '及横跨两栏的内容' : ''}，可重新划选调整`
@@ -591,6 +599,49 @@ function pdfSelectionPreview(snapshot: SelectionSnapshot): {
         : undefined
     : undefined;
   return { text, ...(warning ? { warning } : {}) };
+}
+
+function useCompletedTextSelectionAsRegion(): void {
+  const gesture = completedTextSelectionGesture;
+  if (
+    !gesture ||
+    gesture.documentEpoch !== documentEpoch ||
+    Date.now() - gesture.capturedAt > 30_000 ||
+    gesture.pageElement.dataset.rendered !== 'ready'
+  ) {
+    setRegionMode('single');
+    showNotice('请在表格或多列内容外沿重新拖动框选。', {
+      transient: true,
+      tone: 'info',
+    });
+    return;
+  }
+  const canvas = gesture.pageElement.querySelector<HTMLCanvasElement>('canvas');
+  const pageBounds = gesture.pageElement.getBoundingClientRect();
+  if (!canvas || pageBounds.width <= 0 || pageBounds.height <= 0) {
+    setRegionMode('single');
+    return;
+  }
+  const padding = Math.max(6, Math.min(pageBounds.width, pageBounds.height) * 0.008);
+  const region = normalizeRegion(
+    {
+      x: gesture.region.left - padding,
+      y: gesture.region.top - padding,
+    },
+    {
+      x: gesture.region.right + padding,
+      y: gesture.region.bottom + padding,
+    },
+    { left: 0, top: 0, width: pageBounds.width, height: pageBounds.height },
+  );
+  setRegionMode('single');
+  if (!isUsableRegion(region, 11)) return;
+  const selection = createActiveRegion(gesture.pageElement, canvas, region);
+  createRegionConfirmation(
+    selection,
+    '检测到表格或多列内容；请核对框选范围后再发送',
+  );
+  showNotice(undefined);
 }
 
 function explicitFormulaGestureRegion(
@@ -654,7 +705,14 @@ function finishSmartTextSelection(event: PointerEvent): void {
     textSelectionSnapFrame = undefined;
     const snap = snapPdfSelectionSmartly(gesture, event.clientX, event.clientY);
     rememberCompletedTextSelectionGesture(gesture, event.clientX, event.clientY, snap);
-    if (snap?.crossColumn === 'constrained') {
+    if (snap?.tableLike) {
+      showNotice(
+        continuousSidebarActive
+          ? '检测到表格或多列内容，本次没有自动发送；请使用“框选翻译”核对范围。'
+          : '检测到表格或多列内容，划词顺序可能不可靠；可在选区预览中改用框选。',
+        { transient: true, tone: 'warning' },
+      );
+    } else if (snap?.crossColumn === 'constrained') {
       showNotice(`检测到选区带入另一栏，已保留起始栏${snap.retainedSpanningContent ? '和选中的通栏' : ''}内容。可重新划选调整。`, {
         transient: true,
         tone: 'info',
