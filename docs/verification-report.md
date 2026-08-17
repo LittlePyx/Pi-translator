@@ -1,5 +1,30 @@
 # Pi Translator 发布验收报告
 
+## v0.13.0 GitHub 发布候选（2026-08-18）
+
+本版本为普通网页与 Overleaf 增加一次性区域框选翻译：可靠 DOM 文字默认在本机提取并只发送文字，图像模式必须再次确认才发送当前可见页的选定区域；密码、验证码和支付字段始终阻止发送。本轮同时升级 Node.js 24 CI 与发布流程。发布门禁如下：
+
+| 检查项 | 结果 |
+| --- | --- |
+| TypeScript 类型检查 | 通过 |
+| Vitest 单元测试 | 562/562 通过（80 个文件） |
+| Microsoft Edge 扩展端到端测试 | 98/98 通过，包括网页区域框选、旧设置升级与浏览器重启 |
+| Edge MV3 生产构建 | 通过（3.34 MB） |
+| npm 依赖变化 | 无；锁文件除候选版本号外与 v0.12.1 相同 |
+| API Key 与私钥模式扫描 | 源码及 ZIP 均未发现 |
+| ZIP 文件结构 | 26 项；`manifest.json` 位于根目录；与当前生产构建逐文件一致 |
+| ZIP Manifest | MV3，版本 `0.13.0`；权限清单与 `v0.12.1` 一致 |
+
+安装包：`.output/tex-selection-translator-0.13.0-edge.zip`（1,036,743 bytes）
+
+SHA-256：
+
+```text
+35F5DF8E5BFA5D8DFC7F49C9210242A9712EA34811EFA21FE6C66EFFF97804E6
+```
+
+本节记录发布候选的本地自动化结果。仍需从 Edge 工具栏真实点击扩展，在普通网页完成一次“框选网页区域”的文字优先与截图确认烟测；该项通过前不创建 Git tag、GitHub Release，也不提交 Edge 商店审核。
+
 ## v0.12.1 GitHub 发布候选（2026-08-17）
 
 本版本新增普通网页与 Overleaf 的 Edge 原生侧栏模式、最近译文导航和逐句对照，完善长译文阅读位置、短词释义、实际快捷键检查，以及双栏、通栏公式和表格型 PDF 选区保护。发布门禁如下：
@@ -373,13 +398,15 @@ SHA-256：
 
 ## 发布判断
 
-当前 v0.11.0 ZIP 已通过本地发布门禁，可作为 GitHub Release 与 Edge 商店更新候选。若代码、依赖、manifest、图标或商店文案发生任何变化，应重新执行：
+以本报告顶部与 `package.json` 一致的当前候选为准。若代码、依赖、Manifest、图标、版本元数据或商店文案发生任何变化，应重新执行：
 
 ```powershell
-npm test
-npm run typecheck
+npm ci
 npm run check:secrets
+npm run typecheck
+npm test
 npm run test:e2e
-npm run test:live-formula
-npm run zip:edge
+npm run check:release
 ```
+
+完整人工路径见 `docs/release-checklist.md`。最终 ZIP 必须先通过真实 Edge 工具栏烟测，之后才能创建签名 tag、GitHub Release 或提交商店审核。

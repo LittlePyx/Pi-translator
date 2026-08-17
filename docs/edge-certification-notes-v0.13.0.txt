@@ -1,0 +1,24 @@
+Pi Translator has no Pi account or publisher backend. It is a bring-your-own-API-key client. Use these temporary review credentials:
+
+TEXT TRANSLATION
+Base URL: https://api.deepseek.com
+Model: deepseek-v4-flash
+Key: [TEMPORARY TEXT KEY]
+
+OPTIONAL IMAGE TRANSLATION/OCR
+Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+Model: qwen3.7-plus
+Key: [TEMPORARY VISION KEY]
+
+Valid through: [DATE AFTER REVIEW]
+
+Test steps:
+1. Install the extension. Settings opens automatically. Enter the text values above, connect, and save.
+2. On any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify streaming, copy/correction, and continuous sidebar actions.
+3. Click the toolbar icon and choose “框选网页区域”. Draw over visible article text. The confirmation identifies locally extracted text and sends no screenshot. Confirm to translate.
+4. Optional with the image credentials: draw over an image or Canvas. Only the selected visible region is captured, and only after the confirmation button is clicked. Full-page, auto-scroll, and continuous capture are unavailable. Regions containing password, verification-code, or payment fields are blocked.
+5. From a result, open the Edge browser side panel and select more page text. Its recent-result arrows and “全文 / 逐句” view switch do not make another API request.
+6. Optional: open “PDF 阅读器”, load a local PDF, and translate selectable text or a confirmed image region. Selectable text does not require image capability.
+7. Optional: open a PDF directly in Edge, select text, and use the same context-menu command. The result appears in Edge’s side panel.
+
+Requests go directly to the configured provider. Keys stay in extension storage, are not bundled, and are not exposed to webpages. Screenshots are not stored. No remote code is loaded.
