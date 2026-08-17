@@ -1,23 +1,23 @@
-Pi Translator requires no Pi account, login, subscription, or publisher backend. It is a bring-your-own-API-key client. For certification, use these temporary review credentials:
+Pi Translator has no Pi account or publisher backend. It is a bring-your-own-API-key client. Use these temporary review credentials:
 
 TEXT TRANSLATION
 Base URL: [TEXT API BASE URL]
 Model: [TEXT MODEL]
-API Key: [TEMPORARY REVIEW KEY]
+Key: [TEMPORARY TEXT KEY]
 
 OPTIONAL PDF IMAGE/OCR
 Base URL: [VISION API BASE URL]
 Model: [VISION MODEL]
-API Key: [TEMPORARY VISION KEY]
+Key: [TEMPORARY VISION KEY]
 
-Credentials expire: [DATE AFTER REVIEW]
+Valid through: [DATE AFTER REVIEW]
 
 Test steps:
-1. Install the extension. The settings page opens automatically. Enter the text provider values above, select Connect, then save.
-2. Open any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify the streamed translation, copy/correction actions, and continuous sidebar.
-3. From a completed result, open the Edge browser side panel. Select more text on the page; the independent panel updates without covering page content. Its arrows revisit recent results, and “全文 / 逐句” switches the result view without another API call.
-4. The popup reports whether the text API and Edge shortcut are ready. If Edge did not assign the suggested shortcut because of a conflict, its link opens edge://extensions/shortcuts.
-5. Optional PDF test: configure the vision values above, open “PDF 阅读器”, load a local PDF, then translate selectable text or a user-confirmed image region. Text-only PDF use does not require the vision API.
-6. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result appears in Edge’s side panel.
+1. Install the extension. Settings opens automatically. Enter the text values above, connect, and save.
+2. On any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify streaming, copy/correction, and continuous sidebar actions.
+3. From a result, open the Edge browser side panel and select more page text. The independent panel updates without covering the page. Its arrows revisit recent results; “全文 / 逐句” changes views without another API call.
+4. The popup checks the text API and actual Edge shortcut. If the suggested shortcut was not assigned, its link opens edge://extensions/shortcuts.
+5. Optional: configure the vision values, open “PDF 阅读器”, load a local PDF, and translate selectable text or a confirmed image region. Selectable text does not require vision.
+6. Optional: open a PDF directly in Edge, select text, and use the same context-menu command. The result appears in Edge’s side panel.
 
-API requests go directly to the reviewer-selected provider. Keys are stored only in extension storage, are not bundled in the package, and are not exposed to webpages. Local history navigation, readiness checks, and PDF layout safeguards do not make API requests. The extension loads no remote code.
+Requests go directly to the configured provider. Keys stay in extension storage, are not bundled, and are not exposed to webpages. History navigation, readiness checks, and PDF layout safeguards are local. No remote code is loaded.
