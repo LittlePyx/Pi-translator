@@ -60,7 +60,7 @@
           <p id="source-text"></p>
         </section>
 
-        <section class="content-section result-section">
+        <section id="result-section" class="content-section result-section">
           <div class="section-heading">
             <h2 id="translation-heading">译文</h2>
             <div class="translation-heading-tools">
@@ -98,6 +98,11 @@
             <span id="correction-undo-message">已修正 ·</span>
             <button id="undo-correction" type="button">撤销</button>
           </span>
+          <div id="reading-navigation" class="reading-navigation" role="group" aria-label="长译文阅读导航" hidden>
+            <output id="reading-progress" aria-label="译文阅读进度">顶部</output>
+            <button id="reading-top" type="button" aria-label="回到译文顶部" aria-keyshortcuts="Home" title="回到译文顶部（Home）">↑</button>
+            <button id="reading-bottom" type="button" aria-label="前往译文底部" aria-keyshortcuts="End" title="前往译文底部（End）">↓</button>
+          </div>
           <span id="status" role="status" aria-live="polite"></span>
         </footer>
       </section>

@@ -72,6 +72,7 @@ const emptyDescription = element<HTMLElement>('empty-description');
 const emptyAction = element<HTMLButtonElement>('empty-action');
 const emptyStatus = element<HTMLElement>('empty-status');
 const appSubtitle = element<HTMLElement>('app-subtitle');
+const appHeader = document.querySelector<HTMLElement>('.app-header')!;
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
 const sourceLabel = element<HTMLElement>('source-label');
@@ -80,6 +81,7 @@ const sourceText = element<HTMLElement>('source-text');
 const sourceToggle = element<HTMLButtonElement>('source-toggle');
 const translationState = element<HTMLElement>('translation-state');
 const translationHeading = element<HTMLElement>('translation-heading');
+const resultSection = element<HTMLElement>('result-section');
 const stopTranslation = element<HTMLButtonElement>('stop-translation');
 const translationText = element<HTMLElement>('translation-text');
 const lexicalLookup = element<HTMLElement>('lexical-lookup');
@@ -101,6 +103,10 @@ const correct = element<HTMLButtonElement>('correct');
 const correctionUndo = element<HTMLElement>('correction-undo');
 const correctionUndoMessage = element<HTMLElement>('correction-undo-message');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
+const readingNavigation = element<HTMLElement>('reading-navigation');
+const readingProgress = element<HTMLOutputElement>('reading-progress');
+const readingTop = element<HTMLButtonElement>('reading-top');
+const readingBottom = element<HTMLButtonElement>('reading-bottom');
 const status = element<HTMLElement>('status');
 const sessionActions = element<HTMLElement>('session-actions');
 const openPiReader = element<HTMLButtonElement>('open-pi-reader');
@@ -151,6 +157,21 @@ let activeProgressStage: TranslationProgressStage | undefined;
 let activeProgressFeedback: TranslationProgressFeedback | undefined;
 let translationRenderRevision = 0;
 let activeSpeechRequestId: string | undefined;
+type ReadingRenderIntent = 'automatic' | 'start' | 'restore';
+type ResolvedReadingRenderIntent = Exclude<ReadingRenderIntent, 'automatic'> | 'none';
+interface SidePanelReadingPosition {
+  progress: number;
+  scrollTop: number;
+  atBottom: boolean;
+  segmentId?: string;
+  segmentOffset?: number;
+}
+const readingPositions = new Map<string, SidePanelReadingPosition>();
+let pendingReadingStartIdentity: string | undefined;
+let pendingReadingStartInteractionRevision = 0;
+let readingInteractionRevision = 0;
+let programmaticReadingScroll = false;
+let programmaticReadingScrollRevision = 0;
 
 function resetWebHistoryState(): void {
   webHistoryLoadRevision += 1;
@@ -236,7 +257,7 @@ function showWebHistoryEntry(index: number): void {
   if (!session) return;
   webHistoryIndex = index;
   viewingWebHistory = index > 0;
-  render(session);
+  render(session, 'restore');
 }
 
 async function refreshWebHistory(tabId: number): Promise<void> {
@@ -580,6 +601,7 @@ function renderAlignedTranslation(
   const rows = alignedSegments(session).map((segment, index) => {
     const row = document.createElement('article');
     row.className = 'aligned-segment';
+    row.dataset.segmentId = segment.id;
     const source = document.createElement('div');
     source.className = 'aligned-segment-source';
     source.setAttribute('aria-label', `第 ${index + 1} 句原文`);
@@ -727,8 +749,237 @@ function scheduleStreamViewportFollow(
       || renderRevision !== translationRenderRevision
       || !isSamePdfSidePanelSession(currentSession, session)
     ) return;
-    scrollRoot.scrollTop = scrollRoot.scrollHeight;
+    setReadingScrollTop(scrollRoot.scrollHeight);
   });
+}
+
+function readingIdentity(session: PdfSidePanelSession | null | undefined): string | undefined {
+  if (!session) return undefined;
+  return `${session.tabId}:${session.result?.requestId ?? session.requestId}`;
+}
+
+function readingBounds(): {
+  top: number;
+  bottom: number;
+  range: number;
+  viewportTop: number;
+} | undefined {
+  const scrollRoot = document.scrollingElement;
+  if (!scrollRoot || resultSection.hidden) return undefined;
+  const viewportTop = appHeader.getBoundingClientRect().bottom + 8;
+  const absoluteResultTop = scrollRoot.scrollTop + resultSection.getBoundingClientRect().top;
+  const bottom = Math.max(0, scrollRoot.scrollHeight - scrollRoot.clientHeight);
+  const top = Math.min(bottom, Math.max(0, absoluteResultTop - viewportTop));
+  return { top, bottom, range: Math.max(0, bottom - top), viewportTop };
+}
+
+function setReadingScrollTop(scrollTop: number): void {
+  const scrollRoot = document.scrollingElement;
+  if (!scrollRoot) return;
+  const revision = ++programmaticReadingScrollRevision;
+  programmaticReadingScroll = true;
+  scrollRoot.scrollTop = Math.max(0, Math.min(
+    scrollTop,
+    scrollRoot.scrollHeight - scrollRoot.clientHeight,
+  ));
+  window.requestAnimationFrame(() => {
+    if (revision === programmaticReadingScrollRevision) programmaticReadingScroll = false;
+  });
+}
+
+function rememberCurrentReadingPosition(): void {
+  const session = currentSession;
+  const identity = readingIdentity(session);
+  const scrollRoot = document.scrollingElement;
+  const bounds = readingBounds();
+  if (
+    !session
+    || session.status !== 'complete'
+    || !identity
+    || !scrollRoot
+    || !bounds
+    || translationText.classList.contains('correction-mode')
+    || pendingReadingStartIdentity === identity
+  ) return;
+  const progress = bounds.range > 0
+    ? Math.min(1, Math.max(0, (scrollRoot.scrollTop - bounds.top) / bounds.range))
+    : 0;
+  const position: SidePanelReadingPosition = {
+    progress,
+    scrollTop: scrollRoot.scrollTop,
+    atBottom: bounds.bottom - scrollRoot.scrollTop <= 1,
+  };
+  const segment = [...translationText.querySelectorAll<HTMLElement>('.aligned-segment')]
+    .find((candidate) => candidate.getBoundingClientRect().bottom > bounds.viewportTop + 1);
+  if (segment?.dataset.segmentId) {
+    position.segmentId = segment.dataset.segmentId;
+    position.segmentOffset = segment.getBoundingClientRect().top - bounds.viewportTop;
+  }
+  readingPositions.delete(identity);
+  readingPositions.set(identity, position);
+  while (readingPositions.size > 40) {
+    const oldest = readingPositions.keys().next().value as string | undefined;
+    if (!oldest) break;
+    readingPositions.delete(oldest);
+  }
+}
+
+function resolveReadingRenderIntent(
+  session: PdfSidePanelSession | null | undefined,
+  requested: ReadingRenderIntent,
+  previousIdentity: string | undefined,
+  previousComplete: boolean,
+): ResolvedReadingRenderIntent {
+  const nextIdentity = readingIdentity(session);
+  if (!nextIdentity) return 'none';
+  const markPendingStart = () => {
+    if (pendingReadingStartIdentity === nextIdentity) return;
+    pendingReadingStartIdentity = nextIdentity;
+    pendingReadingStartInteractionRevision = readingInteractionRevision;
+  };
+  const clearPendingStart = () => {
+    if (pendingReadingStartIdentity !== nextIdentity) return;
+    pendingReadingStartIdentity = undefined;
+    pendingReadingStartInteractionRevision = readingInteractionRevision;
+  };
+  if (requested === 'start') {
+    markPendingStart();
+    return 'start';
+  }
+  if (requested === 'restore') {
+    if (readingPositions.has(nextIdentity)) {
+      clearPendingStart();
+      return 'restore';
+    }
+    markPendingStart();
+    return 'start';
+  }
+  if (pendingReadingStartIdentity === nextIdentity && session?.status === 'complete') {
+    if (pendingReadingStartInteractionRevision !== readingInteractionRevision) {
+      clearPendingStart();
+      return 'none';
+    }
+    return 'start';
+  }
+  if (nextIdentity !== previousIdentity) {
+    if (readingPositions.has(nextIdentity)) {
+      clearPendingStart();
+      return 'restore';
+    }
+    markPendingStart();
+    return 'start';
+  }
+  if (previousComplete && session?.status === 'complete') {
+    return readingPositions.has(nextIdentity) ? 'restore' : 'start';
+  }
+  if (!previousComplete && session?.status === 'complete') {
+    if (readingPositions.has(nextIdentity)) return 'restore';
+    markPendingStart();
+    return 'start';
+  }
+  return 'none';
+}
+
+function updateReadingNavigation(): void {
+  const scrollRoot = document.scrollingElement;
+  const bounds = readingBounds();
+  const longResult = Boolean(
+    currentSession?.status === 'complete'
+    && !translationText.classList.contains('correction-mode')
+    && scrollRoot
+    && bounds
+    && bounds.range > Math.max(24, scrollRoot.clientHeight * .08)
+  );
+  const visibilityChanged = readingNavigation.hidden === longResult;
+  readingNavigation.hidden = !longResult;
+  if (!longResult || !scrollRoot || !bounds) {
+    readingTop.disabled = true;
+    readingBottom.disabled = true;
+    return;
+  }
+  const ratio = bounds.range > 0
+    ? Math.min(1, Math.max(0, (scrollRoot.scrollTop - bounds.top) / bounds.range))
+    : 0;
+  const percentage = Math.round(ratio * 100);
+  const atTop = scrollRoot.scrollTop <= bounds.top + 1;
+  const atBottom = bounds.bottom - scrollRoot.scrollTop <= 1;
+  readingProgress.value = atTop ? '顶部' : atBottom ? '底部' : `${percentage}%`;
+  readingProgress.textContent = readingProgress.value;
+  readingProgress.setAttribute('aria-label', `译文阅读进度 ${percentage}%`);
+  readingTop.disabled = atTop;
+  readingBottom.disabled = atBottom;
+  if (visibilityChanged) window.requestAnimationFrame(updateReadingNavigation);
+}
+
+function applyReadingPosition(
+  session: PdfSidePanelSession,
+  intent: ResolvedReadingRenderIntent,
+): void {
+  if (intent === 'none') return;
+  const identity = readingIdentity(session);
+  const bounds = readingBounds();
+  const scrollRoot = document.scrollingElement;
+  if (!identity || !bounds || !scrollRoot) return;
+  const position = intent === 'restore' ? readingPositions.get(identity) : undefined;
+  if (!position) {
+    setReadingScrollTop(bounds.top);
+    if (session.status === 'complete' && pendingReadingStartIdentity === identity) {
+      pendingReadingStartIdentity = undefined;
+    }
+    return;
+  }
+  if (position.atBottom) {
+    setReadingScrollTop(bounds.bottom);
+    return;
+  }
+  const segment = position.segmentId
+    ? [...translationText.querySelectorAll<HTMLElement>('.aligned-segment')]
+      .find((candidate) => candidate.dataset.segmentId === position.segmentId)
+    : undefined;
+  if (segment && position.segmentOffset !== undefined) {
+    setReadingScrollTop(
+      scrollRoot.scrollTop
+      + segment.getBoundingClientRect().top
+      - bounds.viewportTop
+      - position.segmentOffset,
+    );
+    return;
+  }
+  setReadingScrollTop(
+    bounds.range > 0 ? bounds.top + position.progress * bounds.range : position.scrollTop,
+  );
+}
+
+function scheduleReadingState(
+  session: PdfSidePanelSession,
+  renderRevision: number,
+  intent: ResolvedReadingRenderIntent,
+  interactionRevision: number,
+): void {
+  window.requestAnimationFrame(() => {
+    if (
+      renderRevision !== translationRenderRevision
+      || readingIdentity(currentSession) !== readingIdentity(session)
+    ) return;
+    if (interactionRevision === readingInteractionRevision) {
+      applyReadingPosition(session, intent);
+    }
+    updateReadingNavigation();
+  });
+}
+
+function scrollReadingToEdge(edge: 'top' | 'bottom'): void {
+  const bounds = readingBounds();
+  if (!bounds || readingNavigation.hidden) return;
+  const moveFocus = document.activeElement === readingTop || document.activeElement === readingBottom;
+  readingInteractionRevision += 1;
+  setReadingScrollTop(edge === 'top' ? bounds.top : bounds.bottom);
+  rememberCurrentReadingPosition();
+  updateReadingNavigation();
+  if (moveFocus) {
+    window.queueMicrotask(() => (edge === 'top' ? readingBottom : readingTop)
+      .focus({ preventScroll: true }));
+  }
 }
 
 function hidePdfAccessAlert(): void {
@@ -814,7 +1065,20 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
   return sourceUrl;
 }
 
-function render(session: PdfSidePanelSession | null | undefined): void {
+function render(
+  session: PdfSidePanelSession | null | undefined,
+  readingIntent: ReadingRenderIntent = 'automatic',
+): void {
+  const previousIdentity = readingIdentity(currentSession);
+  const previousComplete = currentSession?.status === 'complete';
+  if (previousComplete) rememberCurrentReadingPosition();
+  const resolvedReadingIntent = resolveReadingRenderIntent(
+    session,
+    readingIntent,
+    previousIdentity,
+    previousComplete,
+  );
+  const readingInteractionAtRender = readingInteractionRevision;
   const sameSession = Boolean(session && isSamePdfSidePanelSession(currentSession, session));
   const scrollRoot = document.scrollingElement;
   const followStreamOutput = Boolean(
@@ -839,10 +1103,23 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   translationText.classList.remove('aligned-view');
   translationViewSwitch.hidden = true;
   sourceSection.hidden = false;
+  readingNavigation.hidden = true;
   currentSession = session ?? undefined;
   syncWebHistoryNavigation(currentSession);
   const renderRevision = ++translationRenderRevision;
-  if (session) scheduleStreamViewportFollow(session, renderRevision, followStreamOutput);
+  if (session) {
+    scheduleStreamViewportFollow(
+      session,
+      renderRevision,
+      followStreamOutput && resolvedReadingIntent === 'none',
+    );
+    scheduleReadingState(
+      session,
+      renderRevision,
+      resolvedReadingIntent,
+      readingInteractionAtRender,
+    );
+  }
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
@@ -1081,6 +1358,12 @@ function render(session: PdfSidePanelSession | null | undefined): void {
       }
       finishProgress();
       translationState.textContent = completedState;
+      scheduleReadingState(
+        session,
+        renderRevision,
+        resolvedReadingIntent,
+        readingInteractionAtRender,
+      );
     }).catch(() => undefined);
   }
   if (retryFocusPending) {
@@ -1188,6 +1471,7 @@ webHistoryNewer.addEventListener('click', () => {
 function openCorrectionEditor(): void {
   const session = activeSession();
   if (!session?.result || session.status !== 'complete') return;
+  rememberCurrentReadingPosition();
   const sessionResult = session.result;
   const correctionSession = createManualCorrectionSession({
     translatedText: sessionResult.translatedText,
@@ -1313,6 +1597,7 @@ function openCorrectionEditor(): void {
   translationText.replaceChildren(panel);
   translationViewSwitch.hidden = true;
   sourceSection.hidden = false;
+  readingNavigation.hidden = true;
   formulaView.hidden = true;
   copy.hidden = true;
   copy.disabled = true;
@@ -1322,7 +1607,7 @@ function openCorrectionEditor(): void {
 
   cancel.addEventListener('click', () => {
     if (!isSamePdfSidePanelSession(currentSession, session)) return;
-    render(currentSession);
+    render(currentSession, 'restore');
     queueMicrotask(() => correct.focus());
   });
   panel.addEventListener('keydown', (event) => {
@@ -1634,20 +1919,23 @@ formulaView.addEventListener('click', () => {
   if (!currentSession?.result?.translatedText) return;
   const rendered = formulaRenderOverride ?? autoRenderLatex;
   formulaRenderOverride = !rendered;
-  render(currentSession);
+  render(currentSession, 'restore');
 });
 
 translationViewFull.addEventListener('click', () => {
   if (!currentSession || translationViewSwitch.hidden) return;
   alignedViewPreferred = false;
-  render(currentSession);
+  render(currentSession, 'restore');
 });
 
 translationViewAligned.addEventListener('click', () => {
   if (!currentSession || translationViewSwitch.hidden) return;
   alignedViewPreferred = true;
-  render(currentSession);
+  render(currentSession, 'restore');
 });
+
+readingTop.addEventListener('click', () => scrollReadingToEdge('top'));
+readingBottom.addEventListener('click', () => scrollReadingToEdge('bottom'));
 
 retry.addEventListener('click', () => {
   const session = activeSession();
@@ -1747,6 +2035,31 @@ window.addEventListener('resize', () => {
   const session = currentSession;
   if (!session) return;
   syncSourceDisclosure(session, translationRenderRevision);
+  window.requestAnimationFrame(updateReadingNavigation);
+});
+window.addEventListener('scroll', () => {
+  if (!programmaticReadingScroll) readingInteractionRevision += 1;
+  rememberCurrentReadingPosition();
+  updateReadingNavigation();
+}, { passive: true });
+window.addEventListener('keydown', (event) => {
+  if (
+    readingNavigation.hidden
+    || event.altKey
+    || event.ctrlKey
+    || event.metaKey
+    || event.shiftKey
+    || (event.key !== 'Home' && event.key !== 'End')
+  ) return;
+  const target = event.target;
+  if (
+    target instanceof HTMLInputElement
+    || target instanceof HTMLTextAreaElement
+    || target instanceof HTMLSelectElement
+    || (target instanceof HTMLElement && target.isContentEditable)
+  ) return;
+  event.preventDefault();
+  scrollReadingToEdge(event.key === 'Home' ? 'top' : 'bottom');
 });
 correct.addEventListener('click', openCorrectionEditor);
 undoCorrection.addEventListener('click', undoCurrentCorrection);

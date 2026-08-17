@@ -459,16 +459,33 @@ test.beforeAll(async () => {
     const isVisionProbe = imagePrompt.includes('Read the four black characters');
     const isImageTranslation = Array.isArray(imageMessageContent) && !isVisionProbe;
     const serializedBody = JSON.stringify(body);
-    const isMultiSentenceSelection = serializedBody.includes('First important sentence');
-    const isDenseMetadataSelection = serializedBody.includes('Dense metadata');
-    const isGlobalTermSelection = serializedBody.includes('benefits every reader');
-    const isGlossaryReviewSelection = serializedBody.includes('should remain stable');
-    const isLexicalLookupSelection = serializedBody.includes('continuity');
-    const isDocumentTermSelection = serializedBody.includes('The adaptive sensing policy') ||
-      serializedBody.includes('This adaptive sensing method');
-    const isPdfOptimizerFallback = serializedBody.includes('Optimizer fallback fixture');
+    const userMessageContent = (body.messages as Array<{
+      role?: string;
+      content?: string | Array<{ type?: string; text?: string }>;
+    }> | undefined)?.find((message) => message.role === 'user' &&
+      typeof message.content === 'string')?.content;
+    let requestedText = '';
+    if (typeof userMessageContent === 'string') {
+      try {
+        const payload = JSON.parse(userMessageContent) as { text?: unknown };
+        if (typeof payload.text === 'string') requestedText = payload.text;
+      } catch {
+        requestedText = userMessageContent;
+      }
+    }
+    const isMultiSentenceSelection = requestedText.includes('First important sentence');
+    const isBrowserLongSelection = requestedText.includes(
+      'A long browser side panel result should keep its reading position.',
+    );
+    const isDenseMetadataSelection = requestedText.includes('Dense metadata');
+    const isGlobalTermSelection = requestedText.includes('benefits every reader');
+    const isGlossaryReviewSelection = requestedText.includes('should remain stable');
+    const isLexicalLookupSelection = requestedText.includes('continuity');
+    const isDocumentTermSelection = requestedText.includes('The adaptive sensing policy') ||
+      requestedText.includes('This adaptive sensing method');
+    const isPdfOptimizerFallback = requestedText.includes('Optimizer fallback fixture');
     const isTranslationRevision = serializedBody.includes('translationRevisionPreference');
-    const isPartialRecoverySelection = serializedBody.includes(
+    const isPartialRecoverySelection = requestedText.includes(
       'A recovery request may already contain a partial translation.',
     );
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
@@ -537,6 +554,24 @@ test.beforeAll(async () => {
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
+            } : isBrowserLongSelection ? {
+              translation: [
+                '浏览器侧栏中的长译文会保留当前阅读位置；即使内容包含多个较长段落，用户也可以在结果顶部与底部之间快速移动，而不会影响原网页中的阅读上下文。阅读过程中可以继续核对原文、辨认段落边界，并在需要时复制已经完成的内容，侧栏不会因为一次轻微滚动就擅自跳回末尾。',
+                String.raw`视图切换时仍会保持公式 \(E=mc^2\) 及其周围文字的相对位置；全文、逐句对照和公式源码均使用同一份已完成结果，不会再次调用翻译接口。即使数学渲染改变了段落高度，阅读位置也会根据当前结果重新校准，使公式之前和之后的说明仍然处于相近的视野范围内。`,
+                '从较早的历史译文返回后，侧栏会恢复这条长译文上次停留的位置；新的网页划词结果则从译文开头开始显示，让连续阅读、比较和复制保持清楚而连贯。只有确实超出一屏的结果才显示紧凑的阅读导航，较短的单句与词语翻译仍保持原本简洁的操作区。',
+              ].join('\n\n'),
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [{
+                id: 'C1S1',
+                translation: '浏览器侧栏中的长译文会保留当前阅读位置；即使内容包含多个较长段落，用户也可以在结果顶部与底部之间快速移动，而不会影响原网页中的阅读上下文。阅读过程中可以继续核对原文、辨认段落边界，并在需要时复制已经完成的内容，侧栏不会因为一次轻微滚动就擅自跳回末尾。',
+              }, {
+                id: 'C1S2',
+                translation: String.raw`视图切换时仍会保持公式 \(E=mc^2\) 及其周围文字的相对位置；全文、逐句对照和公式源码均使用同一份已完成结果，不会再次调用翻译接口。即使数学渲染改变了段落高度，阅读位置也会根据当前结果重新校准，使公式之前和之后的说明仍然处于相近的视野范围内。`,
+              }, {
+                id: 'C1S3',
+                translation: '从较早的历史译文返回后，侧栏会恢复这条长译文上次停留的位置；新的网页划词结果则从译文开头开始显示，让连续阅读、比较和复制保持清楚而连贯。只有确实超出一屏的结果才显示紧凑的阅读导航，较短的单句与词语翻译仍保持原本简洁的操作区。',
+              }],
             } : isMultiSentenceSelection ? {
               translation: '第一句重要译文。第二句补充译文。',
               detectedLanguage: 'en',
@@ -668,6 +703,7 @@ test.beforeAll(async () => {
             <p id="lookup-source">continuity</p>
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
             <p id="browser-history-source">A browser side panel keeps recent translations easy to revisit.</p>
+            <p id="browser-long-source">A long browser side panel result should keep its reading position. Einstein's energy relation may appear as a rendered formula while the view changes. Returning from an older translation should restore the previous place.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
             <p id="recovery-source">A configured API should resume this selected translation automatically.</p>
@@ -7856,6 +7892,7 @@ test('pins continuous translation to a collapsible sidebar', async () => {
 test('moves webpage continuous translation into browser-owned side-panel space', async ({}, testInfo) => {
   const sidePanel = await context.newPage();
   const overlay = page.locator('#tex-selection-translator-root');
+  let originalSentenceAlignmentDefault: boolean | undefined;
   try {
     await page.bringToFront();
     await selectElementText('#source');
@@ -8010,6 +8047,96 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-section')).toBeHidden();
     expect(textRequests).toHaveLength(requestsBeforeCorrectionOpen);
 
+    await sidePanel.setViewportSize({ width: 300, height: 420 });
+    originalSentenceAlignmentDefault = await sidePanel.evaluate(async () => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const stored = await extensionChrome.storage.local.get('extensionSettings');
+      const previous = stored.extensionSettings?.sentenceAlignmentDefault === true;
+      await extensionChrome.storage.local.set({
+        extensionSettings: {
+          ...(stored.extensionSettings ?? {}),
+          sentenceAlignmentDefault: true,
+        },
+      });
+      return previous;
+    });
+    await sidePanel.locator('#open-pi-reader').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button', { name: '在浏览器侧栏中打开' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    const requestsBeforeLongResult = textRequests.length;
+    await selectElementText('#browser-long-source');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeLongResult);
+    await expect(sidePanel.locator('#source-text')).toContainText('A long browser side panel result');
+    await expect(sidePanel.locator('#translation-text')).toContainText('只有确实超出一屏的结果');
+    await expect(translationView).toBeVisible();
+    const readingNavigation = sidePanel.getByRole('group', { name: '长译文阅读导航' });
+    const readingProgress = sidePanel.locator('#reading-progress');
+    const readingTop = sidePanel.getByRole('button', { name: '回到译文顶部' });
+    const readingBottom = sidePanel.getByRole('button', { name: '前往译文底部' });
+    await expect(readingNavigation).toBeVisible();
+    await expect(readingProgress).toHaveText('顶部');
+    await expect(readingTop).toBeDisabled();
+    await expect(readingBottom).toBeEnabled();
+    const newResultStart = await sidePanel.locator('#result-section').evaluate((result) => ({
+      resultTop: result.getBoundingClientRect().top,
+      headerBottom: document.querySelector<HTMLElement>('.app-header')!.getBoundingClientRect().bottom,
+    }));
+    expect(Math.abs(newResultStart.resultTop - newResultStart.headerBottom - 8)).toBeLessThanOrEqual(1);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await sidePanel.screenshot({
+        path: testInfo.outputPath('web-browser-sidebar-reading-300-light.png'),
+      });
+    }
+
+    const requestsBeforeReadingNavigation = textRequests.length;
+    await readingBottom.click();
+    await expect(readingProgress).toHaveText('底部');
+    await expect(readingBottom).toBeDisabled();
+    const longResultBottom = await sidePanel.evaluate(() => document.scrollingElement?.scrollTop ?? 0);
+    expect(longResultBottom).toBeGreaterThan(0);
+
+    await olderTranslation.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(sidePanel.locator('#source-text')).toContainText('A browser side panel');
+    await expect(readingNavigation).toBeHidden();
+    await newerTranslation.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(sidePanel.locator('#source-text')).toContainText('A long browser side panel result');
+    await expect(readingNavigation).toBeVisible();
+    await expect(readingProgress).toHaveText('底部');
+    await expect.poll(() => sidePanel.evaluate(
+      () => document.scrollingElement?.scrollTop ?? 0,
+    )).toBeGreaterThanOrEqual(longResultBottom - 2);
+
+    await fullView.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(readingProgress).toHaveText('底部');
+    const formulaView = sidePanel.locator('#formula-view');
+    await expect(formulaView).toHaveText('源码');
+    await formulaView.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(formulaView).toHaveText('公式');
+    await expect(readingProgress).toHaveText('底部');
+    await alignedView.evaluate((button: HTMLButtonElement) => button.click());
+    await expect(readingProgress).toHaveText('底部');
+    expect(textRequests).toHaveLength(requestsBeforeReadingNavigation);
+
+    await readingTop.focus();
+    await readingTop.press('Home');
+    await expect(readingProgress).toHaveText('顶部');
+    await expect(readingBottom).toBeFocused();
+    await readingBottom.press('End');
+    await expect(readingProgress).toHaveText('底部');
+    await expect(readingTop).toBeFocused();
+    const requestsBeforeCleanupSelection = textRequests.length;
+    await selectElementText('#source');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeCleanupSelection);
+    await expect(sidePanel.locator('#source-text')).toContainText(
+      'A consistent academic translation',
+    );
+    await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await sidePanel.setViewportSize({ width: 390, height: 760 });
+
     await sidePanel.locator('#open-pi-reader').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     const options = await context.newPage();
@@ -8025,6 +8152,26 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       await overlay.locator('.surface-close').click();
     }
     await clearBrowserSelection();
+    if (originalSentenceAlignmentDefault !== undefined && !sidePanel.isClosed()) {
+      await sidePanel.evaluate(async (enabled) => {
+        const extensionChrome = (
+          globalThis as typeof globalThis & { chrome: TestChromeApi }
+        ).chrome;
+        const stored = await extensionChrome.storage.local.get('extensionSettings');
+        await extensionChrome.storage.local.set({
+          extensionSettings: {
+            ...(stored.extensionSettings ?? {}),
+            sentenceAlignmentDefault: enabled,
+          },
+        });
+      }, originalSentenceAlignmentDefault).catch(() => undefined);
+      await page.waitForTimeout(150);
+    }
+    if (await overlay.locator('.surface-close').count()) {
+      await overlay.locator('.surface-close').click();
+    }
+    await clearBrowserSelection();
+    await page.reload();
     await sidePanel.close();
   }
 });
