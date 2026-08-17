@@ -1,13 +1,13 @@
 Pi Translator has no Pi account or publisher backend. It is a bring-your-own-API-key client. Use these temporary review credentials:
 
 TEXT TRANSLATION
-Base URL: [TEXT API BASE URL]
-Model: [TEXT MODEL]
+Base URL: https://api.deepseek.com
+Model: deepseek-v4-flash
 Key: [TEMPORARY TEXT KEY]
 
 OPTIONAL PDF IMAGE/OCR
-Base URL: [VISION API BASE URL]
-Model: [VISION MODEL]
+Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+Model: qwen3.7-plus
 Key: [TEMPORARY VISION KEY]
 
 Valid through: [DATE AFTER REVIEW]
