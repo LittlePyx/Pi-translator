@@ -34,6 +34,8 @@ import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import {
   renderTranslationContent,
+  renderTranslationContents,
+  type TranslationContentTarget,
   type TranslationRenderPerformance,
 } from '../../ui/translation-content';
 import {
@@ -73,6 +75,7 @@ const appSubtitle = element<HTMLElement>('app-subtitle');
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
 const sourceLabel = element<HTMLElement>('source-label');
+const sourceSection = element<HTMLElement>('source-section');
 const sourceText = element<HTMLElement>('source-text');
 const sourceToggle = element<HTMLButtonElement>('source-toggle');
 const translationState = element<HTMLElement>('translation-state');
@@ -85,6 +88,9 @@ const lexicalPartOfSpeech = element<HTMLElement>('lexical-part-of-speech');
 const lexicalSenses = element<HTMLElement>('lexical-senses');
 const speakSource = element<HTMLButtonElement>('speak-source');
 const errorMessage = element<HTMLElement>('error-message');
+const translationViewSwitch = element<HTMLElement>('translation-view-switch');
+const translationViewFull = element<HTMLButtonElement>('translation-view-full');
+const translationViewAligned = element<HTMLButtonElement>('translation-view-aligned');
 const formulaView = element<HTMLButtonElement>('formula-view');
 const progressTrack = element<HTMLElement>('progress-track');
 const errorActions = element<HTMLElement>('error-actions');
@@ -130,6 +136,7 @@ let emptyContext: SidePanelEmptyContext = { kind: 'loading' };
 let emptyContextRevision = 0;
 let autoRenderLatex = true;
 let formulaRenderOverride: boolean | undefined;
+let alignedViewPreferred = false;
 let retryFocusPending = false;
 let retryStatusFocusPending = false;
 let retryFocusTabId: number | undefined;
@@ -554,6 +561,60 @@ function renderTranslationText(
   );
 }
 
+function alignedSegments(session: PdfSidePanelSession) {
+  const segments = session.result?.alignedSegments;
+  if (!segments?.length || segments.some((segment) => (
+    !segment.originalText.trim() || !segment.translatedText.trim()
+  ))) {
+    return [];
+  }
+  return segments;
+}
+
+function renderAlignedTranslation(
+  session: PdfSidePanelSession,
+  renderLatex: boolean,
+  requestId: string,
+): Promise<TranslationRenderPerformance> {
+  const targets: TranslationContentTarget[] = [];
+  const rows = alignedSegments(session).map((segment, index) => {
+    const row = document.createElement('article');
+    row.className = 'aligned-segment';
+    const source = document.createElement('div');
+    source.className = 'aligned-segment-source';
+    source.setAttribute('aria-label', `第 ${index + 1} 句原文`);
+    source.textContent = presentationText(session, segment.originalText);
+    const target = document.createElement('div');
+    target.className = 'aligned-segment-target';
+    target.setAttribute('aria-label', `第 ${index + 1} 句译文`);
+    targets.push({
+      container: target,
+      text: presentationText(session, segment.translatedText),
+      renderLatex,
+    });
+    row.append(source, target);
+    return row;
+  });
+  translationText.replaceChildren(...rows);
+  return renderTranslationContents(
+    targets,
+    (metrics) => recordResultRenderPerformance(requestId, metrics),
+  );
+}
+
+function syncTranslationViewSwitch(session: PdfSidePanelSession): boolean {
+  const available = session.status === 'complete' && alignedSegments(session).length > 0;
+  translationViewSwitch.hidden = !available;
+  const aligned = available && alignedViewPreferred;
+  translationViewFull.classList.toggle('active', !aligned);
+  translationViewFull.setAttribute('aria-pressed', String(!aligned));
+  translationViewAligned.classList.toggle('active', aligned);
+  translationViewAligned.setAttribute('aria-pressed', String(aligned));
+  translationText.classList.toggle('aligned-view', aligned);
+  sourceSection.hidden = aligned;
+  return aligned;
+}
+
 function presentationText(session: PdfSidePanelSession, text: string): string {
   return session.result?.sourceKind === 'image-region' || session.providerContext?.role === 'vision'
     ? normalizeVisionLatexText(text)
@@ -775,6 +836,9 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   sourceLayoutFrame = undefined;
   clearCopyFeedback();
   translationText.classList.remove('correction-mode');
+  translationText.classList.remove('aligned-view');
+  translationViewSwitch.hidden = true;
+  sourceSection.hidden = false;
   currentSession = session ?? undefined;
   syncWebHistoryNavigation(currentSession);
   const renderRevision = ++translationRenderRevision;
@@ -991,15 +1055,15 @@ function render(session: PdfSidePanelSession | null | undefined): void {
   );
   const hasLatex = containsRenderableLatex(translatedText);
   const renderLatex = formulaRenderOverride ?? autoRenderLatex;
+  const renderAligned = syncTranslationViewSwitch(session);
   formulaView.hidden = !hasLatex;
   formulaView.textContent = renderLatex ? '源码' : '公式';
   formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
   formulaView.setAttribute('aria-pressed', String(renderLatex));
-  const renderPromise = renderTranslationText(
-    translatedText,
-    hasLatex && renderLatex,
-    session.result?.requestId ?? session.requestId,
-  );
+  const resultRequestId = session.result?.requestId ?? session.requestId;
+  const renderPromise = renderAligned
+    ? renderAlignedTranslation(session, hasLatex && renderLatex, resultRequestId)
+    : renderTranslationText(translatedText, hasLatex && renderLatex, resultRequestId);
   if (hasLatex && renderLatex) {
     const identity = progressIdentity(session);
     activeProgressIdentity = identity;
@@ -1247,6 +1311,8 @@ function openCorrectionEditor(): void {
   target.setAttribute('aria-describedby', feedback.id);
   translationText.classList.add('correction-mode');
   translationText.replaceChildren(panel);
+  translationViewSwitch.hidden = true;
+  sourceSection.hidden = false;
   formulaView.hidden = true;
   copy.hidden = true;
   copy.disabled = true;
@@ -1568,6 +1634,18 @@ formulaView.addEventListener('click', () => {
   if (!currentSession?.result?.translatedText) return;
   const rendered = formulaRenderOverride ?? autoRenderLatex;
   formulaRenderOverride = !rendered;
+  render(currentSession);
+});
+
+translationViewFull.addEventListener('click', () => {
+  if (!currentSession || translationViewSwitch.hidden) return;
+  alignedViewPreferred = false;
+  render(currentSession);
+});
+
+translationViewAligned.addEventListener('click', () => {
+  if (!currentSession || translationViewSwitch.hidden) return;
+  alignedViewPreferred = true;
   render(currentSession);
 });
 

@@ -216,7 +216,7 @@ main {
   font-weight: 680;
 }
 .source-toggle:hover { color: #4f46e5; background: #f1f3f8; }
-.translation-heading-tools { display: flex; align-items: center; gap: 8px; }
+.translation-heading-tools { display: flex; min-width: 0; align-items: center; justify-content: flex-end; gap: 8px; }
 .translation-heading-tools button {
   min-height: var(--compact-hit);
   border: 0;
@@ -229,6 +229,20 @@ main {
   font-weight: 680;
 }
 .translation-heading-tools button:hover { color: #4f46e5; background: #f1f3f8; }
+.translation-view-switch {
+  display: flex;
+  align-items: stretch;
+  border-bottom: 1px solid #d8dce7;
+}
+.translation-heading-tools .translation-view-switch button {
+  min-width: 31px;
+  border-radius: 0;
+  padding-inline: 4px;
+}
+.translation-heading-tools .translation-view-switch button.active {
+  color: #4f46e5;
+  box-shadow: inset 0 -2px #5b4be0;
+}
 #stop-translation {
   padding-inline: 4px;
   color: #9b5260;
@@ -249,6 +263,33 @@ main {
 }
 .translation-text.pending { color: #7b8498; font-size: 12px; }
 .translation-text.error { color: #b4233b; font-size: 12px; }
+.translation-text.aligned-view {
+  display: grid;
+  white-space: normal;
+}
+.aligned-segment {
+  min-width: 0;
+  padding: 12px 0;
+  border-bottom: 1px solid #e2e6ee;
+}
+.aligned-segment:first-child { padding-top: 0; }
+.aligned-segment:last-child { padding-bottom: 0; border-bottom: 0; }
+.aligned-segment-source {
+  color: #667085;
+  font-size: 11px;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+.aligned-segment-target {
+  min-width: 0;
+  margin-top: 6px;
+  color: #172033;
+  font-size: 14px;
+  line-height: 1.8;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
 .lexical-lookup { margin-top: 10px; border-bottom: 1px solid #e2e6ee; }
 .lexical-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; color: #7b8498; font-size: 10px; }
 .lexical-meta > span + span::before { margin-right: 7px; content: "·"; }
@@ -451,6 +492,11 @@ button:focus-visible {
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
   .source-toggle, .translation-heading-tools button { color: #a6afbd; }
   .source-toggle:hover { color: #c1bcff; background: #202938; }
+  .translation-view-switch { border-color: #424b5b; }
+  .translation-heading-tools .translation-view-switch button.active {
+    color: #c1bcff;
+    box-shadow: inset 0 -2px #8c82f4;
+  }
   #stop-translation { color: #d68b98; }
   #stop-translation:hover { color: #ff9aaa; background: #202938; }
   #stop-translation:disabled { color: #777f8e; }
@@ -490,6 +536,9 @@ button:focus-visible {
   .content-section { border-color: #303846; }
   .content-section h2, .source-section p { color: #a7b0bf; }
   .translation-text { color: #f1f4f8; }
+  .aligned-segment { border-color: #303846; }
+  .aligned-segment-source { color: #a7b0bf; }
+  .aligned-segment-target { color: #f1f4f8; }
   .lexical-lookup, .lexical-senses, .lexical-sense { border-color: #303846; }
   .lexical-meta, .lexical-sense > span:first-child { color: #9aa5b5; }
   .lexical-meta button { color: #a6afbd; }

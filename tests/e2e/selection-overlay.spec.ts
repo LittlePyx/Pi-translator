@@ -6962,6 +6962,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   }, streamingSession);
   await expect(sidePanel.locator('#translation-text'))
     .toContainText('流式译文应当显示在原生 PDF 阅读器旁边');
+  await expect(sidePanel.locator('#translation-view-switch')).toBeHidden();
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('850 毫秒');
   await expect(sidePanel.locator('#correct')).toBeVisible();
@@ -7899,6 +7900,67 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-text')).toContainText('First important sentence');
     await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
 
+    const translationView = sidePanel.getByRole('group', { name: '译文显示方式' });
+    const fullView = sidePanel.getByRole('button', { name: '显示完整译文' });
+    const alignedView = sidePanel.getByRole('button', { name: '显示逐句对照' });
+    await expect(translationView).toBeVisible();
+    await expect(fullView).toHaveAttribute('aria-pressed', 'true');
+    const requestsBeforeViewSwitch = textRequests.length;
+    await alignedView.focus();
+    await alignedView.press('Enter');
+    await expect(alignedView).toBeFocused();
+    await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
+    await expect(sidePanel.locator('#source-section')).toBeHidden();
+    const alignedSegments = sidePanel.locator('.aligned-segment');
+    await expect(alignedSegments).toHaveCount(2);
+    await expect(alignedSegments.first().locator('.aligned-segment-source'))
+      .toHaveText('First important sentence.');
+    await expect(alignedSegments.first().locator('.aligned-segment-target'))
+      .toContainText('第一句重要译文');
+    await fullView.focus();
+    await fullView.press('Enter');
+    await expect(fullView).toBeFocused();
+    await expect(fullView).toHaveAttribute('aria-pressed', 'true');
+    await expect(sidePanel.locator('#source-section')).toBeVisible();
+    await expect(alignedSegments).toHaveCount(0);
+    await alignedView.focus();
+    await alignedView.press('Enter');
+    await expect(sidePanel.locator('#source-section')).toBeHidden();
+    await expect(alignedSegments).toHaveCount(2);
+    expect(textRequests).toHaveLength(requestsBeforeViewSwitch);
+
+    await sidePanel.setViewportSize({ width: 300, height: 720 });
+    const alignedLayout = await sidePanel.locator('#translation-text').evaluate((result) => {
+      const first = result.querySelector<HTMLElement>('.aligned-segment')!;
+      const controls = [...document.querySelectorAll<HTMLElement>('#translation-view-switch button')];
+      return {
+        pageClientWidth: document.documentElement.clientWidth,
+        pageScrollWidth: document.documentElement.scrollWidth,
+        resultClientWidth: result.clientWidth,
+        resultScrollWidth: result.scrollWidth,
+        segmentClientWidth: first.clientWidth,
+        segmentScrollWidth: first.scrollWidth,
+        controlHeights: controls.map((control) => control.getBoundingClientRect().height),
+      };
+    });
+    expect(alignedLayout.pageScrollWidth).toBeLessThanOrEqual(alignedLayout.pageClientWidth + 1);
+    expect(alignedLayout.resultScrollWidth).toBeLessThanOrEqual(alignedLayout.resultClientWidth + 1);
+    expect(alignedLayout.segmentScrollWidth).toBeLessThanOrEqual(alignedLayout.segmentClientWidth + 1);
+    expect(alignedLayout.controlHeights.every((height) => height >= 28)).toBe(true);
+    await sidePanel.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(() => alignedSegments.first().evaluate((segment) => ({
+      source: getComputedStyle(segment.querySelector<HTMLElement>('.aligned-segment-source')!).color,
+      target: getComputedStyle(segment.querySelector<HTMLElement>('.aligned-segment-target')!).color,
+    }))).toEqual({ source: 'rgb(167, 176, 191)', target: 'rgb(241, 244, 248)' });
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await sidePanel.screenshot({
+        path: testInfo.outputPath('web-browser-sidebar-aligned-300-dark.png'),
+        fullPage: true,
+      });
+    }
+    await sidePanel.emulateMedia({ colorScheme: 'light' });
+    await sidePanel.setViewportSize({ width: 390, height: 760 });
+
     const browserHistory = sidePanel.locator('#web-history-navigation');
     const browserHistoryCounter = sidePanel.locator('#web-history-counter');
     const olderTranslation = sidePanel.getByRole('button', { name: '上一条译文' });
@@ -7920,17 +7982,33 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       'A consistent academic translation',
     );
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
+    await expect(alignedSegments).toHaveCount(1);
     expect(textRequests).toHaveLength(requestsBeforeHistoryNavigation);
     await newerTranslation.click();
     await expect(browserHistoryCounter).toHaveText(/^1 \/ [2-5]$/u);
     await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
+    await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
+    await expect(alignedSegments).toHaveCount(2);
 
     await olderTranslation.click();
     await selectElementText('#browser-history-source');
     await expect(sidePanel.locator('#source-text')).toContainText('A browser side panel');
+    await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
+    await expect(alignedSegments).toHaveCount(1);
     await expect(browserHistory).toBeVisible();
     await expect(browserHistoryCounter).toHaveText(/^1 \/ [3-5]$/u);
     await expect(newerTranslation).toBeDisabled();
+
+    const requestsBeforeCorrectionOpen = textRequests.length;
+    await sidePanel.locator('#correct').click();
+    await expect(sidePanel.getByRole('group', { name: '修正译文，公式已锁定' })).toBeVisible();
+    await expect(translationView).toBeHidden();
+    await expect(sidePanel.locator('#source-section')).toBeVisible();
+    await sidePanel.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
+    await expect(sidePanel.locator('#source-section')).toBeHidden();
+    expect(textRequests).toHaveLength(requestsBeforeCorrectionOpen);
 
     await sidePanel.locator('#open-pi-reader').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');

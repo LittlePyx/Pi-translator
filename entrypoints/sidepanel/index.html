@@ -52,7 +52,7 @@
           </div>
         </aside>
 
-        <section class="content-section source-section">
+        <section id="source-section" class="content-section source-section">
           <div class="section-heading">
             <h2>原文</h2>
             <button id="source-toggle" class="source-toggle" type="button" aria-controls="source-text" aria-expanded="false" hidden>展开</button>
@@ -64,6 +64,10 @@
           <div class="section-heading">
             <h2 id="translation-heading">译文</h2>
             <div class="translation-heading-tools">
+              <div id="translation-view-switch" class="translation-view-switch" role="group" aria-label="译文显示方式" hidden>
+                <button id="translation-view-full" type="button" class="active" aria-label="显示完整译文" aria-pressed="true" title="显示完整译文">全文</button>
+                <button id="translation-view-aligned" type="button" aria-label="显示逐句对照" aria-pressed="false" title="显示逐句对照">逐句</button>
+              </div>
               <button id="formula-view" type="button" hidden>源码</button>
               <span id="translation-state" tabindex="-1" aria-live="polite"></span>
               <button id="stop-translation" type="button" title="停止翻译" hidden>停止</button>
