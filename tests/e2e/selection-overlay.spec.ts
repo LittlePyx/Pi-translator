@@ -1,4 +1,12 @@
-import { expect, test, chromium, type BrowserContext, type Page, type Route } from '@playwright/test';
+import {
+  expect,
+  test,
+  chromium,
+  type BrowserContext,
+  type Locator,
+  type Page,
+  type Route,
+} from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -341,6 +349,20 @@ async function selectElementText(selector: string): Promise<void> {
   await expect
     .poll(() => page.evaluate(() => window.getSelection()?.toString().trim() ?? ''))
     .not.toBe('');
+}
+
+async function waitForVisibleBoundingBox(
+  locator: Locator,
+  description: string,
+): Promise<NonNullable<Awaited<ReturnType<Locator['boundingBox']>>>> {
+  let resolved: Awaited<ReturnType<Locator['boundingBox']>> = null;
+  await expect.poll(async () => {
+    const candidate = await locator.boundingBox().catch(() => null);
+    if (candidate && candidate.width > 0 && candidate.height > 0) resolved = candidate;
+    return resolved !== null;
+  }, { message: `Expected a visible bounding box for ${description}.` }).toBe(true);
+  if (!resolved) throw new Error(`Expected a visible bounding box for ${description}.`);
+  return resolved;
 }
 
 async function replaceStoredApiKeys(keys: Record<string, string>): Promise<void> {
@@ -1654,9 +1676,7 @@ test('lightly marks translated source text and previews the translation on hover
   await overlay.getByRole('button', { name: '关闭' }).click();
   await clearBrowserSelection();
   await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
-  const markerBox = await marker.boundingBox();
-  expect(markerBox).not.toBeNull();
-  if (!markerBox) return;
+  const markerBox = await waitForVisibleBoundingBox(marker, 'the webpage source marker');
   await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   const tooltip = markerLayer.locator('.tooltip');
   await expect(tooltip).toContainText('一致的学术翻译');
@@ -1680,9 +1700,10 @@ test('lightly marks translated source text and previews the translation on hover
   await expect(restoredMarker).toBeVisible();
   await overlay.getByRole('button', { name: '关闭' }).click();
   await clearBrowserSelection();
-  const restoredMarkerBox = await restoredMarker.boundingBox();
-  expect(restoredMarkerBox).not.toBeNull();
-  if (!restoredMarkerBox) return;
+  const restoredMarkerBox = await waitForVisibleBoundingBox(
+    restoredMarker,
+    'the restored webpage source marker',
+  );
 
   await page.mouse.click(
     restoredMarkerBox.x + restoredMarkerBox.width / 2,
@@ -1779,12 +1800,9 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   const markerLayer = page.locator('#pi-translation-marker-layer');
   const marker = markerLayer.locator('.marker').first();
   await expect(marker).toBeVisible();
-  const markerBox = await marker.boundingBox();
-  expect(markerBox).not.toBeNull();
-  if (markerBox) {
-    await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
-    await expect(markerLayer.locator('.tooltip')).toContainText('用户手动修订后的学术译文。');
-  }
+  const markerBox = await waitForVisibleBoundingBox(marker, 'the corrected webpage source marker');
+  await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
+  await expect(markerLayer.locator('.tooltip')).toContainText('用户手动修订后的学术译文。');
 
   await overlay.locator('details.more > summary').click();
   await overlay.getByRole('button', { name: '让模型调整…' }).click();
@@ -2549,9 +2567,7 @@ test('retries a failed model adjustment with the frozen draft and revision conte
 
   const marker = page.locator('#pi-translation-marker-layer .marker').first();
   await expect(marker).toBeVisible();
-  const markerBox = await marker.boundingBox();
-  expect(markerBox).not.toBeNull();
-  if (!markerBox) throw new Error('Expected a visible source marker after retry.');
+  const markerBox = await waitForVisibleBoundingBox(marker, 'the retried webpage source marker');
   await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(page.locator('#pi-translation-marker-layer .tooltip')).toContainText('经用户调整后');
   await overlay.locator('.mark-action').click();
@@ -2669,9 +2685,7 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
   await expect(marker).toBeVisible();
   await overlay.getByRole('button', { name: '关闭' }).click();
   await clearBrowserSelection();
-  const markerBox = await marker.boundingBox();
-  expect(markerBox).not.toBeNull();
-  if (!markerBox) return;
+  const markerBox = await waitForVisibleBoundingBox(marker, 'the aligned source marker');
   await page.mouse.move(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(markerLayer.locator('.tooltip')).toContainText('第一句重要译文。');
   await expect(markerLayer.locator('.tooltip')).not.toContainText('第二句补充译文。');
@@ -3455,9 +3469,7 @@ test('optionally restores and clears persistent Pi PDF translation markers', asy
     const markerLayer = restoredReader.locator('#pi-translation-marker-layer');
     const marker = markerLayer.locator('.marker').first();
     await expect(marker).toBeVisible();
-    const markerBounds = await marker.boundingBox();
-    expect(markerBounds).not.toBeNull();
-    if (!markerBounds) return;
+    const markerBounds = await waitForVisibleBoundingBox(marker, 'the restored PDF marker');
     await restoredReader.mouse.move(
       markerBounds.x + markerBounds.width / 2,
       markerBounds.y + markerBounds.height / 2,
@@ -3564,9 +3576,8 @@ test('keeps 100 persistent markers responsive across a long lazily rendered PDF'
     const markerLayer = reader.locator('#pi-translation-marker-layer');
     const firstMarker = markerLayer.locator('.marker').first();
     await expect(firstMarker).toBeVisible();
-    const bounds = await firstMarker.boundingBox();
-    expect(bounds).not.toBeNull();
-    await reader.mouse.click(bounds!.x + bounds!.width / 2, bounds!.y + bounds!.height / 2);
+    const bounds = await waitForVisibleBoundingBox(firstMarker, 'the first persistent PDF marker');
+    await reader.mouse.click(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2);
 
     const overlay = reader.locator('#tex-selection-translator-root');
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
@@ -3689,9 +3700,10 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     const markerLayer = reader.locator('#pi-translation-marker-layer');
     const sourceMarker = markerLayer.locator('.marker').first();
     await expect(sourceMarker).toBeVisible();
-    const markerBounds = await sourceMarker.boundingBox();
-    expect(markerBounds).not.toBeNull();
-    if (!markerBounds) return;
+    const markerBounds = await waitForVisibleBoundingBox(
+      sourceMarker,
+      'the narrow PDF source marker',
+    );
     await reader.mouse.click(
       markerBounds.x + Math.min(markerBounds.width / 2, 40),
       markerBounds.y + markerBounds.height / 2,
@@ -4651,8 +4663,10 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.mark-action')).toHaveAttribute('aria-pressed', 'true');
   await expect(sourceMarker).toBeVisible();
-  const sourceMarkerBox = await sourceMarker.boundingBox();
-  if (!sourceMarkerBox) throw new Error('Expected the refreshed PDF source marker to be visible.');
+  const sourceMarkerBox = await waitForVisibleBoundingBox(
+    sourceMarker,
+    'the refreshed PDF source marker',
+  );
   await pdfPage.mouse.move(
     sourceMarkerBox.x + sourceMarkerBox.width / 2,
     sourceMarkerBox.y + sourceMarkerBox.height / 2,
@@ -4956,22 +4970,19 @@ test('uses reliable PDF text inside a box before falling back to vision and reus
   await expect(marker).toBeVisible();
   await overlay.getByRole('button', { name: '关闭' }).click();
   await expect(marker).toBeVisible();
-  const markerBounds = await marker.boundingBox();
-  expect(markerBounds).not.toBeNull();
-  if (markerBounds) {
-    await pdfPage.evaluate(() => window.getSelection()?.removeAllRanges());
-    await pdfPage.mouse.move(
-      markerBounds.x + markerBounds.width / 2,
-      markerBounds.y + markerBounds.height / 2,
-    );
-    await expect(markerLayer.locator('.tooltip')).toContainText('一致的学术翻译');
-    await pdfPage.mouse.click(
-      markerBounds.x + markerBounds.width / 2,
-      markerBounds.y + markerBounds.height / 2,
-    );
-    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
-    expect(await pdfPage.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
-  }
+  const markerBounds = await waitForVisibleBoundingBox(marker, 'the PDF text-region marker');
+  await pdfPage.evaluate(() => window.getSelection()?.removeAllRanges());
+  await pdfPage.mouse.move(
+    markerBounds.x + markerBounds.width / 2,
+    markerBounds.y + markerBounds.height / 2,
+  );
+  await expect(markerLayer.locator('.tooltip')).toContainText('一致的学术翻译');
+  await pdfPage.mouse.click(
+    markerBounds.x + markerBounds.width / 2,
+    markerBounds.y + markerBounds.height / 2,
+  );
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  expect(await pdfPage.evaluate(() => window.getSelection()?.toString() ?? '')).toBe('');
   await pdfPage.close();
 });
 
@@ -8163,7 +8174,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       });
       return previous;
     });
-    await sidePanel.locator('#open-pi-reader').click();
+    await sidePanel.locator('#open-pi-reader').evaluate((button: HTMLButtonElement) => button.click());
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await overlay.locator('details.more > summary').click();
     await overlay.getByRole('button', { name: '在浏览器侧栏中打开' }).click();
