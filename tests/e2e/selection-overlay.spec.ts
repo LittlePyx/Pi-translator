@@ -318,6 +318,15 @@ async function clearBrowserSelection(): Promise<void> {
   });
 }
 
+async function closeVisibleTranslationSurfaceForCleanup(): Promise<void> {
+  await page.locator('#tex-selection-translator-root .surface-close').evaluateAll((buttons) => {
+    const visibleButton = buttons.find(
+      (button) => (button as HTMLElement).getClientRects().length > 0,
+    );
+    (visibleButton as HTMLButtonElement | undefined)?.click();
+  });
+}
+
 async function selectElementText(selector: string): Promise<void> {
   await page.evaluate((targetSelector) => {
     const target = document.querySelector(targetSelector);
@@ -8161,9 +8170,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     }
   } finally {
     await page.bringToFront();
-    if (await overlay.locator('.surface-close').count()) {
-      await overlay.locator('.surface-close').click();
-    }
+    await closeVisibleTranslationSurfaceForCleanup();
     await clearBrowserSelection();
     if (originalSentenceAlignmentDefault !== undefined && !sidePanel.isClosed()) {
       await sidePanel.evaluate(async (enabled) => {
@@ -8180,9 +8187,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       }, originalSentenceAlignmentDefault).catch(() => undefined);
       await page.waitForTimeout(150);
     }
-    if (await overlay.locator('.surface-close').count()) {
-      await overlay.locator('.surface-close').click();
-    }
+    await closeVisibleTranslationSurfaceForCleanup();
     await clearBrowserSelection();
     await page.reload();
     await sidePanel.close();
