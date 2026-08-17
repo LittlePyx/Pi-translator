@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
 import {
+  detectPdfTwoColumnLayout,
   resolvePdfTextSelectionSnap,
   type PdfSelectionTextItem,
 } from '../core/pdf/text-selection-snap';
 
-function item(text: string, left: number, top: number): PdfSelectionTextItem {
-  return { text, left, top, right: left + 180, bottom: top + 16 };
+function item(text: string, left: number, top: number, width = 180): PdfSelectionTextItem {
+  return { text, left, top, right: left + width, bottom: top + 16 };
 }
 
 describe('Pi PDF smart text selection', () => {
@@ -201,6 +202,182 @@ describe('Pi PDF smart text selection', () => {
       pageHeight: 800,
     });
     expect(snapped?.endIndex).toBeLessThan(3);
+    expect(snapped).toMatchObject({ startColumn: 'left', crossColumn: 'constrained' });
+  });
+
+  it('detects the actual central gutter from text geometry', () => {
+    const items = [
+      item('Left one.', 35, 100),
+      item('Left two.', 35, 120),
+      item('Left three.', 35, 140),
+      item('Right one.', 360, 100),
+      item('Right two.', 360, 120),
+      item('Right three.', 360, 140),
+    ];
+    expect(detectPdfTwoColumnLayout(items, 620, 800)).toMatchObject({
+      gutterLeft: 215,
+      gutterRight: 360,
+      leftItemCount: 3,
+      rightItemCount: 3,
+    });
+  });
+
+  it('preserves an intentional cross-column drag without reordering it', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 1,
+      endIndex: 4,
+      endOffset: 5,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 80,
+      gestureEndX: 390,
+    });
+    expect(snapped).toMatchObject({
+      startIndex: 0,
+      endIndex: 4,
+      startColumn: 'left',
+      crossColumn: 'explicit',
+      mode: 'word',
+    });
+  });
+
+  it('keeps continuous-sidebar selections in their starting column', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 1,
+      endIndex: 4,
+      endOffset: 5,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 80,
+      gestureEndX: 390,
+      allowExplicitCrossColumn: false,
+    });
+    expect(snapped?.endIndex).toBeLessThan(3);
+    expect(snapped).toMatchObject({ startColumn: 'left', crossColumn: 'constrained' });
+  });
+
+  it('uses the pointer origin when a right-column drag crosses backward in DOM order', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 4,
+      endIndex: 4,
+      endOffset: 5,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 390,
+      gestureEndX: 300,
+    });
+    expect(snapped?.startIndex).toBeGreaterThanOrEqual(3);
+    expect(snapped).toMatchObject({ startColumn: 'right', crossColumn: 'constrained' });
+  });
+
+  it('retains a spanning formula that the drag actually passes through', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('E = integral from zero to infinity of p(x) dx.', 120, 166, 370),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 4,
+      endOffset: 6,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 80,
+      gestureStartY: 108,
+      gestureEndX: 285,
+      gestureEndY: 174,
+    });
+    expect(snapped).toMatchObject({
+      endIndex: 3,
+      startColumn: 'left',
+      crossColumn: 'constrained',
+      retainedSpanningContent: true,
+      mode: 'word',
+    });
+  });
+
+  it('does not pull in a spanning title outside the vertical drag path', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('A full-width paper title', 120, 36, 370),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 4,
+      endOffset: 6,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 80,
+      gestureStartY: 108,
+      gestureEndX: 285,
+      gestureEndY: 142,
+    });
+    expect(snapped?.endIndex).toBe(2);
+    expect(snapped).not.toHaveProperty('retainedSpanningContent');
+  });
+
+  it('does not bridge across an opposite-column DOM block to retain distant spanning text', () => {
+    const items = [
+      item('Left one.', 40, 100),
+      item('Left two.', 40, 120),
+      item('Left three.', 40, 140),
+      item('Right one.', 350, 100),
+      item('Right two.', 350, 120),
+      item('Right three.', 350, 140),
+      item('Full-width equation after both columns.', 120, 166, 370),
+    ];
+    const snapped = resolvePdfTextSelectionSnap(items, {
+      startIndex: 0,
+      startOffset: 0,
+      endIndex: 6,
+      endOffset: items[6]!.text.length,
+      pageWidth: 600,
+      pageHeight: 800,
+      gestureStartX: 80,
+      gestureStartY: 108,
+      gestureEndX: 285,
+      gestureEndY: 174,
+    });
+    expect(snapped?.endIndex).toBe(2);
+    expect(snapped).not.toHaveProperty('retainedSpanningContent');
   });
 
   it('keeps body sentence expansion away from headers and footers', () => {

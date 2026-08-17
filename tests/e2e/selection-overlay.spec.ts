@@ -91,6 +91,40 @@ function createMultilineTextPdf(lines: string[]): Buffer {
   return Buffer.from(body);
 }
 
+function createTwoColumnTextPdf(
+  leftLines: string[],
+  rightLines: string[],
+  spanningLines: Array<{ text: string; x: number; y: number }> = [],
+): Buffer {
+  const command = (text: string, x: number, y: number) => {
+    const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
+    return `BT\n/F1 11 Tf\n${x} ${y} Td\n(${escaped}) Tj\nET`;
+  };
+  const stream = [
+    ...leftLines.map((line, index) => command(line, 54, 700 - index * 22)),
+    ...spanningLines.map((line) => command(line.text, line.x, line.y)),
+    ...rightLines.map((line, index) => command(line, 330, 700 - index * 22)),
+  ].join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(body));
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(body);
+}
+
 function createTwoPageTextPdf(firstText: string, secondText: string): Buffer {
   const content = (text: string) => {
     const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
@@ -362,6 +396,7 @@ test.beforeAll(async () => {
     const isDenseMetadataSelection = serializedBody.includes('Dense metadata');
     const isGlobalTermSelection = serializedBody.includes('benefits every reader');
     const isGlossaryReviewSelection = serializedBody.includes('should remain stable');
+    const isLexicalLookupSelection = serializedBody.includes('continuity');
     const isDocumentTermSelection = serializedBody.includes('The adaptive sensing policy') ||
       serializedBody.includes('This adaptive sensing method');
     const isPdfOptimizerFallback = serializedBody.includes('Optimizer fallback fixture');
@@ -456,6 +491,19 @@ test.beforeAll(async () => {
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
+            } : isLexicalLookupSelection ? {
+              translation: '连续性',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
+              lookup: {
+                pronunciation: '/ˌkɒntɪˈnjuːəti/',
+                partOfSpeech: 'noun',
+                senses: [
+                  { partOfSpeech: 'noun', meaning: '连续性' },
+                  { partOfSpeech: 'noun', meaning: '连贯性' },
+                ],
+              },
             } : isDocumentTermSelection ? {
               translation: '自适应感知策略在该文档中保持稳定，并在具有层级约束的多阶段重建任务中持续保持一致的技术术语与推理边界。',
               detectedLanguage: 'en',
@@ -550,6 +598,7 @@ test.beforeAll(async () => {
             <p id="source">A consistent academic translation improves the readability of research papers.</p>
             <p id="global-term-source">A consistent academic translation benefits every reader.</p>
             <p id="term-review-source">A technical term should remain stable.</p>
+            <p id="lookup-source">continuity</p>
             <p id="multi-source">First important sentence. Second supporting sentence.</p>
             <p id="term-source">The adaptive sensing policy is stable in this document.</p>
             <p id="term-followup">This adaptive sensing method remains consistent.</p>
@@ -605,6 +654,88 @@ test('exposes the native Edge side panel API to the service worker', async () =>
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
 });
 
+test('reports the shortcut actually assigned by Edge', async () => {
+  const worker = context.serviceWorkers()[0];
+  expect(worker).toBeDefined();
+  const commands = await worker!.evaluate(() => new Promise<Array<{
+    name?: string;
+    shortcut?: string;
+  }>>((resolve) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { commands: { getAll(callback: (commands: Array<{
+        name?: string;
+        shortcut?: string;
+      }>) => void): void } };
+    }).chrome;
+    api.commands.getAll(resolve);
+  }));
+  const translationCommand = commands.find((command) => command.name === 'translate-selection');
+  expect(translationCommand).toBeDefined();
+
+  const options = await context.newPage();
+  try {
+    await options.goto(`chrome-extension://${extensionId}/options.html`);
+    const onboarding = options.locator('#onboarding-dialog');
+    if (await onboarding.isVisible()) await options.locator('#onboarding-skip').click();
+    const chip = options.locator('#translation-shortcut-chip');
+    if (translationCommand?.shortcut) {
+      await expect(chip).toContainText(translationCommand.shortcut.replaceAll('+', ' + '));
+      await expect(options.locator('#translation-shortcut-help'))
+        .toContainText(translationCommand.shortcut.split('+')[0]!);
+    } else {
+      await expect(chip).toHaveText('翻译快捷键未设置');
+      await expect(options.locator('#open-shortcuts')).toHaveText('设置快捷键');
+    }
+  } finally {
+    await options.close();
+  }
+
+  const popup = await context.newPage();
+  try {
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    const readinessPanel = popup.locator('#readiness-panel');
+    await expect(readinessPanel).not.toHaveAttribute('aria-busy', 'true');
+    if (translationCommand?.shortcut) {
+      await expect(readinessPanel).toHaveAttribute('data-state', 'ready');
+      await expect(popup.locator('#readiness-title')).toHaveText('Pi Translator 已就绪');
+      await expect(popup.locator('#readiness-issues')).toBeHidden();
+    } else {
+      await expect(readinessPanel).toHaveAttribute('data-state', 'issue');
+      await expect(popup.locator('#readiness-issues')).toContainText('翻译快捷键尚未设置');
+      await expect(readinessPanel.getByRole('button', { name: '设置快捷键' })).toBeVisible();
+    }
+  } finally {
+    await popup.close();
+  }
+});
+
+test('shows a compact contextual lookup for a short selection', async () => {
+  const requestsBefore = textRequests.length;
+  await selectElementText('#lookup-source');
+  const overlay = page.locator('#tex-selection-translator-root');
+  await overlay.locator('.trigger').click();
+
+  await expect(overlay.locator('.title')).toHaveText('简明释义');
+  await expect(overlay.locator('.lexical-source')).toHaveText('continuity');
+  await expect(overlay.locator('.lexical-meta')).toContainText('/ˌkɒntɪˈnjuːəti/');
+  await expect(overlay.locator('.lexical-meta')).toContainText('noun');
+  await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+  await expect(overlay.locator('.lexical-sense')).toContainText('连贯性');
+
+  await overlay.getByRole('button', { name: '按普通译文方式查看' }).click();
+  await expect(overlay.locator('.title')).toHaveText('翻译结果');
+  await expect(overlay.locator('.body')).toHaveText('连续性');
+  await overlay.getByRole('button', { name: '返回短词和短语释义' }).click();
+  await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+
+  expect(textRequests).toHaveLength(requestsBefore + 1);
+  const request = JSON.stringify(textRequests.at(-1));
+  expect(request).toContain('lookup_and_translate');
+  expect(request).toContain('lookupMode');
+  await page.keyboard.press('Escape');
+  await clearBrowserSelection();
+});
+
 test('deep-links recovery actions to API and PDF image settings', async () => {
   const options = await context.newPage();
   try {
@@ -619,6 +750,9 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     );
     await expect(options.locator('#connection-advanced')).toHaveAttribute('open', '');
     await expect(options.locator('#test-connection')).toBeFocused();
+    await options.goto(`chrome-extension://${extensionId}/options.html?focus=pages#pages`);
+    await expect(options.locator('#settings-pages')).toBeVisible();
+    await expect(options.locator('#general-page-mode')).toBeFocused();
     await options.goto(`chrome-extension://${extensionId}/options.html?focus=vision#connection`);
     await expect(options.locator('#vision-setup-details')).toHaveAttribute('open', '');
     await expect(options.locator('#api-profile')).toHaveValue('vision-e2e');
@@ -3467,6 +3601,221 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await reader.close();
     await context.unroute(sourceUrl);
   }
+});
+
+test('protects and previews selections in a real two-column PDF', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  const leftLines = [
+    'Left column sentence one.',
+    'Left column sentence two.',
+    'Left column sentence three.',
+  ];
+  const rightLines = [
+    'Right column sentence one.',
+    'Right column sentence two.',
+    'Right column sentence three.',
+  ];
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'two-column-selection.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTwoColumnTextPdf(leftLines, rightLines),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  const spans = firstPage.locator('.textLayer span');
+  await expect(spans).toHaveCount(6);
+  const points = await firstPage.evaluate(() => {
+    const layer = document.querySelector<HTMLElement>('.pdf-page .textLayer');
+    const textSpans = [...document.querySelectorAll<HTMLElement>('.pdf-page .textLayer span')];
+    const left = textSpans[0]?.getBoundingClientRect();
+    const right = textSpans[4]?.getBoundingClientRect();
+    if (!layer || !left || !right) throw new Error('Two-column PDF text geometry is missing');
+    const layerBounds = layer.getBoundingClientRect();
+    return {
+      start: { x: left.left + 5, y: left.top + left.height / 2 },
+      gutter: { x: (left.right + right.left) / 2, y: right.top + right.height / 2 },
+      right: { x: right.left + Math.min(20, right.width / 2), y: right.top + right.height / 2 },
+      layerWidth: layerBounds.width,
+      geometry: textSpans.map((span) => {
+        const bounds = span.getBoundingClientRect();
+        return {
+          text: span.textContent,
+          left: Math.round(bounds.left - layerBounds.left),
+          right: Math.round(bounds.right - layerBounds.left),
+          top: Math.round(bounds.top - layerBounds.top),
+          bottom: Math.round(bounds.bottom - layerBounds.top),
+        };
+      }),
+    };
+  });
+  expect(points.layerWidth).toBeGreaterThan(500);
+
+  const performCrossColumnGesture = (endPoint: { x: number; y: number }) => pdfPage.evaluate(({
+    startPoint,
+    endPoint: gestureEnd,
+  }) => {
+    const textSpans = [...document.querySelectorAll<HTMLElement>('.pdf-page .textLayer span')];
+    const start = textSpans[0]?.firstChild;
+    const end = textSpans[4]?.firstChild;
+    if (!(start instanceof Text) || !(end instanceof Text)) {
+      throw new Error('Two-column PDF text nodes are missing');
+    }
+    textSpans[0]!.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      clientX: startPoint.x,
+      clientY: startPoint.y,
+      isPrimary: true,
+      pointerId: 41,
+      pointerType: 'mouse',
+    }));
+    const range = document.createRange();
+    range.setStart(start, 0);
+    range.setEnd(end, end.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    textSpans[0]!.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      button: 0,
+      clientX: gestureEnd.x,
+      clientY: gestureEnd.y,
+      isPrimary: true,
+      pointerId: 41,
+      pointerType: 'mouse',
+    }));
+  }, { startPoint: points.start, endPoint });
+
+  await performCrossColumnGesture(points.gutter);
+  await expect.poll(() => pdfPage.evaluate(() => (
+    window.getSelection()?.toString().replace(/\s+/gu, ' ').trim() ?? ''
+  )), { message: JSON.stringify(points.geometry) }).not.toContain('Right column');
+  const overlay = pdfPage.locator('#tex-selection-translator-root');
+  await expect(overlay.locator('.selection-preview')).toBeVisible();
+  await expect(overlay.locator('.selection-preview-text')).toContainText('Left column');
+  await expect(overlay.locator('.selection-preview-warning')).toContainText('已保留左栏');
+  await expect(pdfPage.locator('#notice')).toContainText('已保留起始栏内容');
+
+  await performCrossColumnGesture(points.right);
+  await expect.poll(() => pdfPage.evaluate(() => (
+    window.getSelection()?.toString().replace(/\s+/gu, ' ').trim() ?? ''
+  ))).toContain('Right column sentence two.');
+  await expect(overlay.locator('.selection-preview-warning')).toContainText('跨栏选区');
+  await expect(overlay.locator('.selection-preview-warning')).toContainText('PDF 原始顺序');
+  await expect(pdfPage.locator('#notice')).toContainText('请先核对选区预览');
+  if (process.env.PI_VISUAL_QA) {
+    await pdfPage.screenshot({ path: testInfo.outputPath('two-column-selection-preview.png') });
+  }
+  await pdfPage.close();
+});
+
+test('retains an explicitly traversed spanning formula in a real two-column PDF', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  const formula = 'Spanning equation: E = m c^2 + lambda ||x||^2 = 1. (1)';
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'two-column-spanning-formula.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTwoColumnTextPdf(
+      [
+        'Left column sentence one.',
+        'Left column sentence two.',
+        'Left column sentence three.',
+      ],
+      [
+        'Right column sentence one.',
+        'Right column sentence two.',
+        'Right column sentence three.',
+      ],
+      [{ text: formula, x: 120, y: 620 }],
+    ),
+  });
+  const firstPage = pdfPage.locator('.pdf-page').first();
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  await expect(firstPage.locator('.textLayer span')).toHaveCount(7);
+  const points = await firstPage.evaluate(() => {
+    const spans = [...document.querySelectorAll<HTMLElement>('.pdf-page .textLayer span')];
+    const left = spans.find((span) => span.textContent === 'Left column sentence one.');
+    const right = spans.find((span) => span.textContent === 'Right column sentence one.');
+    const spanning = spans.find((span) => span.textContent?.startsWith('Spanning equation:'));
+    const leftBounds = left?.getBoundingClientRect();
+    const rightBounds = right?.getBoundingClientRect();
+    const spanningBounds = spanning?.getBoundingClientRect();
+    if (!left || !right || !spanning || !leftBounds || !rightBounds || !spanningBounds) {
+      throw new Error(`Spanning-formula PDF text geometry is missing: ${spans.map((span) => span.textContent).join(' | ')}`);
+    }
+    return {
+      start: { x: leftBounds.left + 5, y: leftBounds.top + leftBounds.height / 2 },
+      end: {
+        x: (leftBounds.right + rightBounds.left) / 2,
+        y: spanningBounds.top + spanningBounds.height / 2,
+      },
+      leftIndex: spans.indexOf(left),
+      rightIndex: spans.indexOf(right),
+      spanningIndex: spans.indexOf(spanning),
+      spanningCrossesGutter: (
+        spanningBounds.left < leftBounds.right && spanningBounds.right > rightBounds.left
+      ),
+    };
+  });
+  expect(points.spanningCrossesGutter).toBe(true);
+  expect(points.leftIndex).toBeLessThan(points.spanningIndex);
+  expect(points.spanningIndex).toBeLessThan(points.rightIndex);
+
+  await pdfPage.evaluate(({ startPoint, endPoint }) => {
+    const spans = [...document.querySelectorAll<HTMLElement>('.pdf-page .textLayer span')];
+    const left = spans.find((span) => span.textContent === 'Left column sentence one.');
+    const right = spans.find((span) => span.textContent === 'Right column sentence one.');
+    const formulaSpan = spans.find((span) => span.textContent?.startsWith('Spanning equation:'));
+    const start = left?.firstChild;
+    const end = right?.firstChild;
+    if (!(left instanceof HTMLElement) || !(formulaSpan instanceof HTMLElement) ||
+      !(start instanceof Text) || !(end instanceof Text)) {
+      throw new Error('Spanning-formula PDF text nodes are missing');
+    }
+    left.dispatchEvent(new PointerEvent('pointerdown', {
+      bubbles: true,
+      button: 0,
+      clientX: startPoint.x,
+      clientY: startPoint.y,
+      isPrimary: true,
+      pointerId: 51,
+      pointerType: 'mouse',
+    }));
+    const range = document.createRange();
+    range.setStart(start, 0);
+    range.setEnd(end, end.data.length);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    document.dispatchEvent(new Event('selectionchange'));
+    formulaSpan.dispatchEvent(new PointerEvent('pointerup', {
+      bubbles: true,
+      button: 0,
+      clientX: endPoint.x,
+      clientY: endPoint.y,
+      isPrimary: true,
+      pointerId: 51,
+      pointerType: 'mouse',
+    }));
+  }, { startPoint: points.start, endPoint: points.end });
+
+  await expect.poll(() => pdfPage.evaluate(() => (
+    window.getSelection()?.toString().replace(/\s+/gu, ' ').trim() ?? ''
+  ))).toContain(formula);
+  await expect.poll(() => pdfPage.evaluate(() => (
+    window.getSelection()?.toString().replace(/\s+/gu, ' ').trim() ?? ''
+  ))).not.toContain('Right column');
+  const overlay = pdfPage.locator('#tex-selection-translator-root');
+  await expect(overlay.locator('.selection-preview-text')).toContainText('Spanning equation');
+  await expect(overlay.locator('.selection-preview-warning')).toContainText('横跨两栏的内容');
+  await expect(pdfPage.locator('#notice')).toContainText('选中的通栏内容');
+  if (process.env.PI_VISUAL_QA) {
+    await pdfPage.screenshot({ path: testInfo.outputPath('spanning-formula-selection-preview.png') });
+  }
+  await pdfPage.close();
 });
 
 test('keeps PDF selection UI quiet until a native text-layer drag finishes', async () => {

@@ -13,6 +13,11 @@ export interface PdfTextSelectionRange {
   endOffset: number;
   pageWidth: number;
   pageHeight: number;
+  gestureStartX?: number;
+  gestureStartY?: number;
+  gestureEndX?: number;
+  gestureEndY?: number;
+  allowExplicitCrossColumn?: boolean;
 }
 
 export interface PdfTextSelectionSnap {
@@ -21,6 +26,19 @@ export interface PdfTextSelectionSnap {
   endIndex: number;
   endOffset: number;
   mode: 'word' | 'sentence' | 'paragraph';
+  startColumn?: PdfColumn;
+  crossColumn?: 'constrained' | 'explicit';
+  retainedSpanningContent?: boolean;
+}
+
+export type PdfColumn = 'left' | 'right';
+type PdfLayoutRole = PdfColumn | 'spanning' | 'other';
+
+export interface PdfTwoColumnLayout {
+  gutterLeft: number;
+  gutterRight: number;
+  leftItemCount: number;
+  rightItemCount: number;
 }
 
 interface JoinedItem {
@@ -218,31 +236,94 @@ function adaptiveSelectionBounds(
   return { start: snappedStart, end: snappedEnd, mode: 'sentence' };
 }
 
+function quantile(values: number[], ratio: number): number {
+  const sorted = [...values].sort((left, right) => left - right);
+  const index = Math.min(sorted.length - 1, Math.max(0, Math.round((sorted.length - 1) * ratio)));
+  return sorted[index] ?? 0;
+}
+
+function layoutRoleForItem(
+  item: PdfSelectionTextItem,
+  layout: PdfTwoColumnLayout,
+): PdfLayoutRole {
+  const middle = (layout.gutterLeft + layout.gutterRight) / 2;
+  const center = (item.left + item.right) / 2;
+  if (
+    (item.left < layout.gutterLeft && item.right > layout.gutterRight) ||
+    (center >= layout.gutterLeft && center <= layout.gutterRight)
+  ) return 'spanning';
+  if (center < middle && item.left < layout.gutterLeft) return 'left';
+  if (center > middle && item.right > layout.gutterRight) return 'right';
+  return 'other';
+}
+
 function columnForItem(
   item: PdfSelectionTextItem,
-  pageWidth: number,
-): 'left' | 'right' | undefined {
-  const center = (item.left + item.right) / 2;
-  if (center < pageWidth * 0.46 && item.right < pageWidth * 0.62) return 'left';
-  if (center > pageWidth * 0.54 && item.left > pageWidth * 0.38) return 'right';
+  layout: PdfTwoColumnLayout,
+): PdfColumn | undefined {
+  const role = layoutRoleForItem(item, layout);
+  return role === 'left' || role === 'right' ? role : undefined;
+}
+
+function columnAtX(x: number | undefined, layout: PdfTwoColumnLayout): PdfColumn | undefined {
+  if (x === undefined || !Number.isFinite(x)) return undefined;
+  if (x < layout.gutterLeft) return 'left';
+  if (x > layout.gutterRight) return 'right';
   return undefined;
 }
 
-function detectedTwoColumnLayout(
+function gestureVerticallyIncludes(
+  item: PdfSelectionTextItem,
+  input: PdfTextSelectionRange,
+): boolean {
+  if (
+    input.gestureStartY === undefined ||
+    !Number.isFinite(input.gestureStartY) ||
+    input.gestureEndY === undefined ||
+    !Number.isFinite(input.gestureEndY)
+  ) return true;
+  const itemHeight = Math.max(1, item.bottom - item.top);
+  const tolerance = Math.max(4, itemHeight * 0.65);
+  const gestureTop = Math.min(input.gestureStartY, input.gestureEndY) - tolerance;
+  const gestureBottom = Math.max(input.gestureStartY, input.gestureEndY) + tolerance;
+  return item.bottom >= gestureTop && item.top <= gestureBottom;
+}
+
+export function detectPdfTwoColumnLayout(
   items: PdfSelectionTextItem[],
   pageWidth: number,
   pageHeight: number,
-): boolean {
-  let left = 0;
-  let right = 0;
-  for (const item of items) {
-    if (item.top < pageHeight * 0.05 || item.bottom > pageHeight * 0.95) continue;
-    if (item.right - item.left > pageWidth * 0.7) continue;
-    const column = columnForItem(item, pageWidth);
-    if (column === 'left') left += 1;
-    else if (column === 'right') right += 1;
-  }
-  return left >= 3 && right >= 3;
+): PdfTwoColumnLayout | undefined {
+  if (pageWidth <= 0 || pageHeight <= 0) return undefined;
+  const bodyItems = items.filter((item) => (
+    item.top >= pageHeight * 0.05 &&
+    item.bottom <= pageHeight * 0.95 &&
+    item.right > item.left &&
+    item.bottom > item.top &&
+    item.right - item.left <= pageWidth * 0.7
+  ));
+  const leftItems = bodyItems.filter((item) => (
+    (item.left + item.right) / 2 < pageWidth * 0.49 && item.left < pageWidth * 0.42
+  ));
+  const rightItems = bodyItems.filter((item) => (
+    (item.left + item.right) / 2 > pageWidth * 0.51 && item.right > pageWidth * 0.58
+  ));
+  if (leftItems.length < 3 || rightItems.length < 3) return undefined;
+  const gutterLeft = quantile(leftItems.map((item) => item.right), 0.8);
+  const gutterRight = quantile(rightItems.map((item) => item.left), 0.2);
+  const gutterWidth = gutterRight - gutterLeft;
+  const gutterMiddle = (gutterLeft + gutterRight) / 2;
+  if (
+    gutterWidth < Math.max(12, pageWidth * 0.025) ||
+    gutterMiddle < pageWidth * 0.35 ||
+    gutterMiddle > pageWidth * 0.65
+  ) return undefined;
+  return {
+    gutterLeft,
+    gutterRight,
+    leftItemCount: leftItems.length,
+    rightItemCount: rightItems.length,
+  };
 }
 
 function selectedText(
@@ -267,6 +348,8 @@ export function resolvePdfTextSelectionSnap(
   if (!items.length || input.startIndex < 0 || input.endIndex >= items.length) return undefined;
   let startIndex = Math.min(input.startIndex, input.endIndex);
   let endIndex = Math.max(input.startIndex, input.endIndex);
+  const rawStartIndex = startIndex;
+  const rawEndIndex = endIndex;
   let startOffset = input.startIndex <= input.endIndex ? input.startOffset : input.endOffset;
   let endOffset = input.startIndex <= input.endIndex ? input.endOffset : input.startOffset;
 
@@ -276,42 +359,116 @@ export function resolvePdfTextSelectionSnap(
   startOffset = wordBoundary(startItem.text, startOffset, 'start');
   endOffset = wordBoundary(endItem.text, endOffset, 'end');
 
-  const twoColumns = detectedTwoColumnLayout(items, input.pageWidth, input.pageHeight);
-  const startColumn = twoColumns ? columnForItem(startItem, input.pageWidth) : undefined;
+  const columnLayout = detectPdfTwoColumnLayout(items, input.pageWidth, input.pageHeight);
+  const layoutRoles = columnLayout
+    ? items.map((item) => layoutRoleForItem(item, columnLayout))
+    : [];
+  const startColumn = columnLayout
+    ? columnAtX(input.gestureStartX, columnLayout) ?? columnForItem(startItem, columnLayout)
+    : undefined;
+  const rawSelectedColumns = columnLayout
+    ? new Set(layoutRoles.slice(startIndex, endIndex + 1)
+        .map((role) => role === 'left' || role === 'right' ? role : undefined)
+        .filter((column): column is PdfColumn => Boolean(column)))
+    : new Set<PdfColumn>();
+  const endsInOppositeColumn = Boolean(
+    columnLayout &&
+    startColumn &&
+    columnAtX(input.gestureEndX, columnLayout) &&
+    columnAtX(input.gestureEndX, columnLayout) !== startColumn,
+  );
+  const rawCrossesColumns = rawSelectedColumns.size > 1;
+  const crossColumn = rawCrossesColumns
+    ? endsInOppositeColumn && input.allowExplicitCrossColumn !== false
+      ? 'explicit' as const
+      : 'constrained' as const
+    : undefined;
   const startInMargin = (
     startItem.top < input.pageHeight * 0.05 ||
     startItem.bottom > input.pageHeight * 0.95
   );
-  const allowed = (item: PdfSelectionTextItem): boolean => {
+  const allowed = (item: PdfSelectionTextItem, index: number): boolean => {
     if (!startInMargin && (
       item.top < input.pageHeight * 0.05 ||
       item.bottom > input.pageHeight * 0.95
     )) return false;
-    return !startColumn || columnForItem(item, input.pageWidth) === startColumn;
+    if (!startColumn || !columnLayout) return true;
+    const role = layoutRoles[index];
+    if (role === startColumn) return true;
+    return (
+      role === 'spanning' &&
+      index >= rawStartIndex &&
+      index <= rawEndIndex &&
+      gestureVerticallyIncludes(item, input)
+    );
   };
 
-  if (startColumn) {
+  if (startColumn && crossColumn !== 'explicit') {
     const selectedAllowed = items
       .map((item, index) => ({ item, index }))
-      .filter(({ item, index }) => index >= startIndex && index <= endIndex && allowed(item));
+      .filter(({ item, index }) => index >= startIndex && index <= endIndex && allowed(item, index));
     if (selectedAllowed.length) {
-      startIndex = selectedAllowed[0]!.index;
-      endIndex = selectedAllowed.at(-1)!.index;
-      if (startIndex !== input.startIndex) startOffset = 0;
-      if (endIndex !== input.endIndex) endOffset = items[endIndex]!.text.length;
+      const runs: typeof selectedAllowed[] = [];
+      for (const entry of selectedAllowed) {
+        const current = runs.at(-1);
+        if (!current?.length || entry.index !== current.at(-1)!.index + 1) runs.push([entry]);
+        else current.push(entry);
+      }
+      const selectedRun = runs.sort((left, right) => {
+        const columnCount = (run: typeof selectedAllowed) => run.filter(
+          ({ index }) => layoutRoles[index] === startColumn,
+        ).length;
+        const countDifference = columnCount(right) - columnCount(left);
+        if (countDifference) return countDifference;
+        const distanceFromGesture = (run: typeof selectedAllowed) => {
+          if (input.gestureStartY === undefined) return 0;
+          return Math.min(...run.map(({ item }) => Math.abs(
+            (item.top + item.bottom) / 2 - input.gestureStartY!,
+          )));
+        };
+        return distanceFromGesture(left) - distanceFromGesture(right);
+      })[0];
+      if (selectedRun?.length) {
+        startIndex = selectedRun[0]!.index;
+        endIndex = selectedRun.at(-1)!.index;
+        if (startIndex !== rawStartIndex) startOffset = 0;
+        if (endIndex !== rawEndIndex) endOffset = items[endIndex]!.text.length;
+      }
     }
   }
 
+  const retainedSpanningContent = Boolean(
+    columnLayout &&
+    layoutRoles.slice(startIndex, endIndex + 1).some((role, offset) => (
+      role === 'spanning' && gestureVerticallyIncludes(items[startIndex + offset]!, input)
+    )),
+  );
+
+  const columnMetadata = {
+    ...(startColumn ? { startColumn } : {}),
+    ...(crossColumn ? { crossColumn } : {}),
+    ...(retainedSpanningContent ? { retainedSpanningContent: true } : {}),
+  };
+
   const rawText = selectedText(items, { startIndex, startOffset, endIndex, endOffset }).trim();
+  if (crossColumn === 'explicit' || retainedSpanningContent) {
+    return { startIndex, startOffset, endIndex, endOffset, mode: 'word', ...columnMetadata };
+  }
   const wordCount = rawText.split(/\s+/u).filter(Boolean).length;
   const shouldUseSentence = startIndex !== endIndex || (rawText.length >= 18 && wordCount >= 3);
   if (!shouldUseSentence) {
-    return { startIndex, startOffset, endIndex, endOffset, mode: 'word' };
+    return { startIndex, startOffset, endIndex, endOffset, mode: 'word', ...columnMetadata };
   }
 
   const candidates = items
     .map((item, itemIndex) => ({ item, itemIndex }))
-    .filter(({ item }) => allowed(item));
+    .filter(({ item, itemIndex }) => (
+      allowed(item, itemIndex) &&
+      (
+        layoutRoles[itemIndex] !== 'spanning' ||
+        (itemIndex >= startIndex && itemIndex <= endIndex)
+      )
+    ));
   const joined: JoinedItem[] = [];
   let text = '';
   const contentLeft = Math.min(...candidates.map(({ item }) => item.left));
@@ -341,18 +498,20 @@ export function resolvePdfTextSelectionSnap(
   const joinedStart = joined.find((entry) => entry.itemIndex === startIndex);
   const joinedEnd = joined.find((entry) => entry.itemIndex === endIndex);
   if (!joinedStart || !joinedEnd) {
-    return { startIndex, startOffset, endIndex, endOffset, mode: 'word' };
+    return { startIndex, startOffset, endIndex, endOffset, mode: 'word', ...columnMetadata };
   }
   const globalStart = joinedStart.start + startOffset;
   const globalEnd = joinedEnd.start + endOffset;
   const bounds = adaptiveSelectionBounds(text, globalStart, globalEnd);
-  if (!bounds) return { startIndex, startOffset, endIndex, endOffset, mode: 'word' };
+  if (!bounds) {
+    return { startIndex, startOffset, endIndex, endOffset, mode: 'word', ...columnMetadata };
+  }
   let sentenceStart = bounds.start;
   let sentenceEnd = bounds.end;
   while (sentenceStart < sentenceEnd && /\s/u.test(text[sentenceStart] ?? '')) sentenceStart += 1;
   while (sentenceEnd > sentenceStart && /\s/u.test(text[sentenceEnd - 1] ?? '')) sentenceEnd -= 1;
   if (sentenceEnd - sentenceStart > 800) {
-    return { startIndex, startOffset, endIndex, endOffset, mode: 'word' };
+    return { startIndex, startOffset, endIndex, endOffset, mode: 'word', ...columnMetadata };
   }
   const startEntry = [...joined].reverse().find((entry) => entry.start <= sentenceStart) ?? joined[0];
   const endEntry = joined.find((entry) => entry.end >= sentenceEnd) ?? joined.at(-1);
@@ -363,5 +522,6 @@ export function resolvePdfTextSelectionSnap(
     endIndex: endEntry.itemIndex,
     endOffset: clamp(sentenceEnd - endEntry.start, 0, items[endEntry.itemIndex]!.text.length),
     mode: bounds.mode,
+    ...columnMetadata,
   };
 }

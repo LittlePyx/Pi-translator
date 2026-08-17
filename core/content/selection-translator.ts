@@ -58,6 +58,7 @@ import {
 import {
   TranslationOverlay,
   type OverlayRetryTarget,
+  type SelectionTriggerPreview,
   type TranslationAdjustmentRequest,
   type ViewportInsetsProvider,
 } from '../../ui/translation-overlay';
@@ -75,7 +76,9 @@ interface SelectionTranslatorOptions {
   allowSitePause?: boolean;
   viewportInsets?: ViewportInsetsProvider;
   onSidebarLayoutChange?: (layout: SelectionTranslatorSidebarLayout) => void;
+  onSidebarActiveChange?: (active: boolean) => void;
   onPublicSettingsChange?: (settings: PublicSettings) => void;
+  selectionPreview?: (snapshot: SelectionSnapshot) => SelectionTriggerPreview | undefined;
   onAdjustPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
   onNavigateToPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
   resolvePdfRegionRects?: (sourceLocation: PdfSourceLocation) => ViewportRect[];
@@ -569,6 +572,7 @@ export async function startSelectionTranslator(
           },
         }),
     onSidebarChange: (active) => {
+      options.onSidebarActiveChange?.(active);
       if (active) {
         lastAutoSelectionHash = activeSelection?.selectionHash;
         scheduleRefresh();
@@ -1119,7 +1123,7 @@ export async function startSelectionTranslator(
         return;
       }
       if (overlay.isShowingCard()) cancelActiveTranslation();
-      overlay.showTrigger(snapshot.rect);
+      overlay.showTrigger(snapshot.rect, options.selectionPreview?.(snapshot));
     } else {
       overlay.hideTrigger();
     }

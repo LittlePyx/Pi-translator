@@ -15,7 +15,10 @@ import {
 import type { SelectionSnapshot } from '../../core/selection/types';
 import { extractPdfRegionText, type PositionedPdfText } from '../../core/pdf/region-text';
 import { resolvePdfFormulaCaptureRegion } from '../../core/pdf/formula-capture-region';
-import { resolvePdfTextSelectionSnap } from '../../core/pdf/text-selection-snap';
+import {
+  resolvePdfTextSelectionSnap,
+  type PdfTextSelectionSnap,
+} from '../../core/pdf/text-selection-snap';
 import type { PdfSourceLocation } from '../../core/translation/types';
 import { shouldUseVisionForPdfFormula } from '../../core/translation/formula-detection';
 import {
@@ -137,6 +140,7 @@ let wheelZoomTimer: ReturnType<typeof setTimeout> | undefined;
 let wheelZoomAccumulatedDelta = 0;
 let wheelZoomAnchor: PageAnchor | undefined;
 let textSelectionSnapFrame: number | undefined;
+let continuousSidebarActive = false;
 let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let currentReadingIdentity: string | undefined;
 let restoringReadingState = false;
@@ -157,6 +161,9 @@ interface CompletedTextSelectionGesture {
   region: RegionRect;
   selectedText: string;
   capturedAt: number;
+  startColumn?: 'left' | 'right';
+  crossColumn?: 'constrained' | 'explicit';
+  retainedSpanningContent?: boolean;
 }
 
 let completedTextSelectionGesture: CompletedTextSelectionGesture | undefined;
@@ -450,7 +457,11 @@ function boundaryTextNode(
   return { node, offset: edge === 'start' ? 0 : node.data.length };
 }
 
-function snapPdfSelectionSmartly(): void {
+function snapPdfSelectionSmartly(
+  gesture?: TextSelectionGesture,
+  gestureEndX?: number,
+  gestureEndY?: number,
+): PdfTextSelectionSnap | undefined {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return;
   const range = selection.getRangeAt(0);
@@ -493,6 +504,11 @@ function snapPdfSelectionSmartly(): void {
     endOffset: end.offset,
     pageWidth: layerBounds.width,
     pageHeight: layerBounds.height,
+    ...(gesture ? { gestureStartX: gesture.startX - layerBounds.left } : {}),
+    ...(gesture ? { gestureStartY: gesture.startY - layerBounds.top } : {}),
+    ...(gestureEndX !== undefined ? { gestureEndX: gestureEndX - layerBounds.left } : {}),
+    ...(gestureEndY !== undefined ? { gestureEndY: gestureEndY - layerBounds.top } : {}),
+    allowExplicitCrossColumn: !continuousSidebarActive,
   });
   if (!resolved) return;
   const startNode = nodes[resolved.startIndex];
@@ -517,6 +533,7 @@ function snapPdfSelectionSmartly(): void {
     }
     startLayer.classList.remove('selecting');
   });
+  return resolved;
 }
 
 function compactSelectionGestureText(value: string): string {
@@ -527,6 +544,7 @@ function rememberCompletedTextSelectionGesture(
   gesture: TextSelectionGesture,
   endX: number,
   endY: number,
+  snap?: PdfTextSelectionSnap,
 ): void {
   const pageBounds = gesture.pageElement.getBoundingClientRect();
   const selectedText = compactSelectionGestureText(window.getSelection()?.toString() ?? '');
@@ -544,7 +562,35 @@ function rememberCompletedTextSelectionGesture(
     ),
     selectedText,
     capturedAt: Date.now(),
+    ...(snap?.startColumn ? { startColumn: snap.startColumn } : {}),
+    ...(snap?.crossColumn ? { crossColumn: snap.crossColumn } : {}),
+    ...(snap?.retainedSpanningContent ? { retainedSpanningContent: true } : {}),
   };
+}
+
+function pdfSelectionPreview(snapshot: SelectionSnapshot): {
+  text: string;
+  warning?: string;
+} | undefined {
+  const text = compactSelectionGestureText(snapshot.sourceText);
+  if (!text) return undefined;
+  const gesture = completedTextSelectionGesture;
+  const matchesGesture = Boolean(
+    gesture &&
+    gesture.documentEpoch === documentEpoch &&
+    Date.now() - gesture.capturedAt <= 30_000 &&
+    gesture.selectedText === text,
+  );
+  const warning = matchesGesture
+    ? gesture?.crossColumn === 'constrained'
+      ? `已保留${gesture.startColumn === 'right' ? '右' : '左'}栏${gesture.retainedSpanningContent ? '及横跨两栏的内容' : ''}，可重新划选调整`
+      : gesture?.crossColumn === 'explicit'
+        ? '跨栏选区 · 将按 PDF 原始顺序发送'
+        : gesture?.retainedSpanningContent
+          ? '横跨两栏的内容已保留 · 按 PDF 原始顺序发送'
+        : undefined
+    : undefined;
+  return { text, ...(warning ? { warning } : {}) };
 }
 
 function explicitFormulaGestureRegion(
@@ -606,8 +652,24 @@ function finishSmartTextSelection(event: PointerEvent): void {
   if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
   textSelectionSnapFrame = requestAnimationFrame(() => {
     textSelectionSnapFrame = undefined;
-    snapPdfSelectionSmartly();
-    rememberCompletedTextSelectionGesture(gesture, event.clientX, event.clientY);
+    const snap = snapPdfSelectionSmartly(gesture, event.clientX, event.clientY);
+    rememberCompletedTextSelectionGesture(gesture, event.clientX, event.clientY, snap);
+    if (snap?.crossColumn === 'constrained') {
+      showNotice(`检测到选区带入另一栏，已保留起始栏${snap.retainedSpanningContent ? '和选中的通栏' : ''}内容。可重新划选调整。`, {
+        transient: true,
+        tone: 'info',
+      });
+    } else if (snap?.crossColumn === 'explicit') {
+      showNotice('已选择左右两栏；将按 PDF 原始文字顺序发送，请先核对选区预览。', {
+        transient: true,
+        tone: 'warning',
+      });
+    } else if (snap?.retainedSpanningContent) {
+      showNotice('已保留选中的通栏内容，并按 PDF 原始文字顺序发送。', {
+        transient: true,
+        tone: 'info',
+      });
+    }
   });
 }
 
@@ -2386,6 +2448,8 @@ const selectionTranslator = startSelectionTranslator(
     allowSitePause: false,
     viewportInsets: () => ({ top: toolbar.getBoundingClientRect().bottom }),
     onSidebarLayoutChange: applyPdfSidebarLayout,
+    onSidebarActiveChange: (active) => { continuousSidebarActive = active; },
+    selectionPreview: pdfSelectionPreview,
     onAdjustPdfRegion: restorePdfRegionSelection,
     onNavigateToPdfRegion: navigateToPdfRegion,
     onNavigateToPdfMarker: navigateToPdfMarkerPage,
