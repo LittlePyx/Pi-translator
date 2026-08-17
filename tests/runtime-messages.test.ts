@@ -37,6 +37,10 @@ function correctionReceipt() {
 }
 
 describe('runtime message guard', () => {
+  it('accepts the explicit webpage region-selection action', () => {
+    expect(isRuntimeMessage({ type: 'START_WEB_REGION_SELECTION' })).toBe(true);
+  });
+
   it('strictly validates staged translation progress messages', () => {
     const basePayload = {
       requestId: 'translation-1',

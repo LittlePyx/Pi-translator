@@ -722,6 +722,7 @@ test.beforeAll(async () => {
               is minimized during training.
             </p>
             <p id="rendered-only-math">The quantity ∑ᵢ xᵢ² ≥ 0 is nonnegative.</p>
+            <div id="visual-region" aria-label="Synthetic chart without DOM text" style="width: 360px; height: 140px; border: 1px solid #94a3b8; background: linear-gradient(135deg, #dbeafe 0 33%, #818cf8 33% 66%, #1e3a8a 66%);"></div>
             <input id="payment" type="text" autocomplete="cc-number" value="4111 1111 1111 1111" />
             <button id="blank" type="button">Clear selection</button>
           </body>
@@ -2750,6 +2751,8 @@ test('shows site pause controls only on supported webpages', async () => {
     await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
     await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
+    await expect(popup.locator('#open-web-region')).toBeVisible();
+    await expect(popup.locator('#open-web-region')).toHaveText('框选网页区域');
     await expect(popup.locator('#open-pdf')).toHaveClass(/secondary-action/);
     const pauseSwitchStyle = await pauseSite.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -2769,6 +2772,95 @@ test('shows site pause controls only on supported webpages', async () => {
   } finally {
     await popup.close();
   }
+});
+
+test('frames webpage regions with local text first and screenshot only when needed', async () => {
+  async function startFromPopup(): Promise<void> {
+    const popup = await context.newPage();
+    try {
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+      await page.bringToFront();
+      await popup.reload();
+      await expect(popup.locator('#open-web-region')).toBeVisible();
+      await popup.evaluate(() => {
+        document.querySelector<HTMLButtonElement>('#open-web-region')?.click();
+      });
+      await expect(page.locator('#pi-web-region-selection-root')).toBeVisible();
+    } finally {
+      if (!popup.isClosed()) await popup.close();
+    }
+  }
+
+  async function drawAround(selector: string, widthRatio = 1): Promise<void> {
+    const box = await page.locator(selector).boundingBox();
+    expect(box).not.toBeNull();
+    if (!box) return;
+    await page.mouse.move(box.x - 4, box.y - 4);
+    await page.mouse.down();
+    await page.mouse.move(
+      box.x + box.width * widthRatio + 4,
+      box.y + box.height + 4,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+  }
+
+  await closeVisibleTranslationSurfaceForCleanup();
+  await clearBrowserSelection();
+  const textBefore = textRequests.length;
+  const visionBeforeText = visionRequests.length;
+  await startFromPopup();
+  await drawAround('#source', 0.55);
+  const textRegion = page.locator('#pi-web-region-selection-root');
+  await expect(textRegion.locator('.status')).toContainText('已在本地提取文字');
+  await expect(textRegion.locator('.privacy')).toContainText('不上传网页截图');
+  await expect(textRegion.locator('.confirm')).toHaveText('翻译文字');
+  await textRegion.locator('.mode').click();
+  await expect(textRegion.locator('.privacy')).toContainText('发送给已配置的图像接口');
+  await expect(textRegion.locator('.confirm')).toHaveText('翻译截图');
+  await textRegion.locator('.mode').click();
+  await expect(textRegion.locator('.confirm')).toHaveText('翻译文字');
+  await textRegion.locator('.confirm').click();
+  await expect(textRegion).toHaveCount(0);
+  await expect(page.locator('#tex-selection-translator-root .body'))
+    .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
+  expect(textRequests).toHaveLength(textBefore + 1);
+  const selectedRegionPayload = JSON.parse(String(
+    (textRequests.at(-1)?.messages as Array<{ role?: string; content?: string }> | undefined)
+      ?.find((message) => message.role === 'user')?.content,
+  )) as { text?: string };
+  expect(selectedRegionPayload.text).toContain('A consistent academic translation');
+  expect(selectedRegionPayload.text).not.toContain('research papers');
+  expect(visionRequests).toHaveLength(visionBeforeText);
+  await closeVisibleTranslationSurfaceForCleanup();
+
+  const visionBeforeImage = visionRequests.length;
+  await page.locator('#visual-region').scrollIntoViewIfNeeded();
+  await startFromPopup();
+  await drawAround('#visual-region');
+  const imageRegion = page.locator('#pi-web-region-selection-root');
+  await expect(imageRegion.locator('.status')).toContainText('没有可靠的可编辑文字');
+  await expect(imageRegion.locator('.privacy')).toContainText('只截取当前可见页中的框内区域');
+  await expect(imageRegion.locator('.confirm')).toHaveText('翻译截图');
+  await imageRegion.locator('.confirm').click();
+  await expect(imageRegion).toHaveCount(0);
+  // A Playwright-opened extension page does not grant activeTab the way the
+  // real toolbar popup does. The integration test therefore verifies the
+  // explicit capture failure path; viewport mapping and image translation
+  // are covered independently by unit and PDF image tests.
+  await expect(page.locator('#tex-selection-translator-root .error'))
+    .toContainText('没有成功截取这个网页区域');
+  expect(visionRequests).toHaveLength(visionBeforeImage);
+  await closeVisibleTranslationSurfaceForCleanup();
+
+  await page.locator('#payment').scrollIntoViewIfNeeded();
+  await startFromPopup();
+  await drawAround('#payment');
+  const sensitiveRegion = page.locator('#pi-web-region-selection-root');
+  await expect(sensitiveRegion.locator('.status')).toContainText('密码、验证码或支付字段');
+  await expect(sensitiveRegion.locator('.confirm')).toBeDisabled();
+  await sensitiveRegion.locator('.cancel').click();
+  await expect(sensitiveRegion).toHaveCount(0);
 });
 
 test('promotes the current PDF action in the quick popup', async () => {
@@ -2798,6 +2890,7 @@ test('promotes the current PDF action in the quick popup', async () => {
     await expect(openPdf).toHaveText('用 Pi 打开当前 PDF');
     await expect(openSidebar).toHaveClass(/secondary-action/);
     await expect(openSidebar).toHaveText('打开翻译侧栏');
+    await expect(popup.locator('#open-web-region')).toBeHidden();
     await expect(popup.locator('#open-settings')).toHaveText('完整设置');
     await expect(popup.locator('#site-control')).toBeHidden();
     const layout = await quickActions.evaluate((actions) => ({
@@ -9074,7 +9167,7 @@ test('automatically binds a visual-capable active API when settings are saved', 
 
   await options.locator('button[type="submit"]').click();
   await expect(options.locator('#status')).toContainText(
-    '已自动启用 PDF 图像区域翻译',
+    '已自动启用图像区域翻译',
   );
   await expect(options.locator('#vision-api-profile')).toHaveValue('default');
   await expect(options.locator('#vision-model')).toHaveValue('e2e-model');
@@ -9125,7 +9218,7 @@ test('keeps the text API active while a second profile is configured for PDF ima
   await options.locator('#api-key').fill('e2e-review-key');
   await options.locator('#refresh-models').click();
   await expect(options.locator('#status')).toContainText('文字继续使用');
-  await expect(options.locator('#profile-role-status')).toContainText('PDF 图像');
+  await expect(options.locator('#profile-role-status')).toContainText('图像翻译');
   await expect(options.locator('#profile-role-status')).not.toContainText('文字翻译');
 
   await options.locator('button[type="submit"]').click();

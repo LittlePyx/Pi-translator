@@ -94,9 +94,9 @@ export function visionApiReadiness(
   if (!snapshot?.hasProfile) {
     return {
       role: 'vision',
-      label: 'PDF 图像',
+      label: '图像翻译',
       value: '按需配置',
-      detail: '普通文字翻译可继续使用；扫描 PDF 或公式图像时再配置视觉 API。',
+      detail: '普通文字翻译可继续使用；网页区域、扫描 PDF 或公式图像需要视觉 API。',
       tone: 'quiet',
       settingsFocus: 'vision',
     };
@@ -104,7 +104,7 @@ export function visionApiReadiness(
   if (!snapshot.hasValidBaseUrl) {
     return blockingStatus(
       'vision',
-      'PDF 图像',
+      '图像翻译',
       '检查配置',
       '视觉 API 的接口地址无效。文字翻译不受影响。',
       'vision',
@@ -113,16 +113,16 @@ export function visionApiReadiness(
   if (!snapshot.hasModel) {
     return blockingStatus(
       'vision',
-      'PDF 图像',
+      '图像翻译',
       '缺少模型',
-      '请为 PDF 图像识别选择支持图片输入的模型。',
+      '请为网页区域与 PDF 图像识别选择支持图片输入的模型。',
       'vision-model',
     );
   }
   if (!snapshot.hasApiKey) {
     return blockingStatus(
       'vision',
-      'PDF 图像',
+      '图像翻译',
       '缺少 Key',
       '视觉 API 没有可用的 API Key。普通文字翻译不受影响。',
       'vision',
@@ -131,7 +131,7 @@ export function visionApiReadiness(
   if (!snapshot.hasPermission) {
     return blockingStatus(
       'vision',
-      'PDF 图像',
+      '图像翻译',
       '待授权',
       '还需允许 Pi Translator 访问视觉 API 域名。',
       'vision-permission',
@@ -140,7 +140,7 @@ export function visionApiReadiness(
   if (snapshot.capabilities.vision === false) {
     return blockingStatus(
       'vision',
-      'PDF 图像',
+      '图像翻译',
       '不支持图片',
       '当前模型已被确认不支持图片输入。文字翻译不受影响。',
       'vision-model',
@@ -149,7 +149,7 @@ export function visionApiReadiness(
   if (snapshot.capabilities.vision === true) {
     return {
       role: 'vision',
-      label: 'PDF 图像',
+      label: '图像翻译',
       value: '已验证',
       detail: '当前模型已在本浏览器会话中通过图片输入测试。',
       tone: 'ready',
@@ -158,7 +158,7 @@ export function visionApiReadiness(
   }
   return {
     role: 'vision',
-    label: 'PDF 图像',
+    label: '图像翻译',
     value: '待验证',
     detail: '视觉 API 已配置，但尚未在本会话中确认图片输入能力。',
     tone: 'quiet',

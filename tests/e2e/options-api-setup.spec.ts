@@ -86,7 +86,7 @@ test.afterAll(async () => {
 test('offers a focused Qwen setup without replacing the text API', async () => {
   await expect(options.getByRole('heading', { name: '文字翻译 API（必需）' })).toBeVisible();
   await expect(options.locator('#vision-setup-status')).toContainText('不影响普通文字翻译');
-  await expect(options.locator('#api-preset option[value="qwen"]')).toContainText('PDF 图像推荐');
+  await expect(options.locator('#api-preset option[value="qwen"]')).toContainText('图像翻译推荐');
 
   await options.locator('#setup-qwen').click();
 
@@ -97,7 +97,7 @@ test('offers a focused Qwen setup without replacing the text API', async () => {
   await expect(options.locator('#model')).toHaveValue('qwen3.7-plus');
   await expect(options.locator('#api-key')).toBeFocused();
   await expect(options.locator('#status')).toContainText('文字翻译仍使用“DeepSeek 文字翻译”');
-  await expect(options.locator('#vision-setup-status')).toContainText('连接成功后会自动用于 PDF 图像');
+  await expect(options.locator('#vision-setup-status')).toContainText('连接成功后会自动用于图像翻译');
   await expect(options.locator('#back-to-text-profile')).toBeVisible();
 
   await options.locator('#back-to-text-profile').click();
@@ -126,7 +126,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
 
     await expect(statusRow).toBeVisible();
     await expect(textStatus).toContainText('文字翻译');
-    await expect(visionStatus).toContainText('PDF 图像');
+    await expect(visionStatus).toContainText('图像翻译');
     await expect(visionStatus).toContainText('按需配置');
     expect(await statusRow.locator('.capability-item').count()).toBe(2);
     expect(await statusRow.evaluate((element) => element.getBoundingClientRect().height))

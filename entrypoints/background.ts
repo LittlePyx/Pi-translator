@@ -3460,10 +3460,10 @@ async function sendToSelectionContentScript(
     if (message.type === 'TRIGGER_TRANSLATE') {
       await browser.runtime.openOptionsPage();
     }
-    if (message.type === 'OPEN_SIDEBAR') {
+    if (message.type === 'OPEN_SIDEBAR' || message.type === 'START_WEB_REGION_SELECTION') {
       throw new TranslationError(
         'UNSUPPORTED_PAGE',
-        'Enable ordinary web page support before opening the sidebar.',
+        'Enable ordinary web page support before using this action.',
       );
     }
     return;
@@ -4291,6 +4291,23 @@ export default defineBackground(() => {
             if (!tab) return { ok: false, error: { code: 'UNSUPPORTED_PAGE' as const, message: 'No active tab.', retryable: false } };
             await sendToSelectionContentScript(tab, message);
             return { ok: true, data: { opened: true } };
+          })
+          .catch((error: unknown) => errorResponse(error));
+      }
+
+      if (message.type === 'START_WEB_REGION_SELECTION') {
+        return browser.tabs
+          .query({ active: true, currentWindow: true })
+          .then(async ([tab]) => {
+            if (!tab) {
+              return errorResponse(new TranslationError(
+                'UNSUPPORTED_PAGE',
+                'No active web page is available.',
+                false,
+              ));
+            }
+            await sendToSelectionContentScript(tab, message);
+            return { ok: true as const, data: { started: true as const } };
           })
           .catch((error: unknown) => errorResponse(error));
       }

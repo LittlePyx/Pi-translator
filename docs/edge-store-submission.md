@@ -17,23 +17,23 @@
 
 ## 2. Single Purpose
 
-Pi Translator translates content that users explicitly select on Microsoft Edge webpages, Overleaf, and PDF documents. When selectable PDF text is unavailable, its packaged PDF reader can translate a user-confirmed image region. Translation results are shown in a page card or side panel, with LaTeX notation preserved when present. All features serve this single translation purpose.
+Pi Translator translates content that users explicitly select on Microsoft Edge webpages, Overleaf, and PDF documents. For webpage images or complex visual content, the toolbar popup can start a one-shot region selector on the current visible tab; it sends locally extracted text by default and sends a cropped screenshot only after explicit confirmation when text is unavailable or the user chooses image mode. When selectable PDF text is unavailable, the packaged PDF reader can likewise translate a user-confirmed image region. Translation results are shown in a page card or side panel, with LaTeX notation preserved when present. All features serve this single translation purpose.
 
 ## 3. 权限说明
 
 ### Host permission justification
 
 ```text
-Uses host access to display the selection translation interface on Overleaf, send user-triggered requests directly to the OpenAI-compatible API selected by the user, and operate on websites or online PDFs only when the user grants optional access. Translation requests contain only text the user explicitly selects, a PDF image region the user explicitly confirms, and applicable translation constraints. The extension requests the configured API origin or user-approved website origins; its default on-demand webpage mode does not require persistent access to all sites. Plain HTTP API access is restricted to localhost services.
+Uses host access to display the selection translation interface on Overleaf, send user-triggered requests directly to the OpenAI-compatible API selected by the user, and operate on websites or online PDFs only when the user grants optional access. Translation requests contain only text the user explicitly selects or locally extracts from a drawn region, a webpage or PDF image region the user explicitly confirms, and applicable translation constraints. The extension requests the configured API origin or user-approved website origins; its default on-demand webpage mode does not require persistent access to all sites. Plain HTTP API access is restricted to localhost services.
 ```
 
 | 权限 | 可粘贴到 Partner Center 的说明 |
 | --- | --- |
 | `storage` | Stores user-selected translation settings, API profiles, optional site-access choices, session history/cache, PDF reading state, and user-created terminology or translation markers so extension components can share and restore the user's chosen state. It also stores user-provided API keys: session storage is the default, and local storage is used only when the user explicitly enables persistent saving. Stored items remain on the user's device and can be cleared from the extension. PDF images and complete PDF files are not stored. |
 | `contextMenus` | Adds the “Use Pi Translator to translate selected text” context-menu item when the user has selected text on a webpage or in Edge's native PDF reader. The command is an explicit user gesture that starts translation of only that selection; it is not used to monitor browsing. |
-| `activeTab` | Temporarily accesses only the currently active tab after the user invokes Pi Translator through its context-menu command, keyboard shortcut, toolbar popup, or PDF open action. This access is used to retrieve the current selection, display the packaged translation interface, or pass the user-selected PDF to the packaged reader. It is not used to collect browsing history or monitor tabs in the background. |
-| `scripting` | Uses the packaged content script to display the selection button, translation card, and pinned sidebar, and to read the active selection after an explicit user action. It runs on Overleaf, on the active tab through `activeTab`, or on sites for which the user has granted optional access. The extension does not download or execute remote code. |
-| `sidePanel` | Displays streaming translation results after the user selects text in Microsoft Edge's protected native PDF reader and explicitly invokes the Pi Translator context-menu command. The panel is enabled only for the PDF tab that triggered it, is disabled on unrelated webpages, and does not open automatically during browsing. |
+| `activeTab` | Temporarily accesses only the currently active tab after the user invokes Pi Translator through its context-menu command, keyboard shortcut, toolbar popup, or PDF open action. This access is used to retrieve the current selection, display the packaged translation interface, pass the user-selected PDF to the packaged reader, or capture only a user-drawn region of the visible tab after a second explicit confirmation. It is not used for full-page or continuous capture, to collect browsing history, or to monitor tabs in the background. |
+| `scripting` | Uses the packaged content script to display the selection button, translation card, pinned sidebar, and one-shot webpage region selector, and to read only the active selection or confirmed region after an explicit user action. It runs on Overleaf, on the active tab through `activeTab`, or on sites for which the user has granted optional access. The extension does not download or execute remote code. |
+| `sidePanel` | Displays streaming translation results when the user explicitly chooses the browser side panel on a supported webpage, or after the user selects text in Microsoft Edge's protected native PDF reader and invokes the Pi Translator context-menu command. Webpage results remain scoped to the current tab, native-PDF panels are enabled only for the PDF tab that triggered them, and the panel does not open automatically during ordinary browsing. |
 | `https://www.overleaf.com/*` | Access to Overleaf project pages is required to detect user-initiated selections in the editor and display the translation interface. Only content the user explicitly translates is sent to the user's selected API; the extension does not upload an entire project. |
 | 可选 `http://*/*`、`https://*/*` | These are optional host permissions. The extension requests the exact API origin configured by the user for model discovery and translation calls. A website origin is requested only when the user enables persistent selection controls for that site or explicitly opens an online PDF in the packaged reader. The default on-demand mode does not require persistent access to all websites. Plain HTTP API access is limited to localhost services. |
 | 可选 `file:///*` | Allows the packaged Pi PDF reader to inherit a local PDF only after the user explicitly chooses “Open with Pi” and separately enables “Allow access to file URLs” on Edge's extension details page. The PDF is parsed locally; only text or an image region that the user explicitly confirms for translation is sent to the configured API. |
@@ -53,11 +53,12 @@ All executable JavaScript, PDF.js, KaTeX, workers, and other required resources 
 在数据类型列表中仅勾选：
 
 - **Authentication information**：用户提供的 API Key。
-- **Website content**：用户主动选中的文本，以及用户确认发送的 PDF 局部截图。
+- **Website content**：用户主动选中或从网页选框本地提取的文本，以及用户确认发送的网页或 PDF 局部截图。
 
 不要勾选 Personally identifiable information、Health information、Financial and payment information、Personal communications、Location、Web history 或 User activity。扩展不以这些类别为收集目的，不发送页面 URL，不监控浏览行为，也不进行分析或遥测。
 
 - 选中文本和相关翻译约束只在用户主动触发翻译后发送到用户配置的 API。
+- 网页区域框选只处理当前可见标签页：先在本机提取框内可编辑文字并默认只发送文字；只有没有可靠文字或用户明确切换到截图模式，并在确认界面再次点击后，才截取并发送选框范围。扩展不自动滚动、不截取完整网页、不发送选框外内容，并会禁止发送包含密码、验证码或支付字段的区域。截图不会写入扩展存储。
 - PDF 框选会先在本机尝试读取框内已有文字层；只有文字缺失、乱码或覆盖不可靠，并且用户点击确认后，局部截图才发送到用户选择的视觉 API。完整 PDF、完整页面和未确认框选不会发送，截图不会写入扩展存储；会话去重只保存截图 SHA-256 哈希和翻译结果。
 - 页面 URL 不发送到翻译 API。
 - 不出售数据，不用于广告、画像、信用或借贷。

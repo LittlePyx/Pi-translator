@@ -160,6 +160,13 @@ main {
   background: rgba(248, 249, 252, .94);
   backdrop-filter: blur(12px);
 }
+.web-history-label {
+  margin-right: auto;
+  color: #667085;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: .02em;
+}
 .web-history-navigation button {
   width: var(--compact-hit);
   height: var(--compact-hit);
@@ -543,6 +550,7 @@ button:focus-visible {
   .session-context { border-color: #303846; }
   .session-context-note { border-left-color: #4d4f76; }
   .web-history-navigation { color: #8f9aab; background: rgba(17, 23, 34, .94); }
+  .web-history-label { color: #9aa5b5; }
   .web-history-navigation button { color: #a6afbd; }
   .web-history-navigation button:hover:not(:disabled) { color: #c1bcff; background: #202938; }
   .web-history-navigation button:disabled { color: #555f6f; }

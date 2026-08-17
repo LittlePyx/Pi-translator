@@ -162,6 +162,7 @@ export type RuntimeMessage =
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
+  | { type: 'START_WEB_REGION_SELECTION' }
   | {
       type: 'OPEN_OPTIONS_PAGE';
       payload?: { focus?: SettingsFocus; recovery?: SettingsRecoveryRequest };
@@ -643,6 +644,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CAPTURE_VISIBLE_TAB' ||
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
+    type === 'START_WEB_REGION_SELECTION' ||
     type === 'OPEN_OPTIONS_PAGE' ||
     type === 'GET_SETTINGS_RECOVERY' ||
     type === 'COMPLETE_SETTINGS_RECOVERY' ||

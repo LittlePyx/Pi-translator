@@ -63,6 +63,11 @@ import {
   type TranslationAdjustmentRequest,
   type ViewportInsetsProvider,
 } from '../../ui/translation-overlay';
+import { captureWebRegion } from './web-region-capture';
+import {
+  createWebRegionSelection,
+  type WebRegionSelectionHandle,
+} from './web-region-selection';
 
 interface ContentScriptRuntimeContext {
   onInvalidated(callback: () => void): unknown;
@@ -244,6 +249,7 @@ export async function startSelectionTranslator(
   const resultRetryContexts = new Map<string, TranslationRetryContext>();
   let inFlightRequestId: string | undefined;
   let completedEarlyRequestId: string | undefined;
+  let activeWebRegionSelection: WebRegionSelectionHandle | undefined;
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
   let lastAutoSelectionHash: string | undefined;
@@ -1068,6 +1074,59 @@ export async function startSelectionTranslator(
 
   function selectionRect(snapshot: SelectionSnapshot): ViewportRect | undefined {
     return snapshot.rect;
+  }
+
+  function startWebRegionSelection(): void {
+    activeWebRegionSelection?.cancel();
+    cancelActiveTranslation();
+    overlay.hide();
+    const handle = createWebRegionSelection();
+    activeWebRegionSelection = handle;
+    void handle.result.then(async (region) => {
+      if (activeWebRegionSelection !== handle) return;
+      if (!region) {
+        activeWebRegionSelection = undefined;
+        return;
+      }
+      const pageUrl = options.pageUrl?.() ?? location.href;
+      if (region.mode === 'text' && region.extractedText) {
+        activeWebRegionSelection = undefined;
+        const requestId = crypto.randomUUID();
+        const snapshot: SelectionSnapshot = {
+          requestId,
+          sourceText: region.extractedText,
+          normalizedText: region.extractedText.trim(),
+          source: 'window-selection',
+          pageUrl,
+          capturedAt: Date.now(),
+          selectionHash: `${requestId}:${region.extractedText.length}`,
+          rect: region.rect,
+        };
+        latestSelection = snapshot;
+        await translate(snapshot);
+        return;
+      }
+      const capture = await captureWebRegion(region.rect, pageUrl);
+      if (activeWebRegionSelection !== handle) return;
+      activeWebRegionSelection = undefined;
+      if (!capture) {
+        overlay.showError({
+          message: '没有成功截取这个网页区域，请重新框选后再试。',
+          showSettings: false,
+          retryable: false,
+        }, region.rect);
+        return;
+      }
+      await translateImageRegion(capture);
+    }).catch((error: unknown) => {
+      if (activeWebRegionSelection !== handle) return;
+      activeWebRegionSelection = undefined;
+      overlay.showError({
+        message: runtimeConnectionErrorMessage(error),
+        showSettings: false,
+        retryable: true,
+      });
+    });
   }
 
   function rememberMarkerAnchor(
@@ -2044,11 +2103,19 @@ export async function startSelectionTranslator(
       return;
     }
     if (typed.type === 'OPEN_SIDEBAR') {
+      activeWebRegionSelection?.cancel();
+      activeWebRegionSelection = undefined;
       overlay.openSidebar();
       refreshSelection();
       return;
     }
+    if (typed.type === 'START_WEB_REGION_SELECTION') {
+      startWebRegionSelection();
+      return;
+    }
     if (typed.type === 'TRIGGER_TRANSLATE') {
+      activeWebRegionSelection?.cancel();
+      activeWebRegionSelection = undefined;
       const snapshot = captureSelectionSnapshot(settings.contextMode);
       if (snapshot) {
         latestSelection = snapshot;
@@ -2105,6 +2172,8 @@ export async function startSelectionTranslator(
     window.removeEventListener('resize', scheduleRefresh);
     window.removeEventListener('scroll', scheduleRefresh, true);
     browser.runtime.onMessage.removeListener(messageListener);
+    activeWebRegionSelection?.cancel();
+    activeWebRegionSelection = undefined;
     overlay.destroy();
     markerManager?.destroy();
     markerManager = undefined;
@@ -2129,6 +2198,8 @@ export async function startSelectionTranslator(
       }
     },
     cancelActiveTranslation: () => {
+      activeWebRegionSelection?.cancel();
+      activeWebRegionSelection = undefined;
       cancelActiveTranslation();
       overlay.hide();
     },
@@ -2138,6 +2209,8 @@ export async function startSelectionTranslator(
       persistentMarkersEnabled = false;
       persistentStoredMarkerCount = 0;
       storedPersistentMarkers = [];
+      activeWebRegionSelection?.cancel();
+      activeWebRegionSelection = undefined;
       cancelActiveTranslation();
       latestSelection = undefined;
       activePdfRegionLocation = undefined;

@@ -200,7 +200,7 @@ let settingsRecoveryCompleting=false;
 const SETTINGS_RECOVERY_TOKEN_KEY='piTranslatorSettingsRecoveryToken';
 
 for(const select of [apiPreset,onboardingPreset]){
-  for(const preset of API_PRESETS){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.id==='qwen'?`${preset.name}（PDF 图像推荐）`:preset.name;select.append(option)}
+  for(const preset of API_PRESETS){const option=document.createElement('option');option.value=preset.id;option.textContent=preset.id==='qwen'?`${preset.name}（图像翻译推荐）`:preset.name;select.append(option)}
   const custom=document.createElement('option');custom.value='custom';custom.textContent='自定义 OpenAI 兼容 API';select.append(custom);
 }
 extensionVersion.textContent=browser.runtime.getManifest().version;
@@ -223,7 +223,7 @@ function clearRecoveryTokenFromUrl():void{
 function renderSettingsRecovery(recovery:SettingsRecoveryDescriptor):void{
   settingsRecoveryBanner.hidden=false;
   settingsRecoveryTitle.textContent=recovery.role==='vision'
-    ? '完成 PDF 图像 API 配置后继续'
+    ? '完成图像翻译 API 配置后继续'
     : '完成文字 API 配置后继续';
   settingsRecoveryDescription.textContent=recovery.hadPartialOutput
     ? '刚才的请求已经产生部分译文。验证并保存成功后会返回原页面，由你确认是否重新翻译，避免重复请求。'
@@ -367,7 +367,7 @@ async function finishOnboarding():Promise<void>{
   await load();
   if(requestedFocusDeferred)await applyRequestedSettingsFocus();
   setStatus(visionSupported
-    ? `首次设置已完成；文字模型为 ${model}，PDF 图像模型为 ${visionDetection.model}。`
+    ? `首次设置已完成；文字模型为 ${model}，图像翻译模型为 ${visionDetection.model}。`
     : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
   if(!transaction.revisionId)throw new Error('首次设置未能提交。');
   await completeSettingsRecovery({text:true,vision:visionSupported},transaction.revisionId);
@@ -399,7 +399,7 @@ function renderProfileSelect():void {
 function renderProfileRole():void {
   const roles:string[]=[];
   if(currentProfileId===activeTextProfileId)roles.push('文字翻译');
-  if(currentProfileId===visionProfileId)roles.push('PDF 图像');
+  if(currentProfileId===visionProfileId)roles.push('图像翻译');
   profileRoleStatus.textContent=`当前配置用途：${roles.length?roles.join(' · '):'尚未分配'}`;
   backToTextProfileButton.hidden=currentProfileId===activeTextProfileId;
   useTextProfileButton.hidden=currentProfileId===activeTextProfileId;
@@ -420,8 +420,8 @@ async function refreshVisionSetupStatus():Promise<void>{
       const pendingKeyConfigured=(currentProfileId===pendingProfile.id&&Boolean(apiKeyInput.value.trim()))||await hasApiKey(pendingProfile.id);
       if(pendingProfile.id!==visionSetupIntentProfileId)return;
       visionSetupStatus.textContent=pendingKeyConfigured
-        ? `正在配置“${pendingProfile.name}”；Key 已填写，连接成功后会自动用于 PDF 图像，文字翻译配置不会改变。`
-        : `正在配置“${pendingProfile.name}”；填写 Key 并连接成功后会自动用于 PDF 图像，文字翻译配置不会改变。`;
+        ? `正在配置“${pendingProfile.name}”；Key 已填写，连接成功后会自动用于图像翻译，文字翻译配置不会改变。`
+        : `正在配置“${pendingProfile.name}”；填写 Key 并连接成功后会自动用于图像翻译，文字翻译配置不会改变。`;
     }else{
       visionSetupStatus.textContent='尚未配置，不影响普通文字翻译。需要扫描件功能时再补充 Qwen Key 即可。';
     }
@@ -529,7 +529,7 @@ async function autoConfigureVisionProfile(active:ApiProfile):Promise<{attempted:
   visionSetupIntentProfileId='';
   visionModel.value=model;
   renderVisionProfileSelect();
-  setVisionTestStatus(`已自动启用 PDF 图像区域翻译 · ${response.data.latencyMs} ms`,'success');
+  setVisionTestStatus(`已自动启用图像区域翻译 · ${response.data.latencyMs} ms`,'success');
   return {attempted:true,configured:true};
 }
 
@@ -610,7 +610,7 @@ backToTextProfileButton.addEventListener('click',()=>{
   const textProfile=activeTextProfile();
   if(!textProfile){setStatus('当前没有可返回的文字翻译 API。',true);return}
   updateCurrentProfile();
-  void loadProfile(textProfile.id).then(()=>setStatus(visionProfileId?`已返回文字 API“${textProfile.name}”；PDF 图像配置仍保留。`:`已返回文字 API“${textProfile.name}”。`));
+  void loadProfile(textProfile.id).then(()=>setStatus(visionProfileId?`已返回文字 API“${textProfile.name}”；图像翻译配置仍保留。`:`已返回文字 API“${textProfile.name}”。`));
 });
 useTextProfileButton.addEventListener('click',()=>{updateCurrentProfile();activeTextProfileId=currentProfileId;renderProfileSelect();setDirty();setStatus(`保存后将使用“${currentProfile()?.name??'当前配置'}”进行文字翻译。`)});
 deleteProfileButton.addEventListener('click',()=>{if(profiles.length<=1)return;const deletedId=currentProfileId;profiles=profiles.filter(profile=>profile.id!==currentProfileId);if(visionProfileId===deletedId)visionProfileId='';if(visionSetupIntentProfileId===deletedId)visionSetupIntentProfileId='';if(activeTextProfileId===deletedId)activeTextProfileId=profiles[0]!.id;void loadProfile(profiles[0]!.id);setDirty();setStatus('配置已从草稿中删除，点击“保存设置”后生效。')});
@@ -693,9 +693,9 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
     await refreshKeyState();
     setSaved();
     const roleMessage=active.id!==editing.id&&visionProfileId===editing.id
-      ?`设置已保存：文字继续使用“${active.name}”，PDF 图像使用“${editing.name}”。`
+      ?`设置已保存：文字继续使用“${active.name}”，图像翻译使用“${editing.name}”。`
       :autoVision.configured&&autoVision.attempted
-        ?'设置已保存，并已自动启用 PDF 图像区域翻译。'
+        ?'设置已保存，并已自动启用图像区域翻译。'
         :autoVision.attempted
           ?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。'
           :'设置已保存，并已同步到打开的页面。';
@@ -790,7 +790,7 @@ async function callModels():Promise<void>{
   }else{
     setStatus(`文字模型 ${suggested} 可用，正在检测 PDF 图片输入能力…`);
     vision=await detectVisionModel(active,response.data.models,suggested,apiKey,visionModel.value);
-    if(vision.model){visionProfileId=active.id;visionSetupIntentProfileId='';visionModel.value=vision.model;renderVisionProfileSelect();setVisionTestStatus(`已自动启用 PDF 图像区域翻译 · ${vision.model}${vision.latencyMs?` · ${vision.latencyMs} ms`:''}`,'success')}
+    if(vision.model){visionProfileId=active.id;visionSetupIntentProfileId='';visionModel.value=vision.model;renderVisionProfileSelect();setVisionTestStatus(`已自动启用图像区域翻译 · ${vision.model}${vision.latencyMs?` · ${vision.latencyMs} ms`:''}`,'success')}
     else setVisionTestStatus('当前接口未检测到可用的图片模型；文字翻译不受影响。');
   }
   renderConnectionSummary(diagnostic.data,suggested,vision);
@@ -800,12 +800,12 @@ async function callModels():Promise<void>{
   const configuredVision=profiles.find(profile=>profile.id===visionProfileId);
   const savedMessage=vision.preserved
     ? configuredVision
-      ? `自动配置完成并已保存：保留现有 PDF 图像配置“${configuredVision.name}”。`
-      : `文字模型 ${suggested} 已连接并保存；本次只修复文字翻译，PDF 图像能力可稍后按需配置。`
+      ? `自动配置完成并已保存：保留现有图像翻译配置“${configuredVision.name}”。`
+      : `文字模型 ${suggested} 已连接并保存；本次只修复文字翻译，图像翻译能力可稍后按需配置。`
     : separateText
-      ? `自动配置完成并已保存：PDF 图像使用“${active.name}”，文字继续使用“${separateText.name}”。`
+      ? `自动配置完成并已保存：图像翻译使用“${active.name}”，文字继续使用“${separateText.name}”。`
       : vision.model
-        ? `自动配置完成并已保存：文字使用 ${suggested}，PDF 图像使用 ${vision.model}。`
+        ? `自动配置完成并已保存：文字使用 ${suggested}，图像翻译使用 ${vision.model}。`
         : `文字模型 ${suggested} 已连接并保存；普通文字翻译可用。需要扫描件功能时再配置 Qwen。`;
   const configurationRevision=await persistConnectedApiConfiguration(savedMessage);
   await completeSettingsRecovery({text:true,vision:Boolean(vision.model)&&!vision.preserved},configurationRevision);
@@ -850,7 +850,7 @@ testVisionCapabilityButton.addEventListener('click',()=>{void(async()=>{
     visionModel.value=model;
     visionSelectionTouched=true;
     renderVisionProfileSelect();
-    const configurationRevision=await persistConnectedApiConfiguration('视觉能力验证成功，当前 PDF 图像配置已保存。');
+    const configurationRevision=await persistConnectedApiConfiguration('视觉能力验证成功，当前图像翻译配置已保存。');
     await completeSettingsRecovery({text:false,vision:true},configurationRevision);
   }
 })().catch((error:unknown)=>setVisionTestStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),'error')).finally(()=>{testVisionCapabilityButton.disabled=false})});

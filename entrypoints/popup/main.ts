@@ -57,6 +57,7 @@ const status = element<HTMLParagraphElement>('status');
 const quickActions = element<HTMLElement>('quick-actions');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const openSidebar = element<HTMLButtonElement>('open-sidebar');
+const openWebRegion = element<HTMLButtonElement>('open-web-region');
 const openPdf = element<HTMLButtonElement>('open-pdf');
 const pdfAccessAlert = element<HTMLElement>('pdf-access-alert');
 const pdfAccessTitle = element<HTMLElement>('pdf-access-title');
@@ -310,6 +311,12 @@ function updateQuickActions(): void {
         ? '解决 PDF 读取权限'
         : '打开 PDF 阅读器';
   const sidebarAvailable = sidebarAvailableForActivePage();
+  const webRegionAvailable = Boolean(
+    activeUrl && (
+      isOverleafProjectUrl(activeUrl) ||
+      (!activePdfContext && generalPageMode !== 'off' && isInjectableWebUrl(activeUrl))
+    ),
+  );
   const pdfIsCurrent = Boolean(activePdfContext);
   const pdfIsPrimary = pdfIsCurrent || !sidebarAvailable;
   const primaryAction = pdfIsPrimary ? openPdf : openSidebar;
@@ -319,6 +326,7 @@ function updateQuickActions(): void {
   primaryAction.classList.add('primary-action');
   if (sidebarAvailable) secondaryAction.classList.add('secondary-action');
   openSidebar.hidden = !sidebarAvailable;
+  openWebRegion.hidden = !webRegionAvailable;
   openSidebar.textContent = pdfIsCurrent
     ? '打开翻译侧栏'
     : sidebarMode === 'browser'
@@ -542,6 +550,24 @@ openSidebar.addEventListener('click', () => {
       window.close();
     })
     .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error'));
+});
+
+openWebRegion.addEventListener('click', () => {
+  setStatus('正在进入网页框选…', 'progress');
+  openWebRegion.disabled = true;
+  void browser.runtime.sendMessage({
+    type: 'START_WEB_REGION_SELECTION',
+  } satisfies RuntimeMessage).then((response: RuntimeResponse<{ started: true }> | undefined) => {
+    if (!response?.ok) {
+      setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
+      return;
+    }
+    window.close();
+  }).catch(() => {
+    setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
+  }).finally(() => {
+    openWebRegion.disabled = false;
+  });
 });
 
 openPdf.addEventListener('click', () => {

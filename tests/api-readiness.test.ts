@@ -28,6 +28,7 @@ describe('compact API readiness indicators', () => {
     });
     expect(visionApiReadiness(undefined)).toMatchObject({
       role: 'vision',
+      label: '图像翻译',
       value: '按需配置',
       tone: 'quiet',
       settingsFocus: 'vision',

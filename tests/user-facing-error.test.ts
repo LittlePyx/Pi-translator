@@ -77,7 +77,7 @@ describe('user-facing errors', () => {
     expect(translationErrorRecovery('VISION_NOT_CONFIGURED', false)).toEqual({
       showRetry: false,
       settingsFocus: 'vision',
-      settingsLabel: '配置 PDF 图像',
+      settingsLabel: '配置图像翻译',
       autoResumeAfterSettings: true,
     });
     expect(translationErrorRecovery('NETWORK_ERROR', false)).toEqual({
