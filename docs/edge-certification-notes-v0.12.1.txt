@@ -1,0 +1,24 @@
+Pi Translator has no publisher-operated account, login, subscription, or backend. It is a bring-your-own-API-key client. To make all core features testable, the following temporary review-only credentials will remain active during certification.
+
+TEXT TRANSLATION
+Base URL: [TEXT API BASE URL]
+Model: [TEXT MODEL]
+API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+
+OPTIONAL PDF IMAGE/OCR
+Base URL: [VISION API BASE URL]
+Model: [VISION MODEL]
+API Key: [PASTE TEMPORARY REVIEW KEY IN PARTNER CENTER]
+
+Expiration: [DATE AFTER REVIEW WINDOW]
+
+Test steps:
+1. Install the extension; its settings page opens automatically.
+2. Configure the text provider, paste the text Key, connect, and save.
+3. Open any public HTTPS article, select an English sentence, and choose “使用 Pi Translator 翻译选中文本” from the context menu. Verify streamed translation, short-phrase lookup, copy, correction, and pinned sidebar.
+4. In a completed result, open the browser side panel. Select more text on the same page and verify that the independent panel updates without covering page content. Use its arrows to revisit recent results and switch between full and sentence-aligned views.
+5. Open the popup and verify translation readiness. If the Edge translation shortcut is unassigned, use the provided shortcut-settings link; no translation request is sent by this check.
+6. Optional PDF test: configure the vision provider, open “PDF 阅读器”, choose a local PDF, and translate selectable text or a user-confirmed image region. On a two-column paper, verify that an accidental cross-column selection keeps the starting column.
+7. Optional native-PDF test: open a PDF directly in Edge, select text, and use the same context-menu command; the result streams in Edge’s side panel.
+
+No Microsoft, Overleaf, or Pi Translator account is needed. API requests go directly to the selected provider. Keys are entered only in extension settings, are not bundled in the ZIP, and are not exposed to webpages. Readiness checks, recent-result navigation, reading positions, and PDF text-layout safeguards are computed locally. The extension executes no remote code.
