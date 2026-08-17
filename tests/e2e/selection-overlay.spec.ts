@@ -4650,17 +4650,16 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await expect(overlay.locator('.recognized-text')).toHaveText('Re-recognized academic source text.');
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.mark-action')).toHaveAttribute('aria-pressed', 'true');
+  await expect(sourceMarker).toBeVisible();
   const sourceMarkerBox = await sourceMarker.boundingBox();
-  expect(sourceMarkerBox).not.toBeNull();
-  if (sourceMarkerBox) {
-    await pdfPage.mouse.move(
-      sourceMarkerBox.x + sourceMarkerBox.width / 2,
-      sourceMarkerBox.y + sourceMarkerBox.height / 2,
-    );
-    const sourceTooltip = pdfPage.locator('#pi-translation-marker-layer .tooltip');
-    await expect(sourceTooltip.locator('.tooltip-text'))
-      .toHaveText('重新识别后修正的学术翻译结果。');
-  }
+  if (!sourceMarkerBox) throw new Error('Expected the refreshed PDF source marker to be visible.');
+  await pdfPage.mouse.move(
+    sourceMarkerBox.x + sourceMarkerBox.width / 2,
+    sourceMarkerBox.y + sourceMarkerBox.height / 2,
+  );
+  const sourceTooltip = pdfPage.locator('#pi-translation-marker-layer .tooltip');
+  await expect(sourceTooltip.locator('.tooltip-text'))
+    .toHaveText('重新识别后修正的学术翻译结果。');
   await overlay.locator('details.more > summary').click();
   await overlay.getByRole('button', { name: '查看本文标记（1）' }).click();
   await expect(overlay.locator('.marker-note')).toHaveCount(1);
