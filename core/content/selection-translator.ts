@@ -577,7 +577,10 @@ export async function startSelectionTranslator(
     ...(surface === 'pdf'
       ? {}
       : {
-          onOpenBrowserSidebar: async (result: TranslateResult) => {
+          onOpenBrowserSidebar: async (
+            result: TranslateResult,
+            openOptions?: { persistPreference?: boolean },
+          ) => {
             const sourceLabel = options.sourceLabel?.();
             const response = await browser.runtime.sendMessage({
               type: 'OPEN_BROWSER_SIDEBAR',
@@ -585,6 +588,9 @@ export async function startSelectionTranslator(
                 result,
                 pageUrl: options.pageUrl?.() ?? location.href,
                 ...(sourceLabel ? { sourceLabel } : {}),
+                ...(openOptions?.persistPreference === false
+                  ? { persistPreference: false }
+                  : {}),
               },
             } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
             if (!response.ok) throw new Error(response.error.message);
@@ -1050,6 +1056,7 @@ export async function startSelectionTranslator(
       overlay.setPreferences({
         targetLanguage: temporaryTargetLanguage,
         style: temporaryStyle,
+        sidebarMode: settings.sidebarMode,
         sidebarSide: settings.sidebarSide,
         sidebarWidth: settings.sidebarWidth,
         autoRenderLatex: settings.autoRenderLatex,
@@ -1940,6 +1947,7 @@ export async function startSelectionTranslator(
       overlay.setPreferences({
         targetLanguage: temporaryTargetLanguage,
         style: temporaryStyle,
+        sidebarMode: settings.sidebarMode,
         sidebarSide: settings.sidebarSide,
         sidebarWidth: settings.sidebarWidth,
         autoRenderLatex: settings.autoRenderLatex,
@@ -2013,6 +2021,7 @@ export async function startSelectionTranslator(
       overlay.setPreferences({
         targetLanguage: temporaryTargetLanguage,
         style: temporaryStyle,
+        sidebarMode: settings.sidebarMode,
         sidebarSide: settings.sidebarSide,
         sidebarWidth: settings.sidebarWidth,
         autoRenderLatex: settings.autoRenderLatex,

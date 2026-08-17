@@ -909,10 +909,12 @@ function openBrowserTranslationSidePanel(
         () => assertTabLifecycleCurrent(lifecycleToken),
       ));
     }
-    await mutateSettings((settings) => ({
-      nextSettings: { ...settings, sidebarMode: 'browser' },
-      value: undefined,
-    }));
+    if (mirrored?.persistPreference !== false) {
+      await mutateSettings((settings) => ({
+        nextSettings: { ...settings, sidebarMode: 'browser' },
+        value: undefined,
+      }));
+    }
     void browser.tabs.sendMessage(tab.id, {
       type: 'BROWSER_SIDEBAR_ACTIVE',
     } satisfies RuntimeMessage).catch(() => undefined);

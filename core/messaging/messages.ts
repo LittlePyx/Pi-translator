@@ -191,6 +191,7 @@ export type RuntimeMessage =
         result: TranslateResult;
         pageUrl: string;
         sourceLabel?: string;
+        persistPreference?: boolean;
       };
     }
   | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number } }

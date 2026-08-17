@@ -19,7 +19,7 @@ import {
   ManualCorrectionError,
   type ManualCorrectionEdit,
 } from '../core/translation/manual-correction';
-import type { SidebarSide } from '../core/settings/schema';
+import type { SidebarMode, SidebarSide } from '../core/settings/schema';
 import {
   documentMemoryTranslationResult,
   type DocumentMemorySnapshot,
@@ -189,6 +189,7 @@ const STYLES = `
 export interface OverlayPreferences {
   targetLanguage: string;
   style: TranslationStyle;
+  sidebarMode: SidebarMode;
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   autoRenderLatex: boolean;
@@ -312,7 +313,10 @@ interface OverlayActions {
     recovery?: SettingsRecoveryRequest,
   ) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
-  onOpenBrowserSidebar?: (result: TranslateResult) => Promise<void>;
+  onOpenBrowserSidebar?: (
+    result: TranslateResult,
+    options?: { persistPreference?: boolean },
+  ) => Promise<void>;
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
   onSidebarLayoutChange: (expanded: boolean, side: SidebarSide, width: number) => void;
@@ -347,7 +351,7 @@ export class TranslationOverlay {
   private documentTermFocusSource: string | undefined = undefined;
   private editingDocumentCandidateId: string | undefined = undefined;
   private sidebarWidth = 390;
-  private preferences: OverlayPreferences = { targetLanguage:'zh-CN', style:'academic', sidebarSide:'right', sidebarWidth:390, autoRenderLatex:true };
+  private preferences: OverlayPreferences = { targetLanguage:'zh-CN', style:'academic', sidebarMode:'floating', sidebarSide:'right', sidebarWidth:390, autoRenderLatex:true };
   private lastRect?: ViewportRect;
   private cardPosition: Position | undefined;
   private currentResult?: TranslateResult;
@@ -405,7 +409,7 @@ export class TranslationOverlay {
     window.visualViewport?.addEventListener('scroll',this.onViewportChange);
   }
 
-  setPreferences(preferences: OverlayPreferences): void { this.preferences={...preferences};this.sidebarWidth=preferences.sidebarWidth;this.publishSidebarLayout();this.scheduleReflow(); }
+  setPreferences(preferences: OverlayPreferences): void { const sidebarModeChanged=this.preferences.sidebarMode!==preferences.sidebarMode;this.preferences={...preferences};this.sidebarWidth=preferences.sidebarWidth;this.publishSidebarLayout();if(sidebarModeChanged&&this.view==='card'&&this.currentResult&&!this.progressState)this.renderResult(this.currentResult);else this.scheduleReflow(); }
   isSidebarActive(): boolean { return this.sidebarActive; }
   isShowingCard(): boolean { return this.view==='card'||this.view==='sidebar'; }
   ownsCurrentSelection(): boolean {
@@ -1282,7 +1286,7 @@ export class TranslationOverlay {
     }
     const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const [value,label] of LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
     language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
-    if(this.actions.onOpenBrowserSidebar){const browserSidebar=this.menuButton('在浏览器侧栏中打开',()=>{browserSidebar.disabled=true;browserSidebar.textContent='正在切换…';void this.actions.onOpenBrowserSidebar?.(result).catch(()=>{browserSidebar.disabled=false;this.flashButtonFeedback(browserSidebar,'无法打开浏览器侧栏',3200,'error')})});menu.append(browserSidebar)}
+    if(this.actions.onOpenBrowserSidebar){if(this.sidebarActive||this.preferences.sidebarMode==='floating'){const browserSidebar=this.menuButton('在浏览器侧栏中打开',()=>this.openBrowserSidebarFromControl(result,browserSidebar));menu.append(browserSidebar)}else{menu.append(this.menuButton('固定到网页浮动侧栏',()=>this.openSidebar()))}}
     if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface())));const settings=this.menuButton('完整设置',()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);details.append(summary,menu);details.addEventListener('toggle',()=>{const surface=details.closest<HTMLElement>('.surface');surface?.classList.toggle('menu-open',details.open);if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
   }
 
@@ -1381,12 +1385,25 @@ export class TranslationOverlay {
 
   private beginPdfRegionAdjustment():void { if(this.sidebarActive)this.collapseSidebar();else{this.clear();this.setView('hidden')}this.actions.onAdjustPdfRegion?.() }
 
+  private openBrowserSidebarFromControl(result:TranslateResult,button:HTMLButtonElement):void {
+    if(!this.actions.onOpenBrowserSidebar)return;
+    const originalLabel=button.textContent??'打开浏览器侧栏';
+    button.disabled=true;button.textContent='正在打开…';
+    void this.actions.onOpenBrowserSidebar(result,{persistPreference:false}).catch((error:unknown)=>{
+      if(!button.isConnected)return;
+      button.disabled=false;button.textContent=originalLabel;
+      this.flashButtonFeedback(button,'无法打开，请重试',3200,'error');
+      const message=error instanceof Error&&error.message.trim()?error.message:'当前页面无法打开浏览器侧栏。';
+      this.resultFeedback.textContent='';requestAnimationFrame(()=>{this.resultFeedback.textContent=message});
+    });
+  }
+
   private placeMoreMenu(details:HTMLElement,menu:HTMLElement):void { const surface=details.closest<HTMLElement>('.surface');if(!surface)return;menu.classList.remove('opens-down');menu.style.removeProperty('max-height');const anchorRect=details.getBoundingClientRect();const surfaceRect=surface.getBoundingClientRect();const headerBottom=surface.querySelector<HTMLElement>(':scope > .header')?.getBoundingClientRect().bottom??surfaceRect.top;const gap=2,margin=8;const visibleTop=Math.max(surfaceRect.top,headerBottom,margin);const visibleBottom=Math.min(surfaceRect.bottom,innerHeight-margin);const above=Math.max(0,anchorRect.top-gap-visibleTop);const below=Math.max(0,visibleBottom-anchorRect.bottom-gap);const desired=Math.min(menu.scrollHeight,280);const opensDown=below>=desired||below>=above;const available=opensDown?below:above;menu.classList.toggle('opens-down',opensDown);menu.style.maxHeight=`${Math.max(1,Math.min(desired,available))}px`; }
 
   private surface(titleText:string):HTMLDivElement {
     const docked=this.sidebarActive||this.markerNavigatorActive||this.historyNavigatorActive||this.documentMemoryActive;const surface=document.createElement('div');surface.className=`surface ${docked?'sidebar '+this.preferences.sidebarSide:'card'}`;surface.setAttribute('role',docked?'complementary':'dialog');surface.setAttribute('aria-label',`Pi Translator ${titleText}`);if(docked)surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);
     const header=document.createElement('div');header.className='header';const titleWrap=document.createElement('div');titleWrap.className='title-wrap';const title=document.createElement('div');title.className='title';title.textContent=titleText;titleWrap.append(this.logo('logo'),title);if(this.sidebarActive&&!this.markerNavigatorActive&&!this.documentMemoryActive){const live=document.createElement('span');live.className='live-badge';live.textContent='自动翻译中';titleWrap.append(live)}const tools=document.createElement('div');tools.className='header-tools';
-    if(this.historyNavigatorActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>this.returnFromHistoryNavigator());tools.append(back)}else if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewSummary=summarizeDocumentReviews(this.documentMemory);const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewSummary.totalCount?' has-review':''}`,documentReviewDescription(reviewSummary));documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const pin=this.button('固定侧栏','pin-action','固定到连续翻译侧栏');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}
+    if(this.historyNavigatorActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>this.returnFromHistoryNavigator());tools.append(back)}else if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewSummary=summarizeDocumentReviews(this.documentMemory);const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewSummary.totalCount?' has-review':''}`,documentReviewDescription(reviewSummary));documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const browserResult=this.preferences.sidebarMode==='browser'&&!this.progressState&&this.currentResult&&this.actions.onOpenBrowserSidebar?this.currentResult:undefined;if(browserResult){const pin=this.button('打开浏览器侧栏','pin-action','打开浏览器侧栏');pin.addEventListener('click',()=>this.openBrowserSidebarFromControl(browserResult,pin));tools.append(pin)}else{const pin=this.button('固定侧栏','pin-action','固定到连续翻译侧栏');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}}
     const closeLabel=this.progressState?'停止并关闭':'关闭';const close=this.button('×','icon surface-close',closeLabel);close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
     if(docked)this.makeResizable(surface);else this.makeDraggable(surface,header);return surface;
   }

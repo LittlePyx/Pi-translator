@@ -354,6 +354,27 @@ async function replaceStoredApiKeys(keys: Record<string, string>): Promise<void>
   }
 }
 
+async function setStoredSidebarMode(mode: 'floating' | 'browser'): Promise<void> {
+  const extensionPage = await context.newPage();
+  try {
+    await extensionPage.goto(`chrome-extension://${extensionId}/popup.html`);
+    await extensionPage.evaluate(async (nextMode) => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const stored = await extensionChrome.storage.local.get('extensionSettings');
+      await extensionChrome.storage.local.set({
+        extensionSettings: {
+          ...(stored.extensionSettings ?? {}),
+          sidebarMode: nextMode,
+        },
+      });
+    }, mode);
+  } finally {
+    await extensionPage.close();
+  }
+}
+
 test.beforeAll(async () => {
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-e2e-'));
   const extensionPath = path.resolve('.output/edge-mv3');
@@ -7857,6 +7878,14 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-label')).toHaveText('www.overleaf.com');
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
     await expect(sidePanel.locator('#open-pi-reader')).toHaveText('改用浮动侧栏');
+    const storedModeAfterTemporaryOpen = await sidePanel.evaluate(async () => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const stored = await extensionChrome.storage.local.get('extensionSettings');
+      return stored.extensionSettings?.sidebarMode;
+    });
+    expect(storedModeAfterTemporaryOpen).toBe('floating');
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await sidePanel.screenshot({
         path: testInfo.outputPath('web-browser-sidebar-390-light.png'),
@@ -7919,6 +7948,75 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     }
     await clearBrowserSelection();
     await sidePanel.close();
+  }
+});
+
+test('uses the preferred browser side panel from the result primary action', async () => {
+  const sidePanel = await context.newPage();
+  const overlay = page.locator('#tex-selection-translator-root');
+  let browserSidebarOpened = false;
+  try {
+    await setStoredSidebarMode('browser');
+    const options = await context.newPage();
+    try {
+      await options.goto(`chrome-extension://${extensionId}/options.html`);
+      await expect(options.locator('#sidebar-mode')).toHaveValue('browser');
+    } finally {
+      await options.close();
+    }
+    const popup = await context.newPage();
+    try {
+      await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+      await expect(popup.locator('#open-sidebar')).toHaveText('打开浏览器翻译侧栏');
+    } finally {
+      await popup.close();
+    }
+    await page.bringToFront();
+    await selectElementText('#browser-history-source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+
+    const primaryAction = overlay.getByRole('button', { name: '打开浏览器侧栏' });
+    await expect(primaryAction).toBeVisible();
+    await overlay.locator('details.more > summary').click();
+    await expect(overlay.getByRole('button', { name: '固定到网页浮动侧栏' })).toBeVisible();
+    await expect(overlay.getByRole('button', { name: '在浏览器侧栏中打开' })).toHaveCount(0);
+    await overlay.locator('details.more > summary').click();
+
+    const requestsBeforeOpen = textRequests.length;
+    await primaryAction.click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    expect(textRequests).toHaveLength(requestsBeforeOpen);
+
+    await sidePanel.setViewportSize({ width: 390, height: 720 });
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await expect(sidePanel.locator('#session')).toBeVisible();
+    browserSidebarOpened = true;
+    await expect(sidePanel.locator('#source-text')).toContainText('A browser side panel');
+    await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    const storedMode = await sidePanel.evaluate(async () => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const stored = await extensionChrome.storage.local.get('extensionSettings');
+      return stored.extensionSettings?.sidebarMode;
+    });
+    expect(storedMode).toBe('browser');
+  } finally {
+    if (browserSidebarOpened && !sidePanel.isClosed()) {
+      await sidePanel.locator('#open-pi-reader').click();
+      await page.bringToFront();
+      await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    }
+    await sidePanel.close();
+    await setStoredSidebarMode('floating');
+    await page.bringToFront();
+    if (await overlay.locator('.surface-close').count()) {
+      await overlay.locator('.surface-close').click();
+    }
+    await clearBrowserSelection();
   }
 });
 
