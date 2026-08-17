@@ -133,6 +133,17 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     await expect(popup.locator('#pause-site'))
       .toHaveAttribute('aria-describedby', 'site-pause-help');
 
+    const readinessPanel = popup.locator('#readiness-panel');
+    await expect(readinessPanel).toHaveAttribute('data-state', 'issue');
+    await expect(readinessPanel).not.toHaveAttribute('aria-busy', 'true');
+    await expect(popup.locator('#readiness-title')).toContainText('还需处理');
+    await expect(popup.locator('#readiness-issues'))
+      .toContainText('还需允许 Pi Translator 访问当前 API 域名');
+    const authorizeApi = readinessPanel.getByRole('button', { name: '授权接口' });
+    await expect(authorizeApi).toBeVisible();
+    expect(await authorizeApi.evaluate((element) => getComputedStyle(element).borderRadius))
+      .toBe('0px');
+
     const quickActions = popup.locator('#quick-actions');
     await expect(quickActions).toHaveAttribute('data-primary', 'reader');
     await expect(quickActions).not.toHaveAttribute('aria-busy', 'true');
@@ -181,7 +192,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     expect(loadingLayout.animationName).toBe('none');
 
     const optionsPromise = context.waitForEvent('page');
-    await textStatus.click();
+    await authorizeApi.click();
     focusedOptions = await optionsPromise;
     await focusedOptions.waitForLoadState('domcontentloaded');
     await expect(focusedOptions.locator('#connection-advanced')).toHaveAttribute('open', '');

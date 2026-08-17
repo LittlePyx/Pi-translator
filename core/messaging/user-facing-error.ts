@@ -9,6 +9,7 @@ export type SettingsFocus =
   | 'vision-permission'
   | 'vision-ocr'
   | 'glossary'
+  | 'pages'
   | 'support';
 export type TranslationProviderRole = 'text' | 'vision';
 

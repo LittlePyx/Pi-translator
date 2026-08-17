@@ -48,6 +48,10 @@ import {
   parseGlossaryText,
 } from '../../core/translation/glossary';
 import type { TranslationStyle } from '../../core/translation/types';
+import {
+  assignedTranslationShortcut,
+  shortcutKeyParts,
+} from '../../core/commands/translation-shortcut';
 
 function element<T extends HTMLElement>(id: string): T {
   const value=document.getElementById(id);if(!value)throw new Error(`Missing options element #${id}`);return value as T;
@@ -117,6 +121,8 @@ const settingsRecoveryDescription=element<HTMLParagraphElement>('settings-recove
 const settingsRecoveryStatus=element<HTMLParagraphElement>('settings-recovery-status');
 const diagnosticReport=element<HTMLElement>('diagnostic-report');
 const shortcutsButton=element<HTMLButtonElement>('open-shortcuts');
+const translationShortcutChip=element<HTMLElement>('translation-shortcut-chip');
+const translationShortcutHelp=element<HTMLElement>('translation-shortcut-help');
 const onboardingDialog=element<HTMLDialogElement>('onboarding-dialog');
 const onboardingPreset=element<HTMLSelectElement>('onboarding-preset');
 const onboardingBaseUrlField=element<HTMLElement>('onboarding-base-url-field');
@@ -153,6 +159,39 @@ let visionSelectionTouched=false;
 let visionSetupIntentProfileId='';
 let onboardingStep=1;
 let onboardingAvailableModels:string[]=[];
+
+function shortcutKeys(shortcut:string):DocumentFragment{
+  const fragment=document.createDocumentFragment();
+  shortcutKeyParts(shortcut).forEach((part,index)=>{
+    if(index)fragment.append(' + ');
+    const key=document.createElement('kbd');key.textContent=part;fragment.append(key);
+  });
+  return fragment;
+}
+
+async function refreshTranslationShortcut():Promise<void>{
+  try{
+    const shortcut=assignedTranslationShortcut(await browser.commands.getAll());
+    translationShortcutChip.replaceChildren();
+    translationShortcutHelp.replaceChildren();
+    if(shortcut){
+      translationShortcutChip.classList.remove('missing');
+      translationShortcutChip.append(shortcutKeys(shortcut));
+      translationShortcutHelp.append('选中文本后使用右键菜单或按 ',shortcutKeys(shortcut),'。');
+      shortcutsButton.textContent='管理快捷键';
+      return;
+    }
+    translationShortcutChip.classList.add('missing');
+    translationShortcutChip.textContent='翻译快捷键未设置';
+    translationShortcutHelp.textContent='Edge 未能分配建议快捷键，可能与系统或其他扩展冲突；请手动设置后再使用。';
+    shortcutsButton.textContent='设置快捷键';
+  }catch{
+    translationShortcutChip.classList.add('missing');
+    translationShortcutChip.textContent='快捷键状态未知';
+    translationShortcutHelp.textContent='暂时无法读取快捷键状态，可打开 Edge 快捷键页面检查。';
+    shortcutsButton.textContent='检查快捷键';
+  }
+}
 let formDirty=false;
 let nonConnectionDirty=false;
 let activeSettingsRecovery:SettingsRecoveryDescriptor|undefined;
@@ -499,7 +538,7 @@ async function removeUnusedApiAccess(previous:ApiProfile[],next:ApiProfile[],act
 }
 
 async function load():Promise<void>{
-  const settings=await getSettings();loadedSettingsBaseline=settings;profiles=settings.apiProfiles.map(profile=>({...profile}));activeTextProfileId=settings.activeApiProfileId;currentProfileId=activeTextProfileId;visionProfileId=settings.visionApiProfileId;visionSelectionTouched=false;visionSetupIntentProfileId='';visionModel.value=settings.visionModel;originalMode=settings.apiKeyStorage;persistKey.checked=settings.apiKeyStorage==='local';sourceLanguage.value=settings.sourceLanguage;targetLanguage.value=settings.targetLanguage;styleSelect.value=settings.style;contentMode.value=settings.contentMode;academicGlossary.value=formatGlossaryEntries(settings.academicGlossary);rememberHistory.checked=settings.rememberRecentTranslations;historyLimit.value=String(settings.historyLimit);sessionCache.checked=settings.enableSessionCache;alignmentDefault.checked=settings.sentenceAlignmentDefault;autoRenderLatex.checked=settings.autoRenderLatex;sidebarSide.value=settings.sidebarSide;contextMode.value=settings.contextMode;enableStreaming.checked=settings.enableStreaming;protectSensitiveFields.checked=settings.protectSensitiveFields;pdfKeyboardShortcuts.checked=settings.pdfKeyboardShortcutsEnabled;pdfRegionShortcutKey.value=settings.pdfRegionShortcutKey.toUpperCase();refreshPdfShortcutField();generalPageMode.value=settings.generalPageMode;siteAllowlist.value=settings.siteAllowlist.join('\n');floatingButton.checked=settings.showFloatingButtonOnOverleaf;hideTargetLanguageTrigger.checked=settings.hideFloatingButtonForTargetLanguage;contextMenu.checked=settings.enableContextMenu;refreshPageModeFields();await loadProfile(currentProfileId);setSaved();if(!settings.onboardingCompleted&&!onboardingDialog.open){onboardingPreset.value=API_PRESETS[0]?.id??'';applyOnboardingPreset();showOnboardingStep(1);onboardingDialog.showModal()}
+  const [settings]=await Promise.all([getSettings(),refreshTranslationShortcut()]);loadedSettingsBaseline=settings;profiles=settings.apiProfiles.map(profile=>({...profile}));activeTextProfileId=settings.activeApiProfileId;currentProfileId=activeTextProfileId;visionProfileId=settings.visionApiProfileId;visionSelectionTouched=false;visionSetupIntentProfileId='';visionModel.value=settings.visionModel;originalMode=settings.apiKeyStorage;persistKey.checked=settings.apiKeyStorage==='local';sourceLanguage.value=settings.sourceLanguage;targetLanguage.value=settings.targetLanguage;styleSelect.value=settings.style;contentMode.value=settings.contentMode;academicGlossary.value=formatGlossaryEntries(settings.academicGlossary);rememberHistory.checked=settings.rememberRecentTranslations;historyLimit.value=String(settings.historyLimit);sessionCache.checked=settings.enableSessionCache;alignmentDefault.checked=settings.sentenceAlignmentDefault;autoRenderLatex.checked=settings.autoRenderLatex;sidebarSide.value=settings.sidebarSide;contextMode.value=settings.contextMode;enableStreaming.checked=settings.enableStreaming;protectSensitiveFields.checked=settings.protectSensitiveFields;pdfKeyboardShortcuts.checked=settings.pdfKeyboardShortcutsEnabled;pdfRegionShortcutKey.value=settings.pdfRegionShortcutKey.toUpperCase();refreshPdfShortcutField();generalPageMode.value=settings.generalPageMode;siteAllowlist.value=settings.siteAllowlist.join('\n');floatingButton.checked=settings.showFloatingButtonOnOverleaf;hideTargetLanguageTrigger.checked=settings.hideFloatingButtonForTargetLanguage;contextMenu.checked=settings.enableContextMenu;refreshPageModeFields();await loadProfile(currentProfileId);setSaved();if(!settings.onboardingCompleted&&!onboardingDialog.open){onboardingPreset.value=API_PRESETS[0]?.id??'';applyOnboardingPreset();showOnboardingStep(1);onboardingDialog.showModal()}
 }
 
 for(const [index,button] of settingsNavButtons.entries()){
@@ -820,6 +859,7 @@ diagnoseButton.addEventListener('click',()=>{const model=modelInput.value.trim()
 
 clearButton.addEventListener('click',()=>void clearApiKey(currentProfileId).then(async()=>{apiKeyInput.value='';await refreshKeyState();setStatus('当前 API 配置的 Key 已清除。')}).catch(()=>setStatus('清除 API Key 失败。',true)));
 shortcutsButton.addEventListener('click',()=>void browser.tabs.create({url:'edge://extensions/shortcuts'}));
+window.addEventListener('focus',()=>void refreshTranslationShortcut());
 restartOnboardingButton.addEventListener('click',()=>{const current=currentProfile();const matching=API_PRESETS.find(preset=>preset.apiBaseUrl===current?.apiBaseUrl);onboardingPreset.value=matching?.id??'custom';applyOnboardingPreset();if(current){onboardingBaseUrl.value=current.apiBaseUrl;onboardingModel.value=current.model}onboardingApiKey.value='';showOnboardingStep(1);onboardingDialog.showModal()});
 exportSettingsButton.addEventListener('click',()=>{void(async()=>{const settings=await getSettings();const content=exportSettingsConfiguration(settings);const url=URL.createObjectURL(new Blob([content],{type:'application/json;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`pi-translator-settings-${new Date().toISOString().slice(0,10)}.json`;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setSupportStatus('配置已导出，文件中不包含任何 API Key。')})().catch(()=>setSupportStatus('导出配置失败。',true))});
 importSettingsButton.addEventListener('click',()=>importSettingsFile.click());
@@ -851,6 +891,9 @@ async function applyRequestedSettingsFocus():Promise<void>{
   }
   if(focus==='glossary'){
     showSettingsSection('translation');const disclosure=academicGlossary.closest<HTMLDetailsElement>('details');if(disclosure)disclosure.open=true;academicGlossary.scrollIntoView({block:'center'});queueMicrotask(()=>academicGlossary.focus());return;
+  }
+  if(focus==='pages'){
+    showSettingsSection('pages');queueMicrotask(()=>{generalPageMode.scrollIntoView({block:'center'});generalPageMode.focus()});return;
   }
   if(focus==='api'||focus==='api-model'||focus==='api-permission'){
     const target=focus==='api-model'

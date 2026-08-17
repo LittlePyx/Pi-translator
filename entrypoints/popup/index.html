@@ -29,6 +29,17 @@
         </button>
       </section>
 
+      <section id="readiness-panel" class="readiness-panel" data-state="loading" aria-label="使用状态" aria-busy="true">
+        <div class="readiness-summary">
+          <span class="readiness-mark" aria-hidden="true"></span>
+          <div>
+            <strong id="readiness-title">正在检查使用状态…</strong>
+            <p id="readiness-note"></p>
+          </div>
+        </div>
+        <div id="readiness-issues" class="readiness-issues" hidden></div>
+      </section>
+
       <label>
         <span>目标语言</span>
         <select id="target-language">

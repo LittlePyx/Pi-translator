@@ -776,6 +776,7 @@ kbd {
 .hero-bottom { position: relative; z-index: 1; display: flex; align-items: center; gap: 18px; margin-top: 13px; }
 .hero-compact .intro { margin: 0; font-size: 14px; }
 .shortcut-chip { margin-left: auto; color: #e0e7ff; font-size: 12px; white-space: nowrap; }
+.shortcut-chip.missing { color: #fde68a; font-weight: 700; }
 
 .privacy-strip {
   display: flex;
@@ -1158,6 +1159,7 @@ body {
 .hero-bottom { margin-top: 10px; }
 .hero-compact .intro { color: #5e687a; }
 .shortcut-chip { color: #6b7280; }
+.shortcut-chip.missing { color: #9a6415; }
 .hero kbd {
   border-color: #cfd5df;
   color: #384255;

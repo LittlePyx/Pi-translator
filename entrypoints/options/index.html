@@ -80,7 +80,7 @@
         </div>
         <div class="hero-bottom">
           <p class="intro">翻译 Overleaf 和普通网页中的选中文本，并按需保护 LaTeX 结构。</p>
-          <span class="shortcut-chip"><kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd></span>
+          <span id="translation-shortcut-chip" class="shortcut-chip" aria-live="polite">正在读取快捷键…</span>
         </div>
       </header>
 
@@ -256,7 +256,7 @@
               <label class="check-row preference-row"><input id="hide-target-language-trigger" type="checkbox" /><span><strong>智能隐藏重复翻译</strong><small>选区已是目标语言时隐藏普通网页浮动按钮。</small></span></label>
               <label class="check-row preference-row"><input id="context-menu" type="checkbox" /><span><strong>右键翻译菜单</strong><small>仅在存在文本选区时显示。</small></span></label>
             </div>
-            <div class="inline-guide"><strong>快捷方式</strong><p>选中文本后使用右键菜单或按 <kbd>Alt</kbd> + <kbd>Shift</kbd> + <kbd>T</kbd>。</p><button id="open-shortcuts" type="button">管理快捷键</button></div>
+            <div class="inline-guide"><strong>快捷方式</strong><p id="translation-shortcut-help">正在读取浏览器实际分配的快捷键…</p><button id="open-shortcuts" type="button">管理快捷键</button></div>
           </section>
 
           <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>

@@ -32,6 +32,14 @@ import {
   pdfPermissionPattern,
 } from '../../core/pdf/source';
 import { isInjectableWebUrl, isOverleafProjectUrl } from '../../core/settings/site-access';
+import {
+  popupPageState,
+  popupReadiness,
+  type PopupReadinessAction,
+  type PopupShortcutState,
+} from '../../core/settings/popup-readiness';
+import { assignedTranslationShortcut } from '../../core/commands/translation-shortcut';
+import type { SettingsFocus } from '../../core/messaging/user-facing-error';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -58,6 +66,10 @@ const openExtensionManagement = element<HTMLButtonElement>('open-extension-manag
 const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
 const textApiStatus = element<HTMLButtonElement>('text-api-status');
 const visionApiStatus = element<HTMLButtonElement>('vision-api-status');
+const readinessPanel = element<HTMLElement>('readiness-panel');
+const readinessTitle = element<HTMLElement>('readiness-title');
+const readinessNote = element<HTMLParagraphElement>('readiness-note');
+const readinessIssues = element<HTMLElement>('readiness-issues');
 
 let activeUrl: string | undefined;
 let activePdfSourceUrl: string | undefined;
@@ -66,6 +78,7 @@ let activePdfContext: 'native' | 'overleaf' | undefined;
 let generalPageMode: ExtensionSettings['generalPageMode'] = 'on-demand';
 let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
 let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
+let popupShortcutState: PopupShortcutState = 'unknown';
 let statusTimer: number | undefined;
 
 type PopupStatusTone = 'progress' | 'success' | 'error';
@@ -146,7 +159,10 @@ function renderReadinessStatus(
   );
 }
 
-async function refreshApiReadiness(settings: ExtensionSettings): Promise<void> {
+async function refreshApiReadiness(settings: ExtensionSettings): Promise<{
+  text: ApiReadinessStatus;
+  vision: ApiReadinessStatus;
+}> {
   const textProfile = settings.apiProfiles.find(
     (profile) => profile.id === settings.activeApiProfileId,
   );
@@ -166,9 +182,10 @@ async function refreshApiReadiness(settings: ExtensionSettings): Promise<void> {
   visionApiSettingsFocus = visionReadiness.settingsFocus;
   renderReadinessStatus(textApiStatus, textReadiness);
   renderReadinessStatus(visionApiStatus, visionReadiness);
+  return { text: textReadiness, vision: visionReadiness };
 }
 
-function openSettingsPage(focus?: ApiReadinessStatus['settingsFocus']): void {
+function openSettingsPage(focus?: SettingsFocus): void {
   void browser.runtime.sendMessage({
     type: 'OPEN_OPTIONS_PAGE',
     ...(focus ? { payload: { focus } } : {}),
@@ -181,6 +198,54 @@ function openSettingsPage(focus?: ApiReadinessStatus['settingsFocus']): void {
       window.close();
     })
     .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', 'error'));
+}
+
+function openShortcutSettings(): void {
+  void browser.tabs.create({ url: 'edge://extensions/shortcuts', active: true })
+    .then(() => window.close())
+    .catch(() => setStatus('请手动打开 edge://extensions/shortcuts 设置快捷键。', 'error'));
+}
+
+function runReadinessAction(action: PopupReadinessAction): void {
+  if (action.kind === 'shortcuts') {
+    openShortcutSettings();
+    return;
+  }
+  openSettingsPage(action.focus);
+}
+
+function renderPopupReadiness(
+  textApi: ApiReadinessStatus,
+  shortcut: PopupShortcutState,
+): void {
+  const result = popupReadiness({
+    textApi,
+    shortcut,
+    page: popupPageState(activeUrl, generalPageMode, Boolean(activePdfContext)),
+  });
+  readinessPanel.dataset.state = result.issues.length ? 'issue' : 'ready';
+  readinessPanel.removeAttribute('aria-busy');
+  readinessTitle.textContent = result.issues.length
+    ? `还需处理 ${result.issues.length} 项`
+    : 'Pi Translator 已就绪';
+  readinessNote.textContent = result.contextNote ?? '';
+  readinessIssues.replaceChildren(...result.issues.map((issue) => {
+    const row = document.createElement('div');
+    row.className = 'readiness-issue';
+    const copy = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = issue.title;
+    const detail = document.createElement('p');
+    detail.textContent = issue.detail;
+    copy.append(title, detail);
+    const action = document.createElement('button');
+    action.type = 'button';
+    action.textContent = issue.actionLabel;
+    action.addEventListener('click', () => runReadinessAction(issue.action));
+    row.append(copy, action);
+    return row;
+  }));
+  readinessIssues.hidden = result.issues.length === 0;
 }
 
 function hidePdfAccessAlert(): void {
@@ -338,10 +403,11 @@ async function resolveActivePdfContext(tab: {
 }
 
 async function load(): Promise<void> {
-  const [settings, tabs, pausedSiteHosts] = await Promise.all([
+  const [settings, tabs, pausedSiteHosts, commands] = await Promise.all([
     getSettings(),
     browser.tabs.query({ active: true, currentWindow: true }),
     getPausedSiteHosts(),
+    browser.commands.getAll().catch(() => undefined),
   ]);
   targetLanguage.value = settings.targetLanguage;
   apiProfile.replaceChildren(...settings.apiProfiles.map((profile) => {
@@ -371,7 +437,11 @@ async function load(): Promise<void> {
     pauseSite.disabled = false;
     siteControl.hidden = false;
   }
-  await refreshApiReadiness(settings);
+  const readiness = await refreshApiReadiness(settings);
+  popupShortcutState = commands
+    ? assignedTranslationShortcut(commands) ? 'assigned' : 'missing'
+    : 'unknown';
+  renderPopupReadiness(readiness.text, popupShortcutState);
 }
 
 targetLanguage.addEventListener('change', () => {
@@ -407,7 +477,8 @@ apiProfile.addEventListener('change', () => {
     });
     if (!granted) throw new Error('API access was not granted.');
     await activateApiProfile(requestedProfileId);
-    await refreshApiReadiness(await getSettings());
+    const readiness = await refreshApiReadiness(await getSettings());
+    renderPopupReadiness(readiness.text, popupShortcutState);
     setStatus('翻译接口已切换。');
   })().catch(async () => {
     const settings = await getSettings().catch(() => undefined);
