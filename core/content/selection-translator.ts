@@ -421,6 +421,9 @@ export async function startSelectionTranslator(
     onRetry: (target) => {
       void retryTranslation(target);
     },
+    ...(surface === 'pdf'
+      ? {}
+      : { onStartWebRegion: () => startWebRegionSelection() }),
     canAdjustWebRegion: (result) => Boolean(webRegionSelectionForResult(result)),
     onAdjustWebRegion: (result) => {
       const selection = result
@@ -1111,6 +1114,7 @@ export async function startSelectionTranslator(
   }
 
   function startWebRegionSelection(initialSelection?: WebRegionSelectionSeed): void {
+    const restoreSidebarOnCancel = overlay.isSidebarActive();
     activeWebRegionSelection?.cancel();
     cancelActiveTranslation();
     failedWebRegionSelection = undefined;
@@ -1122,6 +1126,7 @@ export async function startSelectionTranslator(
       if (activeWebRegionSelection !== handle) return;
       if (!region) {
         activeWebRegionSelection = undefined;
+        if (restoreSidebarOnCancel) overlay.restoreSidebar();
         return;
       }
       const pageUrl = options.pageUrl?.() ?? location.href;

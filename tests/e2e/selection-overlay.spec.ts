@@ -3412,6 +3412,7 @@ test('centers a fit-width PDF inside the space left by the translation sidebar',
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await overlay.getByTitle('固定到连续翻译侧栏').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.sidebar-region-action')).toHaveCount(0);
 
   await expect.poll(() => stage.evaluate((element) =>
     element.getBoundingClientRect().width)).toBeLessThan(850);
@@ -8004,6 +8005,7 @@ test('stops a streaming translation without discarding received output', async (
     await expect(overlay.locator('.loading-status')).toContainText('正在请求模型');
     await pin.click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect(overlay.locator('.sidebar-region-action')).toContainText('框选网页');
     await expect(overlay.locator('.progress')).toBeVisible();
     await expect(overlay.locator('.loading-status')).toContainText('正在请求模型');
 
@@ -8055,7 +8057,7 @@ test('stops a streaming translation without discarding received output', async (
   }
 });
 
-test('pins continuous translation to a collapsible sidebar', async () => {
+test('pins continuous translation to a collapsible sidebar', async ({}, testInfo) => {
   await page.locator('#blank').focus();
   await selectElementText('#source');
   const overlay = page.locator('#tex-selection-translator-root');
@@ -8064,6 +8066,29 @@ test('pins continuous translation to a collapsible sidebar', async () => {
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await overlay.getByTitle('固定到连续翻译侧栏').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  const webRegionAction = overlay.getByRole('button', {
+    name: '框选当前网页中的文字、公式、图表或图像',
+  });
+  await expect(webRegionAction).toBeVisible();
+  await expect(webRegionAction).toContainText('框选网页');
+  await expect(webRegionAction).toContainText('文字 · 公式 · 图表');
+  expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
+    .toBeGreaterThanOrEqual(33);
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({
+      path: testInfo.outputPath('web-floating-sidebar-region-action.png'),
+    });
+  }
+  const requestsBeforeRegionSelection = textRequests.length;
+  await webRegionAction.click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  const webRegion = page.locator('#pi-web-region-selection-root');
+  await expect(webRegion).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(webRegion).toHaveCount(0);
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.sidebar-region-action')).toBeVisible();
+  expect(textRequests).toHaveLength(requestsBeforeRegionSelection);
   const moreMenu = overlay.locator('details.more');
   await moreMenu.locator('summary').click();
   const menu = overlay.locator('.menu');
