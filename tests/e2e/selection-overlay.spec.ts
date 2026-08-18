@@ -1277,7 +1277,9 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await neutralPage.bringToFront();
     const emptyState = sidePanel.locator('#empty-state');
     const emptyAction = sidePanel.locator('#empty-action');
+    const webRegionAction = sidePanel.locator('#start-web-region');
     await expect(emptyState).toHaveAttribute('data-context', 'other');
+    await expect(webRegionAction).toBeHidden();
     await expect(sidePanel.locator('#empty-title')).toHaveText('当前没有可翻译的 PDF');
     await expect(emptyAction).toHaveText('打开 Pi PDF 阅读器');
     await expect(emptyAction).toBeVisible();
@@ -1294,8 +1296,33 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await page.bringToFront();
     await expect(emptyState).toHaveAttribute('data-context', 'web');
     await expect(sidePanel.locator('#empty-title')).toHaveText('浏览器侧栏已就绪');
-    await expect(sidePanel.locator('#empty-description')).toContainText('不会遮挡网页内容');
+    await expect(sidePanel.locator('#empty-description')).toContainText('从顶部框选当前网页');
     await expect(emptyAction).toHaveText('改用网页浮动侧栏');
+    await expect(webRegionAction).toBeVisible();
+    await expect(webRegionAction).toHaveText('框选网页');
+    expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeGreaterThanOrEqual(31);
+    await webRegionAction.click();
+    await expect(page.locator('#pi-web-region-selection-root')).toBeVisible();
+    await page.bringToFront();
+    await page.keyboard.press('Escape');
+    await expect(page.locator('#pi-web-region-selection-root')).toHaveCount(0);
+    const worker = context.serviceWorkers()[0];
+    expect(worker).toBeDefined();
+    await worker!.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: {
+            query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+            sendMessage(tabId: number, message: object): Promise<unknown>;
+          };
+        };
+      }).chrome;
+      const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+      if (target?.id !== undefined) {
+        await api.tabs.sendMessage(target.id, { type: 'BROWSER_SIDEBAR_CLOSED' });
+      }
+    }, page.url());
 
     nativePdfPage = await context.newPage();
     await nativePdfPage.goto(sourceUrl, { waitUntil: 'domcontentloaded' });
@@ -1304,6 +1331,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(sidePanel.locator('#empty-title')).toHaveText('当前 PDF 已就绪');
     await expect(sidePanel.locator('#empty-description')).toContainText('选择文字后右键翻译');
     await expect(emptyAction).toHaveText('用 Pi 打开当前 PDF');
+    await expect(webRegionAction).toBeHidden();
     await emptyAction.focus();
     await expect(emptyAction).toBeFocused();
   } finally {
@@ -8096,6 +8124,10 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-label')).toHaveText('www.overleaf.com');
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
     await expect(sidePanel.locator('#open-pi-reader')).toHaveText('改用浮动侧栏');
+    const webRegionAction = sidePanel.getByRole('button', { name: '框选网页', exact: true });
+    await expect(webRegionAction).toBeVisible();
+    expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeGreaterThanOrEqual(31);
     const storedModeAfterTemporaryOpen = await sidePanel.evaluate(async () => {
       const extensionChrome = (
         globalThis as typeof globalThis & { chrome: TestChromeApi }
@@ -8150,9 +8182,14 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     const alignedLayout = await sidePanel.locator('#translation-text').evaluate((result) => {
       const first = result.querySelector<HTMLElement>('.aligned-segment')!;
       const controls = [...document.querySelectorAll<HTMLElement>('#translation-view-switch button')];
+      const header = document.querySelector<HTMLElement>('.app-header')!;
+      const regionAction = document.querySelector<HTMLElement>('#start-web-region')!;
       return {
         pageClientWidth: document.documentElement.clientWidth,
         pageScrollWidth: document.documentElement.scrollWidth,
+        headerClientWidth: header.clientWidth,
+        headerScrollWidth: header.scrollWidth,
+        regionActionHeight: regionAction.getBoundingClientRect().height,
         resultClientWidth: result.clientWidth,
         resultScrollWidth: result.scrollWidth,
         segmentClientWidth: first.clientWidth,
@@ -8161,6 +8198,8 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       };
     });
     expect(alignedLayout.pageScrollWidth).toBeLessThanOrEqual(alignedLayout.pageClientWidth + 1);
+    expect(alignedLayout.headerScrollWidth).toBeLessThanOrEqual(alignedLayout.headerClientWidth + 1);
+    expect(alignedLayout.regionActionHeight).toBeGreaterThanOrEqual(31);
     expect(alignedLayout.resultScrollWidth).toBeLessThanOrEqual(alignedLayout.resultClientWidth + 1);
     expect(alignedLayout.segmentScrollWidth).toBeLessThanOrEqual(alignedLayout.segmentClientWidth + 1);
     expect(alignedLayout.controlHeights.every((height) => height >= 28)).toBe(true);

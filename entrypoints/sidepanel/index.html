@@ -16,7 +16,16 @@
             <span id="app-subtitle">网页与 PDF 翻译</span>
           </div>
         </div>
-        <button id="open-settings" class="text-action" type="button">设置</button>
+        <div class="header-actions">
+          <button
+            id="start-web-region"
+            class="web-region-action"
+            type="button"
+            title="在当前网页拖动框选文字、公式、图表或图像"
+            hidden
+          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label">框选网页</span></button>
+          <button id="open-settings" class="text-action" type="button">设置</button>
+        </div>
       </header>
 
       <section id="empty-state" class="empty-state" data-context="loading" aria-busy="true" aria-labelledby="empty-title">

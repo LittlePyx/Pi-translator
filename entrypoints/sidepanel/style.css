@@ -57,6 +57,31 @@ main {
 .brand div { display: grid; gap: 1px; }
 .brand strong { font-size: 14px; letter-spacing: -.01em; }
 .brand span { color: #7b8498; font-size: 10px; letter-spacing: .04em; }
+.header-actions { display: flex; align-items: center; gap: 8px; }
+
+.web-region-action {
+  display: inline-flex;
+  min-height: 32px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid #5145cd;
+  border-radius: 6px;
+  padding: 6px 9px;
+  color: #fff;
+  background: #5b4be0;
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 720;
+  white-space: nowrap;
+}
+.web-region-action:hover:not(:disabled) { border-color: #4338ca; background: #5145cd; }
+.web-region-action:disabled { opacity: .68; cursor: wait; }
+.web-region-icon {
+  width: 12px;
+  height: 12px;
+  border: 1.5px dashed currentColor;
+  border-radius: 2px;
+}
 
 .text-action {
   min-height: var(--compact-hit);
@@ -542,6 +567,8 @@ button:focus-visible {
   #stop-translation:hover { color: #ff9aaa; background: #202938; }
   #stop-translation:disabled { color: #777f8e; }
   .text-action { color: #a6afbd; }
+  .web-region-action { color: #fff; border-color: #7367ed; background: #6558dc; }
+  .web-region-action:hover:not(:disabled) { border-color: #8d83f2; background: #7468e4; }
   .empty-mark { border-color: #42436b; color: #a9a1ff; background: #252440; }
   .empty-state p, .session-context-note { color: #9aa5b5; }
   .empty-action { color: #fff; border-color: #7367ed; background: #6558dc; }
@@ -610,6 +637,13 @@ button:focus-visible {
 }
 
 @media (max-width: 380px) {
+  .app-header { gap: 8px; }
+  .brand { min-width: 0; }
+  .brand div { min-width: 0; }
+  .brand span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .header-actions { gap: 4px; }
+  .web-region-action { padding-inline: 7px; }
+  .text-action { padding-left: 6px; }
   .correction-term-fields { grid-template-columns: 1fr; }
   .correction-undo.is-error { flex: 1 0 100%; order: 10; align-items: flex-start; padding-top: 4px; border-top: 1px solid #e2e6ee; line-height: 1.45; }
   @media (prefers-color-scheme: dark) {

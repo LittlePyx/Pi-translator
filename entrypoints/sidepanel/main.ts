@@ -73,6 +73,8 @@ const emptyAction = element<HTMLButtonElement>('empty-action');
 const emptyStatus = element<HTMLElement>('empty-status');
 const appSubtitle = element<HTMLElement>('app-subtitle');
 const appHeader = document.querySelector<HTMLElement>('.app-header')!;
+const startWebRegion = element<HTMLButtonElement>('start-web-region');
+const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
 const sourceLabel = element<HTMLElement>('source-label');
@@ -151,6 +153,8 @@ let copyResetTimer: number | undefined;
 let sourceExpanded = false;
 let sourceCanExpand = false;
 let sourceLayoutFrame: number | undefined;
+let webRegionStartPending = false;
+let webRegionFeedbackTimer: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
@@ -371,6 +375,7 @@ function showEmptyContext(context: SidePanelEmptyContext): void {
   emptyStatus.textContent = '';
   emptyStatus.setAttribute('role', 'status');
   emptyStatus.setAttribute('aria-live', 'polite');
+  syncWebRegionAction(context.kind === 'web');
   if (context.kind === 'loading') {
     appSubtitle.textContent = '网页与 PDF 翻译';
     emptyTitle.textContent = '正在检查当前页面…';
@@ -389,7 +394,7 @@ function showEmptyContext(context: SidePanelEmptyContext): void {
   if (context.kind === 'web') {
     appSubtitle.textContent = '网页划词翻译';
     emptyTitle.textContent = '浏览器侧栏已就绪';
-    emptyDescription.textContent = '在当前网页选择文字，译文会连续显示在这里，不会遮挡网页内容。';
+    emptyDescription.textContent = '可直接从顶部框选当前网页；划选文字后，译文也会连续显示在这里。';
     emptyAction.textContent = '改用网页浮动侧栏';
     return;
   }
@@ -541,6 +546,57 @@ function settingsRecoveryRequest(
     autoResume: recovery.autoResumeAfterSettings === true,
     ...(session.sourceKind === 'web' ? {} : { nativePdfTabId: session.tabId }),
   };
+}
+
+function syncWebRegionAction(available: boolean): void {
+  startWebRegion.hidden = !available;
+  if (available || webRegionStartPending) return;
+  if (webRegionFeedbackTimer !== undefined) window.clearTimeout(webRegionFeedbackTimer);
+  webRegionFeedbackTimer = undefined;
+  startWebRegion.disabled = false;
+  startWebRegion.removeAttribute('aria-busy');
+  startWebRegionLabel.textContent = '框选网页';
+  startWebRegion.title = '在当前网页拖动框选文字、公式、图表或图像';
+}
+
+function setWebRegionFeedback(message: string, error = false): void {
+  if (currentSession) setStatus(message);
+  else setEmptyStatus(message, error);
+}
+
+async function startCurrentWebRegionSelection(): Promise<void> {
+  if (webRegionStartPending || startWebRegion.hidden || activeTabId === undefined) return;
+  webRegionStartPending = true;
+  if (webRegionFeedbackTimer !== undefined) window.clearTimeout(webRegionFeedbackTimer);
+  webRegionFeedbackTimer = undefined;
+  startWebRegion.disabled = true;
+  startWebRegion.setAttribute('aria-busy', 'true');
+  startWebRegionLabel.textContent = '启动中…';
+  setWebRegionFeedback('');
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'START_WEB_REGION_SELECTION',
+    } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
+    if (!response.ok) {
+      throw new Error(translationErrorMessage(response.error.code, response.error.message));
+    }
+    startWebRegionLabel.textContent = '已进入框选';
+    setWebRegionFeedback('请在当前网页拖动框选；按 Esc 可取消');
+    webRegionFeedbackTimer = window.setTimeout(() => {
+      webRegionFeedbackTimer = undefined;
+      if (startWebRegion.hidden) return;
+      startWebRegionLabel.textContent = '框选网页';
+    }, 1_200);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : '当前网页无法开始框选。';
+    startWebRegionLabel.textContent = '重试框选';
+    startWebRegion.title = message;
+    setWebRegionFeedback(message, true);
+  } finally {
+    webRegionStartPending = false;
+    startWebRegion.disabled = false;
+    startWebRegion.removeAttribute('aria-busy');
+  }
 }
 
 const recordedRenderPerformance = new Set<string>();
@@ -1154,6 +1210,7 @@ function render(
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
   const isWebSession = session.sourceKind === 'web';
+  syncWebRegionAction(isWebSession);
   const historicalWebResult = isWebSession && viewingWebHistory;
   appSubtitle.textContent = isWebSession ? '网页划词翻译' : 'PDF 划词翻译';
   sourceKindLabel.textContent = isWebSession ? '当前网页' : '当前 PDF';
@@ -1867,6 +1924,9 @@ function openFullSettings(
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
+startWebRegion.addEventListener('click', () => {
+  void startCurrentWebRegionSelection();
+});
 emptyAction.addEventListener('click', () => {
   if (emptyContext.kind === 'loading') return;
   const revision = emptyContextRevision;

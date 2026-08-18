@@ -15,7 +15,7 @@ Valid through: [DATE AFTER REVIEW]
 Test steps:
 1. Install the extension. Settings opens automatically. Enter the text values above, connect, and save.
 2. On any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify streaming, copy/correction, and continuous sidebar actions.
-3. Click the toolbar icon and choose “框选网页区域”. Draw over visible article text. The confirmation identifies locally extracted text and sends no screenshot. Confirm to translate. From the result menu, “调整区域” restores the box and mode while “重新框选” starts empty; neither makes a request until reconfirmed.
+3. Open the browser side panel and click the prominent “框选网页” action at its top (the toolbar popup also keeps “框选网页区域”). Draw over visible article text. The confirmation identifies locally extracted text and sends no screenshot. Confirm to translate. The side-panel action remains available while viewing the result. From the result menu, “调整区域” restores the box and mode while “重新框选” starts empty; neither makes a request until reconfirmed.
 4. Optional with the image credentials: draw over an image or Canvas. Only the selected visible region is captured, and only after the confirmation button is clicked. Full-page, auto-scroll, and continuous capture are unavailable. Regions containing password, verification-code, or payment fields are blocked.
 5. From a result, open the Edge browser side panel and select more page text. Its recent-result arrows and “全文 / 逐句” view switch do not make another API request.
 6. Optional: open “PDF 阅读器”, load a local PDF, and translate selectable text or a confirmed image region. Selectable text does not require image capability.
