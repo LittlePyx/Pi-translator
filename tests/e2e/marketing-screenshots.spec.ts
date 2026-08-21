@@ -284,10 +284,10 @@ test('captures the real translation overlay', async () => {
   await expect(viewSwitch).toBeVisible();
   const switchBox = await viewSwitch.boundingBox();
   expect(switchBox?.width).toBeLessThan(85);
-  expect(switchBox?.height).toBe(26);
+  expect(switchBox?.height).toBe(32);
   const copyBox = await overlay.locator('.copy-action').boundingBox();
-  expect(copyBox?.width).toBeLessThan(50);
-  expect(copyBox?.height).toBe(28);
+  expect(copyBox?.width).toBeLessThanOrEqual(90);
+  expect(copyBox?.height).toBe(32);
   await page.screenshot({
     path: path.join(SCREENSHOT_DIRECTORY, 'product-translation-1280x800.png'),
   });

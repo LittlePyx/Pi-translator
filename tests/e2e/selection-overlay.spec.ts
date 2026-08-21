@@ -745,6 +745,15 @@ test.beforeAll(async () => {
             </p>
             <p id="rendered-only-math">The quantity ∑ᵢ xᵢ² ≥ 0 is nonnegative.</p>
             <div id="visual-region" aria-label="Synthetic chart without DOM text" style="width: 360px; height: 140px; border: 1px solid #94a3b8; background: linear-gradient(135deg, #dbeafe 0 33%, #818cf8 33% 66%, #1e3a8a 66%);"></div>
+            <div style="margin-top: 48px">
+              <pre><code id="code-source">const translated = items.map((item) =&gt; translate(item));</code></pre>
+              <p id="mixed-code-source">Run <code>npm run build:edge</code> after updating the extension source.</p>
+              <div class="cm-editor"><div class="cm-content">
+                <p id="overleaf-editor-prose">Natural-language prose inside the Overleaf editor remains translatable.</p>
+                <p id="latex-structure">\\begin{equation} E = mc^2 \\end{equation}</p>
+              </div></div>
+              <div class="xterm"><span id="terminal-source">The development server is waiting for another command.</span></div>
+            </div>
             <input id="payment" type="text" autocomplete="cc-number" value="4111 1111 1111 1111" />
             <button id="blank" type="button">Clear selection</button>
           </body>
@@ -790,6 +799,64 @@ test('exposes the native Edge side panel API to the service worker', async () =>
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
 });
 
+test('keeps passive code browsing quiet while continuous and explicit translation remain available', async () => {
+  const overlay = page.locator('#tex-selection-translator-root');
+  await clearBrowserSelection();
+  const close = overlay.locator('.surface-close');
+  if (await close.isVisible().catch(() => false)) await close.click();
+
+  for (const selector of ['#code-source', '#terminal-source', '#latex-structure']) {
+    await selectElementText(selector);
+    await page.waitForTimeout(240);
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  }
+
+  await selectElementText('#overleaf-editor-prose');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  await overlay.locator('.trigger').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  await overlay.getByTitle('在页面侧栏中显示').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  const requestsBeforePassiveSidebarSelection = textRequests.length;
+  await selectElementText('#code-source');
+  await expect.poll(() => textRequests.length).toBe(requestsBeforePassiveSidebarSelection + 1);
+  await expect(overlay.locator('.body')).not.toBeEmpty();
+  const requestsBeforeMixedSidebarSelection = textRequests.length;
+  await selectElementText('#mixed-code-source');
+  await expect.poll(() => textRequests.length).toBe(requestsBeforeMixedSidebarSelection + 1);
+  await expect(overlay.locator('.body')).not.toBeEmpty();
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+
+  await selectElementText('#code-source');
+  await page.waitForTimeout(240);
+  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  const sender = await context.newPage();
+  try {
+    await sender.goto(`chrome-extension://${extensionId}/popup.html`);
+    await sender.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: {
+            query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+            sendMessage(tabId: number, message: object): Promise<unknown>;
+          };
+        };
+      }).chrome;
+      const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+      if (target?.id === undefined) throw new Error('Missing target tab for explicit translation.');
+      await api.tabs.sendMessage(target.id, { type: 'TRIGGER_TRANSLATE' });
+    }, page.url());
+  } finally {
+    await sender.close();
+  }
+  await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  await expect(overlay.locator('.body')).not.toBeEmpty();
+  await overlay.getByTitle('关闭').click();
+  await clearBrowserSelection();
+});
+
 test('reports the shortcut actually assigned by Edge', async () => {
   const worker = context.serviceWorkers()[0];
   expect(worker).toBeDefined();
@@ -833,7 +900,7 @@ test('reports the shortcut actually assigned by Edge', async () => {
     await expect(readinessPanel).not.toHaveAttribute('aria-busy', 'true');
     if (translationCommand?.shortcut) {
       await expect(readinessPanel).toHaveAttribute('data-state', 'ready');
-      await expect(popup.locator('#readiness-title')).toHaveText('Pi Translator 已就绪');
+      await expect(readinessPanel).toBeHidden();
       await expect(popup.locator('#readiness-issues')).toBeHidden();
     } else {
       await expect(readinessPanel).toHaveAttribute('data-state', 'issue');
@@ -1786,7 +1853,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
     moreSummary,
     overlay.locator('.view-button').first(),
   ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
-  expect(compactControlHeights).toEqual([28, 28, 28, 26]);
+  expect(compactControlHeights).toEqual([32, 32, 32, 32]);
   await moreSummary.click();
   await expect(more).toHaveAttribute('open', '');
   await page.keyboard.press('Escape');
@@ -2625,7 +2692,7 @@ test('corrects one aligned sentence locally without adding visible controls or A
   const first = segments.nth(0);
   await expect.poll(() => first.locator('.segment-actions').evaluate(
     (element) => getComputedStyle(element).opacity,
-  )).toBe('0');
+  )).toBe('0.62');
   await first.focus();
   await expect.poll(() => first.locator('.segment-actions').evaluate(
     (element) => getComputedStyle(element).opacity,
@@ -2634,7 +2701,7 @@ test('corrects one aligned sentence locally without adding visible controls or A
     first.locator('.segment-correct'),
     first.locator('.segment-mark'),
   ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
-  expect(alignedControlHeights).toEqual([28, 28]);
+  expect(alignedControlHeights).toEqual([32, 32]);
   const requestsBeforeCorrection = textRequests.length;
   await first.locator('.segment-correct').click();
   let sentenceEditor = first.getByRole('group', { name: /修正第 1 句/ });
@@ -2794,7 +2861,8 @@ test('shows site pause controls only on supported webpages', async () => {
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
     await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
     await expect(popup.locator('#open-web-region')).toBeVisible();
-    await expect(popup.locator('#open-web-region')).toHaveText('框选网页区域');
+    await expect(popup.locator('#open-web-region')).toHaveText('框选当前网页');
+    await expect(popup.locator('#page-context')).toContainText('在 Overleaf 选中文字即可翻译');
     await expect(popup.locator('#open-pdf')).toHaveClass(/secondary-action/);
     const pauseSwitchStyle = await pauseSite.evaluate((element) => {
       const style = getComputedStyle(element);
@@ -3410,7 +3478,7 @@ test('centers a fit-width PDF inside the space left by the translation sidebar',
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   await overlay.locator('.trigger').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
-  await overlay.getByTitle('固定到连续翻译侧栏').click();
+  await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.locator('.sidebar-region-action')).toHaveCount(0);
 
@@ -3486,7 +3554,7 @@ test('restores a PDF reading position, zoom, and fixed sidebar without storing i
     await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
     await overlay.locator('.trigger').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
-    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await overlay.getByTitle('在页面侧栏中显示').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await firstReader.waitForTimeout(700);
   } finally {
@@ -4268,8 +4336,8 @@ test('does not auto-send a detected PDF table from the continuous sidebar', asyn
   const overlay = pdfPage.locator('#tex-selection-translator-root');
   await expect(overlay.locator('.trigger')).toBeVisible();
   await overlay.locator('.trigger').click();
-  await expect(overlay.getByRole('button', { name: '固定到连续翻译侧栏' })).toBeVisible();
-  await overlay.getByRole('button', { name: '固定到连续翻译侧栏' }).click();
+  await expect(overlay.getByRole('button', { name: '在页面侧栏中显示' })).toBeVisible();
+  await overlay.getByRole('button', { name: '在页面侧栏中显示' }).click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   const requestsAfterPin = textRequests.length;
 
@@ -4732,7 +4800,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   const sourceMarker = pdfPage.locator('#pi-translation-marker-layer .marker').first();
   await expect(sourceMarker).toBeVisible();
 
-  await overlay.getByTitle('固定到连续翻译侧栏').click();
+  await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   const documentButton = overlay.locator('.document-memory-action');
   await expect(documentButton).toHaveText('本文 · 待核对 1');
@@ -5451,7 +5519,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
     await overlay.locator('.trigger').click();
     await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
-    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await overlay.getByTitle('在页面侧栏中显示').click();
 
     await selectText('#dense-source');
     await expect(overlay.locator('.body')).toContainText('密集元信息在窄屏中保持清晰');
@@ -6595,7 +6663,7 @@ test('keeps narrow pending OCR reviews actionable and reveals their regions', as
 
     const overlay = pdfPage.locator('#tex-selection-translator-root');
     await expect(overlay.locator('.uncertain-note')).toContainText('有 2 处内容无法完全确认');
-    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await overlay.getByTitle('在页面侧栏中显示').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     const documentButton = overlay.locator('.document-memory-action');
     await expect(documentButton).toHaveText('本文 · 待核对 1');
@@ -7049,8 +7117,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   const stopButtonHeight = await sidePanel.locator('#stop-translation').evaluate(
     (element) => element.getBoundingClientRect().height,
   );
-  expect(stopButtonHeight).toBeGreaterThanOrEqual(28);
-  expect(stopButtonHeight).toBeLessThanOrEqual(29);
+  expect(stopButtonHeight).toBeGreaterThanOrEqual(32);
+  expect(stopButtonHeight).toBeLessThanOrEqual(33);
   await expect(sidePanel.locator('#correct')).toBeHidden();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#open-pi-reader')).toHaveText('用 Pi 打开');
@@ -7062,8 +7130,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     buttonHeight: context.querySelector('button')?.getBoundingClientRect().height,
   }));
   expect(contextLayout.height).toBeLessThanOrEqual(51);
-  expect(contextLayout.buttonHeight).toBeGreaterThanOrEqual(28);
-  expect(contextLayout.buttonHeight).toBeLessThanOrEqual(29);
+  expect(contextLayout.buttonHeight).toBeGreaterThanOrEqual(32);
+  expect(contextLayout.buttonHeight).toBeLessThanOrEqual(33);
 
   const sendStreamingPartial = async (partialText: string) => messageSender.evaluate(
     async ({ session, partial }) => {
@@ -7145,8 +7213,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   const partialCopyButtonHeight = await sidePanel.locator('#copy').evaluate(
     (element) => element.getBoundingClientRect().height,
   );
-  expect(partialCopyButtonHeight).toBeGreaterThanOrEqual(28);
-  expect(partialCopyButtonHeight).toBeLessThanOrEqual(29);
+  expect(partialCopyButtonHeight).toBeGreaterThanOrEqual(32);
+  expect(partialCopyButtonHeight).toBeLessThanOrEqual(33);
   const footerHeightBeforeCopy = await sidePanel.locator('footer').evaluate(
     (footer) => footer.getBoundingClientRect().height,
   );
@@ -7702,8 +7770,8 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
   expect(collapsedLayout.clientHeight).toBeLessThanOrEqual(collapsedLayout.lineHeight * 3 + 1);
   expect(collapsedLayout.overflowY).toBe('hidden');
   const sourceToggleHeight = await sourceToggle.evaluate((button) => button.getBoundingClientRect().height);
-  expect(sourceToggleHeight).toBeGreaterThanOrEqual(28);
-  expect(sourceToggleHeight).toBeLessThanOrEqual(29);
+  expect(sourceToggleHeight).toBeGreaterThanOrEqual(32);
+  expect(sourceToggleHeight).toBeLessThanOrEqual(33);
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-collapsed.png') });
   }
@@ -7755,7 +7823,7 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
     .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 8);
   expect(shortViewportLayout.translationTextTop).toBeDefined();
   expect(shortViewportLayout.translationTextTop!)
-    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 16);
+    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 14);
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-360x420.png') });
     await sidePanel.emulateMedia({ colorScheme: 'dark' });
@@ -8000,8 +8068,8 @@ test('stops a streaming translation without discarding received output', async (
     await expect(overlay.getByTitle('停止并关闭')).toBeVisible();
     await expect(overlay.getByRole('button', { name: '停止翻译并保留已收到的译文' }))
       .toBeVisible();
-    const pin = overlay.getByTitle('固定到连续翻译侧栏');
-    await expect(pin).toHaveText('固定侧栏');
+    const pin = overlay.getByTitle('在页面侧栏中显示');
+    await expect(pin).toHaveText('页面侧栏');
     await expect(overlay.locator('.loading-status')).toContainText('正在请求模型');
     await pin.click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
@@ -8064,7 +8132,7 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   await overlay.locator('.trigger').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
-  await overlay.getByTitle('固定到连续翻译侧栏').click();
+  await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   const webRegionAction = overlay.getByRole('button', {
     name: '框选当前网页中的文字、公式、图表或图像',
@@ -8135,7 +8203,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     const requestsBeforeSwitch = textRequests.length;
 
     await overlay.locator('details.more > summary').click();
-    await overlay.getByRole('button', { name: '在浏览器侧栏中打开' }).click();
+    await overlay.getByRole('button', { name: '在浏览器侧栏中显示' }).click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
     await page.waitForTimeout(250);
     expect(textRequests).toHaveLength(requestsBeforeSwitch);
@@ -8309,7 +8377,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await sidePanel.locator('#open-pi-reader').evaluate((button: HTMLButtonElement) => button.click());
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await overlay.locator('details.more > summary').click();
-    await overlay.getByRole('button', { name: '在浏览器侧栏中打开' }).click();
+    await overlay.getByRole('button', { name: '在浏览器侧栏中显示' }).click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
     const requestsBeforeLongResult = textRequests.length;
     await selectElementText('#browser-long-source');
@@ -8445,7 +8513,7 @@ test('uses the preferred browser side panel from the result primary action', asy
     const popup = await context.newPage();
     try {
       await popup.goto(`chrome-extension://${extensionId}/popup.html`);
-      await expect(popup.locator('#open-sidebar')).toHaveText('打开浏览器翻译侧栏');
+      await expect(popup.locator('#open-sidebar')).toHaveText('在浏览器侧栏中翻译');
     } finally {
       await popup.close();
     }
@@ -8455,11 +8523,12 @@ test('uses the preferred browser side panel from the result primary action', asy
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
     await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
 
-    const primaryAction = overlay.getByRole('button', { name: '打开浏览器侧栏' });
+    const primaryAction = overlay.getByRole('button', { name: '在浏览器侧栏中显示' });
     await expect(primaryAction).toBeVisible();
     await overlay.locator('details.more > summary').click();
-    await expect(overlay.getByRole('button', { name: '固定到网页浮动侧栏' })).toBeVisible();
-    await expect(overlay.getByRole('button', { name: '在浏览器侧栏中打开' })).toHaveCount(0);
+    await expect(overlay.getByRole('button', { name: '在页面侧栏中显示' })).toBeVisible();
+    await expect(overlay.locator('.menu').getByRole('button', { name: '在浏览器侧栏中显示' }))
+      .toHaveCount(0);
     await overlay.locator('details.more > summary').click();
 
     const requestsBeforeOpen = textRequests.length;
@@ -8529,7 +8598,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
     await overlay.locator('.trigger').click();
     await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
-    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await overlay.getByTitle('在页面侧栏中显示').click();
     await selectText('#history-two');
     await expect(overlay.locator('.body')).toContainText('第一句重要译文');
     await selectText('#history-three');
@@ -8839,7 +8908,7 @@ test('keeps document terminology behind a compact sidebar drawer', async () => {
     await overlay.locator('.trigger').click();
   }
   if (await overlay.getAttribute('data-pi-view') !== 'sidebar') {
-    const pin = overlay.getByTitle('固定到连续翻译侧栏');
+    const pin = overlay.getByTitle('在页面侧栏中显示');
     await expect(pin).toBeVisible();
     await pin.click();
   }
@@ -8976,7 +9045,7 @@ test('shows verified global terminology and opens its exact settings area', asyn
     await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
     await expect(overlay.locator('details.applied-terms > summary'))
       .toContainText('已采用术语 1');
-    await overlay.getByTitle('固定到连续翻译侧栏').click();
+    await overlay.getByTitle('在页面侧栏中显示').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   } finally {
     await options?.close();
@@ -9033,7 +9102,7 @@ test('keeps missing configured terminology as a quiet local review', async ({}, 
       await overlay.locator('.trigger').click();
     }
     if (await overlay.getAttribute('data-pi-view') !== 'sidebar') {
-      await overlay.getByTitle('固定到连续翻译侧栏').click();
+      await overlay.getByTitle('在页面侧栏中显示').click();
     }
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeTranslation);
@@ -9173,6 +9242,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await expect(options.locator('#status')).toContainText('自动配置完成');
   await expect(options.locator('#status')).toContainText('已保存');
   await expect(options.locator('#save-state')).toContainText('所有设置已保存');
+  await expect(options.locator('#save-button')).toBeDisabled();
+  await expect(options.locator('#save-button')).toHaveText('已保存');
   await expect(options.locator('#model-list option')).toHaveCount(2);
   await expect(options.locator('#connection-summary')).toBeVisible();
   await expect(options.locator('#connection-text-status')).toContainText('e2e-model');
@@ -9199,6 +9270,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await expect(options.locator('#pdf-region-shortcut-key')).toBeDisabled();
   await options.locator('#alignment-default').check();
   await expect(options.locator('#save-state')).toContainText('未保存');
+  await expect(options.locator('#save-button')).toBeEnabled();
+  await expect(options.locator('#save-button')).toHaveText('保存更改');
   await options.close();
 
   const reopened = await context.newPage();
@@ -9256,6 +9329,15 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-light.png') });
     await reopened.emulateMedia({ colorScheme: 'dark' });
+    await expect.poll(() => onboardingPreset.evaluate((select) => ({
+      appearance: getComputedStyle(select).appearance,
+      background: getComputedStyle(select).backgroundColor,
+      color: getComputedStyle(select).color,
+    }))).toEqual({
+      appearance: 'none',
+      background: 'rgb(23, 31, 44)',
+      color: 'rgb(237, 242, 248)',
+    });
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-dark.png') });
     await reopened.emulateMedia({ colorScheme: 'light' });
   }
@@ -9307,6 +9389,9 @@ test('automatically binds a visual-capable active API when settings are saved', 
   await options.reload();
   await expect(options.locator('#vision-api-profile')).toHaveValue('');
 
+  await options.locator('[data-settings-target="translation"]').click();
+  await options.locator('#target-language').selectOption('ja');
+  await expect(options.locator('#save-button')).toBeEnabled();
   await options.locator('button[type="submit"]').click();
   await expect(options.locator('#status')).toContainText(
     '已自动启用图像区域翻译',
@@ -9363,8 +9448,7 @@ test('keeps the text API active while a second profile is configured for PDF ima
   await expect(options.locator('#profile-role-status')).toContainText('图像翻译');
   await expect(options.locator('#profile-role-status')).not.toContainText('文字翻译');
 
-  await options.locator('button[type="submit"]').click();
-  await expect(options.locator('#status')).toContainText('文字继续使用');
+  await expect(options.locator('#save-button')).toBeDisabled();
   await expect.poll(() => options.evaluate(async () => {
     const extensionChrome = (
       globalThis as typeof globalThis & { chrome: TestChromeApi }

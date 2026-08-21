@@ -19,6 +19,7 @@ import {
   translationErrorMessage,
 } from '../messaging/user-facing-error';
 import { captureSelectionSnapshot } from '../selection/generic-selection';
+import { shouldSuppressPassiveSelectionTranslation } from '../selection/passive-selection-intent';
 import type { SelectionSnapshot, ViewportRect } from '../selection/types';
 import { isLikelyTargetLanguage } from '../language/target-language';
 import { normalizePdfSelectionText } from '../pdf/text-normalizer';
@@ -1216,6 +1217,9 @@ export async function startSelectionTranslator(
     const snapshot = captureSelectionSnapshot(settings.contextMode);
     latestSelection = snapshot;
     if (snapshot) rememberSelectionMarkerAnchor(snapshot);
+    const suppressPassiveTranslation = Boolean(
+      snapshot && shouldSuppressPassiveSelectionTranslation(snapshot, surface),
+    );
     if (overlay.isSidebarActive() || browserSidebarActive) {
       overlay.hideTrigger();
       if (
@@ -1246,6 +1250,10 @@ export async function startSelectionTranslator(
       return;
     }
     if (!shouldShowFloatingButton(settings, surface)) {
+      overlay.hideTrigger();
+      return;
+    }
+    if (suppressPassiveTranslation) {
       overlay.hideTrigger();
       return;
     }

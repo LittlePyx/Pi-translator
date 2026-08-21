@@ -4,7 +4,7 @@
   color: #182033;
   background: #f8f9fc;
   font-synthesis: none;
-  --compact-hit: 28px;
+  --compact-hit: 32px;
   --app-header-height: 66px;
 }
 
@@ -61,20 +61,20 @@ main {
 
 .web-region-action {
   display: inline-flex;
-  min-height: 32px;
+  min-height: 34px;
   align-items: center;
   gap: 6px;
-  border: 1px solid #5145cd;
+  border: 1px solid transparent;
   border-radius: 6px;
   padding: 6px 9px;
-  color: #fff;
-  background: #5b4be0;
+  color: #4f46e5;
+  background: transparent;
   cursor: pointer;
-  font-size: 11px;
-  font-weight: 720;
+  font-size: 11.5px;
+  font-weight: 680;
   white-space: nowrap;
 }
-.web-region-action:hover:not(:disabled) { border-color: #4338ca; background: #5145cd; }
+.web-region-action:hover:not(:disabled) { border-color: #d7d9ee; background: #eeeffb; }
 .web-region-action:disabled { opacity: .68; cursor: wait; }
 .web-region-icon {
   width: 12px;
@@ -567,8 +567,8 @@ button:focus-visible {
   #stop-translation:hover { color: #ff9aaa; background: #202938; }
   #stop-translation:disabled { color: #777f8e; }
   .text-action { color: #a6afbd; }
-  .web-region-action { color: #fff; border-color: #7367ed; background: #6558dc; }
-  .web-region-action:hover:not(:disabled) { border-color: #8d83f2; background: #7468e4; }
+  .web-region-action { color: #c1bcff; border-color: transparent; background: transparent; }
+  .web-region-action:hover:not(:disabled) { border-color: #42436b; background: #252440; }
   .empty-mark { border-color: #42436b; color: #a9a1ff; background: #252440; }
   .empty-state p, .session-context-note { color: #9aa5b5; }
   .empty-action { color: #fff; border-color: #7367ed; background: #6558dc; }
@@ -662,4 +662,53 @@ button:focus-visible {
     animation-iteration-count: 1 !important;
     transition-duration: .01ms !important;
   }
+}
+
+/* v0.13.1 readability pass for narrow Edge sidebars and high-DPI displays. */
+.brand span,
+.document-line span,
+.session-context-note,
+.source-toggle,
+.translation-heading-tools button,
+#translation-state,
+.lexical-meta,
+.lexical-meta button,
+#status,
+.correction-note,
+.correction-scope,
+.correction-term-disclosure > summary,
+.correction-actions span,
+.correction-actions button { font-size: 11px; }
+.empty-status,
+.correction-term-fields label,
+.reading-navigation output { font-size: 10.5px !important; }
+.aligned-segment-source { font-size: 12px; }
+.text-action { min-height: 34px; padding-inline: 8px; }
+.session-actions { gap: 8px; }
+
+@media (prefers-contrast: more) {
+  :root { --compact-hit: 36px; }
+  .app-header,
+  .content-section,
+  .session-actions { border-color: #9aa5b5; }
+  .brand span,
+  .session-context-note,
+  .document-line span,
+  #translation-state,
+  #status { color: #455166; }
+  button:focus-visible,
+  select:focus-visible,
+  input:focus-visible,
+  textarea:focus-visible { outline-width: 3px; }
+}
+
+@media (prefers-color-scheme: dark) and (prefers-contrast: more) {
+  .app-header,
+  .content-section,
+  .session-actions { border-color: #7f8b9d; }
+  .brand span,
+  .session-context-note,
+  .document-line span,
+  #translation-state,
+  #status { color: #d6deea; }
 }

@@ -146,6 +146,7 @@ const supportStatus=element<HTMLElement>('support-status');
 const navProfileName=element<HTMLElement>('nav-profile-name');
 const navKeyStatus=element<HTMLElement>('nav-key-status');
 const saveState=element<HTMLElement>('save-state');
+const saveButton=element<HTMLButtonElement>('save-button');
 const extensionVersion=element<HTMLElement>('extension-version');
 const settingsNavButtons=[...document.querySelectorAll<HTMLButtonElement>('[data-settings-target]')];
 const settingsSections=[...document.querySelectorAll<HTMLElement>('[data-settings-section]')];
@@ -324,10 +325,10 @@ function officialQwenPreset(){return API_PRESETS.find(preset=>preset.id==='qwen'
 function isOfficialQwenProfile(profile:ApiProfile|undefined):boolean{
   return Boolean(profile&&supportsQwenCoordinateOcr(profile.apiBaseUrl));
 }
-function setDirty():void{formDirty=true;saveState.textContent='有未保存的更改';saveState.classList.add('unsaved')}
-function setSaved():void{formDirty=false;nonConnectionDirty=false;saveState.textContent='所有设置已保存';saveState.classList.remove('unsaved')}
+function setDirty():void{formDirty=true;saveState.textContent='有未保存的更改';saveState.classList.add('unsaved');saveButton.disabled=false;saveButton.textContent='保存更改'}
+function setSaved():void{formDirty=false;nonConnectionDirty=false;saveState.textContent='所有设置已保存';saveState.classList.remove('unsaved');saveButton.disabled=true;saveButton.textContent='已保存'}
 function setApiConnectionSaved():void{
-  if(nonConnectionDirty){formDirty=true;saveState.textContent='API 已保存，其他更改未保存';saveState.classList.add('unsaved');return}
+  if(nonConnectionDirty){formDirty=true;saveState.textContent='API 已保存，其他更改未保存';saveState.classList.add('unsaved');saveButton.disabled=false;saveButton.textContent='保存其他更改';return}
   setSaved();
 }
 function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`)}
@@ -617,6 +618,8 @@ deleteProfileButton.addEventListener('click',()=>{if(profiles.length<=1)return;c
 
 form.addEventListener('submit',event=>{event.preventDefault();const mode=generalPageMode.value as GeneralPageMode;const allowlist=normalizeSiteAllowlist(siteAllowlist.value.split(/\r?\n|,/));const glossary=parseGlossaryText(academicGlossary.value);try{profiles=validatedProfiles();renderProfileSelect()}catch(error){showSettingsSection('connection');setStatus(error instanceof Error?error.message:'API 配置不正确。',true);return}if(mode==='allowlist'&&!allowlist.length){showSettingsSection('pages');siteAllowlist.focus();setStatus('请至少填写一个有效的网站域名。',true);return}if(glossary.errors.length){showSettingsSection('translation');const details=academicGlossary.closest('details');if(details)details.open=true;academicGlossary.focus();setStatus(glossary.errors[0]??'术语表格式不正确。',true);return}
   if(pdfKeyboardShortcuts.checked&&!/^[a-z]$/i.test(pdfRegionShortcutKey.value.trim())){showSettingsSection('results');const details=pdfRegionShortcutKey.closest('details');if(details)details.open=true;pdfRegionShortcutKey.focus();setStatus('Pi PDF 框选键需要是一个英文字母。',true);return}
+  saveButton.disabled=true;
+  saveButton.textContent='正在保存…';
   void(async()=>{
     const editing=currentProfile()!;
     const active=activeTextProfile()??editing;
@@ -700,7 +703,11 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
           ?'设置已保存；当前模型未通过图片输入检测，文字翻译不受影响。'
           :'设置已保存，并已同步到打开的页面。';
     setStatus(roleMessage);
-  })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true));
+  })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:'保存设置失败。',true)).finally(()=>{
+    if(!formDirty)return;
+    saveButton.disabled=false;
+    saveButton.textContent='保存更改';
+  });
 });
 
 async function persistConnectedApiConfiguration(message:string):Promise<string>{

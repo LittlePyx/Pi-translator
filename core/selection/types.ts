@@ -5,6 +5,8 @@ export type SelectionSource =
   | 'contenteditable'
   | 'overleaf-adapter';
 
+export type PassiveSelectionEnvironment = 'code' | 'terminal';
+
 export interface ViewportRect {
   top: number;
   left: number;
@@ -22,6 +24,7 @@ export interface SelectionSnapshot {
   selectionHash: string;
   contextText?: string;
   sensitiveField?: boolean;
+  passiveSelectionEnvironment?: PassiveSelectionEnvironment;
   rect?: ViewportRect;
 }
 

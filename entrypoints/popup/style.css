@@ -385,3 +385,50 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .quick-actions[data-primary="loading"]::after,
   .status[data-tone="progress"]::before { animation: none; }
 }
+
+/* v0.13.1: keep the popup contextual and readable instead of presenting every
+   capability as an equally prominent action. */
+.capability-item,
+.readiness-issue button { font-size: 11px; }
+.readiness-summary p,
+.readiness-issue p { color: #66758a; font-size: 11px; }
+.status:empty { min-height: 0; margin: 4px 0; }
+.page-context {
+  margin: 7px 0 10px;
+  color: #526078;
+  font-size: 12px;
+  line-height: 1.5;
+}
+.page-context[data-tone="restricted"] { color: #8c4d19; }
+.quick-actions .region-action {
+  grid-column: 1;
+  border-color: #d8deea;
+  color: #475569;
+  background: #fff;
+}
+.quick-actions .region-action:hover {
+  border-color: #aeb7ca;
+  color: #4338ca;
+  background: #f7f8fc;
+}
+.quick-actions .secondary-action { grid-column: 2; }
+.quick-actions[data-primary="pdf"] .secondary-action { grid-column: 1 / -1; }
+.quick-actions .utility-action {
+  grid-column: 1 / -1;
+  justify-self: end;
+}
+
+@media (prefers-color-scheme: dark) {
+  .quick-actions .region-action {
+    border-color: #3c485c;
+    color: #d5dce8;
+    background: #171f2c;
+  }
+  .quick-actions .region-action:hover {
+    border-color: #69758a;
+    color: #c7d2fe;
+    background: #202938;
+  }
+  .page-context { color: #aab5c5; }
+  .page-context[data-tone="restricted"] { color: #f0b879; }
+}

@@ -1,4 +1,9 @@
-import type { SelectionSnapshot, SelectionSource, ViewportRect } from './types';
+import type {
+  PassiveSelectionEnvironment,
+  SelectionSnapshot,
+  SelectionSource,
+  ViewportRect,
+} from './types';
 import type { ContextMode } from '../settings/schema';
 import { isSensitiveTextControl, selectionContext } from './selection-context';
 
@@ -35,6 +40,64 @@ const RENDERED_MATH_SELECTOR = [
   '[data-latex]',
   'script[type^="math/tex"]',
 ].join(',');
+
+const TERMINAL_SURFACE_SELECTOR = [
+  '[role="terminal"]',
+  '[data-terminal]',
+  '.xterm',
+  '.xterm-screen',
+  '.terminal',
+  '.terminal-view',
+  '.terminal-output',
+].join(',');
+
+const CODE_SURFACE_SELECTOR = [
+  'pre',
+  'code',
+  'samp',
+  '[role="code"]',
+  '[data-code-editor]',
+  '.monaco-editor',
+  '.view-lines',
+  '.CodeMirror',
+  '.cm-editor',
+  '.cm-content',
+  '.ace_editor',
+  '.ace_content',
+  '.blob-code',
+  '.code-line',
+].join(',');
+
+function nodeElement(node: Node | null): Element | undefined {
+  return node instanceof Element ? node : node?.parentElement ?? undefined;
+}
+
+function closestAcrossShadowRoots(element: Element | undefined, selector: string): Element | undefined {
+  let current = element;
+  while (current) {
+    const match = current.closest(selector);
+    if (match) return match;
+    const root = current.getRootNode();
+    current = root instanceof ShadowRoot ? root.host : undefined;
+  }
+  return undefined;
+}
+
+function passiveSelectionEnvironmentForElement(
+  element: Element | undefined,
+): PassiveSelectionEnvironment | undefined {
+  if (closestAcrossShadowRoots(element, TERMINAL_SURFACE_SELECTOR)) return 'terminal';
+  if (closestAcrossShadowRoots(element, CODE_SURFACE_SELECTOR)) return 'code';
+  return undefined;
+}
+
+function passiveSelectionEnvironmentForRange(range: Range): PassiveSelectionEnvironment | undefined {
+  const start = passiveSelectionEnvironmentForElement(nodeElement(range.startContainer));
+  const end = passiveSelectionEnvironmentForElement(nodeElement(range.endContainer));
+  if (start && start === end) return start;
+  const common = passiveSelectionEnvironmentForElement(nodeElement(range.commonAncestorContainer));
+  return common && (!start || start === common) && (!end || end === common) ? common : undefined;
+}
 
 function renderedMathLatex(element: Element): string | undefined {
   const annotation = element.matches('annotation[encoding*="tex" i]')
@@ -74,7 +137,10 @@ function createSnapshot(
   sourceText: string,
   source: SelectionSource,
   rect?: ViewportRect,
-  metadata?: Pick<SelectionSnapshot, 'contextText' | 'sensitiveField'>,
+  metadata?: Pick<
+    SelectionSnapshot,
+    'contextText' | 'sensitiveField' | 'passiveSelectionEnvironment'
+  >,
 ): SelectionSnapshot | undefined {
   const normalizedText = sourceText.trim();
   if (!normalizedText) {
@@ -90,6 +156,9 @@ function createSnapshot(
     selectionHash: hashText(normalizedText),
     ...(metadata?.contextText ? { contextText: metadata.contextText } : {}),
     ...(metadata?.sensitiveField ? { sensitiveField: true } : {}),
+    ...(metadata?.passiveSelectionEnvironment
+      ? { passiveSelectionEnvironment: metadata.passiveSelectionEnvironment }
+      : {}),
     ...(rect ? { rect } : {}),
   };
 }
@@ -109,11 +178,15 @@ function captureTextControl(): SelectionSnapshot | undefined {
   if (start === null || end === null || start === end) {
     return undefined;
   }
+  const passiveSelectionEnvironment = passiveSelectionEnvironmentForElement(active);
   return createSnapshot(
     active.value.slice(start, end),
     'text-control',
     toViewportRect(active.getBoundingClientRect()),
-    { sensitiveField: isSensitiveTextControl(active) },
+    {
+      sensitiveField: isSensitiveTextControl(active),
+      ...(passiveSelectionEnvironment ? { passiveSelectionEnvironment } : {}),
+    },
   );
 }
 
@@ -139,8 +212,10 @@ function captureWindowSelection(contextMode: ContextMode): SelectionSnapshot | u
 
   const selectedText = selectionTextWithMathSource(range, selection.toString());
   const contextText = selectionContext(anchorElement, selectedText, contextMode);
+  const passiveSelectionEnvironment = passiveSelectionEnvironmentForRange(range);
   return createSnapshot(selectedText, source, toViewportRect(rect), {
     ...(contextText ? { contextText } : {}),
+    ...(passiveSelectionEnvironment ? { passiveSelectionEnvironment } : {}),
     sensitiveField: Boolean(
       anchorElement?.closest('[data-private="true"],[data-sensitive="true"],input[type="password"]'),
     ),

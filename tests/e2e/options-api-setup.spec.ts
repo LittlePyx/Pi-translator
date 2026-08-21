@@ -156,6 +156,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     await expect(popup.locator('#open-sidebar')).toBeHidden();
     await expect(popup.locator('#open-pdf')).toHaveClass(/primary-action/);
     await expect(popup.locator('#open-settings')).toHaveClass(/utility-action/);
+    await expect(popup.locator('#page-context')).toContainText('普通网页');
     const actionLayout = await quickActions.evaluate((actions) => {
       const primary = actions.querySelector<HTMLElement>('.primary-action');
       const utility = actions.querySelector<HTMLElement>('.utility-action');

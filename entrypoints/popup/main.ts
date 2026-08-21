@@ -71,6 +71,7 @@ const readinessPanel = element<HTMLElement>('readiness-panel');
 const readinessTitle = element<HTMLElement>('readiness-title');
 const readinessNote = element<HTMLParagraphElement>('readiness-note');
 const readinessIssues = element<HTMLElement>('readiness-issues');
+const pageContext = element<HTMLParagraphElement>('page-context');
 
 let activeUrl: string | undefined;
 let activeTabId: number | undefined;
@@ -230,7 +231,9 @@ function renderPopupReadiness(
   readinessPanel.removeAttribute('aria-busy');
   readinessTitle.textContent = result.issues.length
     ? `还需处理 ${result.issues.length} 项`
-    : 'Pi Translator 已就绪';
+    : result.contextNote
+      ? '当前页面不可使用'
+      : 'Pi Translator 已就绪';
   readinessNote.textContent = result.contextNote ?? '';
   readinessIssues.replaceChildren(...result.issues.map((issue) => {
     const row = document.createElement('div');
@@ -249,6 +252,7 @@ function renderPopupReadiness(
     return row;
   }));
   readinessIssues.hidden = result.issues.length === 0;
+  readinessPanel.hidden = result.issues.length === 0 && !result.contextNote;
 }
 
 function hidePdfAccessAlert(): void {
@@ -330,8 +334,24 @@ function updateQuickActions(): void {
   openSidebar.textContent = pdfIsCurrent
     ? '打开翻译侧栏'
     : sidebarMode === 'browser'
-      ? '打开浏览器翻译侧栏'
-      : '打开连续翻译侧栏';
+      ? '在浏览器侧栏中翻译'
+      : '打开翻译侧栏';
+  openWebRegion.textContent = '框选当前网页';
+  if (pdfIsCurrent) {
+    pageContext.textContent = '当前是 PDF：用 Pi PDF 阅读，或直接打开翻译侧栏。';
+    pageContext.removeAttribute('data-tone');
+  } else if (sidebarAvailable) {
+    pageContext.textContent = isOverleafProjectUrl(activeUrl ?? '')
+      ? '在 Overleaf 选中文字即可翻译；预览、公式和图表可使用框选。'
+      : '在网页中选中文字即可翻译；图表和不可选内容可使用框选。';
+    pageContext.removeAttribute('data-tone');
+  } else if (activeUrl && !isInjectableWebUrl(activeUrl)) {
+    pageContext.textContent = '当前页面受 Edge 限制，请切换到普通网页、Overleaf 或 PDF。';
+    pageContext.dataset.tone = 'restricted';
+  } else {
+    pageContext.textContent = '打开 PDF 阅读器，或在普通网页中使用划词翻译。';
+    pageContext.removeAttribute('data-tone');
+  }
   quickActions.dataset.primary = pdfIsCurrent
     ? 'pdf'
     : sidebarAvailable
