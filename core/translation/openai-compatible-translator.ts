@@ -39,6 +39,9 @@ const VISION_CAPABILITY_EXPECTED_TEXT = 'K7M2';
 export const VISION_CAPABILITY_TEST_IMAGE_DATA_URL =
   'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAIIAAAA6CAIAAADz+BayAAAA0UlEQVR42u3b0Q5FMBBFURX//8v1TlCtVsvaj1duNXZmHCNCjHHC28wuAQ2ggQbQQANo6Jnl6EAIYfNLyhPG+b/2R/M4XzPvSaj9zlWDpgQaaAAN4yal8nSRnhPunqV8V3fXrL1z1aApgQYaQMPoSemp6U3ts6TkovLspBo0JdBAA2iQlNAmR6kGTQk00AAaRk9KebOaHuZU/a+pGjQl0EADaPjeTKlGdlINoIEG0AAavH2bfvk+zrdvmhJooAE0jHXDN/NRDaCBBtBAA2igAResS/FIdWxdgasAAAAASUVORK5CYII=';
 
+export const CONNECTION_SAMPLE_SOURCE =
+  'Pi Translator makes multilingual reading easier.';
+
 interface RequestRetryPolicy {
   maxAttempts: number;
   shouldRetry: (error: TranslationError) => boolean;
@@ -1004,7 +1007,7 @@ export class OpenAiCompatibleTranslator implements Translator {
     options: Pick<TranslationOptions, 'model'>,
     credentials: ProviderCredentials,
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<string> {
     const capabilities = await getApiModelCapabilities(credentials.apiBaseUrl, options.model);
     let useThinkingControl = capabilities.thinkingControl !== false &&
       Object.keys(directAnswerParameters(credentials.apiBaseUrl)).length > 0;
@@ -1018,10 +1021,14 @@ export class OpenAiCompatibleTranslator implements Translator {
           model: options.model,
           messages: [{
             role: 'user',
-            content: 'Reply with OK only. This is a low-cost API connection check.',
+            content: [
+              'Translate the following English sentence into concise, natural Simplified Chinese.',
+              'Return the translation only.',
+              CONNECTION_SAMPLE_SOURCE,
+            ].join('\n'),
           }],
           temperature: 0,
-          max_tokens: 8,
+          max_tokens: 64,
           stream: false,
           ...directAnswerParameters(credentials.apiBaseUrl, useThinkingControl),
         }),
@@ -1034,13 +1041,15 @@ export class OpenAiCompatibleTranslator implements Translator {
           signal,
           GENERATION_RETRY_POLICY,
         );
-        parseCompatibleApiEnvelope(envelope);
+        const sample = parseStructuredTranslation(
+          parseCompatibleApiEnvelope(envelope),
+        ).translatedText.replace(/\s+/gu, ' ').trim().slice(0, 240);
         if (useThinkingControl) {
           await updateApiModelCapabilities(credentials.apiBaseUrl, options.model, {
             thinkingControl: true,
           });
         }
-        return;
+        return sample;
       } catch (error) {
         const normalized = toTranslationError(error);
         if (signal.aborted || !useThinkingControl || !rejectsThinkingControl(normalized)) {

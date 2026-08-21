@@ -30,7 +30,7 @@ export class DeepSeekTranslator extends OpenAiCompatibleTranslator {
     options: Pick<TranslationOptions, 'model'>,
     credentials: Omit<ProviderCredentials, 'apiBaseUrl'> & { apiBaseUrl?: string },
     signal: AbortSignal,
-  ): Promise<void> {
+  ): Promise<string> {
     return super.testConnection(
       options,
       { ...credentials, apiBaseUrl: credentials.apiBaseUrl ?? DEFAULT_API_BASE_URL },

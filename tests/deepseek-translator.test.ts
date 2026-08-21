@@ -92,7 +92,7 @@ describe('DeepSeek translator', () => {
 
   it('tests the configured model with a low-cost chat completion', async () => {
     const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({ choices: [{ message: { content: 'OK' } }] }), {
+      new Response(JSON.stringify({ choices: [{ message: { content: 'Pi Translator 让多语言阅读更轻松。' } }] }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       }),
@@ -105,14 +105,17 @@ describe('DeepSeek translator', () => {
         { apiKey: 'test-key' },
         new AbortController().signal,
       ),
-    ).resolves.toBeUndefined();
+    ).resolves.toBe('Pi Translator 让多语言阅读更轻松。');
 
     expect(fetchMock).toHaveBeenCalledOnce();
     const [url, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     expect(url).toBe('https://api.deepseek.com/chat/completions');
     const body = JSON.parse(String(init.body)) as Record<string, unknown>;
     expect(body.model).toBe(options.model);
-    expect(body.max_tokens).toBe(8);
+    expect(body.max_tokens).toBe(64);
+    expect(JSON.stringify(body.messages)).toContain(
+      'Pi Translator makes multilingual reading easier.',
+    );
     expect(body.thinking).toEqual({ type: 'disabled' });
   });
 

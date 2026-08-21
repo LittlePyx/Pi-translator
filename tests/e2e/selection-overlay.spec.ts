@@ -9344,6 +9344,11 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.locator('#onboarding-next').click();
   await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
   await expect(reopened.locator('#onboarding-back')).toBeVisible();
+  await expect(reopened.locator('#onboarding-open-key-page')).toBeVisible();
+  await expect(reopened.locator('#onboarding-open-key-page')).toHaveAttribute(
+    'data-key-url',
+    'https://platform.deepseek.com/api_keys',
+  );
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-key-360-light.png') });
   }
@@ -9366,6 +9371,20 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-model-360-light.png') });
   }
+  await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-success')).toBeVisible();
+  await expect(reopened.locator('#onboarding-title')).toHaveText('Pi Translator 已就绪');
+  await expect(reopened.locator('#onboarding-sample-source')).toHaveText(
+    'Pi Translator makes multilingual reading easier.',
+  );
+  await expect(reopened.locator('#onboarding-sample-translation')).not.toBeEmpty();
+  await expect(reopened.locator('.onboarding-paths > div')).toHaveCount(3);
+  await expect(reopened.locator('#onboarding-next')).toHaveText('完成');
+  if (process.env.PI_VISUAL_QA) {
+    await reopened.screenshot({ path: testInfo.outputPath('onboarding-success-360-light.png') });
+  }
+  await reopened.locator('#onboarding-next').click();
+  await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
   await reopened.close();
 });
 

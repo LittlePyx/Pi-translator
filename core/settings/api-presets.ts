@@ -4,6 +4,7 @@ export interface ApiPreset {
   apiBaseUrl: string;
   model: string;
   keyHint?: string;
+  keyUrl?: string;
 }
 
 export const API_PRESETS: ApiPreset[] = [
@@ -13,6 +14,7 @@ export const API_PRESETS: ApiPreset[] = [
     apiBaseUrl: 'https://api.deepseek.com',
     model: 'deepseek-v4-flash',
     keyHint: '选择服务商后，扩展会自动填写官方接口地址；连接后再读取此 Key 可用的模型。',
+    keyUrl: 'https://platform.deepseek.com/api_keys',
   },
   {
     id: 'qwen',
@@ -20,12 +22,14 @@ export const API_PRESETS: ApiPreset[] = [
     apiBaseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
     model: 'qwen3.7-plus',
     keyHint: 'API Key 与地域需要匹配；此预设使用中国内地（北京）兼容地址。',
+    keyUrl: 'https://bailian.console.aliyun.com/?apiKey=1#/api-key',
   },
   {
     id: 'openrouter',
     name: 'OpenRouter（聚合模型服务）',
     apiBaseUrl: 'https://openrouter.ai/api/v1',
     model: '~openai/gpt-latest',
+    keyUrl: 'https://openrouter.ai/settings/keys',
   },
   {
     id: 'ollama',

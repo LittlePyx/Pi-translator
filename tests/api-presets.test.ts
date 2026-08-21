@@ -11,5 +11,7 @@ describe('API provider presets', () => {
     ]);
     expect(new Set(API_PRESETS.map((preset) => preset.apiBaseUrl)).size)
       .toBe(API_PRESETS.length);
+    expect(API_PRESETS.filter((preset) => preset.id !== 'ollama')
+      .every((preset) => preset.keyUrl?.startsWith('https://'))).toBe(true);
   });
 });

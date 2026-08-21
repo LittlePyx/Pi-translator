@@ -296,7 +296,7 @@ export interface Translator {
     options: Pick<TranslationOptions, 'model'>,
     credentials: ProviderCredentials,
     signal: AbortSignal,
-  ): Promise<void>;
+  ): Promise<string>;
 
   listModels(
     credentials: ProviderCredentials,

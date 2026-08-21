@@ -55,7 +55,10 @@ import {
 import { getPausedSiteHosts, setSitePaused } from '../core/settings/site-pause';
 import { shouldProtectLatex } from '../core/translation/content-mode';
 import { translateWithLatexRetry } from '../core/translation/latex-safe-translation';
-import { OpenAiCompatibleTranslator } from '../core/translation/openai-compatible-translator';
+import {
+  CONNECTION_SAMPLE_SOURCE,
+  OpenAiCompatibleTranslator,
+} from '../core/translation/openai-compatible-translator';
 import {
   addTranslationHistory,
   clearTranslationHistory,
@@ -3279,21 +3282,36 @@ async function testConnection(
 ): Promise<ConnectionTestResponse> {
   const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
   if (!apiKey) {
-    return errorResponse<{ connected: true }>(
+    return errorResponse<{
+      connected: true;
+      sampleSource: string;
+      sampleTranslation: string;
+    }>(
       new TranslationError('NO_API_KEY', 'Configure an API Key first.'),
     );
   }
   const controller = new AbortController();
   try {
-    await translator.testConnection(
+    const sampleTranslation = await translator.testConnection(
       { model },
       { apiKey, apiBaseUrl },
       controller.signal,
     );
-    return { ok: true, data: { connected: true } };
+    return {
+      ok: true,
+      data: {
+        connected: true,
+        sampleSource: CONNECTION_SAMPLE_SOURCE,
+        sampleTranslation,
+      },
+    };
   } catch (error) {
     await recordLocalDiagnosticError('test-connection', error);
-    return errorResponse<{ connected: true }>(error);
+    return errorResponse<{
+      connected: true;
+      sampleSource: string;
+      sampleTranslation: string;
+    }>(error);
   }
 }
 

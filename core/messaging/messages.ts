@@ -315,7 +315,11 @@ export interface TranslationSessionResult {
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
 export type RecognizePdfPageResponse = RuntimeResponse<{ page: CoordinateOcrPage }>;
-export type ConnectionTestResponse = RuntimeResponse<{ connected: true }>;
+export type ConnectionTestResponse = RuntimeResponse<{
+  connected: true;
+  sampleSource: string;
+  sampleTranslation: string;
+}>;
 export type VisionCapabilityTestResponse = RuntimeResponse<{
   supported: true;
   latencyMs: number;

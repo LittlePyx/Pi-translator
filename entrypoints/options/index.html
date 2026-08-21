@@ -38,6 +38,7 @@
             <span>API Key</span>
             <input id="onboarding-api-key" type="password" autocomplete="off" placeholder="只保存在浏览器扩展存储中" />
           </label>
+          <button id="onboarding-open-key-page" class="provider-key-link text-button" type="button" hidden>前往官方页面获取 API Key ↗</button>
           <label id="onboarding-base-url-field" hidden>
             <span>API Base URL</span>
             <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1" />
@@ -59,6 +60,23 @@
           </label>
           <p class="onboarding-vision-note">扫描版 PDF 属于可选能力：框选图片需要视觉模型；“识别本页”需要官方 Qwen / 阿里云百炼。完成文字 API 后也可稍后配置。</p>
         </section>
+        <section id="onboarding-success" class="onboarding-step onboarding-success" hidden>
+          <div class="onboarding-success-heading">
+            <span aria-hidden="true">✓</span>
+            <div><h3>连接成功，已经完成一次真实翻译</h3><p>API Key、模型和翻译接口均可正常工作。</p></div>
+          </div>
+          <div class="onboarding-sample" aria-label="示例翻译结果">
+            <span>示例翻译</span>
+            <p id="onboarding-sample-source" lang="en"></p>
+            <strong id="onboarding-sample-translation"></strong>
+          </div>
+          <h3 class="onboarding-paths-title">接下来可以从这里开始</h3>
+          <div class="onboarding-paths">
+            <div><span>01</span><strong>网页划词</strong><small>选中文字后点击 Pi；打开侧栏可连续翻译。</small></div>
+            <div><span>02</span><strong>框选网页</strong><small>在扩展面板或翻译侧栏中选择“框选网页”。</small></div>
+            <div><span>03</span><strong>科研 PDF</strong><small>从扩展面板打开 Pi PDF，也支持扫描页框选。</small></div>
+          </div>
+        </section>
         <p id="onboarding-status" class="status" role="status" aria-live="polite"></p>
         <footer class="onboarding-actions">
           <button id="onboarding-skip" class="text-button" type="button">稍后手动设置</button>
@@ -79,7 +97,7 @@
           <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab" /></span>
         </div>
         <div class="hero-bottom">
-          <p class="intro">翻译 Overleaf 和普通网页中的选中文本，并按需保护 LaTeX 结构。</p>
+          <p class="intro">从普通网页到科研 PDF，选中文字或框选内容即可翻译；Overleaf 中自动保护 LaTeX 结构。</p>
           <span id="translation-shortcut-chip" class="shortcut-chip" aria-live="polite">正在读取快捷键…</span>
         </div>
       </header>
@@ -147,6 +165,7 @@
                     <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="粘贴服务商提供的 API Key" /><small id="api-key-state">尚未配置</small></label>
                     <button id="clear-key" class="danger subtle-danger" type="button">清除</button>
                   </div>
+                  <button id="open-provider-key-page" class="provider-key-link text-button" type="button" hidden>还没有 Key？前往官方页面获取 ↗</button>
                   <label class="check-row compact-check"><input id="persist-key" type="checkbox" /><span>在本机持久保存；不勾选则仅保留到浏览器会话结束</span></label>
                   <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
                 </div>

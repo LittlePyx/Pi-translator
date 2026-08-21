@@ -115,6 +115,7 @@ const contextMenu=element<HTMLInputElement>('context-menu');
 const testButton=element<HTMLButtonElement>('test-connection');
 const diagnoseButton=element<HTMLButtonElement>('diagnose-api');
 const clearButton=element<HTMLButtonElement>('clear-key');
+const openProviderKeyPageButton=element<HTMLButtonElement>('open-provider-key-page');
 const status=element<HTMLParagraphElement>('status');
 const settingsRecoveryBanner=element<HTMLElement>('settings-recovery-banner');
 const settingsRecoveryTitle=element<HTMLElement>('settings-recovery-title');
@@ -125,14 +126,19 @@ const shortcutsButton=element<HTMLButtonElement>('open-shortcuts');
 const translationShortcutChip=element<HTMLElement>('translation-shortcut-chip');
 const translationShortcutHelp=element<HTMLElement>('translation-shortcut-help');
 const onboardingDialog=element<HTMLDialogElement>('onboarding-dialog');
+const onboardingTitle=element<HTMLElement>('onboarding-title');
 const onboardingPreset=element<HTMLSelectElement>('onboarding-preset');
 const onboardingBaseUrlField=element<HTMLElement>('onboarding-base-url-field');
 const onboardingBaseUrl=element<HTMLInputElement>('onboarding-base-url');
 const onboardingApiKey=element<HTMLInputElement>('onboarding-api-key');
 const onboardingPersistKey=element<HTMLInputElement>('onboarding-persist-key');
 const onboardingKeyHint=element<HTMLElement>('onboarding-key-hint');
+const onboardingOpenKeyPageButton=element<HTMLButtonElement>('onboarding-open-key-page');
 const onboardingModel=element<HTMLInputElement>('onboarding-model');
 const onboardingModelList=element<HTMLDataListElement>('onboarding-model-list');
+const onboardingSuccess=element<HTMLElement>('onboarding-success');
+const onboardingSampleSource=element<HTMLElement>('onboarding-sample-source');
+const onboardingSampleTranslation=element<HTMLElement>('onboarding-sample-translation');
 const onboardingStatus=element<HTMLElement>('onboarding-status');
 const onboardingBack=element<HTMLButtonElement>('onboarding-back');
 const onboardingNext=element<HTMLButtonElement>('onboarding-next');
@@ -161,6 +167,7 @@ let visionSelectionTouched=false;
 let visionSetupIntentProfileId='';
 let onboardingStep=1;
 let onboardingAvailableModels:string[]=[];
+let onboardingComplete=false;
 
 function shortcutKeys(shortcut:string):DocumentFragment{
   const fragment=document.createDocumentFragment();
@@ -339,9 +346,79 @@ function providerHint(presetId:string):string {
   if(!preset)return '自定义接口需要在“高级接口设置”中填写 API Base URL；模型可读取或手动输入。';
   return preset.keyHint??`将使用 ${preset.name} 的预设接口地址；连接后读取此 Key 实际可用的模型。`;
 }
-function refreshProviderHint():void{apiProviderHint.textContent=providerHint(apiPreset.value)}
-function applyOnboardingPreset():void{onboardingAvailableModels=[];const preset=activeOnboardingPreset();onboardingBaseUrlField.hidden=Boolean(preset);if(!preset){onboardingBaseUrl.value='';onboardingModel.value='';onboardingKeyHint.textContent='自定义接口需要填写 Base URL；随后会尝试读取当前 Key 可用的模型。';return}onboardingBaseUrl.value=preset.apiBaseUrl;onboardingModel.value=preset.model;onboardingKeyHint.textContent=preset.keyHint??'Key 不会发送给 P&I Lab，也不会写入配置导出文件。';if(preset.id==='ollama'&&!onboardingApiKey.value)onboardingApiKey.value='ollama'}
-function showOnboardingStep(step:number,focusStep=false):void{onboardingStep=Math.min(3,Math.max(1,step));for(const section of document.querySelectorAll<HTMLElement>('[data-onboarding-step]'))section.hidden=Number(section.dataset.onboardingStep)!==onboardingStep;for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){const index=Number(dot.dataset.onboardingDot);dot.classList.toggle('active',index===onboardingStep);dot.classList.toggle('complete',index<onboardingStep)}onboardingBack.hidden=onboardingStep===1;onboardingNext.textContent=onboardingStep===1?'下一步':onboardingStep===2?'连接并读取模型':'测试并完成';setOnboardingStatus('');if(focusStep)queueMicrotask(()=>{const target=onboardingStep===1?onboardingPreset:onboardingStep===2?onboardingApiKey:onboardingModel;target.focus()})}
+function renderProviderKeyAction(
+  button:HTMLButtonElement,
+  preset:ReturnType<typeof activeOnboardingPreset>,
+):void {
+  button.hidden=!preset?.keyUrl;
+  button.dataset.keyUrl=preset?.keyUrl??'';
+  if(preset?.keyUrl)button.setAttribute('aria-label',`前往 ${preset.name} 官方页面获取 API Key`);
+  else button.removeAttribute('aria-label');
+}
+function refreshProviderHint():void{
+  const preset=API_PRESETS.find(item=>item.id===apiPreset.value);
+  apiProviderHint.textContent=providerHint(apiPreset.value);
+  renderProviderKeyAction(openProviderKeyPageButton,preset);
+}
+function applyOnboardingPreset():void{
+  onboardingAvailableModels=[];
+  const preset=activeOnboardingPreset();
+  renderProviderKeyAction(onboardingOpenKeyPageButton,preset);
+  onboardingBaseUrlField.hidden=Boolean(preset);
+  if(!preset){
+    onboardingBaseUrl.value='';
+    onboardingModel.value='';
+    onboardingKeyHint.textContent='自定义接口需要填写 Base URL；随后会尝试读取当前 Key 可用的模型。';
+    return;
+  }
+  onboardingBaseUrl.value=preset.apiBaseUrl;
+  onboardingModel.value=preset.model;
+  onboardingKeyHint.textContent=preset.keyHint??'Key 不会发送给 P&I Lab，也不会写入配置导出文件。';
+  if(preset.id==='ollama'&&!onboardingApiKey.value)onboardingApiKey.value='ollama';
+}
+function showOnboardingStep(step:number,focusStep=false):void{
+  onboardingComplete=false;
+  onboardingDialog.classList.remove('complete');
+  onboardingTitle.textContent='三步开始使用 Pi Translator';
+  onboardingSuccess.hidden=true;
+  onboardingSkip.hidden=false;
+  onboardingStep=Math.min(3,Math.max(1,step));
+  for(const section of document.querySelectorAll<HTMLElement>('[data-onboarding-step]'))section.hidden=Number(section.dataset.onboardingStep)!==onboardingStep;
+  for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){
+    const index=Number(dot.dataset.onboardingDot);
+    dot.classList.toggle('active',index===onboardingStep);
+    dot.classList.toggle('complete',index<onboardingStep);
+  }
+  onboardingBack.hidden=onboardingStep===1;
+  onboardingNext.textContent=onboardingStep===1?'下一步':onboardingStep===2?'连接并读取模型':'完成示例翻译';
+  setOnboardingStatus('');
+  if(focusStep)queueMicrotask(()=>{
+    const target=onboardingStep===1?onboardingPreset:onboardingStep===2?onboardingApiKey:onboardingModel;
+    target.focus();
+  });
+}
+function showOnboardingSuccess(sampleSource:string,sampleTranslation:string):void{
+  onboardingComplete=true;
+  onboardingDialog.classList.add('complete');
+  onboardingTitle.textContent='Pi Translator 已就绪';
+  for(const section of document.querySelectorAll<HTMLElement>('[data-onboarding-step]'))section.hidden=true;
+  onboardingSuccess.hidden=false;
+  onboardingSampleSource.textContent=sampleSource;
+  onboardingSampleTranslation.textContent=sampleTranslation;
+  for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){
+    dot.classList.remove('active');
+    dot.classList.add('complete');
+  }
+  onboardingSkip.hidden=true;
+  onboardingBack.hidden=true;
+  onboardingNext.textContent='完成';
+  setOnboardingStatus('');
+  queueMicrotask(()=>onboardingNext.focus());
+}
+function openProviderKeyPage(button:HTMLButtonElement):void{
+  const url=button.dataset.keyUrl;
+  if(url)void browser.tabs.create({url});
+}
 
 async function finishOnboarding():Promise<void>{
   const base=normalizeApiBaseUrl(onboardingBaseUrl.value);
@@ -364,14 +441,19 @@ async function finishOnboarding():Promise<void>{
     value:undefined,
   }));
   onboardingApiKey.value='';
-  onboardingDialog.close();
   await load();
-  if(requestedFocusDeferred)await applyRequestedSettingsFocus();
-  setStatus(visionSupported
-    ? `首次设置已完成；文字模型为 ${model}，图像翻译模型为 ${visionDetection.model}。`
-    : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。');
   if(!transaction.revisionId)throw new Error('首次设置未能提交。');
-  await completeSettingsRecovery({text:true,vision:visionSupported},transaction.revisionId);
+  const completionMessage=visionSupported
+    ? `首次设置已完成；文字模型为 ${model}，图像翻译模型为 ${visionDetection.model}。`
+    : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。';
+  setStatus(completionMessage);
+  if(activeSettingsRecovery){
+    onboardingDialog.close();
+    if(requestedFocusDeferred)await applyRequestedSettingsFocus();
+    await completeSettingsRecovery({text:true,vision:visionSupported},transaction.revisionId);
+    return;
+  }
+  showOnboardingSuccess(response.data.sampleSource,response.data.sampleTranslation);
 }
 
 function validatedProfiles():ApiProfile[] {
@@ -560,9 +642,11 @@ window.addEventListener('beforeunload',event=>{if(!formDirty)return;event.preven
 
 onboardingPreset.addEventListener('change',applyOnboardingPreset);
 onboardingBack.addEventListener('click',()=>showOnboardingStep(onboardingStep-1,true));
+onboardingOpenKeyPageButton.addEventListener('click',()=>openProviderKeyPage(onboardingOpenKeyPageButton));
+openProviderKeyPageButton.addEventListener('click',()=>openProviderKeyPage(openProviderKeyPageButton));
 onboardingSkip.addEventListener('click',()=>{void(async()=>{await mutateSettings((settings)=>({nextSettings:{...settings,onboardingCompleted:true},value:undefined}));onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus('已进入完整设置，保存后即可开始翻译。')})().catch(()=>setOnboardingStatus('无法关闭首次设置，请重新加载页面。',true))});
 onboardingDialog.addEventListener('cancel',()=>{setTimeout(()=>{if(requestedFocusDeferred)void applyRequestedSettingsFocus()},0)});
-onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingStep===1){showOnboardingStep(2,true);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在验证 Key 并读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingAvailableModels=response.data.models;onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?`连接成功，已自动推荐文字模型 ${onboardingModel.value}；下一步会检测图片输入能力。`:'Key 验证成功，但接口未返回模型列表，请手动填写模型 ID。'}else{onboardingAvailableModels=[];message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步核对并手动填写模型。`;error=true}showOnboardingStep(3,true);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
+onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;if(onboardingComplete){onboardingDialog.close();if(requestedFocusDeferred)await applyRequestedSettingsFocus();return}if(onboardingStep===1){showOnboardingStep(2,true);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');if(onboardingStep===2){const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus('正在验证 Key 并读取可用模型…');const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;let message:string;let error=false;if(response.ok){onboardingAvailableModels=response.data.models;onboardingModelList.replaceChildren(...response.data.models.map(model=>{const option=document.createElement('option');option.value=model;return option}));const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?`连接成功，已自动推荐文字模型 ${onboardingModel.value}；下一步会完成一次示例翻译，并检测可选的图片输入能力。`:'Key 验证成功，但接口未返回模型列表，请手动填写模型 ID。'}else{onboardingAvailableModels=[];message=`${translationErrorMessage(response.error.code,response.error.message)} 仍可在下一步核对并手动填写模型。`;error=true}showOnboardingStep(3,true);setOnboardingStatus(message,error);return}await finishOnboarding()})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:'首次设置失败。',true)).finally(()=>{onboardingNext.disabled=false})});
 
 apiBaseUrl.addEventListener('input',()=>{apiPreset.value='custom';connectionAdvanced.open=true;connectionSummary.hidden=true;refreshProviderHint();void refreshApiPermissionState()});generalPageMode.addEventListener('change',refreshPageModeFields);
 pdfKeyboardShortcuts.addEventListener('change',refreshPdfShortcutField);
@@ -835,7 +919,7 @@ testButton.addEventListener('click',()=>{
       await completeSettingsRecovery({text:true,vision:false},configurationRevision);
       return;
     }
-    setStatus('连接成功，API Key 与模型可用。');
+    setStatus(`连接成功；示例翻译：${response.data.sampleTranslation}`);
   })().catch((error:unknown)=>setStatus(error instanceof Error?error.message:runtimeConnectionErrorMessage(error),true)).finally(()=>{testButton.disabled=false});
 });
 
