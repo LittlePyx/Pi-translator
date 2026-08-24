@@ -316,7 +316,7 @@ Pi_translate/
 | `https://api.deepseek.com/*` | 后台调用 DeepSeek API |
 | `https://www.overleaf.com/*` | 在 Overleaf 中持续监听选区并显示浮动按钮 |
 
-不在 MVP 中申请 `<all_urls>`。若未来希望所有网站自动显示浮动按钮，使用 `optional_host_permissions` 按用户授权增加站点访问，而不是默认读取全部网站。
+MVP 不申请 `<all_urls>`。当前版本仍不把它设为安装时必需权限；仅因 Edge 浏览器侧栏不会触发 `activeTab`，在用户主动点击侧栏“框选网页”时把 `<all_urls>` 作为运行时可选权限申请。自动显示划词按钮仍按用户选择的站点或 HTTP/HTTPS 模式单独控制，截图代码也只接受普通 HTTP/HTTPS 页面。
 
 ## 11. 选区获取设计
 
@@ -792,7 +792,7 @@ content script 也保存当前 UI 的 `requestId`。即使旧请求因底层原�
 | 本地存储被读取 | 默认 session；持久模式明确警告并限制 content script 访问 |
 | 选区意外包含敏感文本 | 只在用户明确点击/快捷键/菜单后发送；首次使用说明数据流向 |
 | 请求重放或竞态 | requestId、AbortController、每标签页单活跃请求 |
-| 权限过大影响商店审核 | 不申请 `<all_urls>`；逐项记录权限用途 |
+| 权限过大影响商店审核 | `<all_urls>` 仅作侧栏截图的运行时可选权限；拒绝后保留 `activeTab` 工具栏入口，并逐项记录用途 |
 
 ## 20. 日志与可观测性
 

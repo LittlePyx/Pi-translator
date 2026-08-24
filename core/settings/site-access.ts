@@ -1,6 +1,7 @@
 import type { ExtensionSettings, GeneralPageMode } from './schema';
 
 export const ALL_GENERAL_PAGE_ORIGINS = ['http://*/*', 'https://*/*'] as const;
+export const VISIBLE_TAB_CAPTURE_PERMISSION = '<all_urls>' as const;
 
 export function isOverleafProjectUrl(url: string): boolean {
   try {
@@ -22,11 +23,6 @@ export function isInjectableWebUrl(url: string): boolean {
   } catch {
     return false;
   }
-}
-
-export function webPagePermissionPattern(url: string): string | undefined {
-  if (!isInjectableWebUrl(url)) return undefined;
-  return `${new URL(url).origin}/*`;
 }
 
 export function normalizeSiteEntry(value: string): string | undefined {

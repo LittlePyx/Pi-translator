@@ -30,7 +30,10 @@ import {
   isSamePdfSidePanelSession,
 } from '../../core/pdf/sidepanel-session';
 import { getSettings } from '../../core/settings/repository';
-import { webPagePermissionPattern } from '../../core/settings/site-access';
+import {
+  isInjectableWebUrl,
+  VISIBLE_TAB_CAPTURE_PERMISSION,
+} from '../../core/settings/site-access';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import {
@@ -573,19 +576,27 @@ async function startCurrentWebRegionSelection(): Promise<void> {
   webRegionFeedbackTimer = undefined;
   startWebRegion.disabled = true;
   startWebRegion.setAttribute('aria-busy', 'true');
-  startWebRegionLabel.textContent = '启动中…';
-  setWebRegionFeedback('');
+  startWebRegionLabel.textContent = '检查权限…';
+  setWebRegionFeedback('首次使用时，Edge 会询问是否允许 Pi Translator 截取网页框内画面');
   try {
-    const pagePermission = activeTabUrl
-      ? webPagePermissionPattern(activeTabUrl)
-      : undefined;
-    if (!pagePermission) throw new Error('当前标签页不支持网页框选。');
-    // Keep this as the first asynchronous browser call in the click path so
-    // Edge preserves the user's activation for an optional origin request.
-    const granted = await browser.permissions.request({ origins: [pagePermission] });
-    if (!granted) {
-      throw new Error('需要允许 Pi Translator 访问当前站点，才能截取你确认的框内画面。');
+    if (!activeTabUrl || !isInjectableWebUrl(activeTabUrl)) {
+      throw new Error('当前标签页不支持网页框选。');
     }
+    // Keep this as the first asynchronous browser call in the click path so
+    // Edge preserves the user's activation for the optional permission prompt.
+    // captureVisibleTab cannot use activeTab granted by a click inside the
+    // browser side panel, so this direct entry needs the declared broad web
+    // permission. It remains optional and is requested only from this gesture.
+    const granted = await browser.permissions.request({
+      origins: [VISIBLE_TAB_CAPTURE_PERMISSION],
+    });
+    if (!granted) {
+      throw new Error(
+        '未获得网页截图权限。请再次点击并在 Edge 提示中选择允许；也可从工具栏面板进行一次性框选。',
+      );
+    }
+    startWebRegionLabel.textContent = '启动中…';
+    setWebRegionFeedback('');
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
     } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;

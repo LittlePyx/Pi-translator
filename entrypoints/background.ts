@@ -33,6 +33,7 @@ import {
   type SettingsRecoveryTicket,
 } from '../core/messaging/settings-recovery';
 import { createContextMenuSnapshot } from '../core/selection/generic-selection';
+import { visibleTabCaptureFailure } from '../core/selection/visible-tab-capture';
 import { MAX_SELECTION_LENGTH } from '../core/selection/types';
 import { createSerialTaskRunner } from '../core/runtime/serial-task';
 import {
@@ -51,6 +52,7 @@ import {
   getAutoInjectionPatterns,
   isInjectableWebUrl,
   isOverleafProjectUrl,
+  VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../core/settings/site-access';
 import { getPausedSiteHosts, setSitePaused } from '../core/settings/site-pause';
 import {
@@ -4505,12 +4507,24 @@ export default defineBackground(() => {
             new TranslationError('UNSUPPORTED_PAGE', 'This page cannot be captured.'),
           ));
         }
-        return browser.tabs.captureVisibleTab(windowId, { format: 'png' })
-          .then((imageDataUrl) => ({
-            ok: true as const,
-            data: { imageDataUrl },
-          }))
-          .catch((error: unknown) => errorResponse(error));
+        return browser.permissions.contains({
+          origins: [VISIBLE_TAB_CAPTURE_PERMISSION],
+        }).then(async (hasPersistentWebCaptureAccess) => {
+          try {
+            const imageDataUrl = await browser.tabs.captureVisibleTab(windowId, {
+              format: 'png',
+            });
+            return {
+              ok: true as const,
+              data: { imageDataUrl },
+            };
+          } catch (error) {
+            return errorResponse(visibleTabCaptureFailure(
+              error,
+              hasPersistentWebCaptureAccess,
+            ));
+          }
+        });
       }
 
       if (message.type === 'TRANSLATE_SELECTION') {

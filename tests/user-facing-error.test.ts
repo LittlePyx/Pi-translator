@@ -44,6 +44,7 @@ describe('user-facing errors', () => {
     expect(translationErrorMessage('VISION_NOT_CONFIGURED')).toContain('官方 Qwen');
     expect(translationErrorMessage('VISION_MODEL_UNSUPPORTED')).toContain('图片输入');
     expect(translationErrorMessage('IMAGE_REGION_INVALID')).toContain('重新框选');
+    expect(translationErrorMessage('WEB_CAPTURE_PERMISSION_REQUIRED')).toContain('截图权限');
   });
 
   it('keeps vision-test failure categories actionable and distinct', () => {
@@ -123,6 +124,8 @@ describe('user-facing errors', () => {
     });
     expect(translationErrorRecovery('IMAGE_REGION_INVALID', true)).toEqual({ showRetry: false });
     expect(translationErrorRecovery('UNSUPPORTED_PAGE', true)).toEqual({ showRetry: false });
+    expect(translationErrorRecovery('WEB_CAPTURE_PERMISSION_REQUIRED', true))
+      .toEqual({ showRetry: false });
     expect(translationErrorRecovery('REQUEST_ABORTED', false)).toEqual({ showRetry: false });
     expect(translationErrorRecovery('REQUEST_ABORTED', true)).toEqual({ showRetry: true });
     expect(translationErrorRecovery('API_ENDPOINT_INVALID', false)).toEqual({

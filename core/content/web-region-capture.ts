@@ -34,11 +34,13 @@ export async function captureWebRegion(
     } satisfies RuntimeMessage) as RuntimeResponse<{ imageDataUrl: string }> | undefined;
     if (!response?.ok) {
       const detail = response?.error.message ?? '';
-      const permissionFailure = /activeTab|permission|not been invoked|cannot access/i.test(detail);
+      const permissionFailure =
+        response?.error.code === 'WEB_CAPTURE_PERMISSION_REQUIRED' ||
+        /activeTab|permission|not been invoked|cannot access/i.test(detail);
       throw new WebRegionCaptureError(
         permissionFailure ? 'permission' : 'capture',
         permissionFailure
-          ? '当前网页尚未获得截图权限。请从 Pi Translator 浏览器侧栏重新点击“框选网页”，并允许访问当前站点。'
+          ? '当前网页尚未获得截图权限。请从 Pi Translator 浏览器侧栏重新点击“框选网页”，并在 Edge 提示中选择允许。'
           : 'Edge 没有返回当前网页截图，请保持该标签页在前台后重新框选。',
       );
     }

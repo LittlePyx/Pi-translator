@@ -21,7 +21,7 @@ export default defineConfig({
       default_path: 'sidepanel.html',
     },
     host_permissions: ['https://www.overleaf.com/*'],
-    optional_host_permissions: ['http://*/*', 'https://*/*', 'file:///*'],
+    optional_host_permissions: ['<all_urls>'],
     web_accessible_resources: [
       {
         resources: ['brand/pi_logo.png'],

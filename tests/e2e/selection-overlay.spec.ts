@@ -1498,10 +1498,22 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(webRegionAction).toHaveText('框选网页');
     expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
       .toBeGreaterThanOrEqual(31);
+    await sidePanel.evaluate(() => {
+      const extensionChrome = (globalThis as typeof globalThis & {
+        chrome: {
+          permissions: {
+            request(query: { origins: string[] }): Promise<boolean>;
+          };
+        };
+      }).chrome;
+      Object.defineProperty(extensionChrome.permissions, 'request', {
+        configurable: true,
+        value: async () => false,
+      });
+    });
     await webRegionAction.click();
-    await expect(page.locator('#pi-web-region-selection-root')).toBeVisible();
-    await page.bringToFront();
-    await page.keyboard.press('Escape');
+    await expect(sidePanel.locator('#empty-status')).toContainText('未获得网页截图权限');
+    await expect(webRegionAction).toContainText('重试框选');
     await expect(page.locator('#pi-web-region-selection-root')).toHaveCount(0);
     const worker = context.serviceWorkers()[0];
     expect(worker).toBeDefined();
@@ -3176,7 +3188,7 @@ test('shows contextual guidance once and keeps dismissal local', async () => {
   }
 });
 
-test('always sends confirmed webpage regions through the multimodal capture path', async ({}, testInfo) => {
+test('routes confirmed webpage regions through multimodal capture without text fallback', async ({}, testInfo) => {
   async function startFromPopup(): Promise<void> {
     const popup = await context.newPage();
     try {
@@ -3231,17 +3243,11 @@ test('always sends confirmed webpage regions through the multimodal capture path
   expect(originalRegionBounds).not.toBeNull();
   await webRegion.locator('.confirm').click();
   await expect(webRegion).toHaveCount(0);
-
-  // A Playwright-opened extension page does not grant activeTab the way the
-  // real toolbar popup does. Reaching the capture error proves that a webpage
-  // region containing both DOM text and a rendered formula did not fall back
-  // to TRANSLATE_SELECTION and lose the formula.
-  await expect(page.locator('#tex-selection-translator-root .error'))
-    .toContainText(/截图权限|没有返回当前网页截图/u);
   expect(textRequests).toHaveLength(textBefore);
-  expect(visionRequests).toHaveLength(visionBefore);
 
   const resultOverlay = page.locator('#tex-selection-translator-root');
+  await expect(resultOverlay.locator('.error')).toContainText('截图权限');
+  expect(visionRequests).toHaveLength(visionBefore);
   await expect(resultOverlay.getByRole('button', { name: '调整区域' })).toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '重新框选' })).toBeVisible();
   await resultOverlay.getByRole('button', { name: '调整区域' }).click();
@@ -3274,10 +3280,9 @@ test('always sends confirmed webpage regions through the multimodal capture path
   expect(textRequests).toHaveLength(textBefore);
   await adjustedRegion.locator('.confirm').click();
   await expect(adjustedRegion).toHaveCount(0);
-  await expect(resultOverlay.locator('.error'))
-    .toContainText(/截图权限|没有返回当前网页截图/u);
-  expect(textRequests).toHaveLength(textBefore);
+  await expect(resultOverlay.locator('.error')).toContainText('截图权限');
   expect(visionRequests).toHaveLength(visionBefore);
+  expect(textRequests).toHaveLength(textBefore);
 
   await resultOverlay.getByRole('button', { name: '重新框选' }).click();
   const keyboardRegion = page.locator('#pi-web-region-selection-root');

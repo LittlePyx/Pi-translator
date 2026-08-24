@@ -41,6 +41,7 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   OCR_NOT_SUPPORTED: '当前接口不能生成可靠的扫描 PDF 文字层；仍可使用框选翻译。坐标 OCR 目前支持官方 Qwen / 阿里云百炼接口。',
   OCR_INVALID_RESPONSE: 'OCR 没有返回可靠的文字坐标，未生成文字层；请调整识别区域或继续使用框选翻译。',
   IMAGE_REGION_INVALID: '框选图片无法处理，请缩小框选范围或重新框选更清晰的区域。',
+  WEB_CAPTURE_PERMISSION_REQUIRED: '网页框选尚未获得截图权限，请从浏览器侧栏重新点击“框选网页”，并在 Edge 提示中选择允许。',
   UNSUPPORTED_PAGE: '当前页面禁止扩展注入，请在普通网页或 Overleaf 项目页使用。',
   REQUEST_ABORTED: '翻译请求已取消。',
   UNKNOWN_ERROR: '翻译发生未知错误，请重试；若仍失败，请打开设置测试连接。',
@@ -195,7 +196,9 @@ export function translationErrorRecovery(
     // so keep the recovery action available in that distinct case.
     return { showRetry: retryable };
   }
-  if (['EMPTY_SELECTION', 'UNSUPPORTED_PAGE'].includes(code)) {
+  if (
+    ['EMPTY_SELECTION', 'WEB_CAPTURE_PERMISSION_REQUIRED', 'UNSUPPORTED_PAGE'].includes(code)
+  ) {
     return { showRetry: false };
   }
   if (code === 'UNKNOWN_ERROR') {

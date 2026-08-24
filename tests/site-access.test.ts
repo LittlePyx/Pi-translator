@@ -6,7 +6,7 @@ import {
   isOverleafProjectUrl,
   normalizeSiteAllowlist,
   siteAllowlistToMatchPatterns,
-  webPagePermissionPattern,
+  VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../core/settings/site-access';
 
 describe('general page access', () => {
@@ -37,18 +37,16 @@ describe('general page access', () => {
     ]);
   });
 
+  it('keeps the optional capture capability separate from automatic injection', () => {
+    expect(VISIBLE_TAB_CAPTURE_PERMISSION).toBe('<all_urls>');
+    expect(getAutoInjectionPatterns('all-sites', []))
+      .not.toContain(VISIBLE_TAB_CAPTURE_PERMISSION);
+  });
+
   it('distinguishes Overleaf projects from general injectable pages', () => {
     expect(isOverleafProjectUrl('https://www.overleaf.com/project/abc')).toBe(true);
     expect(isInjectableWebUrl('https://example.com/article')).toBe(true);
     expect(isInjectableWebUrl('edge://extensions')).toBe(false);
-  });
-
-  it('limits webpage capture permission to the current HTTP origin', () => {
-    expect(webPagePermissionPattern('https://example.com/article?id=1'))
-      .toBe('https://example.com/*');
-    expect(webPagePermissionPattern('http://localhost:3000/page'))
-      .toBe('http://localhost:3000/*');
-    expect(webPagePermissionPattern('edge://extensions')).toBeUndefined();
   });
 
   it('matches allowlisted domains and subdomains', () => {
