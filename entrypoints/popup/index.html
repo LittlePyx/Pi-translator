@@ -14,6 +14,7 @@
           <strong>Pi Translator</strong>
           <small>快捷控制</small>
         </span>
+        <button id="feature-guide-toggle" class="feature-guide-toggle" type="button" hidden>使用提示</button>
       </header>
 
       <section class="capability-status" aria-label="API 能力状态">
@@ -79,6 +80,18 @@
         </div>
       </section>
       <p id="page-context" class="page-context" aria-live="polite">正在识别当前页面…</p>
+      <section id="feature-guide" class="feature-guide" aria-labelledby="feature-guide-title" hidden>
+        <div class="feature-guide-heading">
+          <div>
+            <span id="feature-guide-eyebrow" class="feature-guide-eyebrow"></span>
+            <strong id="feature-guide-title" tabindex="-1"></strong>
+          </div>
+          <button id="feature-guide-dismiss" class="feature-guide-dismiss" type="button" aria-label="收起当前页面的使用提示">×</button>
+        </div>
+        <p id="feature-guide-description" class="feature-guide-description"></p>
+        <ol id="feature-guide-steps" class="feature-guide-steps"></ol>
+        <p id="feature-guide-progress" class="feature-guide-progress" aria-live="polite"></p>
+      </section>
       <section id="quick-actions" class="quick-actions" data-primary="loading" aria-label="快捷操作" aria-busy="true">
         <button id="open-sidebar" class="primary-action" type="button">打开连续翻译侧栏</button>
         <button id="open-web-region" class="region-action" type="button" title="适合网页图像、图表、渲染公式和复杂混排">框选当前网页</button>

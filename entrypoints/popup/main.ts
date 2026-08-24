@@ -40,6 +40,16 @@ import {
 } from '../../core/settings/popup-readiness';
 import { assignedTranslationShortcut } from '../../core/commands/translation-shortcut';
 import type { SettingsFocus } from '../../core/messaging/user-facing-error';
+import {
+  completeFeatureDiscovery,
+  dismissFeatureDiscovery,
+  featureDiscoveryModel,
+  featureDiscoverySceneForPage,
+  getFeatureDiscoveryProgress,
+  type FeatureDiscoveryFeature,
+  type FeatureDiscoveryProgress,
+  type FeatureDiscoveryScene,
+} from '../../core/settings/feature-discovery';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -72,6 +82,14 @@ const readinessTitle = element<HTMLElement>('readiness-title');
 const readinessNote = element<HTMLParagraphElement>('readiness-note');
 const readinessIssues = element<HTMLElement>('readiness-issues');
 const pageContext = element<HTMLParagraphElement>('page-context');
+const featureGuideToggle = element<HTMLButtonElement>('feature-guide-toggle');
+const featureGuide = element<HTMLElement>('feature-guide');
+const featureGuideEyebrow = element<HTMLElement>('feature-guide-eyebrow');
+const featureGuideTitle = element<HTMLElement>('feature-guide-title');
+const featureGuideDescription = element<HTMLParagraphElement>('feature-guide-description');
+const featureGuideSteps = element<HTMLOListElement>('feature-guide-steps');
+const featureGuideProgress = element<HTMLParagraphElement>('feature-guide-progress');
+const featureGuideDismiss = element<HTMLButtonElement>('feature-guide-dismiss');
 
 let activeUrl: string | undefined;
 let activeTabId: number | undefined;
@@ -83,6 +101,10 @@ let generalPageMode: ExtensionSettings['generalPageMode'] = 'on-demand';
 let textApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'api';
 let visionApiSettingsFocus: ApiReadinessStatus['settingsFocus'] = 'vision';
 let popupShortcutState: PopupShortcutState = 'unknown';
+let assignedShortcutLabel: string | undefined;
+let featureGuideProgressState: FeatureDiscoveryProgress = { completed: {}, dismissed: {} };
+let featureGuideScene: FeatureDiscoveryScene | undefined;
+let featureGuideRevealOverride = false;
 let statusTimer: number | undefined;
 
 type PopupStatusTone = 'progress' | 'success' | 'error';
@@ -304,6 +326,87 @@ function sidebarAvailableForActivePage(): boolean {
   return generalPageMode !== 'off' && isInjectableWebUrl(activeUrl);
 }
 
+function renderFeatureGuide(): void {
+  featureGuideScene = featureDiscoverySceneForPage({
+    ...(activeUrl ? { url: activeUrl } : {}),
+    ...(activePdfContext ? { pdfContext: activePdfContext } : {}),
+    pdfReaderUrl: browser.runtime.getURL('/pdf.html'),
+  });
+  if (!featureGuideScene) {
+    featureGuide.hidden = true;
+    featureGuideToggle.hidden = true;
+    return;
+  }
+  const model = featureDiscoveryModel(
+    featureGuideScene,
+    featureGuideProgressState,
+    featureGuideRevealOverride,
+  );
+  featureGuide.hidden = !model.shouldShow;
+  featureGuideToggle.hidden = model.shouldShow;
+  featureGuideToggle.textContent = model.completedCount === model.steps.length
+    ? '查看用法'
+    : '使用提示';
+  if (!model.shouldShow) return;
+  featureGuideEyebrow.textContent = model.eyebrow;
+  featureGuideTitle.textContent = model.title;
+  featureGuideDescription.textContent = model.description;
+  featureGuideSteps.replaceChildren(...model.steps.map((step) => {
+    const item = document.createElement('li');
+    item.className = 'feature-guide-step';
+    item.dataset.completed = String(step.completed);
+    const mark = document.createElement('span');
+    mark.className = 'feature-guide-step-mark';
+    mark.textContent = step.completed ? '✓' : '';
+    mark.setAttribute('aria-hidden', 'true');
+    const copy = document.createElement('div');
+    const label = document.createElement('strong');
+    label.textContent = step.label;
+    const detail = document.createElement('span');
+    detail.textContent = step.detail;
+    if (
+      assignedShortcutLabel &&
+      (step.id === 'web-selection' || step.id === 'overleaf-selection')
+    ) {
+      detail.textContent = `${step.detail} 也可按 ${assignedShortcutLabel}。`;
+    }
+    copy.append(label, detail);
+    item.append(mark, copy);
+    return item;
+  }));
+  featureGuideProgress.textContent = model.completedCount
+    ? `已熟悉 ${model.completedCount} / ${model.steps.length}`
+    : '完成后会自动记住，仅保存在本机';
+  featureGuideDismiss.setAttribute(
+    'aria-label',
+    featureGuideRevealOverride ? '关闭使用提示' : '不再提示当前页面的用法',
+  );
+}
+
+async function markFeatureGuideComplete(
+  feature: FeatureDiscoveryFeature | undefined,
+): Promise<void> {
+  if (!feature || featureGuideProgressState.completed[feature]) return;
+  await completeFeatureDiscovery(feature);
+  featureGuideProgressState.completed[feature] = true;
+  renderFeatureGuide();
+}
+
+function sidebarDiscoveryFeature(): FeatureDiscoveryFeature | undefined {
+  if (featureGuideScene === 'web') return 'web-sidebar';
+  return undefined;
+}
+
+function regionDiscoveryFeature(): FeatureDiscoveryFeature | undefined {
+  if (featureGuideScene === 'web') return 'web-region';
+  if (featureGuideScene === 'overleaf') return 'overleaf-region';
+  return undefined;
+}
+
+function pdfDiscoveryFeature(): FeatureDiscoveryFeature {
+  return featureGuideScene === 'overleaf' ? 'overleaf-pdf' : 'pdf-reader';
+}
+
 function updateQuickActions(): void {
   openPdf.textContent = activePdfSourceUrl
     ? activePdfContext === 'overleaf'
@@ -359,6 +462,7 @@ function updateQuickActions(): void {
       : 'reader';
   quickActions.prepend(primaryAction);
   quickActions.removeAttribute('aria-busy');
+  renderFeatureGuide();
 }
 
 async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
@@ -437,12 +541,14 @@ async function resolveActivePdfContext(tab: {
 }
 
 async function load(): Promise<void> {
-  const [settings, tabs, pausedSiteHosts, commands] = await Promise.all([
+  const [settings, tabs, pausedSiteHosts, commands, discoveryProgress] = await Promise.all([
     getSettings(),
     browser.tabs.query({ active: true, currentWindow: true }),
     getPausedSiteHosts(),
     browser.commands.getAll().catch(() => undefined),
+    getFeatureDiscoveryProgress().catch(() => ({ completed: {}, dismissed: {} })),
   ]);
+  featureGuideProgressState = discoveryProgress;
   targetLanguage.value = settings.targetLanguage;
   apiProfile.replaceChildren(...settings.apiProfiles.map((profile) => {
     const option = document.createElement('option');
@@ -474,10 +580,12 @@ async function load(): Promise<void> {
     siteControl.hidden = false;
   }
   const readiness = await refreshApiReadiness(settings);
+  assignedShortcutLabel = commands ? assignedTranslationShortcut(commands) : undefined;
   popupShortcutState = commands
-    ? assignedTranslationShortcut(commands) ? 'assigned' : 'missing'
+    ? assignedShortcutLabel ? 'assigned' : 'missing'
     : 'unknown';
   renderPopupReadiness(readiness.text, popupShortcutState);
+  renderFeatureGuide();
 }
 
 targetLanguage.addEventListener('change', () => {
@@ -547,6 +655,30 @@ pauseSite.addEventListener('change', () => {
     .finally(() => setControlPending(pauseSite, false));
 });
 
+featureGuideToggle.addEventListener('click', () => {
+  featureGuideRevealOverride = true;
+  renderFeatureGuide();
+  featureGuideTitle.focus({ preventScroll: true });
+});
+
+featureGuideDismiss.addEventListener('click', () => {
+  const scene = featureGuideScene;
+  if (!scene) return;
+  featureGuideDismiss.disabled = true;
+  void (async () => {
+    if (!featureGuideRevealOverride) {
+      await dismissFeatureDiscovery(scene);
+      featureGuideProgressState.dismissed[scene] = true;
+    }
+    featureGuideRevealOverride = false;
+    renderFeatureGuide();
+  })().catch(() => {
+    setStatus('使用提示状态未能保存，请稍后再试。', 'error');
+  }).finally(() => {
+    featureGuideDismiss.disabled = false;
+  });
+});
+
 openSettings.addEventListener('click', () => {
   openSettingsPage();
 });
@@ -557,16 +689,20 @@ visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettin
 openSidebar.addEventListener('click', () => {
   if (sidebarMode === 'browser' && !activePdfContext && activeTabId !== undefined) {
     void browser.sidePanel.open({ tabId: activeTabId })
-      .then(() => window.close())
+      .then(async () => {
+        await markFeatureGuideComplete(sidebarDiscoveryFeature()).catch(() => undefined);
+        window.close();
+      })
       .catch(() => setStatus('当前页面无法打开浏览器侧栏，请刷新后重试。', 'error'));
     return;
   }
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
-    .then((response: RuntimeResponse<{ opened: true }> | undefined) => {
+    .then(async (response: RuntimeResponse<{ opened: true }> | undefined) => {
       if (!response?.ok) {
         setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error');
         return;
       }
+      await markFeatureGuideComplete(sidebarDiscoveryFeature()).catch(() => undefined);
       window.close();
     })
     .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error'));
@@ -577,11 +713,12 @@ openWebRegion.addEventListener('click', () => {
   openWebRegion.disabled = true;
   void browser.runtime.sendMessage({
     type: 'START_WEB_REGION_SELECTION',
-  } satisfies RuntimeMessage).then((response: RuntimeResponse<{ started: true }> | undefined) => {
+  } satisfies RuntimeMessage).then(async (response: RuntimeResponse<{ started: true }> | undefined) => {
     if (!response?.ok) {
       setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
       return;
     }
+    await markFeatureGuideComplete(regionDiscoveryFeature()).catch(() => undefined);
     window.close();
   }).catch(() => {
     setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
@@ -610,6 +747,7 @@ openPdf.addEventListener('click', () => {
         : {}),
     } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
+    await markFeatureGuideComplete(pdfDiscoveryFeature()).catch(() => undefined);
     window.close();
   })().catch(() => setStatus('无法打开 PDF 阅读器，请重新加载扩展后再试。', 'error'));
 });

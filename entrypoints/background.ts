@@ -53,6 +53,11 @@ import {
   isOverleafProjectUrl,
 } from '../core/settings/site-access';
 import { getPausedSiteHosts, setSitePaused } from '../core/settings/site-pause';
+import {
+  completeFeatureDiscovery,
+  featureDiscoveryFeatureForTranslation,
+  type FeatureDiscoveryFeature,
+} from '../core/settings/feature-discovery';
 import { shouldProtectLatex } from '../core/translation/content-mode';
 import { translateWithLatexRetry } from '../core/translation/latex-safe-translation';
 import {
@@ -213,6 +218,24 @@ const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
 const activeTabIdsByWindow = new Map<number, number>();
 let lastActiveBrowserTab: { id: number; windowId: number } | undefined;
+
+async function withCompletedTranslationDiscovery(
+  request: Pick<TranslateRequest | TranslateImageRegionRequest, 'pageUrl' | 'sourceLocation'>,
+  kind: 'text' | 'image',
+  task: Promise<TranslateRuntimeResponse>,
+  forcedFeature?: FeatureDiscoveryFeature,
+): Promise<TranslateRuntimeResponse> {
+  const response = await task;
+  if (!response.ok) return response;
+  const feature = forcedFeature ?? featureDiscoveryFeatureForTranslation({
+    pageUrl: request.pageUrl,
+    kind,
+    ...(request.sourceLocation ? { sourceLocation: request.sourceLocation } : {}),
+    pdfReaderUrl: PI_PDF_READER_URL,
+  });
+  await completeFeatureDiscovery(feature).catch(() => undefined);
+  return response;
+}
 
 function rememberActiveBrowserTab(tabId: number, windowId: number): void {
   if (tabId < 0 || windowId < 0) return;
@@ -542,7 +565,7 @@ async function beginPdfSidePanelTranslation(
           },
         }, false);
       }
-      const response = await translate({
+      const request: TranslateRequest = {
         requestId: session.requestId,
         text: session.sourceText,
         pageUrl: session.pageUrl,
@@ -551,7 +574,12 @@ async function beginPdfSidePanelTranslation(
         sourceLanguage: settings.sourceLanguage,
         style: settings.style,
         contentMode: settings.contentMode,
-      }, tabId, 'runtime');
+      };
+      const response = await withCompletedTranslationDiscovery(
+        request,
+        'text',
+        translate(request, tabId, 'runtime'),
+      );
       const current = pdfSidePanelSessions.get(tabId);
       if (
         !response.ok &&
@@ -596,6 +624,9 @@ async function beginPdfSidePanelTranslation(
       style: settings.style,
       contentMode: settings.contentMode,
     }, tabId, 'tab', provider);
+    if (response.ok) {
+      await completeFeatureDiscovery('pdf-selection').catch(() => undefined);
+    }
     const current = pdfSidePanelSessions.get(tabId);
     if (
       !isCurrent() ||
@@ -921,6 +952,9 @@ function openBrowserTranslationSidePanel(
     void browser.tabs.sendMessage(tab.id, {
       type: 'BROWSER_SIDEBAR_ACTIVE',
     } satisfies RuntimeMessage).catch(() => undefined);
+    if (tab.url && !isOverleafProjectUrl(tab.url)) {
+      await completeFeatureDiscovery('web-sidebar').catch(() => undefined);
+    }
     return { ok: true as const, data: { opened: true as const } };
   }).catch((error: unknown) => errorResponse(error));
 }
@@ -940,6 +974,9 @@ async function useFloatingSidebar(
       value: undefined,
     }));
     await sendToSelectionContentScript(tab, { type: 'OPEN_SIDEBAR' });
+    if (!isOverleafProjectUrl(tab.url)) {
+      await completeFeatureDiscovery('web-sidebar').catch(() => undefined);
+    }
     const sidePanelApi = getSidePanelApi();
     if (sidePanelApi) {
       await sidePanelApi.setOptions({ tabId: tab.id, enabled: false }).catch(() => undefined);
@@ -4244,6 +4281,7 @@ export default defineBackground(() => {
           }
           const tab = await browser.tabs.create({ url: viewerUrl.href, active: true });
           await disableSidePanelForPiPdfViewer(tab);
+          await completeFeatureDiscovery('pdf-reader').catch(() => undefined);
           return { ok: true as const, data: { opened: true } };
         })().catch((error: unknown) => errorResponse(error));
       }
@@ -4308,6 +4346,9 @@ export default defineBackground(() => {
           .then(async ([tab]) => {
             if (!tab) return { ok: false, error: { code: 'UNSUPPORTED_PAGE' as const, message: 'No active tab.', retryable: false } };
             await sendToSelectionContentScript(tab, message);
+            if (tab.url && !isOverleafProjectUrl(tab.url)) {
+              await completeFeatureDiscovery('web-sidebar').catch(() => undefined);
+            }
             return { ok: true, data: { opened: true } };
           })
           .catch((error: unknown) => errorResponse(error));
@@ -4325,6 +4366,11 @@ export default defineBackground(() => {
               ));
             }
             await sendToSelectionContentScript(tab, message);
+            if (tab.url) {
+              await completeFeatureDiscovery(
+                isOverleafProjectUrl(tab.url) ? 'overleaf-region' : 'web-region',
+              ).catch(() => undefined);
+            }
             return { ok: true as const, data: { started: true as const } };
           })
           .catch((error: unknown) => errorResponse(error));
@@ -4476,7 +4522,14 @@ export default defineBackground(() => {
             ),
           );
         }
-        return translate(message.payload, tabId, progressTargetForSender(sender.url));
+        return withCompletedTranslationDiscovery(
+          message.payload,
+          'text',
+          translate(message.payload, tabId, progressTargetForSender(sender.url)),
+          isExtensionPdfReaderUrl(sender.url, PI_PDF_READER_URL)
+            ? 'pdf-selection'
+            : undefined,
+        );
       }
 
       if (message.type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR') {
@@ -4487,7 +4540,11 @@ export default defineBackground(() => {
             'A browser tab is required.',
           )));
         }
-        return translateSelectionInBrowserSidePanel(message.payload, tabId);
+        return withCompletedTranslationDiscovery(
+          message.payload,
+          'text',
+          translateSelectionInBrowserSidePanel(message.payload, tabId),
+        );
       }
 
       if (message.type === 'TRANSLATE_IMAGE_REGION') {
@@ -4499,10 +4556,17 @@ export default defineBackground(() => {
             ),
           );
         }
-        return translateImageRegion(
+        return withCompletedTranslationDiscovery(
           message.payload,
-          tabId,
-          progressTargetForSender(sender.url),
+          'image',
+          translateImageRegion(
+            message.payload,
+            tabId,
+            progressTargetForSender(sender.url),
+          ),
+          isExtensionPdfReaderUrl(sender.url, PI_PDF_READER_URL)
+            ? 'pdf-region'
+            : undefined,
         );
       }
 

@@ -2998,6 +2998,78 @@ test('shows site pause controls only on supported webpages', async () => {
   }
 });
 
+test('shows contextual guidance once and keeps dismissal local', async () => {
+  const discoveryKeys = [
+    'featureDiscoveryV1:completed:web-selection',
+    'featureDiscoveryV1:completed:web-sidebar',
+    'featureDiscoveryV1:completed:web-region',
+    'featureDiscoveryV1:completed:overleaf-selection',
+    'featureDiscoveryV1:completed:overleaf-region',
+    'featureDiscoveryV1:completed:overleaf-pdf',
+    'featureDiscoveryV1:completed:pdf-reader',
+    'featureDiscoveryV1:completed:pdf-selection',
+    'featureDiscoveryV1:completed:pdf-region',
+    'featureDiscoveryV1:dismissed:web',
+    'featureDiscoveryV1:dismissed:overleaf',
+    'featureDiscoveryV1:dismissed:pdf',
+  ];
+  const popup = await context.newPage();
+  try {
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await popup.evaluate(async (keys) => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      await extensionChrome.storage.local.remove(keys);
+    }, discoveryKeys);
+    await page.bringToFront();
+    await popup.reload();
+
+    const guide = popup.locator('#feature-guide');
+    await expect(guide).toBeVisible();
+    await expect(popup.locator('#feature-guide-eyebrow')).toHaveText('当前页面 · Overleaf');
+    await expect(popup.locator('#feature-guide-title')).toHaveText('编辑区和预览区，分别这样用');
+    await expect(popup.locator('#feature-guide-steps .feature-guide-step')).toHaveCount(3);
+    await expect(guide).toContainText('编辑区文字直接划选');
+    await expect(guide).toContainText('预览中的复杂内容用框选');
+    await expect(guide).toContainText('通读编译稿时使用 Pi PDF');
+    const layout = await guide.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(layout.height).toBeLessThan(240);
+    expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
+
+    await popup.locator('#feature-guide-dismiss').click();
+    await expect(guide).toBeHidden();
+    await expect(popup.locator('#feature-guide-toggle')).toBeVisible();
+    const dismissed = await popup.evaluate(async () => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      return extensionChrome.storage.local.get('featureDiscoveryV1:dismissed:overleaf');
+    });
+    expect(dismissed['featureDiscoveryV1:dismissed:overleaf']).toBe(true);
+
+    await page.bringToFront();
+    await popup.reload();
+    await expect(guide).toBeHidden();
+    await popup.locator('#feature-guide-toggle').click();
+    await expect(guide).toBeVisible();
+  } finally {
+    if (!popup.isClosed()) {
+      await popup.evaluate(async (keys) => {
+        const extensionChrome = (
+          globalThis as typeof globalThis & { chrome: TestChromeApi }
+        ).chrome;
+        await extensionChrome.storage.local.remove(keys);
+      }, discoveryKeys).catch(() => undefined);
+      await popup.close();
+    }
+  }
+});
+
 test('frames webpage regions with local text first and screenshot only when needed', async () => {
   async function startFromPopup(): Promise<void> {
     const popup = await context.newPage();
