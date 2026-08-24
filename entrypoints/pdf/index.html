@@ -24,13 +24,13 @@
           id="open-outline"
           class="outline-open"
           type="button"
-          title="查看文档目录"
-          aria-label="查看文档目录"
+          title="打开文档导航"
+          aria-label="打开文档导航"
           aria-controls="pdf-outline"
           aria-expanded="false"
           disabled
           hidden
-        >目录</button>
+        >导航</button>
         <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
       </div>
       <div class="region-tools">
@@ -75,12 +75,36 @@
       <button id="open-settings" class="quiet" type="button">设置</button>
     </header>
 
-    <aside id="pdf-outline" class="pdf-outline" aria-label="当前 PDF 文档目录" hidden>
+    <aside id="pdf-outline" class="pdf-outline" aria-label="当前 PDF 文档导航" hidden>
       <header>
-        <span><strong>文档目录</strong><small id="pdf-outline-status"></small></span>
-        <button id="pdf-outline-close" type="button" title="关闭目录（Esc）" aria-label="关闭文档目录">×</button>
+        <span><strong>文档导航</strong><small id="pdf-outline-status"></small></span>
+        <button id="pdf-outline-close" type="button" title="关闭导航（Esc）" aria-label="关闭文档导航">×</button>
       </header>
+      <div class="pdf-navigation-tabs" role="tablist" aria-label="文档导航内容">
+        <button
+          id="pdf-navigation-outline-tab"
+          type="button"
+          role="tab"
+          aria-controls="pdf-outline-tree"
+          aria-selected="true"
+        >目录</button>
+        <button
+          id="pdf-navigation-bookmarks-tab"
+          type="button"
+          role="tab"
+          aria-controls="pdf-bookmarks"
+          aria-selected="false"
+        >书签</button>
+      </div>
       <nav id="pdf-outline-tree" class="pdf-outline-tree" role="tree" aria-label="章节目录"></nav>
+      <section id="pdf-bookmarks" class="pdf-bookmarks" role="tabpanel" aria-label="阅读书签" hidden>
+        <div class="pdf-bookmark-toolbar">
+          <button id="pdf-bookmark-add" type="button">＋ 添加当前页</button>
+          <small id="pdf-bookmark-status">0 / 50</small>
+        </div>
+        <div id="pdf-bookmark-list" class="pdf-bookmark-list" role="list"></div>
+        <p id="pdf-bookmark-empty" class="pdf-bookmark-empty">还没有书签。读到重要位置时，添加当前页即可。</p>
+      </section>
     </aside>
 
     <section id="pdf-search" class="pdf-search" role="search" aria-label="搜索当前 PDF" hidden>

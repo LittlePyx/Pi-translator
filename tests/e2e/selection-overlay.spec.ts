@@ -3398,6 +3398,7 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
     const openOutline = pdfPage.locator('#open-outline');
     await expect(openOutline).toBeVisible();
     await expect(openOutline).toBeEnabled();
+    await expect(pdfPage.locator('#pdf-navigation-outline-tab')).not.toHaveAttribute('hidden', '');
     await openOutline.click();
 
     const panel = pdfPage.locator('#pdf-outline');
@@ -3449,7 +3450,7 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
     const compactLabel = await openOutline.evaluate((button) => (
       getComputedStyle(button, '::before').content
     ));
-    expect(compactLabel).toBe('"目"');
+    expect(compactLabel).toBe('"导"');
     const [panelBounds, toolbarLayout] = await Promise.all([
       panel.boundingBox(),
       pdfPage.locator('#pdf-toolbar').evaluate((toolbar) => ({
@@ -3488,7 +3489,12 @@ test('searches every text PDF page locally and navigates highlighted matches', a
     });
     await expect(pdfPage.locator('#page-count')).toHaveText('12');
     await expect(pdfPage.locator('#open-search')).toBeEnabled();
-    await expect(pdfPage.locator('#open-outline')).toBeHidden();
+    await expect(pdfPage.locator('#open-outline')).toBeVisible();
+    await pdfPage.locator('#open-outline').click();
+    await expect(pdfPage.locator('#pdf-navigation-outline-tab')).toBeHidden();
+    await expect(pdfPage.locator('#pdf-bookmarks')).toBeVisible();
+    await expect(pdfPage.locator('#pdf-bookmark-add')).toBeEnabled();
+    await pdfPage.locator('#pdf-outline-close').click();
     await expect(pdfPage.locator('.pdf-page[data-page-number="11"]'))
       .not.toHaveAttribute('data-rendered', /.+/);
 
@@ -4087,6 +4093,117 @@ test('restores a PDF reading position, zoom, and fixed sidebar without storing i
   } finally {
     await restoredReader.close();
     await context.unroute(sourceUrl);
+  }
+});
+
+test('saves editable PDF reading bookmarks locally by anonymous document identity', async ({}, testInfo) => {
+  const sourceUrl = 'https://www.overleaf.com/private-reading-bookmarks.pdf';
+  const otherSourceUrl = 'https://www.overleaf.com/other-reading-bookmarks.pdf';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'application/pdf',
+      body: createMultiPageTextPdf([
+        { text: 'Private bookmark page one.' },
+        { text: 'Private bookmark page two.' },
+        { text: 'Private bookmark page three.' },
+      ]),
+    });
+  });
+  await context.route(otherSourceUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'application/pdf',
+      body: createTextPdf('A different document has no saved bookmark.'),
+    });
+  });
+  const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  readerUrl.searchParams.set('url', sourceUrl);
+  const firstReader = await context.newPage();
+  try {
+    await firstReader.goto(readerUrl.href);
+    await expect(firstReader.locator('#page-count')).toHaveText('3');
+    await firstReader.locator('#page-number').fill('2');
+    await firstReader.locator('#page-number').press('Enter');
+    await expect(firstReader.locator('#page-number')).toHaveValue('2');
+    await firstReader.locator('#open-outline').click();
+    await expect(firstReader.locator('#pdf-bookmarks')).toBeVisible();
+    const add = firstReader.locator('#pdf-bookmark-add');
+    await add.click();
+    await expect(add).toHaveText('✓ 当前页已添加');
+    await expect(add).toBeDisabled();
+    const item = firstReader.locator('.pdf-bookmark-item');
+    await expect(item).toHaveCount(1);
+    await expect(item).toHaveClass(/is-current/);
+    await item.locator('.pdf-bookmark-edit').click();
+    await item.locator('input[aria-label="书签名称"]').fill('实验结果');
+    await item.locator('textarea[aria-label="书签备注"]').fill('复查图 2 的对比结果');
+    await item.locator('.pdf-bookmark-editor .save').click();
+    await expect(item).toContainText('实验结果');
+    await expect(item).toContainText('复查图 2 的对比结果');
+    await firstReader.setViewportSize({ width: 360, height: 700 });
+    const [panelBounds, toolbarLayout] = await Promise.all([
+      firstReader.locator('#pdf-outline').boundingBox(),
+      firstReader.locator('#pdf-toolbar').evaluate((toolbar) => ({
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+      })),
+    ]);
+    expect(panelBounds).not.toBeNull();
+    expect(panelBounds?.x).toBeGreaterThanOrEqual(0);
+    expect((panelBounds?.x ?? 0) + (panelBounds?.width ?? 0)).toBeLessThanOrEqual(360);
+    expect(toolbarLayout.scrollWidth).toBe(toolbarLayout.clientWidth);
+    if (process.env.PI_VISUAL_QA) {
+      await firstReader.screenshot({ path: testInfo.outputPath('pdf-bookmarks.png') });
+    }
+    await expect.poll(async () => firstReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.local.get('piPdfReadingBookmarksV1');
+      return JSON.stringify(stored.piPdfReadingBookmarksV1 ?? {}).includes('实验结果');
+    })).toBe(true);
+    const serializedBookmarks = await firstReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      return JSON.stringify((await api.storage.local.get('piPdfReadingBookmarksV1'))
+        .piPdfReadingBookmarksV1 ?? {});
+    });
+    expect(serializedBookmarks).not.toContain('private-reading-bookmarks.pdf');
+    expect(serializedBookmarks).not.toContain(sourceUrl);
+    expect(serializedBookmarks).not.toContain('Private bookmark page two');
+  } finally {
+    await firstReader.close();
+  }
+
+  const restoredReader = await context.newPage();
+  try {
+    await restoredReader.goto(readerUrl.href);
+    await restoredReader.locator('#open-outline').click();
+    const restoredItem = restoredReader.locator('.pdf-bookmark-item');
+    await expect(restoredItem).toHaveCount(1);
+    await expect(restoredItem).toContainText('实验结果');
+    await expect(restoredItem).toContainText('复查图 2 的对比结果');
+    await restoredReader.locator('#page-number').fill('1');
+    await restoredReader.locator('#page-number').press('Enter');
+    await restoredItem.locator('.pdf-bookmark-jump').click();
+    await expect(restoredReader.locator('#page-number')).toHaveValue('2');
+    await restoredItem.locator('.pdf-bookmark-delete').click();
+    await expect(restoredReader.locator('.pdf-bookmark-item')).toHaveCount(0);
+  } finally {
+    await restoredReader.close();
+  }
+
+  const otherReaderUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  otherReaderUrl.searchParams.set('url', otherSourceUrl);
+  const otherReader = await context.newPage();
+  try {
+    await otherReader.goto(otherReaderUrl.href);
+    await otherReader.locator('#open-outline').click();
+    await expect(otherReader.locator('.pdf-bookmark-item')).toHaveCount(0);
+  } finally {
+    await otherReader.close();
+    await context.unroute(sourceUrl);
+    await context.unroute(otherSourceUrl);
   }
 });
 

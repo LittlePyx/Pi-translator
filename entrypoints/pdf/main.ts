@@ -62,6 +62,15 @@ import {
   savePdfReadingState,
   type PdfReadingState,
 } from '../../core/pdf/reading-state';
+import {
+  getPdfReadingBookmarkState,
+  MAX_PDF_BOOKMARK_LABEL_LENGTH,
+  MAX_PDF_BOOKMARK_NOTE_LENGTH,
+  MAX_PDF_BOOKMARKS_PER_DOCUMENT,
+  normalizePdfReadingBookmark,
+  savePdfReadingBookmarks,
+  type PdfReadingBookmark,
+} from '../../core/pdf/reading-bookmark-repository';
 import { pdfWheelZoomDelta, pdfWheelZoomStepCount } from '../../core/pdf/wheel-zoom';
 import {
   hasPdfFileSignature,
@@ -142,6 +151,13 @@ const outlinePanel = element<HTMLElement>('pdf-outline');
 const outlineStatus = element<HTMLElement>('pdf-outline-status');
 const outlineTree = element<HTMLElement>('pdf-outline-tree');
 const outlineClose = element<HTMLButtonElement>('pdf-outline-close');
+const outlineTab = element<HTMLButtonElement>('pdf-navigation-outline-tab');
+const bookmarksTab = element<HTMLButtonElement>('pdf-navigation-bookmarks-tab');
+const bookmarksPanel = element<HTMLElement>('pdf-bookmarks');
+const bookmarkAdd = element<HTMLButtonElement>('pdf-bookmark-add');
+const bookmarkStatus = element<HTMLElement>('pdf-bookmark-status');
+const bookmarkList = element<HTMLElement>('pdf-bookmark-list');
+const bookmarkEmpty = element<HTMLElement>('pdf-bookmark-empty');
 const openSearch = element<HTMLButtonElement>('open-search');
 const searchPanel = element<HTMLElement>('pdf-search');
 const searchQuery = element<HTMLInputElement>('pdf-search-query');
@@ -229,6 +245,12 @@ let pdfOutlineEntryMap = new Map<string, PdfOutlineEntry>();
 let pdfOutlineExpandedIds = new Set<string>();
 let currentPdfOutlineEntryId: string | undefined;
 let outlineReturnFocus: HTMLElement | undefined;
+type PdfNavigationView = 'outline' | 'bookmarks';
+let activePdfNavigationView: PdfNavigationView = 'bookmarks';
+let pdfReadingBookmarks: PdfReadingBookmark[] = [];
+let editingPdfBookmarkId: string | undefined;
+let bookmarkSaveRevision = 0;
+let bookmarkSaveQueue: Promise<void> = Promise.resolve();
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -417,6 +439,7 @@ function setDocumentControls(enabled: boolean): void {
   zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
   fitWidth.disabled = !enabled;
   openOutline.disabled = !enabled;
+  openOutline.hidden = !enabled;
   openSearch.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
   recognizePage.hidden = !enabled;
@@ -1047,6 +1070,245 @@ function updatePageControl(anchor = visiblePageAnchor()): void {
     pageNumberInput.value = String(anchor.pageNumber);
   }
   syncPdfOutlineCurrent(anchor.pageNumber);
+  syncPdfBookmarkCurrent(anchor.pageNumber);
+}
+
+function currentPdfBookmark(pageNumber = visiblePageAnchor().pageNumber): PdfReadingBookmark | undefined {
+  return pdfReadingBookmarks.find((bookmark) => bookmark.pageNumber === pageNumber);
+}
+
+function updatePdfNavigationStatus(): void {
+  outlineStatus.textContent = activePdfNavigationView === 'outline'
+    ? `${pdfOutlineEntryMap.size} 项`
+    : `${pdfReadingBookmarks.length} 个书签`;
+}
+
+function syncPdfBookmarkCurrent(pageNumber: number): void {
+  const current = currentPdfBookmark(pageNumber);
+  for (const item of bookmarkList.querySelectorAll<HTMLElement>('.pdf-bookmark-item')) {
+    const isCurrent = Number(item.dataset.bookmarkPage) === pageNumber;
+    item.classList.toggle('is-current', isCurrent);
+    const jump = item.querySelector<HTMLElement>('.pdf-bookmark-jump');
+    if (isCurrent) jump?.setAttribute('aria-current', 'location');
+    else jump?.removeAttribute('aria-current');
+  }
+  bookmarkAdd.disabled = !currentReadingIdentity || Boolean(current) ||
+    pdfReadingBookmarks.length >= MAX_PDF_BOOKMARKS_PER_DOCUMENT;
+  bookmarkAdd.textContent = current ? '✓ 当前页已添加' : '＋ 添加当前页';
+  bookmarkAdd.title = !currentReadingIdentity
+    ? '当前文档无法建立本地匿名标识'
+    : current
+      ? '当前页已有书签'
+      : pdfReadingBookmarks.length >= MAX_PDF_BOOKMARKS_PER_DOCUMENT
+        ? `每份 PDF 最多 ${MAX_PDF_BOOKMARKS_PER_DOCUMENT} 个书签`
+        : '将当前阅读页加入书签';
+  bookmarkStatus.textContent = `${pdfReadingBookmarks.length} / ${MAX_PDF_BOOKMARKS_PER_DOCUMENT}`;
+}
+
+function persistPdfBookmarks(): void {
+  const identity = currentReadingIdentity;
+  if (!identity) return;
+  const epoch = documentEpoch;
+  const revision = ++bookmarkSaveRevision;
+  const snapshot = pdfReadingBookmarks.map((bookmark) => ({ ...bookmark }));
+  bookmarkSaveQueue = bookmarkSaveQueue.catch(() => undefined).then(async () => {
+    try {
+      const saved = await savePdfReadingBookmarks(identity, snapshot);
+      if (
+        currentReadingIdentity !== identity ||
+        documentEpoch !== epoch ||
+        bookmarkSaveRevision !== revision
+      ) return;
+      pdfReadingBookmarks = saved.bookmarks;
+      renderPdfBookmarks();
+    } catch {
+      if (currentReadingIdentity === identity && documentEpoch === epoch) {
+        showNotice('书签暂时无法保存，请稍后重试。', { tone: 'warning', transient: true });
+      }
+    }
+  });
+}
+
+function navigateToPdfBookmark(bookmark: PdfReadingBookmark): void {
+  const pdf = pdfDocument;
+  if (!pdf) return;
+  scrollToPageAnchor({ pageNumber: bookmark.pageNumber, ratio: 0 });
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${bookmark.pageNumber}"]`,
+  );
+  if (pageElement) requestPageRender(pdf, pageElement, renderGeneration);
+  updatePageControl({ pageNumber: bookmark.pageNumber, ratio: 0 });
+  schedulePageRetention();
+  scheduleReadingStateSave();
+  if (matchMedia('(max-width: 560px)').matches) {
+    closePdfOutline(false);
+    stage.focus({ preventScroll: true });
+  }
+}
+
+function renderPdfBookmarkEditor(
+  item: HTMLElement,
+  bookmark: PdfReadingBookmark,
+): void {
+  const editor = document.createElement('form');
+  editor.className = 'pdf-bookmark-editor';
+  const label = document.createElement('input');
+  label.type = 'text';
+  label.maxLength = MAX_PDF_BOOKMARK_LABEL_LENGTH;
+  label.value = bookmark.label;
+  label.placeholder = `第 ${bookmark.pageNumber} 页`;
+  label.setAttribute('aria-label', '书签名称');
+  const note = document.createElement('textarea');
+  note.maxLength = MAX_PDF_BOOKMARK_NOTE_LENGTH;
+  note.value = bookmark.note;
+  note.placeholder = '备注（可选）';
+  note.setAttribute('aria-label', '书签备注');
+  const actions = document.createElement('div');
+  actions.className = 'pdf-bookmark-editor-actions';
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.textContent = '取消';
+  const save = document.createElement('button');
+  save.type = 'submit';
+  save.className = 'save';
+  save.textContent = '保存';
+  actions.append(cancel, save);
+  editor.append(label, note, actions);
+  cancel.addEventListener('click', () => {
+    editingPdfBookmarkId = undefined;
+    renderPdfBookmarks();
+  });
+  editor.addEventListener('submit', (event) => {
+    event.preventDefault();
+    const updated = normalizePdfReadingBookmark({
+      ...bookmark,
+      label: label.value,
+      note: note.value,
+      updatedAt: Date.now(),
+    });
+    if (!updated) return;
+    pdfReadingBookmarks = pdfReadingBookmarks.map((candidate) => (
+      candidate.id === bookmark.id ? updated : candidate
+    ));
+    editingPdfBookmarkId = undefined;
+    renderPdfBookmarks();
+    persistPdfBookmarks();
+  });
+  editor.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return;
+    event.preventDefault();
+    event.stopPropagation();
+    editingPdfBookmarkId = undefined;
+    renderPdfBookmarks();
+  });
+  item.append(editor);
+  queueMicrotask(() => label.focus({ preventScroll: true }));
+}
+
+function renderPdfBookmarks(focusId?: string): void {
+  const fragment = document.createDocumentFragment();
+  for (const bookmark of pdfReadingBookmarks) {
+    const item = document.createElement('article');
+    item.className = 'pdf-bookmark-item';
+    item.dataset.bookmarkId = bookmark.id;
+    item.dataset.bookmarkPage = String(bookmark.pageNumber);
+    item.setAttribute('role', 'listitem');
+    const jump = document.createElement('button');
+    jump.type = 'button';
+    jump.className = 'pdf-bookmark-jump';
+    jump.title = `跳转到第 ${bookmark.pageNumber} 页`;
+    const copy = document.createElement('span');
+    copy.className = 'pdf-bookmark-copy';
+    const label = document.createElement('strong');
+    label.textContent = bookmark.label;
+    copy.append(label);
+    if (bookmark.note) {
+      const note = document.createElement('small');
+      note.textContent = bookmark.note.replace(/\s*\n\s*/gu, ' ');
+      copy.append(note);
+    }
+    const page = document.createElement('span');
+    page.className = 'pdf-bookmark-page';
+    page.textContent = `第 ${bookmark.pageNumber} 页`;
+    jump.append(copy, page);
+    jump.addEventListener('click', () => navigateToPdfBookmark(bookmark));
+    const actions = document.createElement('span');
+    actions.className = 'pdf-bookmark-actions';
+    const edit = document.createElement('button');
+    edit.type = 'button';
+    edit.className = 'pdf-bookmark-edit';
+    edit.textContent = '✎';
+    edit.title = `编辑“${bookmark.label}”`;
+    edit.setAttribute('aria-label', `编辑书签 ${bookmark.label}`);
+    edit.addEventListener('click', () => {
+      editingPdfBookmarkId = bookmark.id;
+      renderPdfBookmarks();
+    });
+    const remove = document.createElement('button');
+    remove.type = 'button';
+    remove.className = 'pdf-bookmark-delete';
+    remove.textContent = '×';
+    remove.title = `删除“${bookmark.label}”`;
+    remove.setAttribute('aria-label', `删除书签 ${bookmark.label}`);
+    remove.addEventListener('click', () => {
+      pdfReadingBookmarks = pdfReadingBookmarks.filter((candidate) => candidate.id !== bookmark.id);
+      if (editingPdfBookmarkId === bookmark.id) editingPdfBookmarkId = undefined;
+      renderPdfBookmarks();
+      persistPdfBookmarks();
+    });
+    actions.append(edit, remove);
+    item.append(jump, actions);
+    if (editingPdfBookmarkId === bookmark.id) renderPdfBookmarkEditor(item, bookmark);
+    fragment.append(item);
+  }
+  bookmarkList.replaceChildren(fragment);
+  bookmarkEmpty.hidden = pdfReadingBookmarks.length > 0;
+  updatePdfNavigationStatus();
+  syncPdfBookmarkCurrent(visiblePageAnchor().pageNumber);
+  if (!focusId) return;
+  const focusTarget = [...bookmarkList.querySelectorAll<HTMLButtonElement>('.pdf-bookmark-jump')]
+    .find((button) => button.closest<HTMLElement>('.pdf-bookmark-item')?.dataset.bookmarkId === focusId);
+  focusTarget?.focus({ preventScroll: true });
+}
+
+function addCurrentPdfBookmark(): void {
+  if (!currentReadingIdentity || !pdfDocument) return;
+  const pageNumber = visiblePageAnchor().pageNumber;
+  if (currentPdfBookmark(pageNumber) || pdfReadingBookmarks.length >= MAX_PDF_BOOKMARKS_PER_DOCUMENT) {
+    syncPdfBookmarkCurrent(pageNumber);
+    return;
+  }
+  const now = Date.now();
+  const bookmark = normalizePdfReadingBookmark({
+    id: crypto.randomUUID(),
+    pageNumber,
+    label: `第 ${pageNumber} 页`,
+    note: '',
+    createdAt: now,
+    updatedAt: now,
+  });
+  if (!bookmark) return;
+  pdfReadingBookmarks = [...pdfReadingBookmarks, bookmark]
+    .sort((left, right) => left.pageNumber - right.pageNumber);
+  renderPdfBookmarks(bookmark.id);
+  persistPdfBookmarks();
+}
+
+function setPdfNavigationView(view: PdfNavigationView, focusTab = false): void {
+  activePdfNavigationView = view === 'outline' && !pdfOutlineEntries.length
+    ? 'bookmarks'
+    : view;
+  const showingOutline = activePdfNavigationView === 'outline';
+  outlineTab.hidden = !pdfOutlineEntries.length;
+  outlineTab.setAttribute('aria-selected', String(showingOutline));
+  outlineTab.tabIndex = showingOutline ? 0 : -1;
+  bookmarksTab.setAttribute('aria-selected', String(!showingOutline));
+  bookmarksTab.tabIndex = showingOutline ? -1 : 0;
+  outlineTree.hidden = !showingOutline;
+  bookmarksPanel.hidden = showingOutline;
+  updatePdfNavigationStatus();
+  if (!showingOutline) renderPdfBookmarks();
+  if (focusTab) (showingOutline ? outlineTab : bookmarksTab).focus({ preventScroll: true });
 }
 
 function visiblePdfOutlineEntryId(): string | undefined {
@@ -1184,22 +1446,35 @@ function closePdfOutline(restoreFocus = true): void {
 }
 
 function openPdfOutline(): void {
-  if (!pdfDocument || !pdfOutlineEntries.length) return;
+  if (!pdfDocument) return;
   closePdfSearch(false);
   outlineReturnFocus = document.activeElement instanceof HTMLElement
     ? document.activeElement
     : openOutline;
   outlinePanel.hidden = false;
   openOutline.setAttribute('aria-expanded', 'true');
-  revealCurrentPdfOutlineEntry();
-  renderPdfOutline();
-  const focusId = visiblePdfOutlineEntryId();
-  const target = focusId
-    ? outlineTree.querySelector<HTMLButtonElement>(
-        `.pdf-outline-action[data-outline-id="${focusId}"]`,
-      )
-    : outlineTree.querySelector<HTMLButtonElement>('.pdf-outline-action');
-  target?.focus({ preventScroll: true });
+  setPdfNavigationView(activePdfNavigationView);
+  if (activePdfNavigationView === 'outline') {
+    revealCurrentPdfOutlineEntry();
+    renderPdfOutline();
+    const focusId = visiblePdfOutlineEntryId();
+    const target = focusId
+      ? outlineTree.querySelector<HTMLButtonElement>(
+          `.pdf-outline-action[data-outline-id="${focusId}"]`,
+        )
+      : outlineTree.querySelector<HTMLButtonElement>('.pdf-outline-action');
+    target?.focus({ preventScroll: true });
+  } else {
+    renderPdfBookmarks();
+    const current = currentPdfBookmark();
+    const target = current
+      ? [...bookmarkList.querySelectorAll<HTMLButtonElement>('.pdf-bookmark-jump')]
+        .find((button) => (
+          button.closest<HTMLElement>('.pdf-bookmark-item')?.dataset.bookmarkId === current.id
+        ))
+      : undefined;
+    (target ?? bookmarkAdd).focus({ preventScroll: true });
+  }
 }
 
 function resetPdfOutline(): void {
@@ -1209,7 +1484,15 @@ function resetPdfOutline(): void {
   pdfOutlineExpandedIds = new Set();
   currentPdfOutlineEntryId = undefined;
   outlineReturnFocus = undefined;
+  activePdfNavigationView = 'bookmarks';
+  pdfReadingBookmarks = [];
+  editingPdfBookmarkId = undefined;
+  bookmarkSaveRevision += 1;
   outlineTree.replaceChildren();
+  bookmarkList.replaceChildren();
+  bookmarkEmpty.hidden = false;
+  outlineTab.hidden = true;
+  setPdfNavigationView('bookmarks');
   outlineStatus.textContent = '';
   openOutline.hidden = true;
   openOutline.disabled = true;
@@ -1282,12 +1565,17 @@ async function loadPdfOutline(pdf: PDFDocumentProxy, epoch: number): Promise<voi
       pdfOutlineEntries,
       visiblePageAnchor().pageNumber,
     )?.id;
-    outlineStatus.textContent = `${flattened.length}${result.truncated ? '+' : ''} 项`;
-    openOutline.hidden = flattened.length === 0;
-    openOutline.disabled = flattened.length === 0;
+    outlineTab.title = result.truncated ? `显示前 ${flattened.length} 项` : '';
+    if (flattened.length && outlinePanel.hidden) activePdfNavigationView = 'outline';
+    setPdfNavigationView(activePdfNavigationView);
   } catch {
     if (pdfDocument !== pdf || documentEpoch !== epoch) return;
-    resetPdfOutline();
+    pdfOutlineEntries = [];
+    pdfOutlineEntryMap = new Map();
+    pdfOutlineExpandedIds = new Set();
+    currentPdfOutlineEntryId = undefined;
+    outlineTree.replaceChildren();
+    setPdfNavigationView('bookmarks');
   }
 }
 
@@ -1824,6 +2112,39 @@ openOutline.addEventListener('click', () => {
   else closePdfOutline();
 });
 outlineClose.addEventListener('click', () => closePdfOutline());
+outlineTab.addEventListener('click', () => setPdfNavigationView('outline'));
+bookmarksTab.addEventListener('click', () => setPdfNavigationView('bookmarks'));
+for (const tab of [outlineTab, bookmarksTab]) {
+  tab.addEventListener('keydown', (event) => {
+    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    if (outlineTab.hidden) {
+      setPdfNavigationView('bookmarks', true);
+      return;
+    }
+    setPdfNavigationView(
+      event.key === 'ArrowLeft' || event.key === 'Home' ? 'outline' : 'bookmarks',
+      true,
+    );
+  });
+}
+bookmarkAdd.addEventListener('click', addCurrentPdfBookmark);
+bookmarkList.addEventListener('keydown', (event) => {
+  const jump = event.target instanceof Element
+    ? event.target.closest<HTMLButtonElement>('.pdf-bookmark-jump')
+    : null;
+  if (!jump) return;
+  const actions = [...bookmarkList.querySelectorAll<HTMLButtonElement>('.pdf-bookmark-jump')];
+  const currentIndex = actions.indexOf(jump);
+  let nextIndex: number | undefined;
+  if (event.key === 'ArrowDown') nextIndex = Math.min(actions.length - 1, currentIndex + 1);
+  else if (event.key === 'ArrowUp') nextIndex = Math.max(0, currentIndex - 1);
+  else if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = actions.length - 1;
+  if (nextIndex === undefined || nextIndex === currentIndex) return;
+  event.preventDefault();
+  actions[nextIndex]?.focus({ preventScroll: true });
+});
 outlineTree.addEventListener('click', (event) => {
   const target = event.target instanceof Element ? event.target : null;
   const toggle = target?.closest<HTMLButtonElement>('.pdf-outline-toggle[data-outline-toggle-id]');
@@ -1883,6 +2204,13 @@ outlineTree.addEventListener('keydown', (event) => {
 });
 document.addEventListener('keydown', (event) => {
   if (outlinePanel.hidden || event.key !== 'Escape') return;
+  if (editingPdfBookmarkId) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    editingPdfBookmarkId = undefined;
+    renderPdfBookmarks();
+    return;
+  }
   event.preventDefault();
   event.stopImmediatePropagation();
   closePdfOutline();
@@ -2132,6 +2460,9 @@ async function openPdfData(
     const readingStatePromise = readingIdentity
       ? getPdfReadingState(readingIdentity).catch(() => undefined)
       : Promise.resolve(undefined);
+    const bookmarkStatePromise = readingIdentity
+      ? getPdfReadingBookmarkState(readingIdentity).catch(() => ({ bookmarks: [], updatedAt: 0 }))
+      : Promise.resolve({ bookmarks: [], updatedAt: 0 });
     const runtime = await loadPdfRuntime();
     if (!isCurrentOpen(operation)) return;
     setLoading('正在解析 PDF…', 'parsing');
@@ -2143,13 +2474,18 @@ async function openPdfData(
       return;
     }
     openLoadingTask = undefined;
-    const restoredState = await readingStatePromise;
+    const [restoredState, restoredBookmarks] = await Promise.all([
+      readingStatePromise,
+      bookmarkStatePromise,
+    ]);
     if (!isCurrentOpen(operation)) {
       await nextDocument.destroy();
       return;
     }
     pdfDocument = nextDocument;
     currentReadingIdentity = readingIdentity;
+    pdfReadingBookmarks = restoredBookmarks.bookmarks;
+    renderPdfBookmarks();
     restoringReadingState = Boolean(restoredState);
     zoomLevel = restoredState?.zoomLevel ?? 1.25;
     fitWidthActive = restoredState?.fitWidth ?? false;

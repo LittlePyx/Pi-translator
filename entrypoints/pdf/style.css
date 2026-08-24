@@ -151,6 +151,33 @@ button { color: inherit; font: inherit; cursor: pointer; }
   line-height: 1;
 }
 .pdf-outline > header button:hover { color: #4338ca; background: rgba(99, 102, 241, .09); }
+.pdf-navigation-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 3px;
+  margin: 7px 8px 2px;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(100, 116, 139, .08);
+}
+.pdf-navigation-tabs button {
+  min-height: 29px;
+  border: 0;
+  border-radius: 4px;
+  padding: 4px 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+}
+.pdf-navigation-tabs button:hover { color: #4338ca; }
+.pdf-navigation-tabs button[aria-selected="true"] {
+  color: #4338ca;
+  background: var(--toolbar);
+  box-shadow: 0 1px 4px rgba(20, 30, 50, .1);
+}
+.pdf-navigation-tabs button[hidden] { display: none; }
+.pdf-navigation-tabs:has(button:first-child[hidden]) { grid-template-columns: 1fr; }
 .pdf-outline-tree {
   max-height: min(480px, calc(100vh - 120px));
   padding: 5px;
@@ -203,6 +230,113 @@ button { color: inherit; font: inherit; cursor: pointer; }
   -webkit-line-clamp: 2;
 }
 .pdf-outline-page { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
+.pdf-bookmarks {
+  max-height: min(480px, calc(100vh - 164px));
+  padding: 5px 8px 8px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.pdf-bookmarks[hidden] { display: none; }
+.pdf-bookmark-toolbar {
+  position: sticky;
+  z-index: 1;
+  top: -5px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 5px 1px 7px;
+  background: var(--toolbar);
+}
+.pdf-bookmark-toolbar button {
+  min-height: 30px;
+  border: 1px solid #c7c9f5;
+  border-radius: 5px;
+  padding: 5px 9px;
+  color: #4338ca;
+  background: rgba(99, 102, 241, .07);
+  font-size: 10px;
+  font-weight: 650;
+}
+.pdf-bookmark-toolbar button:hover:not(:disabled) { background: rgba(99, 102, 241, .13); }
+.pdf-bookmark-toolbar button:disabled { opacity: .48; cursor: default; }
+.pdf-bookmark-toolbar small { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
+.pdf-bookmark-list { display: grid; gap: 4px; }
+.pdf-bookmark-item {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 4px;
+  align-items: center;
+  border-radius: 6px;
+  padding: 3px;
+}
+.pdf-bookmark-item.is-current { background: rgba(99, 102, 241, .1); }
+.pdf-bookmark-jump {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 7px;
+  min-width: 0;
+  min-height: 38px;
+  align-items: center;
+  border: 0;
+  border-radius: 4px;
+  padding: 5px 6px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+.pdf-bookmark-jump:hover { background: rgba(100, 116, 139, .08); }
+.pdf-bookmark-copy { display: grid; gap: 2px; min-width: 0; }
+.pdf-bookmark-copy strong,
+.pdf-bookmark-copy small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pdf-bookmark-copy strong { font-size: 10px; font-weight: 650; }
+.pdf-bookmark-copy small { color: var(--muted); font-size: 8px; }
+.pdf-bookmark-page { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pdf-bookmark-actions { display: flex; gap: 1px; }
+.pdf-bookmark-actions button {
+  width: 27px;
+  height: 28px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 13px;
+}
+.pdf-bookmark-actions button:hover { color: #4338ca; background: rgba(99, 102, 241, .09); }
+.pdf-bookmark-actions .pdf-bookmark-delete:hover { color: #b23b4b; background: rgba(190, 24, 54, .08); }
+.pdf-bookmark-editor {
+  grid-column: 1 / -1;
+  display: grid;
+  gap: 6px;
+  padding: 4px 5px 7px;
+}
+.pdf-bookmark-editor input,
+.pdf-bookmark-editor textarea {
+  width: 100%;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 7px 8px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 10px;
+  resize: vertical;
+}
+.pdf-bookmark-editor textarea { min-height: 54px; max-height: 110px; line-height: 1.45; }
+.pdf-bookmark-editor-actions { display: flex; justify-content: flex-end; gap: 5px; }
+.pdf-bookmark-editor-actions button {
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 4px 9px;
+  background: transparent;
+  font-size: 9px;
+  font-weight: 650;
+}
+.pdf-bookmark-editor-actions .save { color: #fff; border-color: #5054db; background: #5659df; }
+.pdf-bookmark-empty { margin: 24px 18px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }
+.pdf-bookmark-empty[hidden] { display: none; }
 
 .pdf-search {
   position: fixed;
@@ -642,7 +776,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar #recognize-page::before { content: "识"; }
   .toolbar #region-translate::before { content: "框"; }
   .toolbar .outline-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
-  .toolbar .outline-open::before { color: var(--muted); content: "目"; font-size: 11px; }
+  .toolbar .outline-open::before { color: var(--muted); content: "导"; font-size: 11px; }
   .toolbar .search-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
   .toolbar .search-open::before { color: var(--muted); content: "查"; font-size: 11px; }
   .toolbar .region-action[aria-pressed="true"]::before { color: #4338ca; }
@@ -664,7 +798,9 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .brand > span { display: none; }
   .toolbar #choose-file { width: 42px; overflow: hidden; padding-inline: 0; font-size: 0; white-space: nowrap; }
   .toolbar #choose-file::before { content: "PDF"; font-size: 10px; }
-  .toolbar:has(#open-outline:not([hidden])) #fit-width { display: none; }
+  .zoom-controls #zoom-out,
+  .zoom-controls #zoom-in,
+  .zoom-controls output { display: none; }
   .region-tools:has(.queue-action:not([hidden])) #recognize-page { display: none; }
   .toolbar .queue-action { width: 32px; min-height: 30px; padding-inline: 0; font-size: 0; }
   .toolbar .queue-action::before { content: "队"; font-size: 10px; }
@@ -697,6 +833,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
   .toolbar .outline-open { color: #a5b4fc; }
   .toolbar .search-open { color: #a5b4fc; }
+  .pdf-navigation-tabs button[aria-selected="true"] { color: #c7d2fe; }
+  .pdf-bookmark-toolbar button { color: #c7d2fe; border-color: #50547e; background: rgba(99, 102, 241, .14); }
   .pdf-outline-action.is-current { color: #c7d2fe; background: rgba(99, 102, 241, .18); }
   .pdf-outline-action.is-group { color: #cbd5e1; }
   .pdf-search button { color: #b7c0cf; }
