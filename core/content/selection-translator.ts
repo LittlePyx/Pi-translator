@@ -260,6 +260,7 @@ export async function startSelectionTranslator(
   let refreshTimer: ReturnType<typeof setTimeout> | undefined;
   let autoTranslateTimer: ReturnType<typeof setTimeout> | undefined;
   let lastAutoSelectionHash: string | undefined;
+  let dismissedPassiveSelectionHash: string | undefined;
   let browserSidebarActive = false;
   let pdfSelectionPointerId: number | undefined;
   let pdfSelectionInProgress = false;
@@ -599,10 +600,11 @@ export async function startSelectionTranslator(
       ? {}
       : {
           onPauseSite: async () => {
-            await browser.runtime.sendMessage({
+            const response = await browser.runtime.sendMessage({
               type: 'PAUSE_CURRENT_SITE',
               payload: { pageUrl: location.href },
-            } satisfies RuntimeMessage);
+            } satisfies RuntimeMessage) as RuntimeResponse<{ hostname?: string }>;
+            if (!response.ok) throw new Error(response.error.message);
           },
         }),
     ...(surface === 'pdf'
@@ -658,6 +660,9 @@ export async function startSelectionTranslator(
     },
     onStop: stopActiveTranslation,
     onDismiss: cancelActiveTranslation,
+    onDismissTrigger: () => {
+      dismissedPassiveSelectionHash = latestSelection?.selectionHash;
+    },
   }, {
     ...(options.viewportInsets ? { viewportInsets: options.viewportInsets } : {}),
     ...(surface === 'pdf' ? { normalizeFormulaPresentation: true } : {}),
@@ -1247,6 +1252,13 @@ export async function startSelectionTranslator(
         lastAutoSelectionHash = snapshot.selectionHash;
         void translateSelection(snapshot);
       }, 220);
+      return;
+    }
+    if (!snapshot || snapshot.selectionHash !== dismissedPassiveSelectionHash) {
+      dismissedPassiveSelectionHash = undefined;
+    }
+    if (snapshot?.selectionHash === dismissedPassiveSelectionHash) {
+      overlay.hideTrigger();
       return;
     }
     if (!shouldShowFloatingButton(settings, surface)) {
@@ -2168,6 +2180,7 @@ export async function startSelectionTranslator(
     if (typed.type === 'BROWSER_SIDEBAR_CLOSED' && surface !== 'pdf') {
       browserSidebarActive = false;
       lastAutoSelectionHash = undefined;
+      dismissedPassiveSelectionHash = undefined;
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
       scheduleRefresh();
       return;
@@ -2298,6 +2311,7 @@ export async function startSelectionTranslator(
       segmentMarkerAnchors.clear();
       pendingSelectionMarkerRequestId = undefined;
       lastAutoSelectionHash = undefined;
+      dismissedPassiveSelectionHash = undefined;
       if (refreshTimer) clearTimeout(refreshTimer);
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
       pdfSelectionPointerId = undefined;

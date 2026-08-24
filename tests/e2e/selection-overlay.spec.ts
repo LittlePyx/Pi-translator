@@ -1442,6 +1442,97 @@ test('shows and hides the selection trigger with the browser selection', async (
   await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
 });
 
+test('dismisses one passive trigger and can pause the current site in place', async ({}, testInfo) => {
+  await selectSourceText();
+  const overlay = page.locator('#tex-selection-translator-root');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+  const triggerShell = overlay.locator('.trigger-shell');
+  const dismiss = overlay.getByRole('button', { name: '隐藏本次划词提示' });
+  expect(await dismiss.evaluate((button) => {
+    const style = getComputedStyle(button);
+    return { opacity: style.opacity, pointerEvents: style.pointerEvents };
+  })).toEqual({ opacity: '0', pointerEvents: 'none' });
+  await triggerShell.hover();
+  await expect.poll(() => dismiss.evaluate((button) => getComputedStyle(button).opacity)).toBe('1');
+  await expect.poll(() => triggerShell.locator('img').evaluate((image) => (
+    image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0
+  ))).toBe(true);
+  if (process.env.PI_VISUAL_QA) {
+    await page.screenshot({ path: testInfo.outputPath('selection-trigger-dismiss-light.png') });
+    await triggerShell.screenshot({ path: testInfo.outputPath('selection-trigger-dismiss-detail.png') });
+  }
+  const selectedText = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+  await dismiss.click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'notice');
+  await expect(overlay.locator('.selection-dismiss-notice')).toContainText('本次已隐藏');
+  if (process.env.PI_VISUAL_QA) {
+    await page.screenshot({ path: testInfo.outputPath('selection-dismiss-notice-light.png') });
+  }
+  expect(await page.evaluate(() => window.getSelection()?.toString() ?? '')).toBe(selectedText);
+  await page.evaluate(() => window.dispatchEvent(new Event('scroll')));
+  await page.waitForTimeout(120);
+  await expect(overlay).toHaveAttribute('data-pi-view', 'notice');
+
+  await overlay.getByRole('button', { name: '暂停本网站自动划词' }).click();
+  await expect(overlay.locator('.selection-dismiss-notice')).toContainText('已暂停本网站自动划词');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden', { timeout: 3_000 });
+
+  const popup = await context.newPage();
+  try {
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    await popup.reload();
+    await expect(popup.locator('#pause-site')).toBeChecked();
+    const sendToTarget = async (message: object): Promise<void> => {
+      await popup.evaluate(async ({ targetUrl, targetMessage }) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: {
+            tabs: {
+              query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+              sendMessage(tabId: number, message: object): Promise<unknown>;
+            };
+          };
+        }).chrome;
+        const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+        if (target?.id === undefined) throw new Error('Missing paused site tab.');
+        await api.tabs.sendMessage(target.id, targetMessage);
+      }, { targetUrl: page.url(), targetMessage: message });
+    };
+
+    await selectElementText('#global-term-source');
+    await page.waitForTimeout(240);
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    const requestsBeforeExplicitTranslation = textRequests.length;
+    await sendToTarget({ type: 'TRIGGER_TRANSLATE' });
+    await expect.poll(() => textRequests.length).toBe(requestsBeforeExplicitTranslation + 1);
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await overlay.getByTitle('关闭').click();
+    await clearBrowserSelection();
+
+    await selectElementText('#multi-source');
+    const requestsBeforeFixedSidebar = textRequests.length;
+    await sendToTarget({ type: 'OPEN_SIDEBAR' });
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect.poll(() => textRequests.length).toBe(requestsBeforeFixedSidebar + 1);
+    await expect(overlay.locator('.body')).not.toBeEmpty();
+    await overlay.getByTitle('关闭').click();
+    await clearBrowserSelection();
+
+    await popup.locator('#pause-site').uncheck();
+    await expect(popup.locator('#status')).toContainText('已恢复');
+    await expect(popup.locator('#pause-site')).not.toBeChecked();
+  } finally {
+    if (!popup.isClosed()) {
+      await page.bringToFront();
+      await popup.reload();
+      const pauseSite = popup.locator('#pause-site');
+      if (await pauseSite.isChecked().catch(() => false)) await pauseSite.uncheck();
+      await popup.close();
+    }
+    await clearBrowserSelection();
+  }
+});
+
 test('adapts the translation surface to dark and light webpages', async () => {
   const overlay = page.locator('#tex-selection-translator-root');
   await page.evaluate(() => {
