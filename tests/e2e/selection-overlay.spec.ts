@@ -1575,6 +1575,27 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
   }
 });
 
+test('keeps the inline capture permission control inert outside a Pi recovery flow', async () => {
+  const frameElement = page.locator('#untrusted-capture-permission-frame');
+  try {
+    await page.evaluate((src) => {
+      const frame = document.createElement('iframe');
+      frame.id = 'untrusted-capture-permission-frame';
+      frame.src = src;
+      document.body.append(frame);
+    }, `chrome-extension://${extensionId}/web-capture-permission.html`);
+    await expect(frameElement).toBeVisible();
+    const handle = await frameElement.elementHandle();
+    const permissionFrame = await handle?.contentFrame();
+    expect(permissionFrame).toBeDefined();
+    await expect(permissionFrame!.locator('#label'))
+      .toHaveText('请从 Pi 框选入口重新操作');
+    await expect(permissionFrame!.locator('#grant')).toBeDisabled();
+  } finally {
+    await frameElement.evaluate((frame) => frame.remove()).catch(() => undefined);
+  }
+});
+
 test('shows and hides the selection trigger with the browser selection', async () => {
   await selectSourceText();
   const overlay = page.locator('#tex-selection-translator-root');
@@ -3272,39 +3293,54 @@ test('routes confirmed webpage regions through multimodal capture without text f
   const resultOverlay = page.locator('#tex-selection-translator-root');
   await expect(resultOverlay.locator('.error')).toContainText('截图权限');
   expect(visionRequests).toHaveLength(visionBefore);
-  const authorizeCapture = resultOverlay.getByRole('button', { name: '授权并重试' });
-  await expect(authorizeCapture).toBeVisible();
+  const permissionFrameElement = resultOverlay.locator('.capture-permission-frame');
+  await expect(permissionFrameElement).toBeVisible();
+  await expect(resultOverlay.locator('.capture-permission')).toContainText('首次使用需要一次截图授权');
+  await expect(resultOverlay.getByRole('button', { name: '改用浏览器侧栏授权' }))
+    .toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '调整区域' })).toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '重新框选' })).toBeVisible();
-  await authorizeCapture.evaluate((button) => {
-    (button as HTMLButtonElement).click();
-  });
-  await expect(resultOverlay.getByRole('button', { name: '授权入口已打开' })).toBeVisible();
-  const permissionPanel = await context.newPage();
-  try {
-    await permissionPanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
-    await page.bringToFront();
-    await expect(permissionPanel.locator('#start-web-region-label'))
-      .toHaveText('允许截图并重试');
-    await expect(permissionPanel.locator('#empty-status')).toContainText('还差一步');
-    await permissionPanel.evaluate(() => {
-      const extensionChrome = (globalThis as typeof globalThis & {
-        chrome: {
-          permissions: {
-            request(query: { origins: string[] }): Promise<boolean>;
-          };
-        };
-      }).chrome;
-      Object.defineProperty(extensionChrome.permissions, 'request', {
-        configurable: true,
-        value: async () => true,
-      });
-    });
-    await permissionPanel.locator('#start-web-region').click();
-  } finally {
-    await permissionPanel.close();
-    await page.bringToFront();
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({ path: testInfo.outputPath('inline-capture-permission.png') });
   }
+  await expect.poll(() => page.frames().some((frame) => (
+    new URL(frame.url()).pathname === '/web-capture-permission.html'
+  ))).toBe(true);
+  const permissionFrame = page.frames().find((frame) => (
+    new URL(frame.url()).pathname === '/web-capture-permission.html'
+  ));
+  expect(permissionFrame).toBeDefined();
+  expect(new URL(permissionFrame!.url()).protocol).toBe('chrome-extension:');
+  await expect(permissionFrame!.locator('body')).toHaveAttribute('data-theme', 'light');
+  expect(await permissionFrame!.evaluate(() => typeof (
+    globalThis as typeof globalThis & {
+      chrome?: { permissions?: { request?: unknown } };
+    }
+  ).chrome?.permissions?.request))
+    .toBe('function');
+  await permissionFrame!.evaluate(() => {
+    const extensionChrome = (globalThis as typeof globalThis & {
+      chrome: { permissions: object };
+    }).chrome;
+    Object.defineProperty(extensionChrome.permissions, 'request', {
+      configurable: true,
+      value: async () => false,
+    });
+  });
+  await permissionFrame!.getByRole('button', { name: /允许截图并继续/ }).click();
+  await expect(permissionFrame!.locator('#label')).toHaveText('未允许，点击重试');
+  await expect(resultOverlay.locator('.error')).toContainText('截图权限');
+  await permissionFrame!.evaluate(() => {
+    const extensionChrome = (globalThis as typeof globalThis & {
+      chrome: { permissions: object };
+    }).chrome;
+    Object.defineProperty(extensionChrome.permissions, 'request', {
+      configurable: true,
+      value: async () => true,
+    });
+  });
+  await permissionFrame!.getByRole('button', { name: /未允许，点击重试/ })
+    .evaluate((button) => (button as HTMLButtonElement).click());
   const adjustedRegion = page.locator('#pi-web-region-selection-root');
   await expect(adjustedRegion.locator('.selection')).toBeVisible();
   await expect(adjustedRegion.locator('.selection')).toBeFocused();
@@ -9095,6 +9131,30 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expand.press('Enter');
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.getByTitle('收起侧栏')).toBeFocused();
+  await webRegionAction.click();
+  const formulaBox = await page.locator('#math-source').boundingBox();
+  expect(formulaBox).not.toBeNull();
+  if (formulaBox) {
+    await page.mouse.move(formulaBox.x - 4, formulaBox.y - 4);
+    await page.mouse.down();
+    await page.mouse.move(
+      formulaBox.x + formulaBox.width + 4,
+      formulaBox.y + formulaBox.height + 4,
+      { steps: 8 },
+    );
+    await page.mouse.up();
+  }
+  const sidebarRegion = page.locator('#pi-web-region-selection-root');
+  await sidebarRegion.locator('.confirm').click();
+  await expect(sidebarRegion).toHaveCount(0);
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.capture-permission-frame')).toBeVisible();
+  await expect(overlay.locator('.capture-permission')).toContainText('授权后自动恢复刚才的框选');
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({
+      path: testInfo.outputPath('web-floating-sidebar-inline-permission.png'),
+    });
+  }
   await overlay.getByTitle('关闭').click();
   await expect(page.locator('#blank')).toBeFocused();
   await clearBrowserSelection();

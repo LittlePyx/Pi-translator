@@ -219,8 +219,21 @@ const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
 const activeTabIdsByWindow = new Map<number, number>();
-const pendingWebCapturePermissionTabs = new Set<number>();
+const WEB_CAPTURE_PERMISSION_PROMPT_TTL_MS = 5 * 60_000;
+const pendingWebCapturePermissionTabs = new Map<number, number>();
 let lastActiveBrowserTab: { id: number; windowId: number } | undefined;
+
+function markWebCapturePermissionPrompt(tabId: number): void {
+  pendingWebCapturePermissionTabs.set(tabId, Date.now() + WEB_CAPTURE_PERMISSION_PROMPT_TTL_MS);
+}
+
+function hasWebCapturePermissionPrompt(tabId: number): boolean {
+  const expiresAt = pendingWebCapturePermissionTabs.get(tabId);
+  if (expiresAt === undefined) return false;
+  if (expiresAt > Date.now()) return true;
+  pendingWebCapturePermissionTabs.delete(tabId);
+  return false;
+}
 
 async function withCompletedTranslationDiscovery(
   request: Pick<TranslateRequest | TranslateImageRegionRequest, 'pageUrl' | 'sourceLocation'>,
@@ -4352,10 +4365,38 @@ export default defineBackground(() => {
         return undefined;
       }
 
+      if (message.type === 'PREPARE_WEB_CAPTURE_PERMISSION') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '只能从当前网页的 Pi Translator 准备截图授权。',
+            false,
+          )));
+        }
+        markWebCapturePermissionPrompt(tabId);
+        return Promise.resolve({ ok: true as const, data: { ready: true as const } });
+      }
+
+      if (message.type === 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT') {
+        const tabId = sender.tab?.id;
+        return Promise.resolve({
+          ok: true as const,
+          data: { pending: tabId !== undefined && hasWebCapturePermissionPrompt(tabId) },
+        });
+      }
+
+      if (message.type === 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT') {
+        if (sender.tab?.id !== undefined) {
+          pendingWebCapturePermissionTabs.delete(sender.tab.id);
+        }
+        return Promise.resolve({ ok: true as const, data: { cleared: true as const } });
+      }
+
       if (message.type === 'GET_WEB_CAPTURE_PERMISSION_PROMPT') {
         return Promise.resolve({
           ok: true as const,
-          data: { pending: pendingWebCapturePermissionTabs.has(message.payload.tabId) },
+          data: { pending: hasWebCapturePermissionPrompt(message.payload.tabId) },
         });
       }
 
@@ -4368,7 +4409,7 @@ export default defineBackground(() => {
             false,
           )));
         }
-        pendingWebCapturePermissionTabs.add(tab.id);
+        markWebCapturePermissionPrompt(tab.id);
         return openWebCapturePermissionSidePanel({
           id: tab.id,
           windowId: tab.windowId,

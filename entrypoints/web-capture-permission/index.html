@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>网页截图授权</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <button id="grant" type="button">
+      <span class="region-icon" aria-hidden="true"></span>
+      <span class="copy">
+        <strong id="label">允许截图并继续</strong>
+        <small id="detail">Edge 将询问一次，授权后自动恢复框选</small>
+      </span>
+      <span class="arrow" aria-hidden="true">›</span>
+    </button>
+    <p id="status" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></p>
+    <script type="module" src="./main.ts"></script>
+  </body>
+</html>

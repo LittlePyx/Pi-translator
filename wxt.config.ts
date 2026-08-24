@@ -24,7 +24,7 @@ export default defineConfig({
     optional_host_permissions: ['<all_urls>'],
     web_accessible_resources: [
       {
-        resources: ['brand/pi_logo.png'],
+        resources: ['brand/pi_logo.png', 'web-capture-permission.html'],
         matches: ['http://*/*', 'https://*/*'],
       },
     ],

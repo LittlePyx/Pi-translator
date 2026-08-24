@@ -166,6 +166,9 @@ export type RuntimeMessage =
       type: 'START_WEB_REGION_SELECTION';
       payload?: { restorePreviousRegion?: boolean };
     }
+  | { type: 'PREPARE_WEB_CAPTURE_PERMISSION' }
+  | { type: 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT' }
+  | { type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' }
   | { type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' }
   | { type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT'; payload: { tabId: number } }
   | { type: 'WEB_CAPTURE_PERMISSION_PANEL_OPENED'; payload: { tabId: number } }
@@ -655,6 +658,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
     type === 'START_WEB_REGION_SELECTION' ||
+    type === 'PREPARE_WEB_CAPTURE_PERMISSION' ||
+    type === 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT' ||
+    type === 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' ||
     type === 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' ||
     type === 'GET_WEB_CAPTURE_PERMISSION_PROMPT' ||
     type === 'WEB_CAPTURE_PERMISSION_PANEL_OPENED' ||

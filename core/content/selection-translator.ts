@@ -665,7 +665,13 @@ export async function startSelectionTranslator(
       temporaryStyle = preferences.style;
     },
     onStop: stopActiveTranslation,
-    onDismiss: cancelActiveTranslation,
+    onDismiss: () => {
+      cancelActiveTranslation();
+      failedWebRegionSelection = undefined;
+      void browser.runtime.sendMessage({
+        type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT',
+      } satisfies RuntimeMessage).catch(() => undefined);
+    },
     onDismissTrigger: () => {
       dismissedPassiveSelectionHash = latestSelection?.selectionHash;
     },
@@ -1130,6 +1136,9 @@ export async function startSelectionTranslator(
     activeWebRegionSelection?.cancel();
     cancelActiveTranslation();
     failedWebRegionSelection = undefined;
+    void browser.runtime.sendMessage({
+      type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT',
+    } satisfies RuntimeMessage).catch(() => undefined);
     overlay.hide();
     const handle = createWebRegionSelection(initialSelection);
     let attemptedSelection = initialSelection;
@@ -1152,15 +1161,20 @@ export async function startSelectionTranslator(
       activeWebRegionSelection = undefined;
       capture.webRegionSelection = webRegionSelection;
       await translateImageRegion(capture);
-    }).catch((error: unknown) => {
+    }).catch(async (error: unknown) => {
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;
       failedWebRegionSelection = attemptedSelection;
       const permissionFailure = error instanceof WebRegionCaptureError &&
         error.kind === 'permission';
+      if (permissionFailure) {
+        await browser.runtime.sendMessage({
+          type: 'PREPARE_WEB_CAPTURE_PERMISSION',
+        } satisfies RuntimeMessage).catch(() => undefined);
+      }
       overlay.showError({
         message: permissionFailure
-          ? 'Edge 还没有获得网页截图权限。点击“授权并重试”，Pi Translator 会自动打开授权入口。'
+          ? 'Edge 还没有获得网页截图权限。完成一次授权后，Pi Translator 会自动恢复刚才的框选区域。'
           : error instanceof WebRegionCaptureError
             ? error.message
           : runtimeConnectionErrorMessage(error),
