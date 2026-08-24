@@ -71,6 +71,31 @@ describe('runtime message guard', () => {
       payload: { tabId: -1, paused: false },
     })).toBe(false);
     expect(isRuntimeMessage({
+      type: 'RETRANSLATE_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: 7, expectedRequestId: 'request-1', targetLanguage: 'en' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION',
+      payload: {
+        expectedRequestId: 'request-1',
+        targetLanguage: 'ja',
+        result: {
+          requestId: 'result-1',
+          originalText: 'Source text.',
+          translatedText: '译文。',
+          warnings: [],
+        },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'RETRANSLATE_SIDE_PANEL_TRANSLATION',
+      payload: { tabId: 7, expectedRequestId: 'request-1', targetLanguage: 'xx' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION',
+      payload: { expectedRequestId: '', targetLanguage: 'fr' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
       type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
       payload: { tabId: 7 },
     })).toBe(true);

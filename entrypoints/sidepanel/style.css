@@ -286,6 +286,32 @@ main {
 }
 .source-section p.expanded { max-height: min(420px, 44vh); overflow-y: auto; }
 .section-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.result-section > .section-heading { flex-wrap: wrap; row-gap: 6px; }
+.translation-title-group { display: flex; min-width: 0; align-items: center; gap: 7px; }
+.target-language-control {
+  display: inline-flex;
+  min-height: var(--compact-hit);
+  align-items: center;
+  gap: 2px;
+  color: #7b8498;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.target-language-control select {
+  min-height: var(--compact-hit);
+  max-width: 72px;
+  border: 0;
+  border-radius: 4px;
+  padding: 0 18px 0 4px;
+  color: #4f46e5;
+  background: transparent;
+  cursor: pointer;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+}
+.target-language-control select:hover:not(:disabled) { background-color: #f1f3f8; }
+.target-language-control select:disabled { color: #929aaa; cursor: wait; }
 .source-toggle {
   min-height: var(--compact-hit);
   border: 0;
@@ -600,6 +626,10 @@ button:focus-visible {
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
   .source-toggle, .translation-heading-tools button { color: #a6afbd; }
+  .target-language-control { color: #8f9aab; }
+  .target-language-control select { color: #c1bcff; background-color: transparent; }
+  .target-language-control select:hover:not(:disabled) { background-color: #202938; }
+  .target-language-control select:disabled { color: #777f8e; }
   .source-toggle:hover { color: #c1bcff; background: #202938; }
   .translation-view-switch { border-color: #424b5b; }
   .translation-heading-tools .translation-view-switch button.active {
@@ -714,7 +744,7 @@ button:focus-visible {
 }
 
 @media (max-height: 560px) {
-  .source-section p.expanded { max-height: max(88px, 22vh); }
+  .source-section p.expanded { max-height: max(72px, 18vh); }
 }
 
 @media (prefers-reduced-motion: reduce) {

@@ -70,6 +70,7 @@ import {
   summarizeDocumentReviews,
 } from './document-review-summary';
 import { normalizedSpeechLanguage, selectLocalSpeechVoice } from './local-speech';
+import { SUPPORTED_TARGET_LANGUAGES } from '../core/language/supported-target-languages';
 
 function normalizeResultForPresentation(
   result: TranslateResult,
@@ -352,10 +353,6 @@ interface OverlayActions {
 type OverlayView = 'hidden' | 'trigger' | 'notice' | 'card' | 'sidebar' | 'sidebar-collapsed';
 interface Position { left:number;top:number; }
 interface ResultReadingPosition { scrollTop:number;progress:number;segmentId?:string;segmentOffset?:number; }
-
-const LANGUAGES = [
-  ['zh-CN','简体中文'],['en','English'],['ja','日本語'],['de','Deutsch'],['fr','Français'],
-] as const;
 
 export class TranslationOverlay {
   private readonly host = document.createElement('div');
@@ -1339,7 +1336,7 @@ export class TranslationOverlay {
         menu.append(clearMarks);
       }
     }
-    const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const [value,label] of LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
+    const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const {value,label} of SUPPORTED_TARGET_LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);menu.append(languageLabel);
     language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
     if(this.actions.onOpenBrowserSidebar){if(this.sidebarActive||this.preferences.sidebarMode==='floating'){const browserSidebar=this.menuButton('在浏览器侧栏中显示',()=>this.openBrowserSidebarFromControl(result,browserSidebar));menu.append(browserSidebar)}else{menu.append(this.menuButton('在页面侧栏中显示',()=>this.openSidebar()))}}
     if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface()).catch(()=>{this.resultFeedback.textContent='暂停失败，请在扩展面板重试'})));const settings=this.menuButton('完整设置',()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);details.append(summary,menu);details.addEventListener('toggle',()=>{const surface=details.closest<HTMLElement>('.surface');surface?.classList.toggle('menu-open',details.open);if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;

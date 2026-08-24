@@ -63,6 +63,11 @@ import {
   getTranslationHistory,
   TRANSLATION_HISTORY_STORAGE_KEY,
 } from '../../core/translation/history-repository';
+import {
+  isSupportedTargetLanguage,
+  supportedTargetLanguageLabel,
+  type SupportedTargetLanguage,
+} from '../../core/language/supported-target-languages';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -89,6 +94,8 @@ const sourceText = element<HTMLElement>('source-text');
 const sourceToggle = element<HTMLButtonElement>('source-toggle');
 const translationState = element<HTMLElement>('translation-state');
 const translationHeading = element<HTMLElement>('translation-heading');
+const targetLanguageControl = element<HTMLElement>('target-language-control');
+const targetLanguage = element<HTMLSelectElement>('target-language');
 const resultSection = element<HTMLElement>('result-section');
 const stopTranslation = element<HTMLButtonElement>('stop-translation');
 const translationText = element<HTMLElement>('translation-text');
@@ -165,6 +172,10 @@ let webCapturePermissionRecoveryPending = false;
 let webRegionFeedbackTimer: number | undefined;
 let continuousTranslationPaused = false;
 let continuousTranslationPending = false;
+let defaultTargetLanguage: SupportedTargetLanguage = 'zh-CN';
+let targetLanguagePending = false;
+let targetLanguagePendingRequestId: string | undefined;
+let targetLanguagePendingTimer: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
@@ -642,6 +653,111 @@ async function setCurrentContinuousTranslationPaused(paused: boolean): Promise<v
     if (activeTabId === tabId) {
       continuousTranslationPending = false;
       syncContinuousTranslationControl(true);
+    }
+  }
+}
+
+function sessionTargetLanguage(
+  session: PdfSidePanelSession | null | undefined,
+): SupportedTargetLanguage {
+  for (const value of [session?.targetLanguage, session?.result?.targetLanguage]) {
+    if (isSupportedTargetLanguage(value)) return value;
+  }
+  return defaultTargetLanguage;
+}
+
+function clearTargetLanguagePending(): void {
+  targetLanguagePending = false;
+  targetLanguagePendingRequestId = undefined;
+  if (targetLanguagePendingTimer !== undefined) {
+    window.clearTimeout(targetLanguagePendingTimer);
+    targetLanguagePendingTimer = undefined;
+  }
+}
+
+function syncTargetLanguageControl(
+  session: PdfSidePanelSession | null | undefined,
+): void {
+  targetLanguageControl.hidden = !session;
+  if (!session) {
+    targetLanguage.disabled = true;
+    targetLanguage.value = defaultTargetLanguage;
+    return;
+  }
+  if (
+    targetLanguagePending &&
+    targetLanguagePendingRequestId &&
+    session.requestId !== targetLanguagePendingRequestId
+  ) {
+    clearTargetLanguagePending();
+  }
+  targetLanguage.value = sessionTargetLanguage(session);
+  const unavailable = (
+    !session.sourceText.trim() ||
+    session.status === 'translating' ||
+    viewingWebHistory ||
+    translationText.classList.contains('correction-mode')
+  );
+  targetLanguage.disabled = targetLanguagePending || unavailable;
+  targetLanguage.title = viewingWebHistory
+    ? '请先回到最新译文再切换目标语言'
+    : session.status === 'translating'
+      ? '当前翻译完成后可切换目标语言'
+      : '切换当前标签页的目标语言并重新翻译';
+}
+
+async function retranslateCurrentSessionInLanguage(
+  requestedLanguage: SupportedTargetLanguage,
+): Promise<void> {
+  const session = activeSession();
+  if (
+    !session ||
+    targetLanguagePending ||
+    session.status === 'translating' ||
+    viewingWebHistory ||
+    !session.sourceText.trim()
+  ) {
+    syncTargetLanguageControl(currentSession);
+    return;
+  }
+  const previousLanguage = sessionTargetLanguage(session);
+  if (requestedLanguage === previousLanguage) return;
+
+  targetLanguagePending = true;
+  targetLanguagePendingRequestId = session.requestId;
+  syncTargetLanguageControl(session);
+  setStatus(`正在切换为${supportedTargetLanguageLabel(requestedLanguage)}并重新翻译…`);
+  let started = false;
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'RETRANSLATE_SIDE_PANEL_TRANSLATION',
+      payload: {
+        tabId: session.tabId,
+        expectedRequestId: session.requestId,
+        targetLanguage: requestedLanguage,
+      },
+    } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
+    if (!response.ok) throw new Error(response.error.message);
+    started = true;
+    setStatus(`已切换为${supportedTargetLanguageLabel(requestedLanguage)}`);
+    if (
+      targetLanguagePending &&
+      targetLanguagePendingRequestId === session.requestId
+    ) {
+      targetLanguagePendingTimer = window.setTimeout(() => {
+        targetLanguagePendingTimer = undefined;
+        if (targetLanguagePendingRequestId !== session.requestId) return;
+        clearTargetLanguagePending();
+        syncTargetLanguageControl(currentSession);
+      }, 4_000);
+    }
+  } catch (error) {
+    targetLanguage.value = previousLanguage;
+    setStatus(error instanceof Error ? error.message : '无法切换目标语言');
+  } finally {
+    if (!started) {
+      clearTargetLanguagePending();
+      syncTargetLanguageControl(currentSession);
     }
   }
 }
@@ -1288,6 +1404,7 @@ function render(
   readingNavigation.hidden = true;
   currentSession = session ?? undefined;
   syncWebHistoryNavigation(currentSession);
+  syncTargetLanguageControl(currentSession);
   const renderRevision = ++translationRenderRevision;
   if (session) {
     scheduleStreamViewportFollow(
@@ -1614,6 +1731,7 @@ async function loadActiveSession(
     resetWebHistoryState();
     continuousTranslationPaused = false;
     continuousTranslationPending = false;
+    clearTargetLanguagePending();
   }
   activeTabId = requestedTabId;
   activeTabUrl = requestedTabUrl;
@@ -1808,6 +1926,7 @@ function openCorrectionEditor(): void {
   target.setAttribute('aria-describedby', feedback.id);
   translationText.classList.add('correction-mode');
   translationText.replaceChildren(panel);
+  syncTargetLanguageControl(session);
   translationViewSwitch.hidden = true;
   sourceSection.hidden = false;
   readingNavigation.hidden = true;
@@ -2077,6 +2196,13 @@ function openFullSettings(
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
+targetLanguage.addEventListener('change', () => {
+  if (!isSupportedTargetLanguage(targetLanguage.value)) {
+    syncTargetLanguageControl(currentSession);
+    return;
+  }
+  void retranslateCurrentSessionInLanguage(targetLanguage.value);
+});
 continuousTranslationToggle.addEventListener('click', () => {
   void setCurrentContinuousTranslationPaused(!continuousTranslationPaused);
 });
@@ -2379,6 +2505,7 @@ browser.tabs.onActivated.addListener((activated) => {
   }
   sessionLoadGate.invalidate();
   resetWebHistoryState();
+  clearTargetLanguagePending();
   activeTabId = activated.tabId;
   activeTabUrl = undefined;
   showEmptyContext({ kind: 'loading' });
@@ -2408,6 +2535,9 @@ browser.storage.onChanged.addListener((changes, areaName) => {
   void getSettings().then((settings) => {
     autoRenderLatex = settings.autoRenderLatex;
     webHistoryLimit = settings.historyLimit;
+    if (isSupportedTargetLanguage(settings.targetLanguage)) {
+      defaultTargetLanguage = settings.targetLanguage;
+    }
     formulaRenderOverride = undefined;
     if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
       void refreshWebHistory(activeTabId).catch(() => undefined);
@@ -2418,6 +2548,7 @@ browser.storage.onChanged.addListener((changes, areaName) => {
 });
 
 window.addEventListener('pagehide', () => {
+  clearTargetLanguagePending();
   if (activeTabId === undefined) return;
   void browser.tabs.sendMessage(activeTabId, {
     type: 'BROWSER_SIDEBAR_CLOSED',
@@ -2427,6 +2558,9 @@ window.addEventListener('pagehide', () => {
 void getSettings().then((settings) => {
   autoRenderLatex = settings.autoRenderLatex;
   webHistoryLimit = settings.historyLimit;
+  if (isSupportedTargetLanguage(settings.targetLanguage)) {
+    defaultTargetLanguage = settings.targetLanguage;
+  }
   if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
     void refreshWebHistory(activeTabId).catch(() => undefined);
   } else {

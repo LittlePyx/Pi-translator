@@ -8013,6 +8013,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
 
   const baseSession = {
     tabId,
+    targetLanguage: 'zh-CN',
     requestId: 'pdf-side-panel-e2e',
     sourceText: 'Streaming translations should remain beside the native PDF reader.',
     pageUrl: 'https://www.overleaf.com/native-reader.pdf',
@@ -8042,6 +8043,8 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#session')).toBeVisible();
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
   await expect(sidePanel.locator('#translation-state')).toContainText('正在请求模型');
+  await expect(sidePanel.getByLabel('目标语言')).toHaveValue('zh-CN');
+  await expect(sidePanel.getByLabel('目标语言')).toBeDisabled();
   await expect(sidePanel.locator('#translation-text')).toBeEmpty();
   await expect(sidePanel.locator('#session-actions')).toBeHidden();
   const streamingSession = {
@@ -8225,6 +8228,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('850 毫秒');
   await expect(sidePanel.locator('#correct')).toBeVisible();
+  await expect(sidePanel.getByLabel('目标语言')).toBeEnabled();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#translation-text .pi-math-inline math')).toBeVisible();
   await expect(sidePanel.locator('#formula-view')).toHaveText('源码');
@@ -9427,6 +9431,29 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-label')).toHaveText('www.overleaf.com');
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
     await expect(sidePanel.locator('#open-pi-reader')).toHaveText('改用浮动侧栏');
+    const browserTargetLanguage = sidePanel.getByLabel('目标语言');
+    const initialTargetLanguage = await browserTargetLanguage.inputValue();
+    const requestedTargetLanguage = initialTargetLanguage === 'en' ? 'ja' : 'en';
+    const requestedTargetLabel = requestedTargetLanguage === 'en' ? '英文' : '日语';
+    await expect(browserTargetLanguage).toBeEnabled();
+    const requestsBeforeLanguageRetranslation = textRequests.length;
+    await browserTargetLanguage.selectOption(requestedTargetLanguage);
+    await expect.poll(() => textRequests.length)
+      .toBeGreaterThan(requestsBeforeLanguageRetranslation);
+    await expect(browserTargetLanguage).toHaveValue(requestedTargetLanguage);
+    await expect(sidePanel.locator('#status')).toContainText(`已切换为${requestedTargetLabel}`);
+    expect(JSON.stringify(textRequests.at(-1))).toContain(`to ${requestedTargetLanguage}`);
+    expect(await sidePanel.evaluate(async () => {
+      const extensionChrome = (
+        globalThis as typeof globalThis & { chrome: TestChromeApi }
+      ).chrome;
+      const stored = await extensionChrome.storage.local.get('extensionSettings');
+      return stored.extensionSettings?.targetLanguage;
+    })).toBe(initialTargetLanguage);
+
+    await browserTargetLanguage.selectOption(initialTargetLanguage);
+    await expect(browserTargetLanguage).toHaveValue(initialTargetLanguage);
+    await expect(browserTargetLanguage).toBeEnabled();
     const webRegionAction = sidePanel.getByRole('button', { name: '框选网页', exact: true });
     await expect(webRegionAction).toBeVisible();
     expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
@@ -9515,6 +9542,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       const continuousToggle = document.querySelector<HTMLElement>(
         '#continuous-translation-toggle',
       )!;
+      const targetLanguage = document.querySelector<HTMLElement>('#target-language')!;
       return {
         pageClientWidth: document.documentElement.clientWidth,
         pageScrollWidth: document.documentElement.scrollWidth,
@@ -9522,6 +9550,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
         headerScrollWidth: header.scrollWidth,
         regionActionHeight: regionAction.getBoundingClientRect().height,
         continuousToggleHeight: continuousToggle.getBoundingClientRect().height,
+        targetLanguageHeight: targetLanguage.getBoundingClientRect().height,
         resultClientWidth: result.clientWidth,
         resultScrollWidth: result.scrollWidth,
         segmentClientWidth: first.clientWidth,
@@ -9533,6 +9562,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     expect(alignedLayout.headerScrollWidth).toBeLessThanOrEqual(alignedLayout.headerClientWidth + 1);
     expect(alignedLayout.regionActionHeight).toBeGreaterThanOrEqual(31);
     expect(alignedLayout.continuousToggleHeight).toBeGreaterThanOrEqual(29);
+    expect(alignedLayout.targetLanguageHeight).toBeGreaterThanOrEqual(31);
     expect(alignedLayout.resultScrollWidth).toBeLessThanOrEqual(alignedLayout.resultClientWidth + 1);
     expect(alignedLayout.segmentScrollWidth).toBeLessThanOrEqual(alignedLayout.segmentClientWidth + 1);
     expect(alignedLayout.controlHeights.every((height) => height >= 28)).toBe(true);
@@ -9567,15 +9597,17 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     const requestsBeforeHistoryNavigation = textRequests.length;
     await olderTranslation.click();
     await expect(browserHistoryCounter).toHaveText(/^2 \/ [2-5]$/u);
+    await expect(browserTargetLanguage).toBeDisabled();
     await expect(sidePanel.locator('#source-text')).toContainText(
       'A consistent academic translation',
     );
-    await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await expect(sidePanel.locator('#translation-text')).toContainText('经用户调整后');
     await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
     await expect(alignedSegments).toHaveCount(1);
     expect(textRequests).toHaveLength(requestsBeforeHistoryNavigation);
     await newerTranslation.click();
     await expect(browserHistoryCounter).toHaveText(/^1 \/ [2-5]$/u);
+    await expect(browserTargetLanguage).toBeEnabled();
     await expect(sidePanel.locator('#translation-text')).toContainText('第一句重要译文');
     await expect(alignedView).toHaveAttribute('aria-pressed', 'true');
     await expect(alignedSegments).toHaveCount(2);
@@ -9592,6 +9624,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     const requestsBeforeCorrectionOpen = textRequests.length;
     await sidePanel.locator('#correct').click();
     await expect(sidePanel.getByRole('group', { name: '修正译文，公式已锁定' })).toBeVisible();
+    await expect(browserTargetLanguage).toBeDisabled();
     await expect(translationView).toBeHidden();
     await expect(sidePanel.locator('#source-section')).toBeVisible();
     await sidePanel.getByRole('button', { name: '取消', exact: true }).click();
@@ -10843,6 +10876,7 @@ test('persists and undoes a native PDF correction through the real background se
           ...sessions,
           [String(id)]: {
             tabId: id,
+            targetLanguage: 'zh-CN',
             requestId,
             sourceText,
             pageUrl,
@@ -10854,6 +10888,7 @@ test('persists and undoes a native PDF correction through the real background se
               requestId: resultRequestId,
               originalText: sourceText,
               translatedText: translation,
+              targetLanguage: 'zh-CN',
               warnings: [],
               latencyMs: 640,
             },
@@ -10994,6 +11029,33 @@ test('persists and undoes a native PDF correction through the real background se
     expect(restoredSession.session).not.toHaveProperty('correctionReceipt');
     expect((restoredSession.head as { currentResultRequestId: string }).currentResultRequestId)
       .not.toBe(correctedRequestId);
+
+    const requestsBeforeLanguageChange = textRequests.length;
+    const nativeTargetLanguage = sidePanel.getByLabel('目标语言');
+    await expect(nativeTargetLanguage).toHaveValue('zh-CN');
+    await nativeTargetLanguage.selectOption('en');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeLanguageChange);
+    await expect(nativeTargetLanguage).toHaveValue('en');
+    await expect(nativeTargetLanguage).toBeEnabled();
+    expect(JSON.stringify(textRequests.at(-1))).toContain('to en');
+    expect(await sidePanel.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.session.get('pdfSidePanelSessionsByTab');
+      const sessions = stored.pdfSidePanelSessionsByTab as Record<
+        string,
+        { targetLanguage?: string; result?: { targetLanguage?: string } }
+      >;
+      return {
+        session: sessions[String(id)]?.targetLanguage,
+        result: sessions[String(id)]?.result?.targetLanguage,
+      };
+    }, tabId!)).toEqual({ session: 'en', result: 'en' });
+
+    await restartBackground();
+    await sidePanel.reload({ waitUntil: 'domcontentloaded' });
+    await expect(nativeTargetLanguage).toHaveValue('en');
   } finally {
     await nativePdfPage.close().catch(() => undefined);
     await sidePanel.close().catch(() => undefined);

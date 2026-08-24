@@ -136,6 +136,7 @@ describe('native PDF side-panel sessions', () => {
   it('restores a browser-sidebar webpage session on the same document URL', async () => {
     await storePdfSidePanelSession(session({
       sourceKind: 'web',
+      targetLanguage: 'ja',
       pageUrl: 'https://example.com/guide?chapter=2#selection',
       sourceLabel: 'Example Guide',
       status: 'complete',
@@ -152,6 +153,7 @@ describe('native PDF side-panel sessions', () => {
       url: 'https://example.com/guide?chapter=2#another-selection',
     }])).resolves.toMatchObject([{
       sourceKind: 'web',
+      targetLanguage: 'ja',
       sourceLabel: 'Example Guide',
       status: 'complete',
       result: { translatedText: '网页译文。' },

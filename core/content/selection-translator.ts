@@ -1510,6 +1510,68 @@ export async function startSelectionTranslator(
     });
   }
 
+  async function retranslateBrowserSidebarInLanguage(
+    expectedRequestId: string,
+    targetLanguage: string,
+    result?: TranslateResult,
+  ): Promise<RuntimeResponse<{ started: true }>> {
+    if (surface === 'pdf' || !browserSidebarActive) {
+      return {
+        ok: false,
+        error: {
+          code: 'UNSUPPORTED_PAGE',
+          message: '当前网页没有使用浏览器侧栏。',
+          retryable: false,
+        },
+      };
+    }
+    if (inFlightRequestId) {
+      return {
+        ok: false,
+        error: {
+          code: 'REQUEST_ABORTED',
+          message: '当前翻译尚未完成，请稍后再切换目标语言。',
+          retryable: false,
+        },
+      };
+    }
+    if (!result && activeSelection?.requestId !== expectedRequestId) {
+      return {
+        ok: false,
+        error: {
+          code: 'REQUEST_ABORTED',
+          message: '当前网页已无法恢复这次翻译，请重新划选。',
+          retryable: false,
+        },
+      };
+    }
+
+    temporaryTargetLanguage = targetLanguage;
+    overlay.setPreferences({
+      targetLanguage: temporaryTargetLanguage,
+      style: temporaryStyle,
+      sidebarMode: settings.sidebarMode,
+      sidebarSide: settings.sidebarSide,
+      sidebarWidth: settings.sidebarWidth,
+      autoRenderLatex: settings.autoRenderLatex,
+    });
+    if (result) {
+      await retryTranslation({ kind: 'result', result, intent: 'language-change' });
+    } else if (activeRetryContext) {
+      await replayRetryContext(activeRetryContext);
+    } else {
+      return {
+        ok: false,
+        error: {
+          code: 'REQUEST_ABORTED',
+          message: '当前网页已无法恢复这次翻译，请重新划选。',
+          retryable: false,
+        },
+      };
+    }
+    return { ok: true, data: { started: true } };
+  }
+
   function carryRevisionAnchor(result: TranslateResult, requestId: string): void {
     const rootRequestId = revisionRootRequestId(result);
     const markerEntry = markerManager?.entries().find((entry) => (
@@ -2128,9 +2190,16 @@ export async function startSelectionTranslator(
 
   const messageListener = (
     message: unknown,
-  ): void | Promise<SettingsRecoveryAck> => {
+  ): void | Promise<SettingsRecoveryAck | RuntimeResponse<{ started: true }>> => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     const typed = message as RuntimeMessage;
+    if (typed.type === 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION') {
+      return retranslateBrowserSidebarInLanguage(
+        typed.payload.expectedRequestId,
+        typed.payload.targetLanguage,
+        typed.payload.result,
+      );
+    }
     if (typed.type === 'SETTINGS_RECOVERY_READY') {
       const payload: SettingsRecoveryReadyPayload = typed.payload;
       const pending = pendingSettingsRecovery;

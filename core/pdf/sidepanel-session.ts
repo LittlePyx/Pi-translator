@@ -22,6 +22,11 @@ function validSession(value: unknown): value is PdfSidePanelSession {
     typeof session.pageUrl === 'string' &&
     typeof session.sourceLabel === 'string' &&
     (session.sourceKind === undefined || session.sourceKind === 'pdf' || session.sourceKind === 'web') &&
+    (session.targetLanguage === undefined || (
+      typeof session.targetLanguage === 'string' &&
+      session.targetLanguage.length > 0 &&
+      session.targetLanguage.length <= 64
+    )) &&
     typeof session.startedAt === 'number' &&
     ['translating', 'complete', 'error'].includes(session.status ?? '') &&
     (

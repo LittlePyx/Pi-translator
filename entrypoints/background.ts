@@ -98,6 +98,7 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
+import type { SupportedTargetLanguage } from '../core/language/supported-target-languages';
 import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
@@ -594,7 +595,7 @@ async function beginPdfSidePanelTranslation(
         text: session.sourceText,
         pageUrl: session.pageUrl,
         sourceLabel: session.sourceLabel,
-        targetLanguage: settings.targetLanguage,
+        targetLanguage: session.targetLanguage ?? settings.targetLanguage,
         sourceLanguage: settings.sourceLanguage,
         style: settings.style,
         contentMode: settings.contentMode,
@@ -643,7 +644,7 @@ async function beginPdfSidePanelTranslation(
       text: normalizePdfSelectionText(session.sourceText),
       pageUrl: session.pageUrl,
       sourceLabel: session.sourceLabel,
-      targetLanguage: settings.targetLanguage,
+      targetLanguage: session.targetLanguage ?? settings.targetLanguage,
       sourceLanguage: settings.sourceLanguage,
       style: settings.style,
       contentMode: settings.contentMode,
@@ -691,11 +692,13 @@ function preparePdfSidePanelTranslation(
   tabId: number,
   sourceText: string,
   sourceUrl: string | undefined,
+  targetLanguage: string,
   pageNumber?: number,
 ): PdfSidePanelSession {
   const session: PdfSidePanelSession = {
     tabId,
     sourceKind: 'pdf',
+    targetLanguage,
     requestId: crypto.randomUUID(),
     sourceText: sourceText.trim(),
     pageUrl: sourceUrl ?? '',
@@ -724,6 +727,7 @@ function prepareWebSidePanelTranslation(
   return {
     tabId,
     sourceKind: 'web',
+    targetLanguage: request.targetLanguage,
     requestId: request.requestId,
     sourceText: request.text.trim(),
     pageUrl: request.pageUrl,
@@ -748,6 +752,9 @@ function mirroredWebSidePanelSession(
   return {
     tabId,
     sourceKind: 'web',
+    ...(payload.result.targetLanguage
+      ? { targetLanguage: payload.result.targetLanguage }
+      : {}),
     requestId: payload.result.requestId,
     sourceText: payload.result.originalText,
     pageUrl: payload.pageUrl,
@@ -1131,8 +1138,19 @@ function openPdfTranslationSidePanel(
   };
   const createSession = async (): Promise<PdfSidePanelSession> => {
     assertCurrentLifecycle();
+    const previousSession = pdfSidePanelSessions.get(tab.id);
+    const defaultTargetLanguage = previousSession?.targetLanguage ??
+      previousSession?.result?.targetLanguage ??
+      (await getSettings()).targetLanguage;
+    assertCurrentLifecycle();
     const session = hasSelection
-      ? preparePdfSidePanelTranslation(tab.id, sourceText!, sourceUrl, pageNumber)
+      ? preparePdfSidePanelTranslation(
+          tab.id,
+          sourceText!,
+          sourceUrl,
+          defaultTargetLanguage,
+          pageNumber,
+        )
       : showPdfSidePanelSelectionError(tab.id, sourceUrl, pageNumber);
     await publishPdfSidePanelSessionDurably(session, assertCurrentLifecycle);
     return session;
@@ -1291,6 +1309,102 @@ async function retryPdfSidePanelTranslation(
       void beginPdfSidePanelTranslation(tabId, outcome.requestId);
     }
     return outcome.response;
+  } catch (error) {
+    await recordLocalDiagnosticError('translate', error);
+    return errorResponse(error);
+  }
+}
+
+function assertSidePanelRetranslationSource(
+  session: PdfSidePanelSession | undefined,
+  expectedRequestId: string,
+): asserts session is PdfSidePanelSession {
+  if (!session || session.requestId !== expectedRequestId) {
+    throw new TranslationError(
+      'REQUEST_ABORTED',
+      '侧栏已显示新的翻译，没有重译旧结果。',
+      false,
+    );
+  }
+  if (session.status === 'translating') {
+    throw new TranslationError(
+      'REQUEST_ABORTED',
+      '当前翻译尚未完成，请稍后再切换目标语言。',
+      false,
+    );
+  }
+  if (!session.sourceText.trim() || (session.status === 'complete' && !session.result)) {
+    throw new TranslationError(
+      'EMPTY_SELECTION',
+      '当前侧栏没有可重译的原文。',
+      false,
+    );
+  }
+}
+
+async function retranslateSidePanelTranslation(
+  tabId: number,
+  expectedRequestId: string,
+  targetLanguage: SupportedTargetLanguage,
+): Promise<RuntimeResponse<{ started: true }>> {
+  const lifecycleToken = tabLifecycles.capture(tabId);
+  const assertCurrentLifecycle = (): void => {
+    if (!tabLifecycles.isCurrent(lifecycleToken)) {
+      throw staleTranslationMutationError('当前标签页已关闭或跳转，没有重译旧内容。');
+    }
+  };
+  try {
+    await initializePdfSidePanelSessions();
+    assertCurrentLifecycle();
+    const session = pdfSidePanelSessions.get(tabId);
+    assertSidePanelRetranslationSource(session, expectedRequestId);
+
+    if (session.sourceKind === 'web') {
+      const response = await browser.tabs.sendMessage(tabId, {
+        type: 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION',
+        payload: {
+          expectedRequestId,
+          targetLanguage,
+          ...(session.result ? { result: session.result } : {}),
+        },
+      } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }> | undefined;
+      if (!response) {
+        throw new TranslationError(
+          'UNSUPPORTED_PAGE',
+          '无法连接当前网页，请刷新页面后重试。',
+          true,
+        );
+      }
+      return response;
+    }
+
+    const nextRequestId = await runTranslationCommit(tabId, async () => {
+      assertCurrentLifecycle();
+      const current = pdfSidePanelSessions.get(tabId);
+      assertSidePanelRetranslationSource(current, expectedRequestId);
+      const nextSession: PdfSidePanelSession = {
+        ...current,
+        targetLanguage,
+        requestId: crypto.randomUUID(),
+        status: 'translating',
+        progressStage: 'provider',
+        startedAt: Date.now(),
+        completedChunks: 0,
+        totalChunks: 1,
+      };
+      delete nextSession.partialText;
+      delete nextSession.result;
+      delete nextSession.error;
+      delete nextSession.providerContext;
+      delete nextSession.settingsRecoveryConfirmation;
+      delete nextSession.correctionReceipt;
+      await publishPdfSidePanelSessionDurably(nextSession, assertCurrentLifecycle);
+      return nextSession.requestId;
+    });
+    if (tabLifecycles.isCurrent(lifecycleToken)) {
+      void beginPdfSidePanelTranslation(tabId, nextRequestId);
+    }
+    return { ok: true, data: { started: true } };
   } catch (error) {
     await recordLocalDiagnosticError('translate', error);
     return errorResponse(error);
@@ -4368,6 +4482,24 @@ export default defineBackground(() => {
             message.payload.tabId,
             message.payload.expectedRequestId,
           ));
+      }
+
+      if (message.type === 'RETRANSLATE_SIDE_PANEL_TRANSLATION') {
+        const extensionSender = Boolean(
+          sender.url?.startsWith(browser.runtime.getURL('')),
+        );
+        if (!extensionSender) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '只能从 Pi Translator 浏览器侧栏切换当前翻译的语言。',
+            false,
+          )));
+        }
+        return retranslateSidePanelTranslation(
+          message.payload.tabId,
+          message.payload.expectedRequestId,
+          message.payload.targetLanguage,
+        );
       }
 
       if (message.type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {

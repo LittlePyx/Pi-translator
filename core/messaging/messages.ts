@@ -29,6 +29,10 @@ import type {
   CoordinateOcrPage,
   RecognizePdfPageRequest,
 } from '../pdf/ocr-text-layer';
+import {
+  isSupportedTargetLanguage,
+  type SupportedTargetLanguage,
+} from '../language/supported-target-languages';
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
@@ -124,6 +128,8 @@ export type TranslationProgressStage =
 export interface PdfSidePanelSession {
   tabId: number;
   sourceKind?: 'pdf' | 'web';
+  /** Current-tab override used by the browser side panel; it is not a global setting. */
+  targetLanguage?: string;
   requestId: string;
   sourceText: string;
   pageUrl: string;
@@ -191,6 +197,22 @@ export type RuntimeMessage =
   | {
       type: 'RETRY_PDF_SIDE_PANEL_TRANSLATION';
       payload: { tabId: number; expectedRequestId: string };
+    }
+  | {
+      type: 'RETRANSLATE_SIDE_PANEL_TRANSLATION';
+      payload: {
+        tabId: number;
+        expectedRequestId: string;
+        targetLanguage: SupportedTargetLanguage;
+      };
+    }
+  | {
+      type: 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION';
+      payload: {
+        expectedRequestId: string;
+        targetLanguage: SupportedTargetLanguage;
+        result?: TranslateResult;
+      };
     }
   | {
       type: 'CANCEL_PDF_SIDE_PANEL_TRANSLATION';
@@ -688,6 +710,27 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   if (type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {
     return validPdfSidePanelRequestPayload(message.payload);
   }
+  if (type === 'RETRANSLATE_SIDE_PANEL_TRANSLATION') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId', 'expectedRequestId', 'targetLanguage']) &&
+      Number.isSafeInteger(payload.tabId) &&
+      (payload.tabId as number) >= 0 &&
+      nonEmptyString(payload.expectedRequestId, 256) &&
+      isSupportedTargetLanguage(payload.targetLanguage),
+    );
+  }
+  if (type === 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['expectedRequestId', 'targetLanguage', 'result']) &&
+      nonEmptyString(payload.expectedRequestId, 256) &&
+      isSupportedTargetLanguage(payload.targetLanguage) &&
+      (payload.result === undefined || validCorrectionResult(payload.result)),
+    );
+  }
   if (type === 'RECORD_LOCAL_PERFORMANCE') {
     return validLocalRenderPerformancePayload(message.payload);
   }
@@ -717,6 +760,8 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'OPEN_PDF_VIEWER' ||
     type === 'GET_PDF_SIDE_PANEL_SESSION' ||
     type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION' ||
+    type === 'RETRANSLATE_SIDE_PANEL_TRANSLATION' ||
+    type === 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION' ||
     type === 'PDF_SIDE_PANEL_SESSION_UPDATED' ||
     type === 'OPEN_SIDEBAR' ||
     type === 'OPEN_BROWSER_SIDEBAR' ||
