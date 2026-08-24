@@ -610,6 +610,12 @@ export async function startSelectionTranslator(
     ...(surface === 'pdf'
       ? {}
       : {
+          onOpenWebCapturePermissionPanel: async () => {
+            const response = await browser.runtime.sendMessage({
+              type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL',
+            } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
+            if (!response.ok) throw new Error(response.error.message);
+          },
           onOpenBrowserSidebar: async (
             result: TranslateResult,
             openOptions?: { persistPreference?: boolean },
@@ -1150,12 +1156,17 @@ export async function startSelectionTranslator(
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;
       failedWebRegionSelection = attemptedSelection;
+      const permissionFailure = error instanceof WebRegionCaptureError &&
+        error.kind === 'permission';
       overlay.showError({
-        message: error instanceof WebRegionCaptureError
-          ? error.message
+        message: permissionFailure
+          ? 'Edge 还没有获得网页截图权限。点击“授权并重试”，Pi Translator 会自动打开授权入口。'
+          : error instanceof WebRegionCaptureError
+            ? error.message
           : runtimeConnectionErrorMessage(error),
         showSettings: false,
-        retryable: true,
+        retryable: !permissionFailure,
+        ...(permissionFailure ? { webCapturePermissionRecovery: true } : {}),
         ...(attemptedSelection ? { webRegionRecovery: true } : {}),
       }, attemptedSelection?.rect);
     });
@@ -2168,7 +2179,9 @@ export async function startSelectionTranslator(
       return;
     }
     if (typed.type === 'START_WEB_REGION_SELECTION') {
-      startWebRegionSelection();
+      startWebRegionSelection(
+        typed.payload?.restorePreviousRegion ? failedWebRegionSelection : undefined,
+      );
       return;
     }
     if (typed.type === 'TRIGGER_TRANSLATE') {

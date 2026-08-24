@@ -159,6 +159,7 @@ let sourceExpanded = false;
 let sourceCanExpand = false;
 let sourceLayoutFrame: number | undefined;
 let webRegionStartPending = false;
+let webCapturePermissionRecoveryPending = false;
 let webRegionFeedbackTimer: number | undefined;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
@@ -555,11 +556,21 @@ function settingsRecoveryRequest(
 
 function syncWebRegionAction(available: boolean): void {
   startWebRegion.hidden = !available;
-  if (available || webRegionStartPending) return;
+  if (webRegionStartPending) return;
+  if (available) {
+    startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
+      ? '允许截图并重试'
+      : '框选网页';
+    startWebRegion.title = webCapturePermissionRecoveryPending
+      ? '点击后在 Edge 提示中选择允许，并恢复刚才的框选区域'
+      : '在当前网页拖动框选文字、公式、图表或图像';
+    return;
+  }
   if (webRegionFeedbackTimer !== undefined) window.clearTimeout(webRegionFeedbackTimer);
   webRegionFeedbackTimer = undefined;
   startWebRegion.disabled = false;
   startWebRegion.removeAttribute('aria-busy');
+  webCapturePermissionRecoveryPending = false;
   startWebRegionLabel.textContent = '框选网页';
   startWebRegion.title = '在当前网页拖动框选文字、公式、图表或图像';
 }
@@ -567,6 +578,14 @@ function syncWebRegionAction(available: boolean): void {
 function setWebRegionFeedback(message: string, error = false): void {
   if (currentSession) setStatus(message);
   else setEmptyStatus(message, error);
+}
+
+function showWebCapturePermissionRecovery(tabId: number): void {
+  if (activeTabId !== tabId || startWebRegion.hidden) return;
+  webCapturePermissionRecoveryPending = true;
+  syncWebRegionAction(true);
+  setWebRegionFeedback('还差一步：点击“允许截图并重试”，然后在 Edge 权限提示中选择允许');
+  queueMicrotask(() => startWebRegion.focus({ preventScroll: true }));
 }
 
 async function startCurrentWebRegionSelection(): Promise<void> {
@@ -599,20 +618,26 @@ async function startCurrentWebRegionSelection(): Promise<void> {
     setWebRegionFeedback('');
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
+      ...(webCapturePermissionRecoveryPending
+        ? { payload: { restorePreviousRegion: true } }
+        : {}),
     } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
     if (!response.ok) {
       throw new Error(translationErrorMessage(response.error.code, response.error.message));
     }
+    webCapturePermissionRecoveryPending = false;
     startWebRegionLabel.textContent = '已进入框选';
     setWebRegionFeedback('请在当前网页拖动框选；按 Esc 可取消');
     webRegionFeedbackTimer = window.setTimeout(() => {
       webRegionFeedbackTimer = undefined;
       if (startWebRegion.hidden) return;
-      startWebRegionLabel.textContent = '框选网页';
+      syncWebRegionAction(true);
     }, 1_200);
   } catch (error) {
     const message = error instanceof Error ? error.message : '当前网页无法开始框选。';
-    startWebRegionLabel.textContent = '重试框选';
+    startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
+      ? '重试授权'
+      : '重试框选';
     startWebRegion.title = message;
     setWebRegionFeedback(message, true);
   } finally {
@@ -1519,22 +1544,37 @@ async function loadActiveSession(
     render(undefined);
     return;
   }
-  if (nextEmptyContext.kind === 'web') {
+  const [response, capturePermissionPrompt] = await Promise.all([
+    browser.runtime.sendMessage({
+      type: 'GET_PDF_SIDE_PANEL_SESSION',
+      payload: { tabId: requestedTabId },
+    } satisfies RuntimeMessage) as Promise<RuntimeResponse<{
+      session: PdfSidePanelSession | null;
+    }>>,
+    browser.runtime.sendMessage({
+      type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
+      payload: { tabId: requestedTabId },
+    } satisfies RuntimeMessage) as Promise<RuntimeResponse<{ pending: boolean }>>,
+  ]);
+  if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
+  const capturePermissionRecoveryPending = capturePermissionPrompt.ok &&
+    capturePermissionPrompt.data.pending;
+  // Opening the side panel only to authorize webpage capture must not switch
+  // translation surfaces or dismiss the failed region's recovery controls.
+  if (nextEmptyContext.kind === 'web' && !capturePermissionRecoveryPending) {
     void browser.tabs.sendMessage(requestedTabId, {
       type: 'BROWSER_SIDEBAR_ACTIVE',
     } satisfies RuntimeMessage).catch(() => undefined);
   }
-  const response = (await browser.runtime.sendMessage({
-    type: 'GET_PDF_SIDE_PANEL_SESSION',
-    payload: { tabId: requestedTabId },
-  } satisfies RuntimeMessage)) as RuntimeResponse<{ session: PdfSidePanelSession | null }>;
-  if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
   if (!response.ok) {
     render(undefined);
     setEmptyStatus(translationErrorMessage(response.error.code, response.error.message), true);
     return;
   }
   renderIncomingSession(response.data.session);
+  if (capturePermissionRecoveryPending) {
+    showWebCapturePermissionRecovery(requestedTabId);
+  }
 }
 
 function activeSession(): PdfSidePanelSession | undefined {
@@ -2225,6 +2265,9 @@ browser.runtime.onMessage.addListener((message: unknown) => {
     typed.payload.tabId === activeTabId
   ) {
     renderIncomingSession(typed.payload);
+  }
+  if (typed.type === 'WEB_CAPTURE_PERMISSION_PANEL_OPENED') {
+    showWebCapturePermissionRecovery(typed.payload.tabId);
   }
 });
 

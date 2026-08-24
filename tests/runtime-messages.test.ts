@@ -39,6 +39,15 @@ function correctionReceipt() {
 describe('runtime message guard', () => {
   it('accepts the explicit webpage region-selection action', () => {
     expect(isRuntimeMessage({ type: 'START_WEB_REGION_SELECTION' })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'START_WEB_REGION_SELECTION',
+      payload: { restorePreviousRegion: true },
+    })).toBe(true);
+    expect(isRuntimeMessage({ type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
+      payload: { tabId: 7 },
+    })).toBe(true);
   });
 
   it('strictly validates staged translation progress messages', () => {

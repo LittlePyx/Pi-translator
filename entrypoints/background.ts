@@ -219,6 +219,7 @@ const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 const pdfSidePanelCorrectionClaims = new Map<number, string>();
 const piPdfReaderTabIds = new Set<number>();
 const activeTabIdsByWindow = new Map<number, number>();
+const pendingWebCapturePermissionTabs = new Set<number>();
 let lastActiveBrowserTab: { id: number; windowId: number } | undefined;
 
 async function withCompletedTranslationDiscovery(
@@ -959,6 +960,37 @@ function openBrowserTranslationSidePanel(
     }
     return { ok: true as const, data: { opened: true as const } };
   }).catch((error: unknown) => errorResponse(error));
+}
+
+function openWebCapturePermissionSidePanel(
+  tab: { id: number; windowId: number },
+): Promise<RuntimeResponse<{ opened: true }>> {
+  const sidePanelApi = getSidePanelApi();
+  if (!sidePanelApi) {
+    return Promise.resolve(errorResponse(new TranslationError(
+      'UNSUPPORTED_PAGE',
+      '当前 Edge 版本无法自动打开浏览器侧栏。',
+      false,
+    )));
+  }
+  // Notify an already-open panel immediately; a newly opened panel also reads
+  // the pending state from the service worker during its initial load.
+  void browser.runtime.sendMessage({
+    type: 'WEB_CAPTURE_PERMISSION_PANEL_OPENED',
+    payload: { tabId: tab.id },
+  } satisfies RuntimeMessage).catch(() => undefined);
+  let openPromise: Promise<unknown>;
+  try {
+    // Keep this call synchronous with the button click in the content script.
+    // Chromium explicitly permits sidePanel.open() from a content-script gesture.
+    openPromise = sidePanelApi.open({ tabId: tab.id });
+  } catch (error) {
+    openPromise = Promise.reject(error);
+  }
+  return openPromise.then(() => ({
+    ok: true as const,
+    data: { opened: true as const },
+  })).catch((error: unknown) => errorResponse(error));
 }
 
 async function useFloatingSidebar(
@@ -3907,6 +3939,7 @@ export default defineBackground(() => {
     activeRequests.get(tabId)?.controller.abort();
     activeRequests.delete(tabId);
     piPdfReaderTabIds.delete(tabId);
+    pendingWebCapturePermissionTabs.delete(tabId);
     for (const [windowId, activeTabId] of activeTabIdsByWindow) {
       if (activeTabId === tabId) activeTabIdsByWindow.delete(windowId);
     }
@@ -3943,6 +3976,9 @@ export default defineBackground(() => {
 
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (tab.active) rememberActiveBrowserTab(tabId, tab.windowId);
+    if (changeInfo.status === 'loading' || changeInfo.url) {
+      pendingWebCapturePermissionTabs.delete(tabId);
+    }
     if (changeInfo.status === 'loading' && !changeInfo.url) {
       const currentSession = pdfSidePanelSessions.get(tabId);
       if (currentSession && isSamePdfDocumentLocationChange(
@@ -4316,6 +4352,36 @@ export default defineBackground(() => {
         return undefined;
       }
 
+      if (message.type === 'GET_WEB_CAPTURE_PERMISSION_PROMPT') {
+        return Promise.resolve({
+          ok: true as const,
+          data: { pending: pendingWebCapturePermissionTabs.has(message.payload.tabId) },
+        });
+      }
+
+      if (message.type === 'OPEN_WEB_CAPTURE_PERMISSION_PANEL') {
+        const tab = sender.tab;
+        if (tab?.id === undefined) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '需要从网页中的 Pi Translator 打开截图授权入口。',
+            false,
+          )));
+        }
+        pendingWebCapturePermissionTabs.add(tab.id);
+        return openWebCapturePermissionSidePanel({
+          id: tab.id,
+          windowId: tab.windowId,
+        }).then((response) => {
+          if (!response.ok) pendingWebCapturePermissionTabs.delete(tab.id!);
+          return response;
+        });
+      }
+
+      if (message.type === 'WEB_CAPTURE_PERMISSION_PANEL_OPENED') {
+        return undefined;
+      }
+
       if (message.type === 'OPEN_BROWSER_SIDEBAR') {
         const tab = sender.tab;
         if (tab?.id === undefined) {
@@ -4368,6 +4434,9 @@ export default defineBackground(() => {
               ));
             }
             await sendToSelectionContentScript(tab, message);
+            if (message.payload?.restorePreviousRegion) {
+              pendingWebCapturePermissionTabs.delete(tab.id!);
+            }
             if (tab.url) {
               await completeFeatureDiscovery(
                 isOverleafProjectUrl(tab.url) ? 'overleaf-region' : 'web-region',

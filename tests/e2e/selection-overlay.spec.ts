@@ -1517,6 +1517,30 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(page.locator('#pi-web-region-selection-root')).toHaveCount(0);
     const worker = context.serviceWorkers()[0];
     expect(worker).toBeDefined();
+    const activeWebTabId = await worker!.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+        };
+      }).chrome;
+      return (await api.tabs.query({})).find((tab) => tab.url === targetUrl)?.id;
+    }, page.url());
+    expect(activeWebTabId).toEqual(expect.any(Number));
+    await worker!.evaluate(async (tabId) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      await api.runtime.sendMessage({
+        type: 'WEB_CAPTURE_PERMISSION_PANEL_OPENED',
+        payload: { tabId },
+      });
+    }, activeWebTabId);
+    await expect(sidePanel.locator('#start-web-region-label'))
+      .toHaveText('允许截图并重试');
+    await expect(sidePanel.locator('#empty-status')).toContainText('还差一步');
+    await webRegionAction.click();
+    await expect(sidePanel.locator('#empty-status')).toContainText('未获得网页截图权限');
+    await expect(sidePanel.locator('#start-web-region-label')).toHaveText('重试授权');
     await worker!.evaluate(async (targetUrl) => {
       const api = (globalThis as typeof globalThis & {
         chrome: {
@@ -3248,9 +3272,39 @@ test('routes confirmed webpage regions through multimodal capture without text f
   const resultOverlay = page.locator('#tex-selection-translator-root');
   await expect(resultOverlay.locator('.error')).toContainText('截图权限');
   expect(visionRequests).toHaveLength(visionBefore);
+  const authorizeCapture = resultOverlay.getByRole('button', { name: '授权并重试' });
+  await expect(authorizeCapture).toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '调整区域' })).toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '重新框选' })).toBeVisible();
-  await resultOverlay.getByRole('button', { name: '调整区域' }).click();
+  await authorizeCapture.evaluate((button) => {
+    (button as HTMLButtonElement).click();
+  });
+  await expect(resultOverlay.getByRole('button', { name: '授权入口已打开' })).toBeVisible();
+  const permissionPanel = await context.newPage();
+  try {
+    await permissionPanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await expect(permissionPanel.locator('#start-web-region-label'))
+      .toHaveText('允许截图并重试');
+    await expect(permissionPanel.locator('#empty-status')).toContainText('还差一步');
+    await permissionPanel.evaluate(() => {
+      const extensionChrome = (globalThis as typeof globalThis & {
+        chrome: {
+          permissions: {
+            request(query: { origins: string[] }): Promise<boolean>;
+          };
+        };
+      }).chrome;
+      Object.defineProperty(extensionChrome.permissions, 'request', {
+        configurable: true,
+        value: async () => true,
+      });
+    });
+    await permissionPanel.locator('#start-web-region').click();
+  } finally {
+    await permissionPanel.close();
+    await page.bringToFront();
+  }
   const adjustedRegion = page.locator('#pi-web-region-selection-root');
   await expect(adjustedRegion.locator('.selection')).toBeVisible();
   await expect(adjustedRegion.locator('.selection')).toBeFocused();

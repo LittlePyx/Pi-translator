@@ -162,7 +162,13 @@ export type RuntimeMessage =
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
-  | { type: 'START_WEB_REGION_SELECTION' }
+  | {
+      type: 'START_WEB_REGION_SELECTION';
+      payload?: { restorePreviousRegion?: boolean };
+    }
+  | { type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' }
+  | { type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT'; payload: { tabId: number } }
+  | { type: 'WEB_CAPTURE_PERMISSION_PANEL_OPENED'; payload: { tabId: number } }
   | {
       type: 'OPEN_OPTIONS_PAGE';
       payload?: { focus?: SettingsFocus; recovery?: SettingsRecoveryRequest };
@@ -649,6 +655,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'CANCEL_TRANSLATION' ||
     type === 'TRIGGER_TRANSLATE' ||
     type === 'START_WEB_REGION_SELECTION' ||
+    type === 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' ||
+    type === 'GET_WEB_CAPTURE_PERMISSION_PROMPT' ||
+    type === 'WEB_CAPTURE_PERMISSION_PANEL_OPENED' ||
     type === 'OPEN_OPTIONS_PAGE' ||
     type === 'GET_SETTINGS_RECOVERY' ||
     type === 'COMPLETE_SETTINGS_RECOVERY' ||

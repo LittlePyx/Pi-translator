@@ -230,6 +230,7 @@ interface ErrorDisplay {
   showSettings: boolean;
   retryable?: boolean;
   webRegionRecovery?: boolean;
+  webCapturePermissionRecovery?: boolean;
   partialText?: string | undefined;
   settingsFocus?: SettingsFocus;
   settingsLabel?: string;
@@ -261,6 +262,7 @@ interface OverlayActions {
   onRetry: (target: OverlayRetryTarget) => void;
   onTranslateText: (text: string) => void;
   onStartWebRegion?: () => void;
+  onOpenWebCapturePermissionPanel?: () => Promise<void>;
   canAdjustWebRegion?: (result: TranslateResult) => boolean;
   onAdjustWebRegion?: (result?: TranslateResult) => void;
   onReselectWebRegion?: (result?: TranslateResult) => void;
@@ -605,11 +607,12 @@ export class TranslationOverlay {
     this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?'翻译中断':'翻译失败');
     const body=document.createElement('div');body.className='error';body.setAttribute('role','alert');body.setAttribute('aria-live','assertive');body.textContent=error.message;surface.append(body);
     if(partialText){const partial=document.createElement('section');partial.className='partial-result';const label=document.createElement('div');label.className='partial-result-label';label.textContent='已保留收到的部分译文';const preview=document.createElement('div');preview.className='stream-preview';preview.textContent=partialText;partial.append(label,preview);surface.append(partial)}
-    const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;const showWebRegionRecovery=Boolean(error.webRegionRecovery&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion);
-    if(showWebRegionRecovery){const adjust=this.button('调整区域','action primary');adjust.dataset.piFocusTarget='true';adjust.addEventListener('click',()=>this.actions.onAdjustWebRegion?.());const reselect=this.button('重新框选','action');reselect.addEventListener('click',()=>this.actions.onReselectWebRegion?.());footer.append(adjust,reselect)}
+    const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;const showWebRegionRecovery=Boolean(error.webRegionRecovery&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion);const showCapturePermissionRecovery=Boolean(error.webCapturePermissionRecovery&&this.actions.onOpenWebCapturePermissionPanel);
+    if(showCapturePermissionRecovery){const authorize=this.button('授权并重试','action primary');authorize.dataset.piFocusTarget='true';authorize.addEventListener('click',()=>{authorize.disabled=true;authorize.textContent='正在打开授权入口…';void this.actions.onOpenWebCapturePermissionPanel?.().then(()=>{authorize.textContent='授权入口已打开'}).catch(()=>{authorize.disabled=false;authorize.textContent='重新打开授权入口'})});footer.append(authorize)}
+    if(showWebRegionRecovery){const adjust=this.button('调整区域',`action${showCapturePermissionRecovery?'':' primary'}`);if(!showCapturePermissionRecovery)adjust.dataset.piFocusTarget='true';adjust.addEventListener('click',()=>this.actions.onAdjustWebRegion?.());const reselect=this.button('重新框选','action');reselect.addEventListener('click',()=>this.actions.onReselectWebRegion?.());footer.append(adjust,reselect)}
     if(showRetry){const retry=this.button(showWebRegionRecovery?'重试原区域':'重试',`action${showWebRegionRecovery?'':' primary'}`);if(!showWebRegionRecovery)retry.dataset.piFocusTarget='true';retry.addEventListener('click',()=>{retry.disabled=true;retry.textContent='正在重试…';this.actions.onRetry({kind:'failed'})});footer.append(retry)}
-    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry||showWebRegionRecovery?'':' primary'}`);if(!showRetry&&!showWebRegionRecovery)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
-    if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!showWebRegionRecovery&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),'已复制','部分译文已复制到剪贴板'));footer.append(copy)}
+    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry||showWebRegionRecovery||showCapturePermissionRecovery?'':' primary'}`);if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
+    if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),'已复制','部分译文已复制到剪贴板'));footer.append(copy)}
     if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
   }
 
