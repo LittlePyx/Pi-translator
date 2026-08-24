@@ -1,11 +1,10 @@
-import {
-  getDocument,
-  GlobalWorkerOptions,
-  type PDFDocumentProxy,
-  type PDFPageProxy,
-  type RenderTask,
+import type {
+  PDFDocumentLoadingTask,
+  PDFDocumentProxy,
+  PDFPageProxy,
+  RenderTask,
 } from 'pdfjs-dist';
-import { TextLayerBuilder } from 'pdfjs-dist/web/pdf_viewer.mjs';
+import type { TextLayerBuilder as PdfTextLayerBuilder } from 'pdfjs-dist/web/pdf_viewer.mjs';
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import {
   startSelectionTranslator,
@@ -76,7 +75,37 @@ import {
   setPdfTranslationMarkerPersistence,
 } from '../../core/pdf/translation-marker-repository';
 
-GlobalWorkerOptions.workerSrc = workerUrl;
+type PdfJsModule = typeof import('pdfjs-dist');
+type PdfViewerModule = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
+
+interface PdfRuntime {
+  getDocument: PdfJsModule['getDocument'];
+  TextLayerBuilder: PdfViewerModule['TextLayerBuilder'];
+}
+
+let pdfRuntime: PdfRuntime | undefined;
+let pdfRuntimePromise: Promise<PdfRuntime> | undefined;
+
+function loadPdfRuntime(): Promise<PdfRuntime> {
+  if (pdfRuntime) return Promise.resolve(pdfRuntime);
+  if (!pdfRuntimePromise) {
+    pdfRuntimePromise = import('pdfjs-dist').then(async (pdfjs) => {
+      // The viewer module reads PDF.js from its global compatibility hook
+      // while it initializes, so the core module must finish first.
+      const pdfViewer = await import('pdfjs-dist/web/pdf_viewer.mjs');
+      pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
+      pdfRuntime = {
+        getDocument: pdfjs.getDocument,
+        TextLayerBuilder: pdfViewer.TextLayerBuilder,
+      };
+      return pdfRuntime;
+    }).catch((error: unknown) => {
+      pdfRuntimePromise = undefined;
+      throw error;
+    });
+  }
+  return pdfRuntimePromise;
+}
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -125,10 +154,10 @@ let documentEpoch = 0;
 let currentDocumentSessionId = crypto.randomUUID();
 let openOperationId = 0;
 let openAbortController: AbortController | undefined;
-let openLoadingTask: ReturnType<typeof getDocument> | undefined;
+let openLoadingTask: PDFDocumentLoadingTask | undefined;
 let pageObserver: IntersectionObserver | undefined;
 const activeRenderTasks = new Map<HTMLElement, RenderTask>();
-const activeTextLayerBuilders = new Map<HTMLElement, TextLayerBuilder>();
+const activeTextLayerBuilders = new Map<HTMLElement, PdfTextLayerBuilder>();
 const temporaryOcrPages = new Map<number, CoordinateOcrPage>();
 const pageRenderRevisions = new WeakMap<HTMLElement, number>();
 const invalidationCallbacks: Array<() => void> = [];
@@ -256,9 +285,17 @@ function currentZoom(): number {
   return zoomLevel;
 }
 
-function setLoading(message: string | undefined): void {
+type PdfLoadingStage = 'reading-local' | 'reading-online' | 'runtime' | 'parsing' | 'pages';
+
+function setLoading(message: string | undefined, stageName?: PdfLoadingStage): void {
   loading.hidden = !message;
-  if (message) loadingText.textContent = message;
+  if (message) {
+    loadingText.textContent = message;
+    if (stageName) loading.dataset.stage = stageName;
+    else loading.removeAttribute('data-stage');
+  } else {
+    loading.removeAttribute('data-stage');
+  }
 }
 
 type PdfNoticeTone = 'info' | 'success' | 'warning' | 'error';
@@ -772,7 +809,10 @@ function isCurrentOpen(operation: DocumentOpenOperation): boolean {
   );
 }
 
-function beginDocumentOpen(message: string): DocumentOpenOperation {
+function beginDocumentOpen(
+  message: string,
+  loadingStage: Extract<PdfLoadingStage, 'reading-local' | 'reading-online'>,
+): DocumentOpenOperation {
   void persistReadingState();
   currentReadingIdentity = undefined;
   restoringReadingState = false;
@@ -797,7 +837,7 @@ function beginDocumentOpen(message: string): DocumentOpenOperation {
   void selectionTranslator.then((controller) => controller.reset());
   setDocumentControls(false);
   pageJump.hidden = true;
-  setLoading(message);
+  setLoading(message, loadingStage);
   showNotice(undefined);
   emptyState.hidden = true;
   viewer.hidden = true;
@@ -1092,6 +1132,8 @@ async function renderPage(
       : { transform: [outputScale, 0, 0, outputScale, 0, 0] }),
   });
   activeRenderTasks.set(pageElement, renderTask);
+  const TextLayerBuilder = pdfRuntime?.TextLayerBuilder;
+  if (!TextLayerBuilder) throw new Error('PDF 阅读组件尚未加载。');
   const textLayerBuilder = new TextLayerBuilder({ pdfPage: page });
   activeTextLayerBuilders.get(pageElement)?.cancel();
   activeTextLayerBuilders.set(pageElement, textLayerBuilder);
@@ -1192,13 +1234,16 @@ async function openPdfData(
   readingIdentity?: string,
 ): Promise<void> {
   if (!isCurrentOpen(operation)) return;
-  setLoading('正在解析 PDF…');
+  setLoading('正在加载阅读组件…', 'runtime');
   let nextDocument: PDFDocumentProxy | undefined;
   try {
     const readingStatePromise = readingIdentity
       ? getPdfReadingState(readingIdentity).catch(() => undefined)
       : Promise.resolve(undefined);
-    const task = getDocument({ data, isEvalSupported: false });
+    const runtime = await loadPdfRuntime();
+    if (!isCurrentOpen(operation)) return;
+    setLoading('正在解析 PDF…', 'parsing');
+    const task = runtime.getDocument({ data, isEvalSupported: false });
     openLoadingTask = task;
     nextDocument = await task.promise;
     if (!isCurrentOpen(operation)) {
@@ -1234,7 +1279,7 @@ async function openPdfData(
     const targetRatio = initialPage === undefined ? restoredState?.pageRatio ?? 0 : 0;
     pageNumberInput.value = String(targetPage);
     setDocumentControls(true);
-    setLoading('正在准备页面…');
+    setLoading('正在准备页面…', 'pages');
     await buildPages(nextDocument, { pageNumber: targetPage, ratio: targetRatio });
     if (!isCurrentOpen(operation)) return;
     restoringReadingState = false;
@@ -1284,7 +1329,7 @@ async function openLocalFile(file: File): Promise<void> {
     });
     return;
   }
-  const operation = beginDocumentOpen('正在读取本地 PDF…');
+  const operation = beginDocumentOpen('正在读取本地 PDF…', 'reading-local');
   try {
     const data = new Uint8Array(await file.arrayBuffer());
     if (!isCurrentOpen(operation)) return;
@@ -2277,6 +2322,7 @@ document.addEventListener('keydown', (event) => {
 async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
   const operation = beginDocumentOpen(
     source.protocol === 'file:' ? '正在读取本地 PDF…' : '正在读取在线 PDF…',
+    source.protocol === 'file:' ? 'reading-local' : 'reading-online',
   );
   try {
     if (

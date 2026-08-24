@@ -3141,6 +3141,41 @@ test('opens the PDF reader from the quick popup', async () => {
   if (!popup.isClosed()) await popup.close();
 });
 
+test('loads the PDF runtime only after a document is opened', async () => {
+  const pdfPage = await context.newPage();
+  const coreRuntimeRequests: string[] = [];
+  const runtimeRequests: string[] = [];
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await expect(pdfPage.locator('#empty-state')).toBeVisible();
+  const startupResources = await pdfPage.evaluate(() => (
+    performance.getEntriesByType('resource').map((entry) => entry.name)
+  ));
+  expect(runtimeRequests).toHaveLength(0);
+  expect(startupResources.some((url) => url.includes('/chunks/pdf_viewer-'))).toBe(false);
+  expect(startupResources.some((url) => url.includes('/assets/pdf.worker.'))).toBe(false);
+  await pdfPage.route('**/chunks/pdf-*.js', async (route) => {
+    coreRuntimeRequests.push(route.request().url());
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    await route.continue();
+  });
+  await pdfPage.route('**/chunks/pdf_viewer-*.js', async (route) => {
+    runtimeRequests.push(route.request().url());
+    await route.continue();
+  });
+
+  await pdfPage.locator('#file-input').setInputFiles({
+    name: 'lazy-runtime.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('The PDF runtime loads on demand.'),
+  });
+  await expect(pdfPage.locator('#loading')).toHaveAttribute('data-stage', 'runtime');
+  await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+  await expect(pdfPage.locator('.textLayer')).toContainText('The PDF runtime loads on demand.');
+  expect(coreRuntimeRequests).toHaveLength(1);
+  expect(runtimeRequests).toHaveLength(1);
+  await pdfPage.close();
+});
+
 test('passes a PDF hash page through the background handoff', async () => {
   const sender = await context.newPage();
   await sender.goto(`chrome-extension://${extensionId}/popup.html`);
