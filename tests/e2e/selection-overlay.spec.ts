@@ -3366,20 +3366,40 @@ test('searches every text PDF page locally and navigates highlighted matches', a
     await query.fill('needle');
     await expect(pdfPage.locator('#pdf-search-status')).toContainText('1 / 2');
     await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    const results = pdfPage.locator('#pdf-search-results');
+    const resultButtons = results.locator('.pdf-search-result');
+    const resultsToggle = pdfPage.locator('#pdf-search-results-toggle');
+    await expect(results).toBeVisible();
+    await expect(resultButtons).toHaveCount(2);
+    await expect(resultButtons.nth(0)).toContainText('第 4 页');
+    await expect(resultButtons.nth(0).locator('mark')).toHaveText('Needle');
+    await resultsToggle.click();
+    await expect(results).toBeHidden();
+    await expect(resultsToggle).toHaveAttribute('aria-expanded', 'false');
+    await resultsToggle.click();
+    await expect(results).toBeVisible();
     const pageFour = pdfPage.locator('.pdf-page[data-page-number="4"]');
     await expect(pageFour).toHaveAttribute('data-rendered', 'ready');
     await expect(pageFour.locator('.pi-pdf-search-current')).toContainText('Needle');
 
-    await query.press('Enter');
+    await query.press('ArrowDown');
+    await expect(resultButtons.nth(0)).toBeFocused();
+    await resultButtons.nth(0).press('ArrowDown');
     await expect(pdfPage.locator('#page-number')).toHaveValue('11');
     const pageEleven = pdfPage.locator('.pdf-page[data-page-number="11"]');
     await expect(pageEleven).toHaveAttribute('data-rendered', 'ready');
     await expect(pageEleven.locator('.pi-pdf-search-current')).toContainText('Needle');
+    await expect(resultButtons.nth(1)).toBeFocused();
     await expect(pdfPage.locator('#pdf-search-status')).toContainText('2 / 2');
     if (process.env.PI_VISUAL_QA) {
       await pdfPage.screenshot({ path: testInfo.outputPath('pdf-search.png') });
     }
 
+    await resultButtons.nth(0).click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    await query.focus();
+    await query.press('Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('11');
     await query.press('Shift+Enter');
     await expect(pdfPage.locator('#page-number')).toHaveValue('4');
     await query.press('Escape');
@@ -3412,6 +3432,43 @@ test('keeps scanned PDF search local and does not start OCR automatically', asyn
       .toHaveText('当前文档没有可搜索文字');
     expect(visionRequests).toHaveLength(visionRequestsBefore);
     await expect(pdfPage.locator('#recognize-page')).toBeVisible();
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('keeps dense PDF search previews bounded around the current result', async () => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'dense-search.pdf',
+      mimeType: 'application/pdf',
+      buffer: createMultilineTextPdf(Array.from(
+        { length: 30 },
+        (_, index) => [1, 2, 3, 4]
+          .map((column) => `Needle ${index * 4 + column}`)
+          .join(' | '),
+      )),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await expect(pdfPage.locator('#open-search')).toBeEnabled();
+    await pdfPage.locator('#document-stage').press('Control+f');
+    await pdfPage.locator('#pdf-search-query').fill('needle');
+    await expect(pdfPage.locator('#pdf-search-status')).toContainText('1 / 120');
+    const results = pdfPage.locator('#pdf-search-results');
+    const buttons = results.locator('.pdf-search-result');
+    await expect(buttons).toHaveCount(80);
+    await expect(results.locator('.pdf-search-results-range'))
+      .toHaveText('显示第 1–80 项 · 共 120 项');
+
+    await pdfPage.locator('#pdf-search-query').press('ArrowDown');
+    await buttons.first().press('End');
+    await expect(pdfPage.locator('#pdf-search-status')).toContainText('120 / 120');
+    await expect(buttons).toHaveCount(80);
+    await expect(results.locator('.pdf-search-results-range'))
+      .toHaveText('显示第 41–120 项 · 共 120 项');
+    await expect(results.locator('[data-search-result-index="119"]')).toBeFocused();
   } finally {
     await pdfPage.close();
   }
@@ -3689,6 +3746,22 @@ test('keeps the PDF toolbar clear and usable at narrow widths', async () => {
     expect(layout.childrenFit).toBe(true);
     const chooseFileBox = await pdfPage.locator('#choose-file').boundingBox();
     expect(chooseFileBox?.height).toBeLessThanOrEqual(32);
+
+    await pdfPage.locator('#open-search').click();
+    await pdfPage.locator('#pdf-search-query').fill('toolbar');
+    await expect(pdfPage.locator('#pdf-search-results')).toBeVisible();
+    const searchLayout = await pdfPage.locator('#pdf-search').evaluate((search) => {
+      const bounds = search.getBoundingClientRect();
+      return {
+        left: bounds.left,
+        right: bounds.right,
+        scrollWidth: search.scrollWidth,
+        clientWidth: search.clientWidth,
+      };
+    });
+    expect(searchLayout.left).toBeGreaterThanOrEqual(0);
+    expect(searchLayout.right).toBeLessThanOrEqual(360);
+    expect(searchLayout.scrollWidth).toBe(searchLayout.clientWidth);
   } finally {
     await pdfPage.close();
   }
@@ -5451,6 +5524,17 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await expect.poll(() => pdfPage.evaluate(
     () => window.getSelection()?.toString().trim(),
   )).toBe('Selectable scanned academic sentence.');
+
+  await pdfPage.locator('#document-stage').press('Control+f');
+  const searchQuery = pdfPage.locator('#pdf-search-query');
+  await searchQuery.fill('scanned academic');
+  await expect(pdfPage.locator('#pdf-search-status')).toContainText('1 / 1');
+  const ocrSearchResult = pdfPage.locator('#pdf-search-results .pdf-search-result');
+  await expect(ocrSearchResult).toHaveCount(1);
+  await expect(ocrSearchResult).toContainText('Selectable scanned academic sentence.');
+  await expect(ocrSearchResult.locator('mark')).toHaveText('scanned academic');
+  await expect(ocrLine).toHaveClass(/pi-pdf-search-current/);
+  await searchQuery.press('Escape');
 
   await pdfPage.locator('#zoom-in').click();
   await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]'))

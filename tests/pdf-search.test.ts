@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   buildPdfSearchPageIndex,
+  buildPdfSearchSnippet,
   findPdfSearchMatches,
   normalizePdfSearchText,
 } from '../core/pdf/search';
@@ -52,6 +53,23 @@ describe('PDF search indexing', () => {
       { pageNumber: 1, itemIndexes: [1] },
       { pageNumber: 2, itemIndexes: [0] },
     ]);
+    expect(buildPdfSearchSnippet(first, matches[0]!)).toEqual({
+      before: 'This PDF supports ',
+      match: 'search',
+      after: '. Search again.',
+    });
+  });
+
+  it('preserves visible casing and clips long result context', () => {
+    const page = buildPdfSearchPageIndex(7, [{
+      str: 'A long academic introduction places the distinctive Needle beside supporting context.',
+    }]);
+    const [match] = findPdfSearchMatches([page], 'needle');
+    expect(buildPdfSearchSnippet(page, match!, 12)).toEqual({
+      before: '…distinctive ',
+      match: 'Needle',
+      after: ' beside supp…',
+    });
   });
 
   it('returns no matches for blank queries or pages without text and respects the limit', () => {

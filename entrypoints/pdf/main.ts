@@ -76,6 +76,7 @@ import {
 } from '../../core/pdf/translation-marker-repository';
 import {
   buildPdfSearchPageIndex,
+  buildPdfSearchSnippet,
   findPdfSearchMatches,
   normalizePdfSearchText,
   type PdfSearchMatch,
@@ -135,6 +136,8 @@ const searchQuery = element<HTMLInputElement>('pdf-search-query');
 const searchStatus = element<HTMLOutputElement>('pdf-search-status');
 const searchPrevious = element<HTMLButtonElement>('pdf-search-previous');
 const searchNext = element<HTMLButtonElement>('pdf-search-next');
+const searchResultsToggle = element<HTMLButtonElement>('pdf-search-results-toggle');
+const searchResults = element<HTMLElement>('pdf-search-results');
 const searchClose = element<HTMLButtonElement>('pdf-search-close');
 const recognizePage = element<HTMLButtonElement>('recognize-page');
 const regionTranslate = element<HTMLButtonElement>('region-translate');
@@ -198,6 +201,7 @@ let currentReadingIdentity: string | undefined;
 let restoringReadingState = false;
 let fileDragDepth = 0;
 const PDF_SEARCH_RESULT_LIMIT = 5_000;
+const PDF_SEARCH_PREVIEW_LIMIT = 80;
 const PDF_SEARCH_HIGHLIGHT_NAME = 'pi-pdf-search-match';
 const PDF_SEARCH_CURRENT_HIGHLIGHT_NAME = 'pi-pdf-search-current';
 const searchPageIndexes = new Map<number, PdfSearchPageIndex>();
@@ -207,6 +211,7 @@ let activeSearchQuery = '';
 let searchIndexRunId = 0;
 let searchIndexing = false;
 let searchReturnFocus: HTMLElement | undefined;
+let searchResultsExpanded = true;
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -1044,7 +1049,7 @@ function renderedSearchSpans(pageElement: HTMLElement): HTMLElement[] {
   return [...textLayer.querySelectorAll<HTMLElement>('span')].filter((span) => (
     !span.classList.contains('markedContent') &&
     span.getAttribute('role') !== 'img' &&
-    !span.hasAttribute('data-pi-ocr-block')
+    Boolean(normalizePdfSearchText(span.textContent ?? ''))
   ));
 }
 
@@ -1160,10 +1165,102 @@ function refreshPdfSearchHighlights(): void {
   }
 }
 
+function visiblePdfSearchResultWindow(): { start: number; end: number } {
+  if (searchMatches.length <= PDF_SEARCH_PREVIEW_LIMIT) {
+    return { start: 0, end: searchMatches.length };
+  }
+  const halfWindow = Math.floor(PDF_SEARCH_PREVIEW_LIMIT / 2);
+  const start = Math.min(
+    searchMatches.length - PDF_SEARCH_PREVIEW_LIMIT,
+    Math.max(0, searchResultIndex - halfWindow),
+  );
+  return { start, end: start + PDF_SEARCH_PREVIEW_LIMIT };
+}
+
+function keepPdfSearchResultVisible(button: HTMLElement): void {
+  const top = button.offsetTop;
+  const bottom = top + button.offsetHeight;
+  if (top < searchResults.scrollTop) {
+    searchResults.scrollTop = top;
+  } else if (bottom > searchResults.scrollTop + searchResults.clientHeight) {
+    searchResults.scrollTop = bottom - searchResults.clientHeight;
+  }
+}
+
+function renderPdfSearchResults(): void {
+  const restoreResultFocus = document.activeElement instanceof HTMLElement &&
+    searchResults.contains(document.activeElement);
+  const hasMatches = Boolean(activeSearchQuery && searchMatches.length);
+  searchResultsToggle.hidden = !hasMatches;
+  searchResultsToggle.setAttribute('aria-expanded', String(searchResultsExpanded));
+  const toggleLabel = searchResultsExpanded ? '收起搜索结果' : '展开搜索结果';
+  searchResultsToggle.title = toggleLabel;
+  searchResultsToggle.setAttribute('aria-label', toggleLabel);
+  searchResults.hidden = searchPanel.hidden || !hasMatches || !searchResultsExpanded;
+  if (!hasMatches) {
+    searchResults.replaceChildren();
+    return;
+  }
+
+  const { start, end } = visiblePdfSearchResultWindow();
+  const fragment = document.createDocumentFragment();
+  if (searchMatches.length > PDF_SEARCH_PREVIEW_LIMIT) {
+    const range = document.createElement('div');
+    range.className = 'pdf-search-results-range';
+    range.textContent = `显示第 ${start + 1}–${end} 项 · 共 ${searchMatches.length} 项`;
+    fragment.append(range);
+  }
+  searchMatches.slice(start, end).forEach((match, offset) => {
+    const resultIndex = start + offset;
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'pdf-search-result';
+    button.dataset.searchResultIndex = String(resultIndex);
+    button.setAttribute('aria-label', `第 ${match.pageNumber} 页，搜索结果 ${resultIndex + 1}`);
+    button.setAttribute('aria-posinset', String(resultIndex + 1));
+    button.setAttribute('aria-setsize', String(searchMatches.length));
+    if (resultIndex === searchResultIndex) {
+      button.classList.add('is-current');
+      button.setAttribute('aria-current', 'true');
+    }
+    const page = document.createElement('span');
+    page.className = 'pdf-search-result-page';
+    page.textContent = `第 ${match.pageNumber} 页`;
+    const excerpt = document.createElement('span');
+    excerpt.className = 'pdf-search-result-excerpt';
+    const indexedPage = searchPageIndexes.get(match.pageNumber);
+    const snippet = indexedPage
+      ? buildPdfSearchSnippet(indexedPage, match)
+      : { before: '', match: activeSearchQuery, after: '' };
+    excerpt.append(document.createTextNode(snippet.before));
+    const mark = document.createElement('mark');
+    mark.textContent = snippet.match || activeSearchQuery;
+    excerpt.append(mark, document.createTextNode(snippet.after));
+    button.append(page, excerpt);
+    fragment.append(button);
+  });
+  searchResults.replaceChildren(fragment);
+  const current = searchResults.querySelector<HTMLElement>('.pdf-search-result.is-current');
+  if (current && !searchResults.hidden) {
+    if (restoreResultFocus) current.focus({ preventScroll: true });
+    keepPdfSearchResultVisible(current);
+  }
+}
+
+function focusPdfSearchResult(index: number): void {
+  const button = searchResults.querySelector<HTMLButtonElement>(
+    `.pdf-search-result[data-search-result-index="${index}"]`,
+  );
+  if (!button) return;
+  button.focus({ preventScroll: true });
+  keepPdfSearchResultVisible(button);
+}
+
 function syncPdfSearchStatus(): void {
   const hasMatches = searchMatches.length > 0;
   searchPrevious.disabled = !hasMatches;
   searchNext.disabled = !hasMatches;
+  renderPdfSearchResults();
   if (!activeSearchQuery) {
     setSearchStatus('输入关键词');
     return;
@@ -1225,24 +1322,52 @@ function navigateToPdfSearchResult(index: number): void {
   syncPdfSearchStatus();
 }
 
-function searchTextItemsForPage(page: PDFPageProxy): Promise<PdfSearchTextItem[]> {
-  return page.getTextContent().then((content) => {
-    const viewport = page.getViewport({ scale: 1 });
-    const items: PdfSearchTextItem[] = [];
-    for (const item of content.items) {
-      if (!('str' in item) || !normalizePdfSearchText(item.str)) continue;
-      const baseline = item.transform[5];
-      const topRatio = typeof baseline === 'number' && viewport.height > 0
-        ? clamp(1 - baseline / viewport.height, 0, 1)
-        : undefined;
-      items.push({
-        str: item.str,
-        ...(item.hasEOL ? { hasEOL: true } : {}),
-        ...(topRatio === undefined ? {} : { topRatio }),
-      });
-    }
-    return items;
-  });
+function searchTextItemsForTemporaryOcrPage(
+  page: CoordinateOcrPage | undefined,
+): PdfSearchTextItem[] {
+  if (!page) return [];
+  return selectableOcrBlocks(page).map((block) => ({
+    str: block.text,
+    hasEOL: true,
+    topRatio: clamp(block.box.top, 0, 1),
+  }));
+}
+
+async function searchTextItemsForPage(page: PDFPageProxy): Promise<PdfSearchTextItem[]> {
+  const content = await page.getTextContent();
+  const viewport = page.getViewport({ scale: 1 });
+  const items: PdfSearchTextItem[] = [];
+  for (const item of content.items) {
+    if (!('str' in item) || !normalizePdfSearchText(item.str)) continue;
+    const baseline = item.transform[5];
+    const topRatio = typeof baseline === 'number' && viewport.height > 0
+      ? clamp(1 - baseline / viewport.height, 0, 1)
+      : undefined;
+    items.push({
+      str: item.str,
+      ...(item.hasEOL ? { hasEOL: true } : {}),
+      ...(topRatio === undefined ? {} : { topRatio }),
+    });
+  }
+  return items.length
+    ? items
+    : searchTextItemsForTemporaryOcrPage(temporaryOcrPages.get(page.pageNumber));
+}
+
+function updatePdfSearchIndexFromTemporaryOcrPage(
+  pageNumber: number,
+  page: CoordinateOcrPage,
+): void {
+  const hadMatches = searchMatches.length > 0;
+  searchPageIndexes.set(
+    pageNumber,
+    buildPdfSearchPageIndex(pageNumber, searchTextItemsForTemporaryOcrPage(page)),
+  );
+  if (!activeSearchQuery) return;
+  updatePdfSearchMatches(true);
+  if (!searchPanel.hidden && !hadMatches && searchMatches.length) {
+    navigateToPdfSearchResult(searchResultIndex);
+  }
 }
 
 function yieldSearchIndexing(): Promise<void> {
@@ -1324,6 +1449,7 @@ function closePdfSearch(restoreFocus = true): void {
   searchPanel.hidden = true;
   stopSearchIndexing();
   refreshPdfSearchHighlights();
+  renderPdfSearchResults();
   if (restoreFocus) {
     const target = searchReturnFocus?.isConnected ? searchReturnFocus : stage;
     target.focus({ preventScroll: true });
@@ -1340,6 +1466,7 @@ function resetPdfSearch(): void {
   activeSearchQuery = '';
   searchQuery.value = '';
   searchReturnFocus = undefined;
+  searchResultsExpanded = true;
   syncPdfSearchStatus();
 }
 
@@ -1347,7 +1474,42 @@ openSearch.addEventListener('click', openPdfSearch);
 searchClose.addEventListener('click', () => closePdfSearch());
 searchPrevious.addEventListener('click', () => navigateToPdfSearchResult(searchResultIndex - 1));
 searchNext.addEventListener('click', () => navigateToPdfSearchResult(searchResultIndex + 1));
+searchResultsToggle.addEventListener('click', () => {
+  searchResultsExpanded = !searchResultsExpanded;
+  renderPdfSearchResults();
+});
+searchResults.addEventListener('click', (event) => {
+  const button = event.target instanceof Element
+    ? event.target.closest<HTMLButtonElement>('.pdf-search-result[data-search-result-index]')
+    : null;
+  const index = Number(button?.dataset.searchResultIndex);
+  if (!button || !Number.isInteger(index)) return;
+  navigateToPdfSearchResult(index);
+  focusPdfSearchResult(index);
+});
+searchResults.addEventListener('keydown', (event) => {
+  const button = event.target instanceof Element
+    ? event.target.closest<HTMLButtonElement>('.pdf-search-result[data-search-result-index]')
+    : null;
+  const currentIndex = Number(button?.dataset.searchResultIndex);
+  if (!button || !Number.isInteger(currentIndex) || !searchMatches.length) return;
+  let nextIndex: number | undefined;
+  if (event.key === 'ArrowDown') nextIndex = (currentIndex + 1) % searchMatches.length;
+  else if (event.key === 'ArrowUp') {
+    nextIndex = (currentIndex - 1 + searchMatches.length) % searchMatches.length;
+  } else if (event.key === 'Home') nextIndex = 0;
+  else if (event.key === 'End') nextIndex = searchMatches.length - 1;
+  if (nextIndex === undefined) return;
+  event.preventDefault();
+  navigateToPdfSearchResult(nextIndex);
+  focusPdfSearchResult(nextIndex);
+});
 searchQuery.addEventListener('input', applyPdfSearchQuery);
+searchQuery.addEventListener('keydown', (event) => {
+  if (event.key !== 'ArrowDown' || !searchMatches.length || !searchResultsExpanded) return;
+  event.preventDefault();
+  focusPdfSearchResult(Math.max(0, searchResultIndex));
+});
 document.addEventListener('keydown', (event) => {
   const searchShortcut = (event.ctrlKey || event.metaKey) &&
     !event.altKey && event.key.toLocaleLowerCase() === 'f';
@@ -2427,6 +2589,7 @@ function createRegionConfirmation(
         temporaryOcrPages.set(numericPageNumber, mapped.page);
         const lineCount = renderTemporaryOcrTextLayer(selection.pageElement, mapped.page);
         if (!lineCount) throw new Error('OCR 没有返回可安全选择的文字行。');
+        updatePdfSearchIndexFromTemporaryOcrPage(numericPageNumber, mapped.page);
         selection.pageElement.dataset.hasText = 'true';
         activePageRecognitionRequestId = undefined;
         finishSelection();

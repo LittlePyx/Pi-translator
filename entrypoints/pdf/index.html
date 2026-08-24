@@ -78,7 +78,18 @@
       <output id="pdf-search-status" class="pdf-search-status" aria-live="polite">输入关键词</output>
       <button id="pdf-search-previous" type="button" title="上一个结果（Shift+Enter）" aria-label="上一个搜索结果" disabled>↑</button>
       <button id="pdf-search-next" type="button" title="下一个结果（Enter）" aria-label="下一个搜索结果" disabled>↓</button>
+      <button
+        id="pdf-search-results-toggle"
+        class="pdf-search-results-toggle"
+        type="button"
+        title="收起搜索结果"
+        aria-label="收起搜索结果"
+        aria-controls="pdf-search-results"
+        aria-expanded="true"
+        hidden
+      >☷</button>
       <button id="pdf-search-close" class="pdf-search-close" type="button" title="关闭搜索（Esc）" aria-label="关闭搜索">×</button>
+      <div id="pdf-search-results" class="pdf-search-results" aria-label="PDF 搜索结果" hidden></div>
     </section>
 
     <main id="document-stage" class="document-stage" tabindex="-1">
