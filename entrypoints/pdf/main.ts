@@ -99,12 +99,19 @@ import {
   type PdfOutlineEntry,
   type PdfOutlineSourceItem,
 } from '../../core/pdf/outline';
+import {
+  pdfDestinationTopCoordinate,
+  safePdfLinkAnnotations,
+  type SafePdfLinkAction,
+  type SafePdfNamedAction,
+} from '../../core/pdf/link-annotations';
 
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfViewerModule = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
 
 interface PdfRuntime {
   getDocument: PdfJsModule['getDocument'];
+  AnnotationType: PdfJsModule['AnnotationType'];
   TextLayerBuilder: PdfViewerModule['TextLayerBuilder'];
 }
 
@@ -121,6 +128,7 @@ function loadPdfRuntime(): Promise<PdfRuntime> {
       pdfjs.GlobalWorkerOptions.workerSrc = workerUrl;
       pdfRuntime = {
         getDocument: pdfjs.getDocument,
+        AnnotationType: pdfjs.AnnotationType,
         TextLayerBuilder: pdfViewer.TextLayerBuilder,
       };
       return pdfRuntime;
@@ -183,6 +191,7 @@ const emptyState = element<HTMLElement>('empty-state');
 const loading = element<HTMLElement>('loading');
 const loadingText = element<HTMLElement>('loading-text');
 const notice = element<HTMLElement>('notice');
+const pdfLinkReturn = element<HTMLButtonElement>('pdf-link-return');
 const viewer = element<HTMLElement>('pdf-viewer');
 const dropOverlay = element<HTMLElement>('pdf-drop-overlay');
 const dropTitle = element<HTMLElement>('pdf-drop-title');
@@ -343,6 +352,13 @@ interface PageAnchor {
   pageNumber: number;
   ratio: number;
 }
+
+interface ResolvedPdfLinkDestination extends PageAnchor {
+  destinationLabel: string;
+}
+
+const PDF_LINK_HISTORY_LIMIT = 20;
+const pdfLinkHistory: PageAnchor[] = [];
 
 interface DocumentOpenOperation {
   id: number;
@@ -891,6 +907,7 @@ function beginDocumentOpen(
   completedTextSelectionGesture = undefined;
   resetPdfOutline();
   resetPdfSearch();
+  resetPdfLinkHistory();
   openOperationId += 1;
   documentEpoch += 1;
   currentDocumentSessionId = crypto.randomUUID();
@@ -1064,6 +1081,115 @@ function scrollToPageAnchor(anchor: PageAnchor): void {
   if (!page) return;
   stage.scrollTop = Math.max(0, page.offsetTop + page.offsetHeight * clamp(anchor.ratio, 0, 1) - 12);
 }
+
+function updatePdfLinkReturn(): void {
+  const target = pdfLinkHistory.at(-1);
+  pdfLinkReturn.hidden = !target;
+  if (!target) {
+    pdfLinkReturn.textContent = '← 返回';
+    pdfLinkReturn.removeAttribute('title');
+    return;
+  }
+  pdfLinkReturn.textContent = `← 返回第 ${target.pageNumber} 页`;
+  pdfLinkReturn.title = `返回链接跳转前的第 ${target.pageNumber} 页`;
+  pdfLinkReturn.setAttribute('aria-label', pdfLinkReturn.title);
+}
+
+function resetPdfLinkHistory(): void {
+  pdfLinkHistory.length = 0;
+  updatePdfLinkReturn();
+}
+
+function pushPdfLinkHistory(anchor: PageAnchor): void {
+  const previous = pdfLinkHistory.at(-1);
+  if (
+    previous?.pageNumber === anchor.pageNumber &&
+    Math.abs(previous.ratio - anchor.ratio) < 0.01
+  ) return;
+  pdfLinkHistory.push(anchor);
+  if (pdfLinkHistory.length > PDF_LINK_HISTORY_LIMIT) pdfLinkHistory.shift();
+  updatePdfLinkReturn();
+}
+
+async function resolvePdfLinkDestination(
+  pdf: PDFDocumentProxy,
+  destination: string | unknown[],
+): Promise<ResolvedPdfLinkDestination | undefined> {
+  const explicit = typeof destination === 'string'
+    ? await pdf.getDestination(destination)
+    : destination;
+  if (!Array.isArray(explicit) || !explicit.length) return undefined;
+  const reference = explicit[0];
+  let pageNumber: number | undefined;
+  if (typeof reference === 'number' && Number.isInteger(reference)) {
+    pageNumber = reference + 1;
+  } else if (reference && typeof reference === 'object' && 'num' in reference) {
+    const ref = reference as Parameters<PDFDocumentProxy['getPageIndex']>[0];
+    pageNumber = pdf.cachedPageNumber(ref) ?? undefined;
+    pageNumber ??= await pdf.getPageIndex(ref).then((pageIndex) => pageIndex + 1);
+  }
+  if (!pageNumber || pageNumber < 1 || pageNumber > pdf.numPages) return undefined;
+  const top = pdfDestinationTopCoordinate(explicit);
+  let ratio = 0;
+  if (top !== undefined) {
+    const page = await pdf.getPage(pageNumber);
+    const viewport = page.getViewport({ scale: 1 });
+    const point = viewport.convertToViewportPoint(0, top);
+    const viewportY = Number(point[1]);
+    if (Number.isFinite(viewportY) && viewport.height > 0) {
+      ratio = clamp(viewportY / viewport.height, 0, 1);
+    }
+  }
+  return { pageNumber, ratio, destinationLabel: `第 ${pageNumber} 页` };
+}
+
+function namedPdfLinkDestination(
+  action: SafePdfNamedAction,
+  sourcePageNumber: number,
+): ResolvedPdfLinkDestination | undefined {
+  const total = pdfDocument?.numPages ?? 0;
+  if (!total) return undefined;
+  const pageNumber = action === 'FirstPage'
+    ? 1
+    : action === 'LastPage'
+      ? total
+      : action === 'NextPage'
+        ? Math.min(total, sourcePageNumber + 1)
+        : Math.max(1, sourcePageNumber - 1);
+  return { pageNumber, ratio: 0, destinationLabel: `第 ${pageNumber} 页` };
+}
+
+function jumpToPdfLinkDestination(
+  target: ResolvedPdfLinkDestination,
+  rememberOrigin = true,
+  focusReturn = false,
+): void {
+  const pdf = pdfDocument;
+  if (!pdf) return;
+  if (rememberOrigin) pushPdfLinkHistory(visiblePageAnchor());
+  scrollToPageAnchor(target);
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${target.pageNumber}"]`,
+  );
+  if (pageElement) requestPageRender(pdf, pageElement, renderGeneration);
+  updatePageControl(target);
+  schedulePageRetention();
+  scheduleReadingStateSave();
+  updatePdfLinkReturn();
+  if (focusReturn) pdfLinkReturn.focus({ preventScroll: true });
+}
+
+pdfLinkReturn.addEventListener('click', () => {
+  const target = pdfLinkHistory.pop();
+  if (!target) return;
+  jumpToPdfLinkDestination(
+    { ...target, destinationLabel: `第 ${target.pageNumber} 页` },
+    false,
+  );
+  updatePdfLinkReturn();
+  if (!pdfLinkReturn.hidden) pdfLinkReturn.focus({ preventScroll: true });
+  else stage.focus({ preventScroll: true });
+});
 
 function updatePageControl(anchor = visiblePageAnchor()): void {
   if (document.activeElement !== pageNumberInput) {
@@ -2229,8 +2355,10 @@ function evictPage(pageElement: HTMLElement): void {
     canvas.height = 0;
   }
   pageElement.querySelector<HTMLElement>('.textLayer')?.replaceChildren();
+  pageElement.querySelector<HTMLElement>('.pdf-link-layer')?.replaceChildren();
   delete pageElement.dataset.rendered;
   delete pageElement.dataset.hasText;
+  delete pageElement.dataset.linkCount;
   pageElement.removeAttribute('title');
 }
 
@@ -2285,7 +2413,7 @@ function requestPageRender(
   pageElement.dataset.rendered = 'queued';
   const pageNumber = Number(pageElement.dataset.pageNumber);
   void pdf.getPage(pageNumber)
-    .then((page) => renderPage(page, pageElement, generation, pageRevision))
+    .then((page) => renderPage(pdf, page, pageElement, generation, pageRevision))
     .catch((error: unknown) => {
       if (
         generation !== renderGeneration ||
@@ -2296,7 +2424,109 @@ function requestPageRender(
     });
 }
 
+function positionedPdfLinkRect(
+  rect: [number, number, number, number],
+  viewport: ReturnType<PDFPageProxy['getViewport']>,
+): { left: number; top: number; width: number; height: number } | undefined {
+  const converted = viewport.convertToViewportRectangle(rect).map(Number);
+  if (converted.length !== 4 || converted.some((value) => !Number.isFinite(value))) {
+    return undefined;
+  }
+  const left = clamp(Math.min(converted[0]!, converted[2]!), 0, viewport.width);
+  const right = clamp(Math.max(converted[0]!, converted[2]!), 0, viewport.width);
+  const top = clamp(Math.min(converted[1]!, converted[3]!), 0, viewport.height);
+  const bottom = clamp(Math.max(converted[1]!, converted[3]!), 0, viewport.height);
+  if (right - left < 1 || bottom - top < 1) return undefined;
+  return { left, top, width: right - left, height: bottom - top };
+}
+
+async function resolvedPdfLinkAction(
+  pdf: PDFDocumentProxy,
+  action: SafePdfLinkAction,
+  sourcePageNumber: number,
+): Promise<
+  | { kind: 'external'; url: string }
+  | { kind: 'internal'; target: ResolvedPdfLinkDestination }
+  | undefined
+> {
+  if (action.kind === 'external') return action;
+  if (action.kind === 'named') {
+    const target = namedPdfLinkDestination(action.action, sourcePageNumber);
+    return target ? { kind: 'internal', target } : undefined;
+  }
+  const target = await resolvePdfLinkDestination(pdf, action.destination).catch(() => undefined);
+  return target ? { kind: 'internal', target } : undefined;
+}
+
+async function renderPdfLinkLayer(
+  pdf: PDFDocumentProxy,
+  page: PDFPageProxy,
+  pageElement: HTMLElement,
+  viewport: ReturnType<PDFPageProxy['getViewport']>,
+  annotations: readonly unknown[],
+  generation: number,
+  pageRevision: number,
+): Promise<void> {
+  const isCurrent = (): boolean => (
+    pdfDocument === pdf &&
+    generation === renderGeneration &&
+    pageRenderRevisions.get(pageElement) === pageRevision &&
+    pageElement.dataset.rendered === 'ready'
+  );
+  if (!isCurrent()) return;
+  const runtime = pdfRuntime;
+  const layer = pageElement.querySelector<HTMLElement>('.pdf-link-layer');
+  if (!runtime || !layer) return;
+  const links = safePdfLinkAnnotations(
+    annotations,
+    runtime.AnnotationType.LINK,
+    currentSourceUrl,
+  );
+  const prepared = await Promise.all(links.map(async (link) => ({
+    link,
+    action: await resolvedPdfLinkAction(pdf, link.action, page.pageNumber),
+  })));
+  if (!isCurrent()) return;
+  const fragment = document.createDocumentFragment();
+  let renderedCount = 0;
+  for (const { link, action } of prepared) {
+    if (!action) continue;
+    const bounds = positionedPdfLinkRect(link.rect, viewport);
+    if (!bounds) continue;
+    const anchor = document.createElement('a');
+    anchor.dataset.pdfLinkId = link.id;
+    anchor.dataset.pdfLinkKind = action.kind;
+    anchor.style.left = `${bounds.left}px`;
+    anchor.style.top = `${bounds.top}px`;
+    anchor.style.width = `${bounds.width}px`;
+    anchor.style.height = `${bounds.height}px`;
+    if (action.kind === 'external') {
+      const hostname = new URL(action.url).hostname;
+      anchor.href = action.url;
+      anchor.target = '_blank';
+      anchor.rel = 'noopener noreferrer nofollow';
+      anchor.referrerPolicy = 'no-referrer';
+      anchor.title = `打开外部链接：${hostname}`;
+      anchor.setAttribute('aria-label', anchor.title);
+    } else {
+      anchor.href = `#page=${action.target.pageNumber}`;
+      anchor.title = `跳转到${action.target.destinationLabel}`;
+      anchor.setAttribute('aria-label', anchor.title);
+      anchor.addEventListener('click', (event) => {
+        event.preventDefault();
+        jumpToPdfLinkDestination(action.target, true, event.detail === 0);
+      });
+      anchor.addEventListener('auxclick', (event) => event.preventDefault());
+    }
+    fragment.append(anchor);
+    renderedCount += 1;
+  }
+  layer.replaceChildren(fragment);
+  pageElement.dataset.linkCount = String(renderedCount);
+}
+
 async function renderPage(
+  pdf: PDFDocumentProxy,
   page: PDFPageProxy,
   pageElement: HTMLElement,
   generation: number,
@@ -2357,6 +2587,7 @@ async function renderPage(
   activeTextLayerBuilders.get(pageElement)?.cancel();
   activeTextLayerBuilders.set(pageElement, textLayerBuilder);
   textContainer.replaceWith(textLayerBuilder.div);
+  const annotationsPromise = page.getAnnotations({ intent: 'display' }).catch(() => []);
   try {
     await Promise.all([
       renderTask.promise,
@@ -2373,6 +2604,17 @@ async function renderPage(
         );
     const hasText = hasNativeText || temporaryOcrCount > 0;
     pageElement.dataset.hasText = String(hasText);
+    void annotationsPromise.then((annotations) => renderPdfLinkLayer(
+      pdf,
+      page,
+      pageElement,
+      viewport,
+      annotations,
+      generation,
+      pageRevision,
+    )).catch(() => {
+      if (isCurrentPageRender()) pageElement.dataset.linkCount = '0';
+    });
     if (!hasText && !scanHintShownForDocument && !isRegionModeActive()) {
       scanHintShownForDocument = true;
       showNotice('可能是扫描版 PDF', {
@@ -2432,7 +2674,9 @@ async function buildPages(
     canvas.ariaHidden = 'true';
     const textLayer = document.createElement('div');
     textLayer.className = 'textLayer';
-    pageElement.append(canvas, textLayer);
+    const linkLayer = document.createElement('div');
+    linkLayer.className = 'pdf-link-layer';
+    pageElement.append(canvas, textLayer, linkLayer);
     viewer.append(pageElement);
     pageObserver.observe(pageElement);
   }

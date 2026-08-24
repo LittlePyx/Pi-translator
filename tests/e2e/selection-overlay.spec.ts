@@ -314,6 +314,67 @@ function createOutlinedPdf(): Buffer {
   return Buffer.from(body);
 }
 
+function createLinkedPdf(): Buffer {
+  const pageCount = 4;
+  const fontObject = 3 + pageCount;
+  const firstContentObject = fontObject + 1;
+  const firstAnnotationObject = firstContentObject + pageCount;
+  const pageTexts = [
+    [
+      'Jump to the final page',
+      'Open the external paper reference',
+      'Unsafe script link',
+      'Unsafe launch action',
+      'Go to the next page',
+    ],
+    ['Linked document page two'],
+    ['Linked document page three'],
+    ['Return to the first page'],
+  ];
+  const pageObjects = pageTexts.map((_, index) => {
+    const annotations = index === 0
+      ? ` /Annots [${firstAnnotationObject} 0 R ${firstAnnotationObject + 1} 0 R ${firstAnnotationObject + 2} 0 R ${firstAnnotationObject + 3} 0 R ${firstAnnotationObject + 4} 0 R]`
+      : index === 3
+        ? ` /Annots [${firstAnnotationObject + 5} 0 R]`
+        : '';
+    return `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObject} 0 R >> >> /Contents ${firstContentObject + index} 0 R${annotations} >>`;
+  });
+  const streams = pageTexts.map((lines) => {
+    const operations = lines.map((line, index) => {
+      const escaped = line.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
+      return `${index ? '0 -40 Td\n' : ''}(${escaped}) Tj`;
+    }).join('\n');
+    const stream = `BT\n/F1 16 Tf\n72 720 Td\n${operations}\nET`;
+    return `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
+  });
+  const kids = pageTexts.map((_, index) => `${3 + index} 0 R`).join(' ');
+  const externalUrl = 'https://www.overleaf.com/pi-pdf-external-reference';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    `<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`,
+    ...pageObjects,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ...streams,
+    '<< /Type /Annot /Subtype /Link /Rect [68 704 280 730] /Border [0 0 0] /Dest [6 0 R /Fit] >>',
+    `<< /Type /Annot /Subtype /Link /Rect [68 664 340 690] /Border [0 0 0] /A << /S /URI /URI (${externalUrl}) >> >>`,
+    '<< /Type /Annot /Subtype /Link /Rect [68 624 280 650] /Border [0 0 0] /A << /S /JavaScript /JS (app.alert\\(\'unsafe\'\\)) >> >>',
+    '<< /Type /Annot /Subtype /Link /Rect [68 584 280 610] /Border [0 0 0] /A << /S /Launch /F (payload.exe) >> >>',
+    '<< /Type /Annot /Subtype /Link /Rect [68 544 240 570] /Border [0 0 0] /A << /S /Named /N /NextPage >> >>',
+    '<< /Type /Annot /Subtype /Link /Rect [68 704 280 730] /Border [0 0 0] /Dest [3 0 R /Fit] >>',
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(body));
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(body);
+}
+
 function createRasterPdf(): Buffer {
   const width = 64;
   const height = 64;
@@ -3470,6 +3531,91 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
     await expect(panel).toBeHidden();
   } finally {
     await pdfPage.close();
+  }
+});
+
+test('opens safe PDF links, navigates internal references, and returns to the source', async ({}, testInfo) => {
+  const externalUrl = 'https://www.overleaf.com/pi-pdf-external-reference';
+  await context.route(externalUrl, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html',
+      body: '<!doctype html><title>External paper reference</title>',
+    });
+  });
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 900, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'linked-paper.pdf',
+      mimeType: 'application/pdf',
+      buffer: createLinkedPdf(),
+    });
+    const firstPage = pdfPage.locator('.pdf-page[data-page-number="1"]');
+    const finalPage = pdfPage.locator('.pdf-page[data-page-number="4"]');
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    await expect(firstPage).toHaveAttribute('data-link-count', '3');
+    await expect(finalPage).not.toHaveAttribute('data-rendered', /.+/);
+    const firstPageLinks = firstPage.locator('.pdf-link-layer a');
+    await expect(firstPageLinks).toHaveCount(3);
+    const serializedLinks = await firstPageLinks.evaluateAll((links) => links.map((link) => ({
+      href: (link as HTMLAnchorElement).href,
+      rel: (link as HTMLAnchorElement).rel,
+      target: (link as HTMLAnchorElement).target,
+    })));
+    expect(JSON.stringify(serializedLinks)).not.toMatch(/javascript|payload\.exe|evil\.example/iu);
+
+    const internal = firstPage.locator('.pdf-link-layer a[aria-label="跳转到第 4 页"]');
+    const originalBounds = await internal.boundingBox();
+    await internal.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    await expect(finalPage).toHaveAttribute('data-rendered', 'ready');
+    await expect(finalPage).toHaveAttribute('data-link-count', '1');
+    const returnButton = pdfPage.locator('#pdf-link-return');
+    await expect(returnButton).toBeVisible();
+    await expect(returnButton).toHaveText('← 返回第 1 页');
+    await returnButton.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('1');
+    await expect(returnButton).toBeHidden();
+
+    const namedNext = firstPage.locator('.pdf-link-layer a[aria-label="跳转到第 2 页"]');
+    await namedNext.focus();
+    await namedNext.press('Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('2');
+    await expect(returnButton).toHaveText('← 返回第 1 页');
+    await expect(returnButton).toBeFocused();
+    await returnButton.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('1');
+
+    const external = firstPage.locator('.pdf-link-layer a[data-pdf-link-kind="external"]');
+    await expect(external).toHaveAttribute('target', '_blank');
+    await expect(external).toHaveAttribute('rel', /noopener/);
+    const externalPagePromise = context.waitForEvent('page');
+    await external.click();
+    const externalPage = await externalPagePromise;
+    await externalPage.waitForURL(externalUrl);
+    await expect(externalPage).toHaveTitle('External paper reference');
+    await externalPage.close();
+
+    await pdfPage.locator('#zoom-in').click();
+    const zoomedInternal = firstPage.locator('.pdf-link-layer a[aria-label="跳转到第 4 页"]');
+    await expect(zoomedInternal).toBeVisible();
+    const zoomedBounds = await zoomedInternal.boundingBox();
+    expect(zoomedBounds?.width).toBeGreaterThan(originalBounds?.width ?? 0);
+
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await zoomedInternal.click();
+    await expect(returnButton).toBeVisible();
+    const returnBounds = await returnButton.boundingBox();
+    expect(returnBounds).not.toBeNull();
+    expect(returnBounds?.x).toBeGreaterThanOrEqual(0);
+    expect((returnBounds?.x ?? 0) + (returnBounds?.width ?? 0)).toBeLessThanOrEqual(360);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-link-return-360.png') });
+    }
+  } finally {
+    await pdfPage.close();
+    await context.unroute(externalUrl);
   }
 });
 
