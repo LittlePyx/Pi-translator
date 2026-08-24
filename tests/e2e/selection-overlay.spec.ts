@@ -269,6 +269,51 @@ function createMultiPageTextPdf(
   return Buffer.from(body);
 }
 
+function createOutlinedPdf(): Buffer {
+  const pages = Array.from({ length: 6 }, (_, index) => ({
+    text: `Outlined document page ${index + 1}.`,
+  }));
+  const pageCount = pages.length;
+  const fontObject = 3 + pageCount;
+  const firstContentObject = fontObject + 1;
+  const outlineRootObject = firstContentObject + pageCount;
+  const introductionObject = outlineRootObject + 1;
+  const methodsObject = outlineRootObject + 2;
+  const experimentObject = outlineRootObject + 3;
+  const conclusionObject = outlineRootObject + 4;
+  const pageObjects = pages.map((_, index) => (
+    `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 ${fontObject} 0 R >> >> /Contents ${firstContentObject + index} 0 R >>`
+  ));
+  const streams = pages.map((page) => {
+    const stream = `BT\n/F1 18 Tf\n72 720 Td\n(${page.text}) Tj\nET`;
+    return `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
+  });
+  const kids = pages.map((_, index) => `${3 + index} 0 R`).join(' ');
+  const objects = [
+    `<< /Type /Catalog /Pages 2 0 R /Outlines ${outlineRootObject} 0 R /PageMode /UseOutlines >>`,
+    `<< /Type /Pages /Kids [${kids}] /Count ${pageCount} >>`,
+    ...pageObjects,
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    ...streams,
+    `<< /Type /Outlines /First ${introductionObject} 0 R /Last ${conclusionObject} 0 R /Count 4 >>`,
+    `<< /Title (Introduction) /Parent ${outlineRootObject} 0 R /Next ${methodsObject} 0 R /Dest [3 0 R /Fit] >>`,
+    `<< /Title (Methods) /Parent ${outlineRootObject} 0 R /Prev ${introductionObject} 0 R /Next ${conclusionObject} 0 R /First ${experimentObject} 0 R /Last ${experimentObject} 0 R /Count 1 /Dest [5 0 R /Fit] >>`,
+    `<< /Title (Detailed experiment and supplementary evaluation results) /Parent ${methodsObject} 0 R /Dest [6 0 R /Fit] >>`,
+    `<< /Title (Conclusion) /Parent ${outlineRootObject} 0 R /Prev ${methodsObject} 0 R /Dest [8 0 R /Fit] >>`,
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(body));
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(body);
+}
+
 function createRasterPdf(): Buffer {
   const width = 64;
   const height = 64;
@@ -3339,6 +3384,94 @@ test('loads the PDF runtime only after a document is opened', async () => {
   await pdfPage.close();
 });
 
+test('uses the native PDF outline for compact chapter navigation', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 900, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'outlined-paper.pdf',
+      mimeType: 'application/pdf',
+      buffer: createOutlinedPdf(),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    const openOutline = pdfPage.locator('#open-outline');
+    await expect(openOutline).toBeVisible();
+    await expect(openOutline).toBeEnabled();
+    await openOutline.click();
+
+    const panel = pdfPage.locator('#pdf-outline');
+    const tree = pdfPage.locator('#pdf-outline-tree');
+    const actions = tree.locator('.pdf-outline-action');
+    await expect(panel).toBeVisible();
+    await openOutline.click();
+    await expect(panel).toBeHidden();
+    await openOutline.click();
+    await expect(panel).toBeVisible();
+    await expect(pdfPage.locator('#pdf-outline-status')).toHaveText('4 项');
+    await expect(actions).toHaveCount(4);
+    const introduction = actions.filter({ hasText: 'Introduction' });
+    const methods = actions.filter({ hasText: 'Methods' });
+    const experiment = actions.filter({ hasText: 'Detailed experiment' });
+    const conclusion = actions.filter({ hasText: 'Conclusion' });
+    await expect(introduction).toHaveAttribute('aria-current', 'location');
+    await expect(methods).toHaveAttribute('aria-expanded', 'true');
+    await expect(experiment).toHaveAttribute('aria-level', '2');
+
+    await methods.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('3');
+    await expect(methods).toHaveAttribute('aria-current', 'location');
+    await tree.getByRole('button', { name: '收起 Methods' }).click();
+    await expect(experiment).toBeHidden();
+    await methods.focus();
+    await methods.press('ArrowRight');
+    await expect(methods).toHaveAttribute('aria-expanded', 'true');
+    await methods.press('ArrowDown');
+    await expect(experiment).toBeFocused();
+    await experiment.press('Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    await expect(experiment).toHaveAttribute('aria-current', 'location');
+
+    await experiment.press('Escape');
+    await expect(panel).toBeHidden();
+    await expect(openOutline).toBeFocused();
+    await openOutline.click();
+    await expect(panel).toBeVisible();
+    await pdfPage.keyboard.press('Control+f');
+    await expect(panel).toBeHidden();
+    await expect(pdfPage.locator('#pdf-search-query')).toBeFocused();
+    await pdfPage.locator('#pdf-search-query').press('Escape');
+    await expect(openOutline).toBeFocused();
+
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await openOutline.click();
+    await expect(panel).toBeVisible();
+    const compactLabel = await openOutline.evaluate((button) => (
+      getComputedStyle(button, '::before').content
+    ));
+    expect(compactLabel).toBe('"目"');
+    const [panelBounds, toolbarLayout] = await Promise.all([
+      panel.boundingBox(),
+      pdfPage.locator('#pdf-toolbar').evaluate((toolbar) => ({
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+      })),
+    ]);
+    expect(panelBounds).not.toBeNull();
+    expect(panelBounds?.x).toBeGreaterThanOrEqual(0);
+    expect((panelBounds?.x ?? 0) + (panelBounds?.width ?? 0)).toBeLessThanOrEqual(360);
+    expect(toolbarLayout.scrollWidth).toBe(toolbarLayout.clientWidth);
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-outline.png') });
+    }
+    await conclusion.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('6');
+    await expect(panel).toBeHidden();
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('searches every text PDF page locally and navigates highlighted matches', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   try {
@@ -3355,6 +3488,7 @@ test('searches every text PDF page locally and navigates highlighted matches', a
     });
     await expect(pdfPage.locator('#page-count')).toHaveText('12');
     await expect(pdfPage.locator('#open-search')).toBeEnabled();
+    await expect(pdfPage.locator('#open-outline')).toBeHidden();
     await expect(pdfPage.locator('.pdf-page[data-page-number="11"]'))
       .not.toHaveAttribute('data-rendered', /.+/);
 

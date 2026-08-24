@@ -80,6 +80,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .toolbar .primary { color: #fff; border-color: #5054db; background: #5659df; }
 .toolbar .primary:hover:not(:disabled) { border-color: #4447c8; background: #484bcf; }
 .toolbar .quiet { padding-inline: 9px; }
+.toolbar .outline-open { color: #4f46e5; }
 .toolbar .search-open { color: #4f46e5; }
 .toolbar .region-action[aria-pressed="true"] { color: #4338ca; border-color: #8f92ed; background: #eef0ff; }
 .region-tools { position: relative; display: flex; align-items: center; gap: 5px; }
@@ -110,6 +111,98 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .toolbar .queue-item button { min-height: 30px; padding: 4px 8px; color: #a33b47; font-size: 10px; }
 .zoom-controls button { width: 28px; padding-inline: 0; font-size: 15px; }
 .zoom-controls output { width: 42px; color: var(--muted); font-size: 10px; text-align: center; }
+
+.pdf-outline {
+  position: fixed;
+  z-index: 12;
+  top: 62px;
+  left: 14px;
+  width: min(320px, calc(100vw - 28px));
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--toolbar);
+  box-shadow: 0 12px 34px rgba(20, 30, 50, .18);
+  backdrop-filter: blur(16px);
+}
+.pdf-outline[hidden] { display: none; }
+.pdf-outline > header {
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 6px 7px 6px 12px;
+  border-bottom: 1px solid var(--line);
+}
+.pdf-outline > header span { display: flex; min-width: 0; align-items: baseline; gap: 7px; }
+.pdf-outline > header strong { font-size: 11px; }
+.pdf-outline > header small { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
+.pdf-outline > header button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  color: #7a8496;
+  background: transparent;
+  font-size: 18px;
+  font-weight: 350;
+  line-height: 1;
+}
+.pdf-outline > header button:hover { color: #4338ca; background: rgba(99, 102, 241, .09); }
+.pdf-outline-tree {
+  max-height: min(480px, calc(100vh - 120px));
+  padding: 5px;
+  overflow-y: auto;
+  scrollbar-width: thin;
+}
+.pdf-outline-row {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr);
+  align-items: center;
+  padding-left: calc((var(--outline-depth) - 1) * 13px);
+}
+.pdf-outline-toggle,
+.pdf-outline-toggle-spacer { width: 20px; height: 30px; }
+.pdf-outline-toggle {
+  border: 0;
+  border-radius: 4px;
+  padding: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 16px;
+  line-height: 1;
+  transition: transform .12s ease;
+}
+.pdf-outline-toggle[aria-expanded="true"] { transform: rotate(90deg); }
+.pdf-outline-toggle:hover { color: #4338ca; background: rgba(99, 102, 241, .08); }
+.pdf-outline-action {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  width: 100%;
+  min-height: 32px;
+  align-items: center;
+  border: 0;
+  border-radius: 5px;
+  padding: 5px 7px;
+  color: inherit;
+  background: transparent;
+  font-size: 10px;
+  line-height: 1.35;
+  text-align: left;
+}
+.pdf-outline-action:hover { background: rgba(100, 116, 139, .08); }
+.pdf-outline-action.is-current { color: #3730a3; background: rgba(99, 102, 241, .11); }
+.pdf-outline-action.is-group { color: #465269; font-weight: 650; }
+.pdf-outline-title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.pdf-outline-page { color: var(--muted); font-size: 8px; font-variant-numeric: tabular-nums; }
 
 .pdf-search {
   position: fixed;
@@ -548,6 +641,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .region-action::before { color: var(--muted); font-size: 13px; line-height: 1; }
   .toolbar #recognize-page::before { content: "识"; }
   .toolbar #region-translate::before { content: "框"; }
+  .toolbar .outline-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
+  .toolbar .outline-open::before { color: var(--muted); content: "目"; font-size: 11px; }
   .toolbar .search-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
   .toolbar .search-open::before { color: var(--muted); content: "查"; font-size: 11px; }
   .toolbar .region-action[aria-pressed="true"]::before { color: #4338ca; }
@@ -556,6 +651,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
 }
 
 @media (max-width: 560px) {
+  .pdf-outline { right: 9px; left: 9px; width: auto; }
   .pdf-search {
     right: 9px;
     left: 9px;
@@ -568,6 +664,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .brand > span { display: none; }
   .toolbar #choose-file { width: 42px; overflow: hidden; padding-inline: 0; font-size: 0; white-space: nowrap; }
   .toolbar #choose-file::before { content: "PDF"; font-size: 10px; }
+  .toolbar:has(#open-outline:not([hidden])) #fit-width { display: none; }
   .region-tools:has(.queue-action:not([hidden])) #recognize-page { display: none; }
   .toolbar .queue-action { width: 32px; min-height: 30px; padding-inline: 0; font-size: 0; }
   .toolbar .queue-action::before { content: "队"; font-size: 10px; }
@@ -598,7 +695,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .region-action[aria-pressed="true"]::before { color: #a5b4fc; }
   .toolbar .queue-action { color: #a5b4fc; }
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
+  .toolbar .outline-open { color: #a5b4fc; }
   .toolbar .search-open { color: #a5b4fc; }
+  .pdf-outline-action.is-current { color: #c7d2fe; background: rgba(99, 102, 241, .18); }
+  .pdf-outline-action.is-group { color: #cbd5e1; }
   .pdf-search button { color: #b7c0cf; }
   .pdf-search button:hover:not(:disabled) { color: #c7d2fe; background: rgba(99, 102, 241, .16); }
   .pdf-search button:disabled { color: #596579; }

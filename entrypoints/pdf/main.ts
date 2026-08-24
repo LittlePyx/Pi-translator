@@ -83,6 +83,13 @@ import {
   type PdfSearchPageIndex,
   type PdfSearchTextItem,
 } from '../../core/pdf/search';
+import {
+  buildPdfOutlineEntries,
+  flattenPdfOutlineEntries,
+  pdfOutlineEntryForPage,
+  type PdfOutlineEntry,
+  type PdfOutlineSourceItem,
+} from '../../core/pdf/outline';
 
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfViewerModule = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
@@ -130,6 +137,11 @@ const documentName = element<HTMLElement>('document-name');
 const pageJump = element<HTMLElement>('page-jump');
 const pageNumberInput = element<HTMLInputElement>('page-number');
 const pageCount = element<HTMLOutputElement>('page-count');
+const openOutline = element<HTMLButtonElement>('open-outline');
+const outlinePanel = element<HTMLElement>('pdf-outline');
+const outlineStatus = element<HTMLElement>('pdf-outline-status');
+const outlineTree = element<HTMLElement>('pdf-outline-tree');
+const outlineClose = element<HTMLButtonElement>('pdf-outline-close');
 const openSearch = element<HTMLButtonElement>('open-search');
 const searchPanel = element<HTMLElement>('pdf-search');
 const searchQuery = element<HTMLInputElement>('pdf-search-query');
@@ -212,6 +224,11 @@ let searchIndexRunId = 0;
 let searchIndexing = false;
 let searchReturnFocus: HTMLElement | undefined;
 let searchResultsExpanded = true;
+let pdfOutlineEntries: PdfOutlineEntry[] = [];
+let pdfOutlineEntryMap = new Map<string, PdfOutlineEntry>();
+let pdfOutlineExpandedIds = new Set<string>();
+let currentPdfOutlineEntryId: string | undefined;
+let outlineReturnFocus: HTMLElement | undefined;
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -399,6 +416,7 @@ function setDocumentControls(enabled: boolean): void {
   zoomOut.disabled = !enabled || currentZoom() <= ZOOM_LEVELS[0] + 0.001;
   zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
   fitWidth.disabled = !enabled;
+  openOutline.disabled = !enabled;
   openSearch.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
   recognizePage.hidden = !enabled;
@@ -848,6 +866,7 @@ function beginDocumentOpen(
   currentReadingIdentity = undefined;
   restoringReadingState = false;
   completedTextSelectionGesture = undefined;
+  resetPdfOutline();
   resetPdfSearch();
   openOperationId += 1;
   documentEpoch += 1;
@@ -1026,6 +1045,269 @@ function scrollToPageAnchor(anchor: PageAnchor): void {
 function updatePageControl(anchor = visiblePageAnchor()): void {
   if (document.activeElement !== pageNumberInput) {
     pageNumberInput.value = String(anchor.pageNumber);
+  }
+  syncPdfOutlineCurrent(anchor.pageNumber);
+}
+
+function visiblePdfOutlineEntryId(): string | undefined {
+  let entry = currentPdfOutlineEntryId
+    ? pdfOutlineEntryMap.get(currentPdfOutlineEntryId)
+    : undefined;
+  while (entry?.parentId && !pdfOutlineExpandedIds.has(entry.parentId)) {
+    entry = pdfOutlineEntryMap.get(entry.parentId);
+  }
+  return entry?.id;
+}
+
+function applyPdfOutlineCurrentState(): void {
+  for (const action of outlineTree.querySelectorAll<HTMLElement>('.pdf-outline-action')) {
+    action.classList.remove('is-current');
+    action.removeAttribute('aria-current');
+  }
+  const visibleId = visiblePdfOutlineEntryId();
+  if (!visibleId) return;
+  const action = outlineTree.querySelector<HTMLElement>(
+    `.pdf-outline-action[data-outline-id="${visibleId}"]`,
+  );
+  action?.classList.add('is-current');
+  action?.setAttribute('aria-current', 'location');
+}
+
+function syncPdfOutlineCurrent(pageNumber: number): void {
+  const nextId = pdfOutlineEntryForPage(pdfOutlineEntries, pageNumber)?.id;
+  if (nextId === currentPdfOutlineEntryId) return;
+  currentPdfOutlineEntryId = nextId;
+  applyPdfOutlineCurrentState();
+}
+
+function renderPdfOutline(focusId?: string): void {
+  const fragment = document.createDocumentFragment();
+  const appendEntries = (
+    container: DocumentFragment | HTMLElement,
+    entries: readonly PdfOutlineEntry[],
+  ): void => {
+    for (const entry of entries) {
+      const node = document.createElement('div');
+      node.className = 'pdf-outline-node';
+      node.dataset.outlineNodeId = entry.id;
+      const row = document.createElement('div');
+      row.className = 'pdf-outline-row';
+      row.style.setProperty('--outline-depth', String(entry.depth));
+      if (entry.children.length) {
+        const toggle = document.createElement('button');
+        const expanded = pdfOutlineExpandedIds.has(entry.id);
+        toggle.type = 'button';
+        toggle.className = 'pdf-outline-toggle';
+        toggle.dataset.outlineToggleId = entry.id;
+        toggle.tabIndex = -1;
+        toggle.textContent = '›';
+        toggle.setAttribute('aria-label', `${expanded ? '收起' : '展开'} ${entry.title}`);
+        toggle.setAttribute('aria-expanded', String(expanded));
+        row.append(toggle);
+      } else {
+        const spacer = document.createElement('span');
+        spacer.className = 'pdf-outline-toggle-spacer';
+        spacer.ariaHidden = 'true';
+        row.append(spacer);
+      }
+      const action = document.createElement('button');
+      action.type = 'button';
+      action.className = 'pdf-outline-action';
+      action.dataset.outlineId = entry.id;
+      action.setAttribute('role', 'treeitem');
+      action.setAttribute('aria-level', String(entry.depth));
+      if (entry.children.length) {
+        action.setAttribute('aria-expanded', String(pdfOutlineExpandedIds.has(entry.id)));
+      }
+      if (entry.pageNumber === undefined) action.classList.add('is-group');
+      const title = document.createElement('span');
+      title.className = 'pdf-outline-title';
+      title.textContent = entry.title;
+      action.append(title);
+      if (entry.pageNumber !== undefined) {
+        const page = document.createElement('span');
+        page.className = 'pdf-outline-page';
+        page.textContent = String(entry.pageNumber);
+        action.append(page);
+        action.title = `${entry.title} · 第 ${entry.pageNumber} 页`;
+      } else {
+        action.title = `${entry.title} · 章节组`;
+      }
+      row.append(action);
+      node.append(row);
+      if (entry.children.length && pdfOutlineExpandedIds.has(entry.id)) {
+        const children = document.createElement('div');
+        children.className = 'pdf-outline-group';
+        children.setAttribute('role', 'group');
+        appendEntries(children, entry.children);
+        node.append(children);
+      }
+      container.append(node);
+    }
+  };
+  appendEntries(fragment, pdfOutlineEntries);
+  outlineTree.replaceChildren(fragment);
+  applyPdfOutlineCurrentState();
+  if (!focusId) return;
+  outlineTree.querySelector<HTMLButtonElement>(
+    `.pdf-outline-action[data-outline-id="${focusId}"]`,
+  )?.focus({ preventScroll: true });
+}
+
+function togglePdfOutlineEntry(entryId: string, focusAfter = true): void {
+  const entry = pdfOutlineEntryMap.get(entryId);
+  if (!entry?.children.length) return;
+  if (pdfOutlineExpandedIds.has(entryId)) pdfOutlineExpandedIds.delete(entryId);
+  else pdfOutlineExpandedIds.add(entryId);
+  renderPdfOutline(focusAfter ? entryId : undefined);
+}
+
+function revealCurrentPdfOutlineEntry(): void {
+  let entry = currentPdfOutlineEntryId
+    ? pdfOutlineEntryMap.get(currentPdfOutlineEntryId)
+    : undefined;
+  while (entry?.parentId) {
+    pdfOutlineExpandedIds.add(entry.parentId);
+    entry = pdfOutlineEntryMap.get(entry.parentId);
+  }
+}
+
+function closePdfOutline(restoreFocus = true): void {
+  if (outlinePanel.hidden) return;
+  outlinePanel.hidden = true;
+  openOutline.setAttribute('aria-expanded', 'false');
+  if (restoreFocus) {
+    const target = outlineReturnFocus?.isConnected ? outlineReturnFocus : openOutline;
+    target.focus({ preventScroll: true });
+  }
+  outlineReturnFocus = undefined;
+}
+
+function openPdfOutline(): void {
+  if (!pdfDocument || !pdfOutlineEntries.length) return;
+  closePdfSearch(false);
+  outlineReturnFocus = document.activeElement instanceof HTMLElement
+    ? document.activeElement
+    : openOutline;
+  outlinePanel.hidden = false;
+  openOutline.setAttribute('aria-expanded', 'true');
+  revealCurrentPdfOutlineEntry();
+  renderPdfOutline();
+  const focusId = visiblePdfOutlineEntryId();
+  const target = focusId
+    ? outlineTree.querySelector<HTMLButtonElement>(
+        `.pdf-outline-action[data-outline-id="${focusId}"]`,
+      )
+    : outlineTree.querySelector<HTMLButtonElement>('.pdf-outline-action');
+  target?.focus({ preventScroll: true });
+}
+
+function resetPdfOutline(): void {
+  closePdfOutline(false);
+  pdfOutlineEntries = [];
+  pdfOutlineEntryMap = new Map();
+  pdfOutlineExpandedIds = new Set();
+  currentPdfOutlineEntryId = undefined;
+  outlineReturnFocus = undefined;
+  outlineTree.replaceChildren();
+  outlineStatus.textContent = '';
+  openOutline.hidden = true;
+  openOutline.disabled = true;
+  openOutline.setAttribute('aria-expanded', 'false');
+}
+
+async function resolvePdfOutlineDestination(
+  pdf: PDFDocumentProxy,
+  destination: string | unknown[],
+  namedDestinations: Map<string, Promise<unknown[] | null>>,
+  pageReferences: Map<string, Promise<number | undefined>>,
+): Promise<number | undefined> {
+  let explicitDestination: unknown[] | null;
+  if (typeof destination === 'string') {
+    let pending = namedDestinations.get(destination);
+    if (!pending) {
+      pending = pdf.getDestination(destination) as Promise<unknown[] | null>;
+      namedDestinations.set(destination, pending);
+    }
+    explicitDestination = await pending;
+  } else {
+    explicitDestination = destination;
+  }
+  if (!explicitDestination?.length) return undefined;
+  const reference = explicitDestination[0];
+  if (typeof reference === 'number' && Number.isInteger(reference)) {
+    const pageNumber = reference + 1;
+    return pageNumber >= 1 && pageNumber <= pdf.numPages ? pageNumber : undefined;
+  }
+  if (!reference || typeof reference !== 'object' || !('num' in reference)) return undefined;
+  const candidate = reference as { num: unknown; gen?: unknown };
+  if (!Number.isInteger(candidate.num)) return undefined;
+  const key = `${String(candidate.num)}:${String(candidate.gen ?? 0)}`;
+  let pendingPage = pageReferences.get(key);
+  if (!pendingPage) {
+    pendingPage = pdf.getPageIndex(
+      reference as Parameters<PDFDocumentProxy['getPageIndex']>[0],
+    ).then((pageIndex) => {
+      const pageNumber = pageIndex + 1;
+      return pageNumber >= 1 && pageNumber <= pdf.numPages ? pageNumber : undefined;
+    }).catch(() => undefined);
+    pageReferences.set(key, pendingPage);
+  }
+  return pendingPage;
+}
+
+async function loadPdfOutline(pdf: PDFDocumentProxy, epoch: number): Promise<void> {
+  try {
+    const source = await pdf.getOutline();
+    if (pdfDocument !== pdf || documentEpoch !== epoch || !Array.isArray(source)) return;
+    const namedDestinations = new Map<string, Promise<unknown[] | null>>();
+    const pageReferences = new Map<string, Promise<number | undefined>>();
+    const result = await buildPdfOutlineEntries(
+      source as unknown as PdfOutlineSourceItem[],
+      (destination) => resolvePdfOutlineDestination(
+        pdf,
+        destination,
+        namedDestinations,
+        pageReferences,
+      ),
+    );
+    if (pdfDocument !== pdf || documentEpoch !== epoch) return;
+    pdfOutlineEntries = result.entries;
+    const flattened = flattenPdfOutlineEntries(result.entries);
+    pdfOutlineEntryMap = new Map(flattened.map((entry) => [entry.id, entry]));
+    pdfOutlineExpandedIds = new Set(
+      flattened.filter((entry) => entry.initiallyExpanded).map((entry) => entry.id),
+    );
+    currentPdfOutlineEntryId = pdfOutlineEntryForPage(
+      pdfOutlineEntries,
+      visiblePageAnchor().pageNumber,
+    )?.id;
+    outlineStatus.textContent = `${flattened.length}${result.truncated ? '+' : ''} 项`;
+    openOutline.hidden = flattened.length === 0;
+    openOutline.disabled = flattened.length === 0;
+  } catch {
+    if (pdfDocument !== pdf || documentEpoch !== epoch) return;
+    resetPdfOutline();
+  }
+}
+
+function navigateToPdfOutlineEntry(entry: PdfOutlineEntry): void {
+  const pdf = pdfDocument;
+  if (!pdf || entry.pageNumber === undefined) {
+    togglePdfOutlineEntry(entry.id);
+    return;
+  }
+  scrollToPageAnchor({ pageNumber: entry.pageNumber, ratio: 0 });
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${entry.pageNumber}"]`,
+  );
+  if (pageElement) requestPageRender(pdf, pageElement, renderGeneration);
+  updatePageControl({ pageNumber: entry.pageNumber, ratio: 0 });
+  schedulePageRetention();
+  scheduleReadingStateSave();
+  if (matchMedia('(max-width: 560px)').matches) {
+    closePdfOutline(false);
+    stage.focus({ preventScroll: true });
   }
 }
 
@@ -1432,10 +1714,14 @@ function applyPdfSearchQuery(): void {
 
 function openPdfSearch(): void {
   if (!pdfDocument) return;
-  if (searchPanel.hidden) {
-    searchReturnFocus = document.activeElement instanceof HTMLElement
+  const returnFocus = !outlinePanel.hidden
+    ? openOutline
+    : document.activeElement instanceof HTMLElement
       ? document.activeElement
       : undefined;
+  closePdfOutline(false);
+  if (searchPanel.hidden) {
+    searchReturnFocus = returnFocus;
     searchPanel.hidden = false;
   }
   searchQuery.focus({ preventScroll: true });
@@ -1531,6 +1817,75 @@ document.addEventListener('keydown', (event) => {
     event.stopImmediatePropagation();
     navigateToPdfSearchResult(searchResultIndex + (event.shiftKey ? -1 : 1));
   }
+}, true);
+
+openOutline.addEventListener('click', () => {
+  if (outlinePanel.hidden) openPdfOutline();
+  else closePdfOutline();
+});
+outlineClose.addEventListener('click', () => closePdfOutline());
+outlineTree.addEventListener('click', (event) => {
+  const target = event.target instanceof Element ? event.target : null;
+  const toggle = target?.closest<HTMLButtonElement>('.pdf-outline-toggle[data-outline-toggle-id]');
+  if (toggle?.dataset.outlineToggleId) {
+    togglePdfOutlineEntry(toggle.dataset.outlineToggleId);
+    return;
+  }
+  const action = target?.closest<HTMLButtonElement>('.pdf-outline-action[data-outline-id]');
+  const entry = action?.dataset.outlineId
+    ? pdfOutlineEntryMap.get(action.dataset.outlineId)
+    : undefined;
+  if (entry) navigateToPdfOutlineEntry(entry);
+});
+outlineTree.addEventListener('keydown', (event) => {
+  const action = event.target instanceof Element
+    ? event.target.closest<HTMLButtonElement>('.pdf-outline-action[data-outline-id]')
+    : null;
+  const entry = action?.dataset.outlineId
+    ? pdfOutlineEntryMap.get(action.dataset.outlineId)
+    : undefined;
+  if (!action || !entry) return;
+  const actions = [...outlineTree.querySelectorAll<HTMLButtonElement>('.pdf-outline-action')];
+  const actionIndex = actions.indexOf(action);
+  let focusTarget: HTMLButtonElement | undefined;
+  if (event.key === 'ArrowDown') {
+    focusTarget = actions[Math.min(actions.length - 1, actionIndex + 1)];
+  } else if (event.key === 'ArrowUp') {
+    focusTarget = actions[Math.max(0, actionIndex - 1)];
+  } else if (event.key === 'Home') {
+    focusTarget = actions[0];
+  } else if (event.key === 'End') {
+    focusTarget = actions.at(-1);
+  } else if (event.key === 'ArrowRight' && entry.children.length) {
+    if (!pdfOutlineExpandedIds.has(entry.id)) {
+      event.preventDefault();
+      togglePdfOutlineEntry(entry.id);
+      return;
+    }
+    focusTarget = actions.find((candidate) => (
+      pdfOutlineEntryMap.get(candidate.dataset.outlineId ?? '')?.parentId === entry.id
+    ));
+  } else if (event.key === 'ArrowLeft') {
+    if (entry.children.length && pdfOutlineExpandedIds.has(entry.id)) {
+      event.preventDefault();
+      togglePdfOutlineEntry(entry.id);
+      return;
+    }
+    focusTarget = entry.parentId
+      ? outlineTree.querySelector<HTMLButtonElement>(
+          `.pdf-outline-action[data-outline-id="${entry.parentId}"]`,
+        ) ?? undefined
+      : undefined;
+  }
+  if (!focusTarget) return;
+  event.preventDefault();
+  focusTarget.focus({ preventScroll: true });
+});
+document.addEventListener('keydown', (event) => {
+  if (outlinePanel.hidden || event.key !== 'Escape') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  closePdfOutline();
 }, true);
 
 function evictPage(pageElement: HTMLElement): void {
@@ -1819,6 +2174,7 @@ async function openPdfData(
     setLoading('正在准备页面…', 'pages');
     await buildPages(nextDocument, { pageNumber: targetPage, ratio: targetRatio });
     if (!isCurrentOpen(operation)) return;
+    void loadPdfOutline(nextDocument, operation.epoch);
     restoringReadingState = false;
     const controller = await selectionTranslator;
     if (!isCurrentOpen(operation)) return;
@@ -3181,6 +3537,7 @@ stage.addEventListener('scroll', () => {
   schedulePageRetention();
   scheduleReadingStateSave();
 }, { passive: true });
+stage.addEventListener('pointerdown', () => closePdfOutline(false), { passive: true });
 document.addEventListener('pointerdown', beginSmartTextSelection, true);
 document.addEventListener('pointerup', finishSmartTextSelection, true);
 document.addEventListener('pointercancel', cancelSmartTextSelection, true);

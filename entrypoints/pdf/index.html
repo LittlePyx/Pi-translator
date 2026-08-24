@@ -20,6 +20,17 @@
           <span aria-hidden="true">/</span>
           <output id="page-count" aria-label="总页数">0</output>
         </label>
+        <button
+          id="open-outline"
+          class="outline-open"
+          type="button"
+          title="查看文档目录"
+          aria-label="查看文档目录"
+          aria-controls="pdf-outline"
+          aria-expanded="false"
+          disabled
+          hidden
+        >目录</button>
         <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
       </div>
       <div class="region-tools">
@@ -63,6 +74,14 @@
       </div>
       <button id="open-settings" class="quiet" type="button">设置</button>
     </header>
+
+    <aside id="pdf-outline" class="pdf-outline" aria-label="当前 PDF 文档目录" hidden>
+      <header>
+        <span><strong>文档目录</strong><small id="pdf-outline-status"></small></span>
+        <button id="pdf-outline-close" type="button" title="关闭目录（Esc）" aria-label="关闭文档目录">×</button>
+      </header>
+      <nav id="pdf-outline-tree" class="pdf-outline-tree" role="tree" aria-label="章节目录"></nav>
+    </aside>
 
     <section id="pdf-search" class="pdf-search" role="search" aria-label="搜索当前 PDF" hidden>
       <span class="pdf-search-icon" aria-hidden="true"></span>
