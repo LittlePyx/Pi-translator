@@ -201,8 +201,8 @@ export type RuntimeMessage =
   | {
       type: 'OPEN_BROWSER_SIDEBAR';
       payload?: {
-        result: TranslateResult;
-        pageUrl: string;
+        result?: TranslateResult;
+        pageUrl?: string;
         sourceLabel?: string;
         persistPreference?: boolean;
       };
@@ -210,6 +210,8 @@ export type RuntimeMessage =
   | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number } }
   | { type: 'BROWSER_SIDEBAR_ACTIVE' }
   | { type: 'BROWSER_SIDEBAR_CLOSED' }
+  | { type: 'GET_SIDEBAR_OBSTRUCTION_HINT' }
+  | { type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
   | { type: 'GET_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
@@ -681,6 +683,8 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'USE_FLOATING_SIDEBAR' ||
     type === 'BROWSER_SIDEBAR_ACTIVE' ||
     type === 'BROWSER_SIDEBAR_CLOSED' ||
+    type === 'GET_SIDEBAR_OBSTRUCTION_HINT' ||
+    type === 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' ||
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||
     type === 'GET_DOCUMENT_MEMORY' ||

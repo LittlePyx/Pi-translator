@@ -9072,6 +9072,16 @@ test('stops a streaming translation without discarding received output', async (
 });
 
 test('pins continuous translation to a collapsible sidebar', async ({}, testInfo) => {
+  const obstructionHintStorageKey = 'sidebarObstructionHintDismissedHostsV1';
+  const worker = context.serviceWorkers()[0];
+  expect(worker).toBeDefined();
+  await worker!.evaluate(async (storageKey) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: { remove(key: string): Promise<void> } } };
+    }).chrome;
+    await api.storage.local.remove(storageKey);
+  }, obstructionHintStorageKey);
+  await page.reload();
   await page.locator('#blank').focus();
   await selectElementText('#source');
   const overlay = page.locator('#tex-selection-translator-root');
@@ -9080,6 +9090,26 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
   await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  const obstructionHint = overlay.locator('.sidebar-obstruction-hint');
+  await expect(obstructionHint).toContainText('网页内容可能被侧栏遮住');
+  await expect(obstructionHint.getByRole('button', { name: '改用浏览器侧栏' })).toBeVisible();
+  await expect(obstructionHint.getByRole('button', { name: /继续使用/ })).toBeVisible();
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({
+      path: testInfo.outputPath('web-floating-sidebar-obstruction-hint.png'),
+    });
+  }
+  await obstructionHint.getByRole('button', { name: /继续使用/ }).click();
+  await expect(obstructionHint).toHaveCount(0);
+  await expect.poll(() => worker!.evaluate(async (storageKey) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        storage: { local: { get(key: string): Promise<Record<string, unknown>> } };
+      };
+    }).chrome;
+    const stored = await api.storage.local.get(storageKey);
+    return stored[storageKey];
+  }, obstructionHintStorageKey)).toContain('www.overleaf.com');
   const webRegionAction = overlay.getByRole('button', {
     name: '框选当前网页中的文字、公式、图表或图像',
   });
@@ -9145,8 +9175,6 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.locator('.sidebar-region-action')).toBeVisible();
   expect(textRequests).toHaveLength(requestsBeforeRegionSelection);
-  const worker = context.serviceWorkers()[0];
-  expect(worker).toBeDefined();
   await worker!.evaluate(() => {
     const scope = globalThis as typeof globalThis & {
       __piOriginalPermissionsContains?: (query: { origins?: string[] }) => Promise<boolean>;
@@ -9255,6 +9283,81 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await overlay.getByTitle('关闭').click();
   await expect(page.locator('#blank')).toBeFocused();
   await clearBrowserSelection();
+  await worker!.evaluate(async (storageKey) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: { storage: { local: { remove(key: string): Promise<void> } } };
+    }).chrome;
+    await api.storage.local.remove(storageKey);
+  }, obstructionHintStorageKey);
+  await page.reload();
+  await worker!.evaluate(async (targetUrl) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        tabs: {
+          query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+          sendMessage(tabId: number, message: object): Promise<unknown>;
+        };
+      };
+    }).chrome;
+    const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+    if (target?.id === undefined) throw new Error('Missing active web test tab.');
+    await api.tabs.sendMessage(target.id, { type: 'OPEN_SIDEBAR' });
+  }, page.url());
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  const idleObstructionHint = overlay.locator('.sidebar-obstruction-hint');
+  await expect(idleObstructionHint).toContainText('浏览器侧栏不会覆盖页面');
+  await worker!.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __piOriginalSidePanelOpen?: (options: { tabId: number }) => Promise<void>;
+      chrome: {
+        sidePanel: {
+          open(options: { tabId: number }): Promise<void>;
+        };
+      };
+    };
+    const sidePanel = scope.chrome.sidePanel;
+    scope.__piOriginalSidePanelOpen ??= sidePanel.open.bind(sidePanel);
+    Object.defineProperty(sidePanel, 'open', {
+      configurable: true,
+      value: async () => undefined,
+    });
+  });
+  try {
+    await idleObstructionHint.getByRole('button', { name: '改用浏览器侧栏' }).click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await expect.poll(() => worker!.evaluate(async (storageKey) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: { local: { get(key: string): Promise<Record<string, unknown>> } };
+        };
+      }).chrome;
+      const stored = await api.storage.local.get(storageKey);
+      return stored[storageKey];
+    }, obstructionHintStorageKey)).toContain('www.overleaf.com');
+    expect(await worker!.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          storage: { local: { get(key: string): Promise<Record<string, Record<string, unknown>>> } };
+        };
+      }).chrome;
+      const stored = await api.storage.local.get('extensionSettings');
+      return stored.extensionSettings?.sidebarMode;
+    })).toBe('floating');
+  } finally {
+    await worker!.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __piOriginalSidePanelOpen?: (options: { tabId: number }) => Promise<void>;
+        chrome: { sidePanel: object };
+      };
+      if (!scope.__piOriginalSidePanelOpen) return;
+      Object.defineProperty(scope.chrome.sidePanel, 'open', {
+        configurable: true,
+        value: scope.__piOriginalSidePanelOpen,
+      });
+      delete scope.__piOriginalSidePanelOpen;
+    });
+  }
+  await page.reload();
 });
 
 test('moves webpage continuous translation into browser-owned side-panel space', async ({}, testInfo) => {

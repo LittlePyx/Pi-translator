@@ -617,16 +617,19 @@ export async function startSelectionTranslator(
             if (!response.ok) throw new Error(response.error.message);
           },
           onOpenBrowserSidebar: async (
-            result: TranslateResult,
+            result: TranslateResult | undefined,
             openOptions?: { persistPreference?: boolean },
           ) => {
             const sourceLabel = options.sourceLabel?.();
+            const pageUrl = options.pageUrl?.() ?? location.href;
             const response = await browser.runtime.sendMessage({
               type: 'OPEN_BROWSER_SIDEBAR',
               payload: {
-                result,
-                pageUrl: options.pageUrl?.() ?? location.href,
-                ...(sourceLabel ? { sourceLabel } : {}),
+                ...(result ? {
+                  result,
+                  pageUrl,
+                  ...(sourceLabel ? { sourceLabel } : {}),
+                } : {}),
                 ...(openOptions?.persistPreference === false
                   ? { persistPreference: false }
                   : {}),
@@ -637,6 +640,19 @@ export async function startSelectionTranslator(
             overlay.deactivateSidebar();
             lastAutoSelectionHash = activeSelection?.selectionHash;
             scheduleRefresh();
+          },
+          isSidebarObstructionHintDismissed: async () => {
+            const response = await browser.runtime.sendMessage({
+              type: 'GET_SIDEBAR_OBSTRUCTION_HINT',
+            } satisfies RuntimeMessage) as RuntimeResponse<{ dismissed: boolean }>;
+            if (!response.ok) throw new Error(response.error.message);
+            return response.data.dismissed;
+          },
+          onDismissSidebarObstructionHint: async () => {
+            const response = await browser.runtime.sendMessage({
+              type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT',
+            } satisfies RuntimeMessage) as RuntimeResponse<{ dismissed: true }>;
+            if (!response.ok) throw new Error(response.error.message);
           },
         }),
     onSidebarChange: (active) => {

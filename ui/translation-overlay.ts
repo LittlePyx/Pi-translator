@@ -20,6 +20,7 @@ import {
   type ManualCorrectionEdit,
 } from '../core/translation/manual-correction';
 import type { SidebarMode, SidebarSide } from '../core/settings/schema';
+import { shouldSuggestBrowserSidebar } from '../core/content/sidebar-obstruction';
 import {
   documentMemoryTranslationResult,
   type DocumentMemorySnapshot,
@@ -143,6 +144,7 @@ const STYLES = `
   .icon { display:grid;place-items:center;width:var(--compact-hit);height:var(--compact-hit);padding:0;border:0;border-radius:8px;color:#5e6a7f;background:transparent;font-size:17px; }.icon:hover{background:var(--soft)}.icon:disabled{opacity:.28;cursor:default}.counter{min-width:35px;color:var(--muted);font-size:10.5px;text-align:center;font-variant-numeric:tabular-nums}
   .pin-action{height:var(--compact-hit);padding:0 8px;border:1px solid var(--line);border-radius:5px;color:#4b5870;background:transparent;font-size:11px;font-weight:680;white-space:nowrap}.pin-action:hover{color:var(--accent);border-color:#b8c0ea;background:var(--soft)}
   .sidebar-region-action{display:inline-flex;align-self:flex-start;align-items:center;gap:7px;max-width:100%;min-height:34px;margin:3px 0 1px;padding:4px 6px;border:0;border-radius:5px;color:var(--muted);background:transparent;text-align:left}.sidebar-region-action:hover{color:var(--accent);background:var(--soft)}.sidebar-region-icon{flex:0 0 auto;width:12px;height:12px;border:1.5px dashed var(--accent);border-radius:2px}.sidebar-region-label{flex:0 0 auto;color:var(--text);font-size:11px;font-weight:680}.sidebar-region-hint{min-width:0;overflow:hidden;color:var(--muted);font-size:10px;font-weight:500;text-overflow:ellipsis;white-space:nowrap}
+  .sidebar-obstruction-hint{display:grid;grid-template-columns:auto minmax(0,1fr);gap:7px 8px;margin:5px 0;padding:8px 9px;border:1px solid rgba(89,89,223,.18);border-radius:8px;background:linear-gradient(135deg,rgba(238,241,255,.88),rgba(244,247,252,.92));color:var(--muted);font-size:9.5px;line-height:1.45}.sidebar-obstruction-icon{display:grid;place-items:center;width:20px;height:20px;border-radius:6px;color:var(--accent);background:rgba(89,89,223,.1);font-size:12px;font-weight:800}.sidebar-obstruction-copy{display:grid;gap:1px;min-width:0}.sidebar-obstruction-copy strong{color:var(--text);font-size:10.5px}.sidebar-obstruction-actions{grid-column:2;display:flex;align-items:center;gap:4px;flex-wrap:wrap}.sidebar-obstruction-actions button{min-height:27px;padding:3px 7px;border:0;border-radius:4px;color:var(--muted);background:transparent;font-size:9.5px;font-weight:650}.sidebar-obstruction-actions .sidebar-obstruction-switch{color:var(--accent);background:rgba(89,89,223,.09)}.sidebar-obstruction-actions button:hover:not(:disabled){color:var(--accent);background:rgba(89,89,223,.12)}.sidebar-obstruction-status{grid-column:2;color:#a52b36;font-size:9px}.sidebar-obstruction-status:empty{display:none}
   .result-topline{display:flex;align-items:center;gap:6px;min-height:var(--compact-hit);margin-top:5px}.meta{display:flex;flex:1;flex-wrap:wrap;align-items:center;gap:5px;min-width:0;color:var(--muted);font-size:10.5px}.source-host{min-width:0;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.meta-dot::before{content:"·";margin-right:5px}.cache-badge{padding:0;color:#16839a;background:transparent;font-weight:650}.source-location{min-height:var(--compact-hit);padding:0 2px;border:0;border-bottom:1px solid transparent;color:var(--muted);background:transparent;font-size:10.5px}.source-location:hover{color:var(--accent);border-bottom-color:currentColor}
   .applied-terms{margin:2px 0;border-block:1px solid var(--line)}.applied-terms>summary{display:flex;align-items:center;gap:6px;min-height:29px;padding:2px 1px;color:var(--muted);cursor:pointer;list-style:none;font-size:9.5px}.applied-terms>summary::-webkit-details-marker{display:none}.applied-terms>summary::before{content:"✓";color:#17816d;font-weight:800}.applied-terms>summary::after{content:"＋";margin-left:auto;color:var(--muted)}.applied-terms[open]>summary::after{content:"−"}.applied-terms>summary:hover{color:var(--accent)}.applied-term-count{color:var(--text);font-weight:700}.applied-term-scope-summary{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.applied-term-list{display:grid;padding-bottom:5px}.applied-term-row{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:6px;min-height:31px;padding:4px 1px;border-top:1px solid var(--line)}.applied-term-pair{display:flex;align-items:baseline;gap:5px;min-width:0;font-size:10px}.applied-term-source,.applied-term-target{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.applied-term-source{color:var(--text)}.applied-term-arrow{color:var(--muted)}.applied-term-target{color:var(--accent)}.applied-term-actions{display:flex;align-items:center;gap:4px}.applied-term-scope{color:var(--muted);font-size:8.5px}.applied-term-edit{min-height:var(--compact-hit);padding:0 4px;border:0;border-radius:3px;color:var(--muted);background:transparent;font-size:9px}.applied-term-edit:hover{color:var(--accent);background:var(--soft)}
   .glossary-review{margin:2px 0;border-block:1px solid var(--line)}.glossary-review>summary{display:flex;align-items:center;gap:6px;min-height:29px;padding:2px 1px;color:var(--muted);cursor:pointer;list-style:none;font-size:9.5px}.glossary-review>summary::-webkit-details-marker{display:none}.glossary-review>summary::before{content:"!";display:grid;place-items:center;width:13px;height:13px;border-radius:50%;color:#8a6516;background:#fff4cf;font-size:8px;font-weight:850}.glossary-review>summary::after{content:"＋";margin-left:auto;color:var(--muted)}.glossary-review[open]>summary::after{content:"−"}.glossary-review>summary:hover{color:var(--accent)}.glossary-review-count{color:#806019;font-weight:700}.glossary-review-intro{padding:5px 1px 7px;color:var(--muted);font-size:9px;line-height:1.5}.glossary-review .applied-term-target{color:#806019}.glossary-review .applied-term-actions{gap:1px}
@@ -178,6 +180,7 @@ const STYLES = `
   details.more{position:relative;margin-left:auto}details.more>summary{display:grid;place-items:center;width:var(--compact-hit);height:var(--compact-hit);border-radius:4px;color:var(--muted);cursor:pointer;list-style:none;font-size:12px;font-weight:800}details.more>summary:hover{background:var(--soft)}details.more>summary::-webkit-details-marker{display:none}.menu{position:absolute;z-index:5;right:0;bottom:34px;width:220px;max-height:calc(100vh - 32px);padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--surface);box-shadow:0 16px 40px rgba(15,23,42,.2);overflow-y:auto;overscroll-behavior:contain}.menu::-webkit-scrollbar{width:5px}.menu::-webkit-scrollbar-track{background:transparent}.menu::-webkit-scrollbar-thumb{border-radius:999px;background:rgba(101,115,138,.48)}.menu::-webkit-scrollbar-button{width:0;height:0}.menu.opens-down{top:34px;bottom:auto}.sidebar.left .menu{left:0;right:auto}.menu button{width:100%;min-height:var(--compact-hit);padding:6px 9px;border:0;border-radius:4px;color:var(--text);background:transparent;text-align:left;font-size:11px}.menu button:hover{background:var(--soft)}.menu hr{border:0;border-top:1px solid var(--line);margin:6px 0}.menu label{display:grid;gap:4px;margin:6px;color:var(--muted);font-size:10px}.menu select{width:100%;min-height:var(--compact-hit);padding:5px 6px;border:1px solid var(--line);border-radius:4px;color:var(--text);background:var(--soft);font-size:11px}
   :host([data-pi-theme="dark"]) .logo,:host([data-pi-theme="dark"]) .trigger-logo{filter:brightness(0) invert(1)}:host([data-pi-theme="dark"]) .title{color:#d6deea}:host([data-pi-theme="dark"]) .view-button.active{color:#e4e5ff;background:#273246}:host([data-pi-theme="dark"]) .segment{background:linear-gradient(145deg,rgba(31,41,55,.9),rgba(24,33,47,.72))}:host([data-pi-theme="dark"]) .action{color:#e8edf6;background:#202938;border-color:#465269}:host([data-pi-theme="dark"]) .primary{background:#5b6ee1}:host([data-pi-theme="dark"]) .copy-action{color:#fff;background:#6558dc;border-color:#7367ed}:host([data-pi-theme="dark"]) .copy-action:hover:not(:disabled){color:#fff;background:#7468e4;border-color:#8d83f2}:host([data-pi-theme="dark"]) .copy-action[data-state="success"]{border-color:#2a9b7f;background:#237e68}:host([data-pi-theme="dark"]) .copy-action[data-state="error"]{border-color:#d95664;background:#a83242}:host([data-pi-theme="dark"]) .copy-action:disabled{color:#777f8e;border-color:#333b4a;background:#202734}:host([data-pi-theme="dark"]) .warning{color:#f1d68e;background:#463b20}:host([data-pi-theme="dark"]) .error{color:#ff9aa4;background:#32171d}:host([data-pi-theme="dark"]) .cache-badge{color:#8de7f7;background:transparent}:host([data-pi-theme="dark"]) .correction-action{color:var(--muted);background:transparent;border-color:transparent}:host([data-pi-theme="dark"]) .correction-action:hover,:host([data-pi-theme="dark"]) .correction-undo button:hover{color:#c4c8ff;background:var(--soft)}
   :host([data-pi-theme="dark"]) .capture-permission{border-color:rgba(129,140,248,.22)}:host([data-pi-theme="dark"]) .capture-permission-fallback{color:var(--muted);background:transparent;border-color:transparent}:host([data-pi-theme="dark"]) .capture-permission-fallback:hover{color:#c4c8ff;background:var(--soft)}
+  :host([data-pi-theme="dark"]) .sidebar-obstruction-hint{border-color:rgba(129,140,248,.22);background:linear-gradient(135deg,rgba(39,50,70,.96),rgba(31,41,56,.94))}:host([data-pi-theme="dark"]) .sidebar-obstruction-icon{color:#c4c8ff;background:rgba(129,140,248,.14)}:host([data-pi-theme="dark"]) .sidebar-obstruction-actions .sidebar-obstruction-switch{color:#c4c8ff;background:rgba(129,140,248,.12)}:host([data-pi-theme="dark"]) .sidebar-obstruction-actions button:hover:not(:disabled){color:#c4c8ff;background:rgba(129,140,248,.16)}:host([data-pi-theme="dark"]) .sidebar-obstruction-status{color:#ff9aa4}
   :host([data-pi-theme="dark"]) .stop-translation:hover{color:#ff9aa4;background:var(--soft)}:host([data-pi-theme="dark"]) .pi-math-display::-webkit-scrollbar-thumb,:host([data-pi-theme="dark"]) .pi-math-scroll::-webkit-scrollbar-thumb,:host([data-pi-theme="dark"]) .revision-custom textarea::-webkit-scrollbar-thumb,:host([data-pi-theme="dark"]) .menu::-webkit-scrollbar-thumb{background:rgba(169,181,199,.48)}
   :host([data-pi-theme="dark"]) .applied-terms>summary::before{color:#71d6bd}:host([data-pi-theme="dark"]) .applied-term-target{color:#c4c8ff}
   :host([data-pi-theme="dark"]) .glossary-review>summary::before{color:#f1d68e;background:#493d20}:host([data-pi-theme="dark"]) .glossary-review-count,:host([data-pi-theme="dark"]) .glossary-review .applied-term-target{color:#f1d68e}
@@ -331,9 +334,11 @@ interface OverlayActions {
   ) => Promise<boolean>;
   onPauseSite?: () => Promise<void>;
   onOpenBrowserSidebar?: (
-    result: TranslateResult,
+    result: TranslateResult | undefined,
     options?: { persistPreference?: boolean },
   ) => Promise<void>;
+  isSidebarObstructionHintDismissed?: () => Promise<boolean>;
+  onDismissSidebarObstructionHint?: () => Promise<void>;
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
   onSidebarLayoutChange: (expanded: boolean, side: SidebarSide, width: number) => void;
@@ -410,6 +415,10 @@ export class TranslationOverlay {
   private cardReturnFocus: HTMLElement | undefined;
   private focusNextSurface = false;
   private triggerNoticeTimer: ReturnType<typeof setTimeout> | undefined;
+  private sidebarObstructionHintTimer: ReturnType<typeof setTimeout> | undefined;
+  private sidebarObstructionHintPreferenceLoaded = false;
+  private sidebarObstructionHintDismissed = false;
+  private sidebarObstructionHintPresented = false;
 
   constructor(
     private readonly actions: OverlayActions,
@@ -427,9 +436,10 @@ export class TranslationOverlay {
     window.addEventListener('scroll',this.onViewportChange,true);
     window.visualViewport?.addEventListener('resize',this.onViewportChange);
     window.visualViewport?.addEventListener('scroll',this.onViewportChange);
+    if(this.actions.isSidebarObstructionHintDismissed){void this.actions.isSidebarObstructionHintDismissed().then((dismissed)=>{this.sidebarObstructionHintPreferenceLoaded=true;this.sidebarObstructionHintDismissed=dismissed;this.scheduleSidebarObstructionHint()}).catch(()=>{this.sidebarObstructionHintPreferenceLoaded=true;this.sidebarObstructionHintDismissed=true})}
   }
 
-  setPreferences(preferences: OverlayPreferences): void { const sidebarModeChanged=this.preferences.sidebarMode!==preferences.sidebarMode;this.preferences={...preferences};this.sidebarWidth=preferences.sidebarWidth;this.publishSidebarLayout();if(sidebarModeChanged&&this.view==='card'&&this.currentResult&&!this.progressState)this.renderResult(this.currentResult);else this.scheduleReflow(); }
+  setPreferences(preferences: OverlayPreferences): void { const sidebarModeChanged=this.preferences.sidebarMode!==preferences.sidebarMode;this.preferences={...preferences};this.sidebarWidth=preferences.sidebarWidth;this.publishSidebarLayout();if(sidebarModeChanged&&this.view==='card'&&this.currentResult&&!this.progressState)this.renderResult(this.currentResult);else this.scheduleReflow();this.scheduleSidebarObstructionHint(240) }
   isSidebarActive(): boolean { return this.sidebarActive; }
   isShowingCard(): boolean { return this.view==='card'||this.view==='sidebar'; }
   ownsCurrentSelection(): boolean {
@@ -1427,7 +1437,7 @@ export class TranslationOverlay {
 
   private beginPdfRegionAdjustment():void { if(this.sidebarActive)this.collapseSidebar();else{this.clear();this.setView('hidden')}this.actions.onAdjustPdfRegion?.() }
 
-  private openBrowserSidebarFromControl(result:TranslateResult,button:HTMLButtonElement):void {
+  private openBrowserSidebarFromControl(result:TranslateResult|undefined,button:HTMLButtonElement):void {
     if(!this.actions.onOpenBrowserSidebar)return;
     const originalLabel=button.textContent??'打开浏览器侧栏';
     button.disabled=true;button.textContent='正在打开…';
@@ -1438,6 +1448,40 @@ export class TranslationOverlay {
       const message=error instanceof Error&&error.message.trim()?error.message:'当前页面无法打开浏览器侧栏。';
       this.resultFeedback.textContent='';requestAnimationFrame(()=>{this.resultFeedback.textContent=message});
     });
+  }
+
+  private sidebarCoversMeaningfulPageContent():boolean {
+    const availableLeft=this.viewportInsets.left;const availableRight=innerWidth-this.viewportInsets.right;const availableTop=this.viewportInsets.top;const availableBottom=innerHeight-this.viewportInsets.bottom;const inset=Math.min(120,Math.max(24,this.sidebarWidth*.32));const x=this.preferences.sidebarSide==='right'?availableRight-this.sidebarWidth+inset:availableLeft+this.sidebarWidth-inset;const yRatios=[.2,.38,.56,.74,.88];const meaningfulSelector='a[href],button,input,select,textarea,[role="button"],[role="link"],img,canvas,svg,table,pre,code,video,iframe';
+    return yRatios.some((ratio)=>document.elementsFromPoint(x,availableTop+(availableBottom-availableTop)*ratio).some((element)=>{
+      if(element===this.host||element.closest(`#${this.host.id}`)||element===document.documentElement||element===document.body)return false;
+      if(element.matches(meaningfulSelector))return true;
+      const directText=[...element.childNodes].some((node)=>node.nodeType===Node.TEXT_NODE&&Boolean(node.textContent?.trim())&&node.textContent!.trim().length>=8);
+      if(!directText)return false;
+      const rect=element.getBoundingClientRect();return rect.width>=40&&rect.height>=14;
+    }));
+  }
+
+  private sidebarObstructionLikely():boolean {
+    return shouldSuggestBrowserSidebar({viewportWidth:innerWidth,insetLeft:this.viewportInsets.left,insetRight:this.viewportInsets.right,sidebarWidth:this.sidebarWidth,meaningfulContentCovered:this.sidebarCoversMeaningfulPageContent()});
+  }
+
+  private scheduleSidebarObstructionHint(delay=700):void {
+    if(this.sidebarObstructionHintTimer)clearTimeout(this.sidebarObstructionHintTimer);this.sidebarObstructionHintTimer=undefined;
+    if(!this.sidebarObstructionHintPreferenceLoaded||this.sidebarObstructionHintDismissed||this.sidebarObstructionHintPresented||!this.sidebarActive||this.sidebarCollapsed||this.view!=='sidebar'||!this.actions.onOpenBrowserSidebar||!this.actions.onDismissSidebarObstructionHint)return;
+    if(this.progressState||this.root.querySelector('.error,.capture-permission,.notice'))return;
+    this.sidebarObstructionHintTimer=setTimeout(()=>{this.sidebarObstructionHintTimer=undefined;this.showSidebarObstructionHint()},delay);
+  }
+
+  private refreshSidebarObstructionHint():void {
+    const hint=this.root.querySelector<HTMLElement>('.sidebar-obstruction-hint');
+    if(hint&&!this.sidebarObstructionLikely())hint.remove();
+  }
+
+  private showSidebarObstructionHint():void {
+    if(this.sidebarObstructionHintPresented||!this.sidebarActive||this.view!=='sidebar'||!this.sidebarObstructionLikely()||!this.actions.onOpenBrowserSidebar||!this.actions.onDismissSidebarObstructionHint)return;
+    const surface=this.root.querySelector<HTMLElement>('.surface.sidebar');if(!surface)return;const hint=document.createElement('aside');hint.className='sidebar-obstruction-hint';hint.setAttribute('role','status');hint.setAttribute('aria-label','页面侧栏遮挡提示');const icon=document.createElement('span');icon.className='sidebar-obstruction-icon';icon.ariaHidden='true';icon.textContent='↔';const copy=document.createElement('div');copy.className='sidebar-obstruction-copy';const title=document.createElement('strong');title.textContent='网页内容可能被侧栏遮住';const detail=document.createElement('span');detail.textContent='浏览器侧栏不会覆盖页面，可以按需切换。';copy.append(title,detail);const actions=document.createElement('div');actions.className='sidebar-obstruction-actions';const switchButton=this.button('改用浏览器侧栏','sidebar-obstruction-switch');const keepButton=this.button('继续使用','sidebar-obstruction-keep','继续使用页面侧栏，本网站不再提示');const status=document.createElement('span');status.className='sidebar-obstruction-status';status.setAttribute('role','alert');
+    switchButton.addEventListener('click',()=>{switchButton.disabled=true;keepButton.disabled=true;switchButton.textContent='正在切换…';void this.actions.onOpenBrowserSidebar?.(this.currentResult,{persistPreference:false}).then(()=>{this.sidebarObstructionHintDismissed=true;void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)}).catch(()=>{if(!switchButton.isConnected)return;switchButton.disabled=false;keepButton.disabled=false;switchButton.textContent='改用浏览器侧栏';status.textContent='暂时无法打开，请稍后重试。'})});
+    keepButton.addEventListener('click',()=>{this.sidebarObstructionHintDismissed=true;hint.remove();this.resultFeedback.textContent='已继续使用页面侧栏，本网站不再提示';void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)});actions.append(switchButton,keepButton);hint.append(icon,copy,actions,status);const anchor=surface.querySelector('.sidebar-region-action')??surface.querySelector('.header');anchor?.after(hint);this.sidebarObstructionHintPresented=true;
   }
 
   private placeMoreMenu(details:HTMLElement,menu:HTMLElement):void { const surface=details.closest<HTMLElement>('.surface');if(!surface)return;menu.classList.remove('opens-down');menu.style.removeProperty('max-height');const anchorRect=details.getBoundingClientRect();const surfaceRect=surface.getBoundingClientRect();const headerBottom=surface.querySelector<HTMLElement>(':scope > .header')?.getBoundingClientRect().bottom??surfaceRect.top;const gap=2,margin=8;const visibleTop=Math.max(surfaceRect.top,headerBottom,margin);const visibleBottom=Math.min(surfaceRect.bottom,innerHeight-margin);const above=Math.max(0,anchorRect.top-gap-visibleTop);const below=Math.max(0,visibleBottom-anchorRect.bottom-gap);const desired=Math.min(menu.scrollHeight,280);const opensDown=below>=desired||below>=above;const available=opensDown?below:above;menu.classList.toggle('opens-down',opensDown);menu.style.maxHeight=`${Math.max(1,Math.min(desired,available))}px`; }
@@ -1467,7 +1511,7 @@ export class TranslationOverlay {
     this.refreshViewportInsets();
     this.root.append(surface);
     this.observeSize(surface);
-    if(this.sidebarActive||this.markerNavigatorActive||this.documentMemoryActive){this.setView('sidebar');this.scheduleReflow();if(shouldMoveFocus)queueMicrotask(restoreOverlayFocus);return}
+    if(this.sidebarActive||this.markerNavigatorActive||this.documentMemoryActive){this.setView('sidebar');this.scheduleReflow();this.scheduleSidebarObstructionHint();if(shouldMoveFocus)queueMicrotask(restoreOverlayFocus);return}
     const rect=this.lastRect??{top:innerHeight/2,bottom:innerHeight/2,left:innerWidth/2,right:innerWidth/2};
     if(this.cardPosition){
       this.cardPosition=this.applyPosition(surface,this.constrain(this.cardPosition.left,this.cardPosition.top,surface.offsetWidth,surface.offsetHeight));
@@ -1584,8 +1628,9 @@ export class TranslationOverlay {
       this.sidebarWidth=Math.min(maximum,Math.max(minimum,raw));
       surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);
       this.publishSidebarLayout();
+      this.refreshSidebarObstructionHint();
     });
-    const stop=()=>{if(id!==undefined)this.actions.onSidebarWidthChange(this.sidebarWidth);id=undefined};handle.addEventListener('pointerup',stop);handle.addEventListener('pointercancel',stop);
+    const stop=()=>{if(id!==undefined){this.actions.onSidebarWidthChange(this.sidebarWidth);this.scheduleSidebarObstructionHint(240)}id=undefined};handle.addEventListener('pointerup',stop);handle.addEventListener('pointercancel',stop);
   }
 
   private constrain(left:number,top:number,width:number,height:number):Position {
@@ -1692,12 +1737,12 @@ export class TranslationOverlay {
   }
   private button(text:string,className:string,title?:string):HTMLButtonElement{const button=document.createElement('button');button.type='button';button.className=className;button.textContent=text;if(title){button.title=title;button.ariaLabel=title}return button}
   private logo(className:string):HTMLImageElement{const image=document.createElement('img');image.className=className;image.src=this.logoUrl;image.alt='';return image}
-  private clear():void{this.surfaceResizeObserver?.disconnect();this.surfaceResizeObserver=undefined;if(this.reflowFrame!==undefined)cancelAnimationFrame(this.reflowFrame);this.reflowFrame=undefined;if(this.triggerNoticeTimer)clearTimeout(this.triggerNoticeTimer);this.triggerNoticeTimer=undefined;for(const child of [...this.root.children])if(!(child instanceof HTMLStyleElement)&&child!==this.resultFeedback)child.remove()}
+  private clear():void{this.surfaceResizeObserver?.disconnect();this.surfaceResizeObserver=undefined;if(this.reflowFrame!==undefined)cancelAnimationFrame(this.reflowFrame);this.reflowFrame=undefined;if(this.triggerNoticeTimer)clearTimeout(this.triggerNoticeTimer);this.triggerNoticeTimer=undefined;if(this.sidebarObstructionHintTimer)clearTimeout(this.sidebarObstructionHintTimer);this.sidebarObstructionHintTimer=undefined;for(const child of [...this.root.children])if(!(child instanceof HTMLStyleElement)&&child!==this.resultFeedback)child.remove()}
   private publishSidebarLayout():void{this.actions.onSidebarLayoutChange(this.view==='sidebar',this.preferences.sidebarSide,this.sidebarWidth)}
   private setView(view:OverlayView):void{this.view=view;this.host.dataset.piView=view;this.publishSidebarLayout()}
   private readonly onKeyDown=(event:KeyboardEvent):void=>{if(this.view==='hidden')return;if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive){this.returnFromHistoryNavigator();return}const correctionCancel=this.root.querySelector<HTMLButtonElement>('.correction-cancel');if(correctionCancel){correctionCancel.click();return}const openMenu=this.root.querySelector<HTMLDetailsElement>('details.more[open]');if(openMenu){openMenu.open=false;openMenu.querySelector<HTMLElement>('summary')?.focus();return}if(this.sidebarActive)this.collapseSidebar();else this.closeSurface();return}if(event.altKey&&(event.key==='/'||event.code==='Slash')&&this.sidebarActive&&!this.sidebarCollapsed&&this.history.length>1&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive)this.root.querySelector<HTMLInputElement>('.history-search-field')?.focus({preventScroll:true});else this.openHistoryNavigator();return}const origin=event.composedPath()[0];const editable=origin instanceof HTMLInputElement||origin instanceof HTMLTextAreaElement||origin instanceof HTMLSelectElement||(origin instanceof HTMLElement&&origin.isContentEditable);const canNavigate=!editable&&!this.sidebarCollapsed&&!this.historyNavigatorActive&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState&&!this.root.querySelector('details.more[open],.recognized-editor,.segment-correction')&&Boolean(this.root.querySelector('.body,.aligned-list'));if(canNavigate&&event.altKey&&event.key==='ArrowUp'){event.preventDefault();this.navigate(1)}if(canNavigate&&event.altKey&&event.key==='ArrowDown'){event.preventDefault();this.navigate(-1)}};
   private readonly onDocumentPointerDown=(event:PointerEvent):void=>{const openMenu=this.root.querySelector<HTMLDetailsElement>('details.more[open]');if(!openMenu||event.composedPath().includes(openMenu))return;openMenu.open=false};
-  private readonly onViewportChange=():void=>this.scheduleReflow();
+  private readonly onViewportChange=(event?:Event):void=>{this.scheduleReflow();if(event?.type==='resize'){this.refreshSidebarObstructionHint();this.scheduleSidebarObstructionHint(240)}};
   private readonly onColorSchemeChange=():void=>this.scheduleTheme();
   private trackTheme():void{this.refreshTheme();this.themeObserver=new MutationObserver(()=>this.scheduleTheme());const options:MutationObserverInit={attributes:true,attributeFilter:['class','style','data-theme','data-color-mode','data-bs-theme']};this.themeObserver.observe(document.documentElement,options);if(document.body)this.themeObserver.observe(document.body,options);this.colorSchemeQuery=globalThis.matchMedia?.('(prefers-color-scheme:dark)');this.colorSchemeQuery?.addEventListener('change',this.onColorSchemeChange)}
   private scheduleTheme():void{if(this.themeTimer)clearTimeout(this.themeTimer);this.themeTimer=setTimeout(()=>this.refreshTheme(),40)}private refreshTheme():void{this.host.dataset.piTheme=detectPageTheme()}

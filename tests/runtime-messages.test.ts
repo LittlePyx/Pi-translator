@@ -51,6 +51,8 @@ describe('runtime message guard', () => {
     })).toBe(true);
     expect(isRuntimeMessage({ type: 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT' })).toBe(true);
     expect(isRuntimeMessage({ type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' })).toBe(true);
+    expect(isRuntimeMessage({ type: 'GET_SIDEBAR_OBSTRUCTION_HINT' })).toBe(true);
+    expect(isRuntimeMessage({ type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' })).toBe(true);
     expect(isRuntimeMessage({
       type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
       payload: { tabId: 7 },

@@ -54,7 +54,11 @@ import {
   isOverleafProjectUrl,
   VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../core/settings/site-access';
-import { getPausedSiteHosts, setSitePaused } from '../core/settings/site-pause';
+import { getPausedSiteHosts, setSitePaused, siteHostFromUrl } from '../core/settings/site-pause';
+import {
+  dismissSidebarObstructionHint,
+  isSidebarObstructionHintDismissed,
+} from '../core/settings/sidebar-obstruction-hint';
 import {
   completeFeatureDiscovery,
   featureDiscoveryFeatureForTranslation,
@@ -731,10 +735,11 @@ function prepareWebSidePanelTranslation(
 
 function mirroredWebSidePanelSession(
   tabId: number,
-  payload: NonNullable<Extract<
-    RuntimeMessage,
-    { type: 'OPEN_BROWSER_SIDEBAR' }
-  >['payload']>,
+  payload: {
+    result: TranslateResult;
+    pageUrl: string;
+    sourceLabel?: string;
+  },
 ): PdfSidePanelSession {
   return {
     tabId,
@@ -953,9 +958,15 @@ function openBrowserTranslationSidePanel(
     if (!tabLifecycles.isCurrent(lifecycleToken)) {
       throw staleTranslationMutationError('网页已经关闭或跳转，浏览器侧栏没有继续打开。');
     }
-    if (mirrored) {
+    if (mirrored?.result && mirrored.pageUrl) {
+      const result = mirrored.result;
+      const pageUrl = mirrored.pageUrl;
       await runTranslationCommit(tab.id, () => publishPdfSidePanelSessionDurably(
-        mirroredWebSidePanelSession(tab.id, mirrored),
+        mirroredWebSidePanelSession(tab.id, {
+          result,
+          pageUrl,
+          ...(mirrored.sourceLabel ? { sourceLabel: mirrored.sourceLabel } : {}),
+        }),
         () => assertTabLifecycleCurrent(lifecycleToken),
       ));
     }
@@ -4459,6 +4470,30 @@ export default defineBackground(() => {
         message.type === 'BROWSER_SIDEBAR_CLOSED'
       ) {
         return undefined;
+      }
+
+      if (
+        message.type === 'GET_SIDEBAR_OBSTRUCTION_HINT' ||
+        message.type === 'DISMISS_SIDEBAR_OBSTRUCTION_HINT'
+      ) {
+        const hostname = sender.tab?.url ? siteHostFromUrl(sender.tab.url) : undefined;
+        if (!hostname) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '当前页面无法保存侧栏提示偏好。',
+            false,
+          )));
+        }
+        if (message.type === 'GET_SIDEBAR_OBSTRUCTION_HINT') {
+          return isSidebarObstructionHintDismissed(hostname).then((dismissed) => ({
+            ok: true as const,
+            data: { dismissed },
+          }));
+        }
+        return dismissSidebarObstructionHint(hostname).then(() => ({
+          ok: true as const,
+          data: { dismissed: true as const },
+        }));
       }
 
       if (message.type === 'OPEN_SIDEBAR') {
