@@ -77,6 +77,8 @@ const emptyAction = element<HTMLButtonElement>('empty-action');
 const emptyStatus = element<HTMLElement>('empty-status');
 const appSubtitle = element<HTMLElement>('app-subtitle');
 const appHeader = document.querySelector<HTMLElement>('.app-header')!;
+const continuousTranslationToggle = element<HTMLButtonElement>('continuous-translation-toggle');
+const continuousTranslationLabel = element<HTMLElement>('continuous-translation-label');
 const startWebRegion = element<HTMLButtonElement>('start-web-region');
 const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const sessionSection = element<HTMLElement>('session');
@@ -161,6 +163,8 @@ let sourceLayoutFrame: number | undefined;
 let webRegionStartPending = false;
 let webCapturePermissionRecoveryPending = false;
 let webRegionFeedbackTimer: number | undefined;
+let continuousTranslationPaused = false;
+let continuousTranslationPending = false;
 const sessionLoadGate = createLatestRequestGate();
 let activeProgressIdentity: TranslationProgressIdentity | undefined;
 let activeProgressStage: TranslationProgressStage | undefined;
@@ -382,6 +386,7 @@ function showEmptyContext(context: SidePanelEmptyContext): void {
   emptyStatus.setAttribute('role', 'status');
   emptyStatus.setAttribute('aria-live', 'polite');
   syncWebRegionAction(context.kind === 'web');
+  syncContinuousTranslationControl(context.kind === 'web');
   if (context.kind === 'loading') {
     appSubtitle.textContent = '网页与 PDF 翻译';
     emptyTitle.textContent = '正在检查当前页面…';
@@ -400,7 +405,7 @@ function showEmptyContext(context: SidePanelEmptyContext): void {
   if (context.kind === 'web') {
     appSubtitle.textContent = '网页划词翻译';
     emptyTitle.textContent = '浏览器侧栏已就绪';
-    emptyDescription.textContent = '可直接从顶部框选当前网页；划选文字后，译文也会连续显示在这里。';
+    emptyDescription.textContent = webContinuousTranslationDescription();
     emptyAction.textContent = '改用网页浮动侧栏';
     return;
   }
@@ -561,6 +566,7 @@ function syncWebRegionAction(available: boolean): void {
     startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
       ? '允许截图并重试'
       : '框选网页';
+    startWebRegionLabel.dataset.shortLabel = webCapturePermissionRecoveryPending ? '授权' : '框选';
     startWebRegion.title = webCapturePermissionRecoveryPending
       ? '点击后在 Edge 提示中选择允许，并恢复刚才的框选区域'
       : '在当前网页拖动框选文字、公式、图表或图像';
@@ -572,7 +578,72 @@ function syncWebRegionAction(available: boolean): void {
   startWebRegion.removeAttribute('aria-busy');
   webCapturePermissionRecoveryPending = false;
   startWebRegionLabel.textContent = '框选网页';
+  startWebRegionLabel.dataset.shortLabel = '框选';
   startWebRegion.title = '在当前网页拖动框选文字、公式、图表或图像';
+}
+
+function webContinuousTranslationDescription(): string {
+  return continuousTranslationPaused
+    ? '自动划词已暂停；仍可从顶部框选网页，也可使用右键菜单或快捷键主动翻译。'
+    : '可直接从顶部框选当前网页；划选文字后，译文也会连续显示在这里。';
+}
+
+function syncContinuousTranslationControl(available: boolean): void {
+  continuousTranslationToggle.hidden = !available;
+  continuousTranslationToggle.disabled = continuousTranslationPending;
+  continuousTranslationToggle.classList.toggle('paused', continuousTranslationPaused);
+  continuousTranslationToggle.setAttribute('aria-pressed', String(continuousTranslationPaused));
+  continuousTranslationLabel.textContent = continuousTranslationPending
+    ? '正在更新…'
+    : continuousTranslationPaused ? '已暂停' : '自动翻译中';
+  continuousTranslationLabel.dataset.shortLabel = continuousTranslationPending
+    ? '稍候'
+    : continuousTranslationPaused ? '暂停' : '自动';
+  continuousTranslationToggle.title = continuousTranslationPaused
+    ? '继续当前标签页的自动连续翻译'
+    : '暂停当前标签页的自动连续翻译';
+  continuousTranslationToggle.ariaLabel = continuousTranslationToggle.title;
+  if (emptyContext.kind === 'web') {
+    emptyDescription.textContent = webContinuousTranslationDescription();
+  }
+}
+
+function applyContinuousTranslationState(paused: boolean): void {
+  continuousTranslationPaused = paused;
+  syncContinuousTranslationControl(
+    emptyContext.kind === 'web' || currentSession?.sourceKind === 'web',
+  );
+}
+
+async function setCurrentContinuousTranslationPaused(paused: boolean): Promise<void> {
+  if (continuousTranslationPending || activeTabId === undefined) return;
+  const tabId = activeTabId;
+  continuousTranslationPending = true;
+  syncContinuousTranslationControl(true);
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'SET_CONTINUOUS_TRANSLATION_PAUSED',
+      payload: { tabId, paused },
+    } satisfies RuntimeMessage) as RuntimeResponse<{ paused: boolean }>;
+    if (!response.ok) throw new Error(response.error.message);
+    if (activeTabId !== tabId) return;
+    continuousTranslationPaused = response.data.paused;
+    const message = response.data.paused
+      ? '已暂停当前标签页的自动连续翻译'
+      : '已继续当前标签页的自动连续翻译';
+    if (currentSession) setStatus(message);
+    else setEmptyStatus(message);
+  } catch (error) {
+    if (activeTabId !== tabId) return;
+    const message = error instanceof Error ? error.message : '无法调整自动连续翻译状态。';
+    if (currentSession) setStatus(message);
+    else setEmptyStatus(message, true);
+  } finally {
+    if (activeTabId === tabId) {
+      continuousTranslationPending = false;
+      syncContinuousTranslationControl(true);
+    }
+  }
 }
 
 function setWebRegionFeedback(message: string, error = false): void {
@@ -596,6 +667,7 @@ async function startCurrentWebRegionSelection(): Promise<void> {
   startWebRegion.disabled = true;
   startWebRegion.setAttribute('aria-busy', 'true');
   startWebRegionLabel.textContent = '检查权限…';
+  startWebRegionLabel.dataset.shortLabel = '检查';
   setWebRegionFeedback('首次使用时，Edge 会询问是否允许 Pi Translator 截取网页框内画面');
   try {
     if (!activeTabUrl || !isInjectableWebUrl(activeTabUrl)) {
@@ -615,6 +687,7 @@ async function startCurrentWebRegionSelection(): Promise<void> {
       );
     }
     startWebRegionLabel.textContent = '启动中…';
+    startWebRegionLabel.dataset.shortLabel = '启动';
     setWebRegionFeedback('');
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
@@ -627,6 +700,7 @@ async function startCurrentWebRegionSelection(): Promise<void> {
     }
     webCapturePermissionRecoveryPending = false;
     startWebRegionLabel.textContent = '已进入框选';
+    startWebRegionLabel.dataset.shortLabel = '框选';
     setWebRegionFeedback('请在当前网页拖动框选；按 Esc 可取消');
     webRegionFeedbackTimer = window.setTimeout(() => {
       webRegionFeedbackTimer = undefined;
@@ -638,6 +712,7 @@ async function startCurrentWebRegionSelection(): Promise<void> {
     startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
       ? '重试授权'
       : '重试框选';
+    startWebRegionLabel.dataset.shortLabel = '重试';
     startWebRegion.title = message;
     setWebRegionFeedback(message, true);
   } finally {
@@ -1259,6 +1334,7 @@ function render(
   sourceLabel.title = session.sourceLabel;
   const isWebSession = session.sourceKind === 'web';
   syncWebRegionAction(isWebSession);
+  syncContinuousTranslationControl(isWebSession);
   const historicalWebResult = isWebSession && viewingWebHistory;
   appSubtitle.textContent = isWebSession ? '网页划词翻译' : 'PDF 划词翻译';
   sourceKindLabel.textContent = isWebSession ? '当前网页' : '当前 PDF';
@@ -1534,7 +1610,11 @@ async function loadActiveSession(
     requestedTabUrl = tab?.url;
     activeWindowId = tab?.windowId;
   }
-  if (activeTabId !== requestedTabId) resetWebHistoryState();
+  if (activeTabId !== requestedTabId) {
+    resetWebHistoryState();
+    continuousTranslationPaused = false;
+    continuousTranslationPending = false;
+  }
   activeTabId = requestedTabId;
   activeTabUrl = requestedTabUrl;
   const nextEmptyContext = await resolveEmptyContext(requestedTabId, requestedTabUrl);
@@ -1544,7 +1624,7 @@ async function loadActiveSession(
     render(undefined);
     return;
   }
-  const [response, capturePermissionPrompt] = await Promise.all([
+  const [response, capturePermissionPrompt, continuousTranslationState] = await Promise.all([
     browser.runtime.sendMessage({
       type: 'GET_PDF_SIDE_PANEL_SESSION',
       payload: { tabId: requestedTabId },
@@ -1555,8 +1635,17 @@ async function loadActiveSession(
       type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
       payload: { tabId: requestedTabId },
     } satisfies RuntimeMessage) as Promise<RuntimeResponse<{ pending: boolean }>>,
+    nextEmptyContext.kind === 'web'
+      ? browser.runtime.sendMessage({
+          type: 'GET_CONTINUOUS_TRANSLATION_STATE',
+          payload: { tabId: requestedTabId },
+        } satisfies RuntimeMessage) as Promise<RuntimeResponse<{ paused: boolean }>>
+      : Promise.resolve(undefined),
   ]);
   if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
+  if (continuousTranslationState?.ok) {
+    applyContinuousTranslationState(continuousTranslationState.data.paused);
+  }
   const capturePermissionRecoveryPending = capturePermissionPrompt.ok &&
     capturePermissionPrompt.data.pending;
   // Opening the side panel only to authorize webpage capture must not switch
@@ -1988,6 +2077,9 @@ function openFullSettings(
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
+continuousTranslationToggle.addEventListener('click', () => {
+  void setCurrentContinuousTranslationPaused(!continuousTranslationPaused);
+});
 startWebRegion.addEventListener('click', () => {
   void startCurrentWebRegionSelection();
 });
@@ -2268,6 +2360,12 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   }
   if (typed.type === 'WEB_CAPTURE_PERMISSION_PANEL_OPENED') {
     showWebCapturePermissionRecovery(typed.payload.tabId);
+  }
+  if (
+    typed.type === 'CONTINUOUS_TRANSLATION_STATE_UPDATED' &&
+    typed.payload.tabId === activeTabId
+  ) {
+    applyContinuousTranslationState(typed.payload.paused);
   }
 });
 

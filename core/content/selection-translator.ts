@@ -262,6 +262,7 @@ export async function startSelectionTranslator(
   let lastAutoSelectionHash: string | undefined;
   let dismissedPassiveSelectionHash: string | undefined;
   let browserSidebarActive = false;
+  let continuousTranslationPaused = false;
   let pdfSelectionPointerId: number | undefined;
   let pdfSelectionInProgress = false;
   let temporaryTargetLanguage = settings.targetLanguage;
@@ -414,6 +415,17 @@ export async function startSelectionTranslator(
     } catch {
       return false;
     }
+  }
+
+  function applyContinuousTranslationPaused(paused: boolean): boolean {
+    continuousTranslationPaused = paused;
+    if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+    autoTranslateTimer = undefined;
+    const current = captureSelectionSnapshot(settings.contextMode);
+    if (current) latestSelection = current;
+    lastAutoSelectionHash = current?.selectionHash ?? latestSelection?.selectionHash;
+    overlay.setContinuousTranslationPaused(paused);
+    return paused;
   }
 
   const overlay = new TranslationOverlay({
@@ -655,6 +667,14 @@ export async function startSelectionTranslator(
             if (!response.ok) throw new Error(response.error.message);
           },
         }),
+    onSetContinuousTranslationPaused: async (paused) => {
+      const response = await browser.runtime.sendMessage({
+        type: 'SET_CONTINUOUS_TRANSLATION_PAUSED',
+        payload: { paused },
+      } satisfies RuntimeMessage) as RuntimeResponse<{ paused: boolean }>;
+      if (!response.ok) throw new Error(response.error.message);
+      return applyContinuousTranslationPaused(response.data.paused);
+    },
     onSidebarChange: (active) => {
       options.onSidebarActiveChange?.(active);
       if (active) {
@@ -1130,6 +1150,16 @@ export async function startSelectionTranslator(
     // Defaults keep the content UI usable while the service worker restarts.
   }
 
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'GET_CONTINUOUS_TRANSLATION_STATE',
+    } satisfies RuntimeMessage) as RuntimeResponse<{ paused: boolean }>;
+    if (response.ok) applyContinuousTranslationPaused(response.data.paused);
+  } catch {
+    // A temporary pause defaults to active translation after an unavailable
+    // service worker rather than making the sidebar appear unresponsive.
+  }
+
   function selectionRect(snapshot: SelectionSnapshot): ViewportRect | undefined {
     return snapshot.rect;
   }
@@ -1266,6 +1296,11 @@ export async function startSelectionTranslator(
     );
     if (overlay.isSidebarActive() || browserSidebarActive) {
       overlay.hideTrigger();
+      if (continuousTranslationPaused) {
+        if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+        autoTranslateTimer = undefined;
+        return;
+      }
       if (
         !snapshot ||
         (surface === 'general' &&
@@ -2222,6 +2257,10 @@ export async function startSelectionTranslator(
       dismissedPassiveSelectionHash = undefined;
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
       scheduleRefresh();
+      return;
+    }
+    if (typed.type === 'CONTINUOUS_TRANSLATION_STATE_UPDATED') {
+      applyContinuousTranslationPaused(typed.payload.paused);
       return;
     }
     if (typed.type === 'OPEN_SIDEBAR') {

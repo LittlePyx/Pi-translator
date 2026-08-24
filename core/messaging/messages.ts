@@ -210,6 +210,15 @@ export type RuntimeMessage =
   | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number } }
   | { type: 'BROWSER_SIDEBAR_ACTIVE' }
   | { type: 'BROWSER_SIDEBAR_CLOSED' }
+  | { type: 'GET_CONTINUOUS_TRANSLATION_STATE'; payload?: { tabId: number } }
+  | {
+      type: 'SET_CONTINUOUS_TRANSLATION_PAUSED';
+      payload: { paused: boolean; tabId?: number };
+    }
+  | {
+      type: 'CONTINUOUS_TRANSLATION_STATE_UPDATED';
+      payload: { tabId: number; paused: boolean };
+    }
   | { type: 'GET_SIDEBAR_OBSTRUCTION_HINT' }
   | { type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
@@ -630,6 +639,37 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
 
   const message = value as { type: unknown; payload?: unknown };
   const type = message.type;
+  if (type === 'GET_CONTINUOUS_TRANSLATION_STATE') {
+    if (message.payload === undefined) return true;
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId']) &&
+      Number.isSafeInteger(payload.tabId) &&
+      (payload.tabId as number) >= 0,
+    );
+  }
+  if (type === 'SET_CONTINUOUS_TRANSLATION_PAUSED') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['paused', 'tabId']) &&
+      typeof payload.paused === 'boolean' &&
+      (payload.tabId === undefined || (
+        Number.isSafeInteger(payload.tabId) && (payload.tabId as number) >= 0
+      )),
+    );
+  }
+  if (type === 'CONTINUOUS_TRANSLATION_STATE_UPDATED') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId', 'paused']) &&
+      Number.isSafeInteger(payload.tabId) &&
+      (payload.tabId as number) >= 0 &&
+      typeof payload.paused === 'boolean',
+    );
+  }
   if (type === 'UPDATE_TRANSLATION_RESULT') {
     return validUpdateTranslationPayload(message.payload);
   }
@@ -683,6 +723,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'USE_FLOATING_SIDEBAR' ||
     type === 'BROWSER_SIDEBAR_ACTIVE' ||
     type === 'BROWSER_SIDEBAR_CLOSED' ||
+    type === 'GET_CONTINUOUS_TRANSLATION_STATE' ||
+    type === 'SET_CONTINUOUS_TRANSLATION_PAUSED' ||
+    type === 'CONTINUOUS_TRANSLATION_STATE_UPDATED' ||
     type === 'GET_SIDEBAR_OBSTRUCTION_HINT' ||
     type === 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' ||
     type === 'SET_SIDEBAR_WIDTH' ||

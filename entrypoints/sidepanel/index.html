@@ -18,12 +18,20 @@
         </div>
         <div class="header-actions">
           <button
+            id="continuous-translation-toggle"
+            class="continuous-translation-toggle"
+            type="button"
+            aria-pressed="false"
+            title="暂停当前标签页的自动连续翻译"
+            hidden
+          ><span class="continuous-translation-dot" aria-hidden="true"></span><span id="continuous-translation-label" data-short-label="自动">自动翻译中</span></button>
+          <button
             id="start-web-region"
             class="web-region-action"
             type="button"
             title="在当前网页拖动框选文字、公式、图表或图像"
             hidden
-          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label">框选网页</span></button>
+          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label" data-short-label="框选">框选网页</span></button>
           <button id="open-settings" class="text-action" type="button">设置</button>
         </div>
       </header>

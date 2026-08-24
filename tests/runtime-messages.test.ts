@@ -53,6 +53,23 @@ describe('runtime message guard', () => {
     expect(isRuntimeMessage({ type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' })).toBe(true);
     expect(isRuntimeMessage({ type: 'GET_SIDEBAR_OBSTRUCTION_HINT' })).toBe(true);
     expect(isRuntimeMessage({ type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' })).toBe(true);
+    expect(isRuntimeMessage({ type: 'GET_CONTINUOUS_TRANSLATION_STATE' })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'SET_CONTINUOUS_TRANSLATION_PAUSED',
+      payload: { tabId: 7, paused: true },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CONTINUOUS_TRANSLATION_STATE_UPDATED',
+      payload: { tabId: 7, paused: false },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'SET_CONTINUOUS_TRANSLATION_PAUSED',
+      payload: { tabId: 7, paused: 'yes' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'CONTINUOUS_TRANSLATION_STATE_UPDATED',
+      payload: { tabId: -1, paused: false },
+    })).toBe(false);
     expect(isRuntimeMessage({
       type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
       payload: { tabId: 7 },

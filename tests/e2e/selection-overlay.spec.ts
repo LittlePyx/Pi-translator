@@ -9110,6 +9110,46 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
     const stored = await api.storage.local.get(storageKey);
     return stored[storageKey];
   }, obstructionHintStorageKey)).toContain('www.overleaf.com');
+  const pauseContinuousTranslation = overlay.getByRole('button', {
+    name: '暂停当前标签页的自动连续翻译',
+  });
+  await expect(pauseContinuousTranslation).toHaveText('自动翻译中');
+  await expect(pauseContinuousTranslation).toHaveAttribute('aria-pressed', 'false');
+  await pauseContinuousTranslation.click();
+  const resumeContinuousTranslation = overlay.getByRole('button', {
+    name: '继续当前标签页的自动连续翻译',
+  });
+  await expect(resumeContinuousTranslation).toHaveText('已暂停');
+  await expect(resumeContinuousTranslation).toHaveAttribute('aria-pressed', 'true');
+  const requestsBeforePausedSelection = textRequests.length;
+  await selectElementText('#global-term-source');
+  await page.waitForTimeout(450);
+  expect(textRequests).toHaveLength(requestsBeforePausedSelection);
+  await worker!.evaluate(async (targetUrl) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        tabs: {
+          query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+          sendMessage(tabId: number, message: object): Promise<unknown>;
+        };
+      };
+    }).chrome;
+    const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+    if (target?.id === undefined) throw new Error('Missing active web test tab.');
+    await api.tabs.sendMessage(target.id, { type: 'TRIGGER_TRANSLATE' });
+  }, page.url());
+  await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforePausedSelection);
+  await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  const requestsBeforeSecondPausedSelection = textRequests.length;
+  await selectElementText('#term-review-source');
+  await page.waitForTimeout(450);
+  expect(textRequests).toHaveLength(requestsBeforeSecondPausedSelection);
+  await overlay.getByRole('button', {
+    name: '继续当前标签页的自动连续翻译',
+  }).click();
+  await expect(overlay.getByRole('button', {
+    name: '暂停当前标签页的自动连续翻译',
+  })).toHaveText('自动翻译中');
   const webRegionAction = overlay.getByRole('button', {
     name: '框选当前网页中的文字、公式、图表或图像',
   });
@@ -9391,6 +9431,31 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(webRegionAction).toBeVisible();
     expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
       .toBeGreaterThanOrEqual(31);
+    const browserPause = sidePanel.getByRole('button', {
+      name: '暂停当前标签页的自动连续翻译',
+    });
+    await expect(browserPause).toHaveText('自动翻译中');
+    await expect(browserPause).toHaveAttribute('aria-pressed', 'false');
+    await browserPause.click();
+    const browserResume = sidePanel.getByRole('button', {
+      name: '继续当前标签页的自动连续翻译',
+    });
+    await expect(browserResume).toHaveText('已暂停');
+    await expect(browserResume).toHaveAttribute('aria-pressed', 'true');
+    await expect(overlay).toHaveAttribute('data-pi-continuous-translation', 'paused');
+    const browserSourceBeforePausedSelection = await sidePanel.locator('#source-text').textContent();
+    const requestsBeforePausedBrowserSelection = textRequests.length;
+    await selectElementText('#global-term-source');
+    await page.waitForTimeout(450);
+    expect(textRequests).toHaveLength(requestsBeforePausedBrowserSelection);
+    await expect(sidePanel.locator('#source-text')).toHaveText(
+      browserSourceBeforePausedSelection ?? '',
+    );
+    await browserResume.click();
+    await expect(sidePanel.getByRole('button', {
+      name: '暂停当前标签页的自动连续翻译',
+    })).toHaveText('自动翻译中');
+    await expect(overlay).toHaveAttribute('data-pi-continuous-translation', 'active');
     const storedModeAfterTemporaryOpen = await sidePanel.evaluate(async () => {
       const extensionChrome = (
         globalThis as typeof globalThis & { chrome: TestChromeApi }
@@ -9447,12 +9512,16 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       const controls = [...document.querySelectorAll<HTMLElement>('#translation-view-switch button')];
       const header = document.querySelector<HTMLElement>('.app-header')!;
       const regionAction = document.querySelector<HTMLElement>('#start-web-region')!;
+      const continuousToggle = document.querySelector<HTMLElement>(
+        '#continuous-translation-toggle',
+      )!;
       return {
         pageClientWidth: document.documentElement.clientWidth,
         pageScrollWidth: document.documentElement.scrollWidth,
         headerClientWidth: header.clientWidth,
         headerScrollWidth: header.scrollWidth,
         regionActionHeight: regionAction.getBoundingClientRect().height,
+        continuousToggleHeight: continuousToggle.getBoundingClientRect().height,
         resultClientWidth: result.clientWidth,
         resultScrollWidth: result.scrollWidth,
         segmentClientWidth: first.clientWidth,
@@ -9463,6 +9532,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     expect(alignedLayout.pageScrollWidth).toBeLessThanOrEqual(alignedLayout.pageClientWidth + 1);
     expect(alignedLayout.headerScrollWidth).toBeLessThanOrEqual(alignedLayout.headerClientWidth + 1);
     expect(alignedLayout.regionActionHeight).toBeGreaterThanOrEqual(31);
+    expect(alignedLayout.continuousToggleHeight).toBeGreaterThanOrEqual(29);
     expect(alignedLayout.resultScrollWidth).toBeLessThanOrEqual(alignedLayout.resultClientWidth + 1);
     expect(alignedLayout.segmentScrollWidth).toBeLessThanOrEqual(alignedLayout.segmentClientWidth + 1);
     expect(alignedLayout.controlHeights.every((height) => height >= 28)).toBe(true);
@@ -9549,6 +9619,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await overlay.locator('details.more > summary').click();
     await overlay.getByRole('button', { name: '在浏览器侧栏中显示' }).click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await sidePanel.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     const requestsBeforeLongResult = textRequests.length;
     await selectElementText('#browser-long-source');
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeLongResult);
@@ -9601,9 +9672,12 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#source-text')).toContainText('A long browser side panel result');
     await expect(readingNavigation).toBeVisible();
     await expect(readingProgress).toHaveText('底部');
-    await expect.poll(() => sidePanel.evaluate(
-      () => document.scrollingElement?.scrollTop ?? 0,
-    )).toBeGreaterThanOrEqual(longResultBottom - 2);
+    await expect.poll(() => sidePanel.evaluate(() => {
+      const scrolling = document.scrollingElement;
+      return scrolling
+        ? Math.max(0, scrolling.scrollHeight - scrolling.clientHeight - scrolling.scrollTop)
+        : Number.POSITIVE_INFINITY;
+    })).toBeLessThanOrEqual(2);
 
     await fullView.evaluate((button: HTMLButtonElement) => button.click());
     await expect(readingProgress).toHaveText('底部');

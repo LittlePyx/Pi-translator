@@ -56,6 +56,10 @@ import {
 } from '../core/settings/site-access';
 import { getPausedSiteHosts, setSitePaused, siteHostFromUrl } from '../core/settings/site-pause';
 import {
+  isContinuousTranslationPaused,
+  setContinuousTranslationPaused,
+} from '../core/settings/continuous-translation-pause';
+import {
   dismissSidebarObstructionHint,
   isSidebarObstructionHintDismissed,
 } from '../core/settings/sidebar-obstruction-hint';
@@ -3980,6 +3984,7 @@ export default defineBackground(() => {
         clearTranslationCheckpoint(tabId),
         clearSettingsRecoveryTicketsForTab(tabId),
         removeStoredPdfSidePanelSession(tabId),
+        setContinuousTranslationPaused(tabId, false),
       ]);
     }).finally(() => {
       void queuePdfSidePanelOptionsSync().catch(() => undefined);
@@ -4467,9 +4472,47 @@ export default defineBackground(() => {
 
       if (
         message.type === 'BROWSER_SIDEBAR_ACTIVE' ||
-        message.type === 'BROWSER_SIDEBAR_CLOSED'
+        message.type === 'BROWSER_SIDEBAR_CLOSED' ||
+        message.type === 'CONTINUOUS_TRANSLATION_STATE_UPDATED'
       ) {
         return undefined;
+      }
+
+      if (
+        message.type === 'GET_CONTINUOUS_TRANSLATION_STATE' ||
+        message.type === 'SET_CONTINUOUS_TRANSLATION_PAUSED'
+      ) {
+        const requestedTabId = message.payload?.tabId;
+        const extensionSender = Boolean(
+          sender.url?.startsWith(browser.runtime.getURL('')),
+        );
+        const tabId = extensionSender ? requestedTabId : sender.tab?.id;
+        if (tabId === undefined || tabId < 0) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '当前标签页无法调整连续翻译状态。',
+            false,
+          )));
+        }
+        if (message.type === 'GET_CONTINUOUS_TRANSLATION_STATE') {
+          return isContinuousTranslationPaused(tabId).then((paused) => ({
+            ok: true as const,
+            data: { paused },
+          }));
+        }
+        const paused = message.payload.paused === true;
+        return setContinuousTranslationPaused(tabId, paused).then(async () => {
+          const update = {
+            type: 'CONTINUOUS_TRANSLATION_STATE_UPDATED',
+            payload: { tabId, paused },
+          } satisfies RuntimeMessage;
+          await browser.tabs.sendMessage(tabId, update).catch(() => undefined);
+          void browser.runtime.sendMessage(update).catch(() => undefined);
+          return {
+            ok: true as const,
+            data: { paused },
+          };
+        });
       }
 
       if (
