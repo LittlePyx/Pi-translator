@@ -36,6 +36,17 @@
         </div>
       </header>
 
+      <section id="bilingual-page-control" class="bilingual-page-control" aria-label="网页正文双语阅读" hidden>
+        <div class="bilingual-page-copy">
+          <strong>双语正文</strong>
+          <span id="bilingual-page-status" aria-live="polite">在原段落下方渐进显示译文</span>
+        </div>
+        <div class="bilingual-page-actions">
+          <button id="bilingual-page-primary" type="button">开始</button>
+          <button id="bilingual-page-clear" type="button" hidden>清除</button>
+        </div>
+      </section>
+
       <section id="empty-state" class="empty-state" data-context="loading" aria-busy="true" aria-labelledby="empty-title">
         <div class="empty-mark">π</div>
         <h1 id="empty-title">正在检查当前页面…</h1>

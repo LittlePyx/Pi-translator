@@ -137,6 +137,39 @@ main {
 }
 .text-action:hover { color: #4f46e5; }
 
+.bilingual-page-control {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-bottom: 1px solid #e3e7ef;
+  color: #657084;
+}
+.bilingual-page-copy { display: grid; min-width: 0; gap: 1px; }
+.bilingual-page-copy strong { color: #3f485b; font-size: 11px; }
+.bilingual-page-copy span {
+  overflow: hidden;
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bilingual-page-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
+.bilingual-page-actions button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 4px 7px;
+  color: #4f46e5;
+  background: #efefff;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 680;
+}
+.bilingual-page-actions button:hover:not(:disabled) { background: #e3e1ff; }
+.bilingual-page-actions button:disabled { opacity: .65; cursor: wait; }
+.bilingual-page-actions #bilingual-page-clear { color: #737d90; background: transparent; }
+
 .empty-state {
   display: grid;
   justify-items: center;
@@ -626,6 +659,11 @@ button:focus-visible {
   .access-alert { color: #ffd9de; border-color: #713945; border-left-color: #f18b99; background: #321d24; }
   .access-actions button:first-child { color: #fff; border-color: #b84d5c; background: #8f2f3e; }
   .source-toggle, .translation-heading-tools button { color: #a6afbd; }
+  .bilingual-page-control { color: #98a4b5; border-bottom-color: #303846; }
+  .bilingual-page-copy strong { color: #d6dce6; }
+  .bilingual-page-actions button { color: #c7c3ff; background: #292943; }
+  .bilingual-page-actions button:hover:not(:disabled) { background: #363653; }
+  .bilingual-page-actions #bilingual-page-clear { color: #a6afbd; background: transparent; }
   .target-language-control { color: #8f9aab; }
   .target-language-control select { color: #c1bcff; background-color: transparent; }
   .target-language-control select:hover:not(:disabled) { background-color: #202938; }

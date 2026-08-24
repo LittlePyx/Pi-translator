@@ -33,6 +33,11 @@ import {
   isSupportedTargetLanguage,
   type SupportedTargetLanguage,
 } from '../language/supported-target-languages';
+import {
+  isBilingualPageState,
+  type BilingualPageAction,
+  type BilingualPageState,
+} from '../translation/bilingual-page';
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
@@ -163,11 +168,35 @@ export interface PdfSidePanelSession {
 export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR'; payload: TranslateRequest }
+  | { type: 'TRANSLATE_BILINGUAL_PAGE_SEGMENT'; payload: TranslateRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
   | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
   | { type: 'TRIGGER_TRANSLATE' }
+  | {
+      type: 'START_BILINGUAL_PAGE';
+      payload: { tabId: number; targetLanguage: SupportedTargetLanguage };
+    }
+  | { type: 'GET_BILINGUAL_PAGE_STATE'; payload: { tabId: number } }
+  | {
+      type: 'CONTROL_BILINGUAL_PAGE';
+      payload: { tabId: number; action: BilingualPageAction };
+    }
+  | {
+      type: 'START_BILINGUAL_PAGE_IN_TAB';
+      payload: { targetLanguage: SupportedTargetLanguage };
+    }
+  | { type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB' }
+  | {
+      type: 'CONTROL_BILINGUAL_PAGE_IN_TAB';
+      payload: { action: BilingualPageAction };
+    }
+  | { type: 'BILINGUAL_PAGE_STATE_UPDATED'; payload: { state: BilingualPageState } }
+  | {
+      type: 'BILINGUAL_PAGE_TAB_STATE_UPDATED';
+      payload: { tabId: number; state: BilingualPageState };
+    }
   | {
       type: 'START_WEB_REGION_SELECTION';
       payload?: { restorePreviousRegion?: boolean };
@@ -359,6 +388,7 @@ export interface TranslationSessionResult {
 }
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
+export type BilingualPageStateResponse = RuntimeResponse<{ state: BilingualPageState }>;
 export type RecognizePdfPageResponse = RuntimeResponse<{ page: CoordinateOcrPage }>;
 export type ConnectionTestResponse = RuntimeResponse<{
   connected: true;
@@ -599,6 +629,14 @@ function validPdfSidePanelRequestPayload(value: unknown): boolean {
   );
 }
 
+function validTabId(value: unknown): value is number {
+  return Number.isSafeInteger(value) && (value as number) >= 0;
+}
+
+function validBilingualPageAction(value: unknown): value is BilingualPageAction {
+  return value === 'pause' || value === 'resume' || value === 'stop' || value === 'clear';
+}
+
 function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {
   const allowlist = new Set(allowed);
   return Object.keys(value).every((key) => allowlist.has(key));
@@ -661,6 +699,68 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
 
   const message = value as { type: unknown; payload?: unknown };
   const type = message.type;
+  if (type === 'START_BILINGUAL_PAGE') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId', 'targetLanguage']) &&
+      validTabId(payload.tabId) &&
+      isSupportedTargetLanguage(payload.targetLanguage),
+    );
+  }
+  if (type === 'GET_BILINGUAL_PAGE_STATE') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId']) &&
+      validTabId(payload.tabId),
+    );
+  }
+  if (type === 'CONTROL_BILINGUAL_PAGE') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId', 'action']) &&
+      validTabId(payload.tabId) &&
+      validBilingualPageAction(payload.action),
+    );
+  }
+  if (type === 'START_BILINGUAL_PAGE_IN_TAB') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['targetLanguage']) &&
+      isSupportedTargetLanguage(payload.targetLanguage),
+    );
+  }
+  if (type === 'GET_BILINGUAL_PAGE_STATE_IN_TAB') {
+    return message.payload === undefined;
+  }
+  if (type === 'CONTROL_BILINGUAL_PAGE_IN_TAB') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['action']) &&
+      validBilingualPageAction(payload.action),
+    );
+  }
+  if (type === 'BILINGUAL_PAGE_STATE_UPDATED') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['state']) &&
+      isBilingualPageState(payload.state),
+    );
+  }
+  if (type === 'BILINGUAL_PAGE_TAB_STATE_UPDATED') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId', 'state']) &&
+      validTabId(payload.tabId) &&
+      isBilingualPageState(payload.state),
+    );
+  }
   if (type === 'GET_CONTINUOUS_TRANSLATION_STATE') {
     if (message.payload === undefined) return true;
     const payload = record(message.payload);
@@ -740,6 +840,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   return (
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR' ||
+    type === 'TRANSLATE_BILINGUAL_PAGE_SEGMENT' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
     type === 'RECOGNIZE_PDF_PAGE' ||
     type === 'CAPTURE_VISIBLE_TAB' ||

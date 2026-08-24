@@ -15,9 +15,16 @@ import {
 import { getApiModelCapabilities } from '../../core/translation/api-capability-repository';
 import type {
   ActivePdfSourceResponse,
+  BilingualPageStateResponse,
   RuntimeMessage,
   RuntimeResponse,
 } from '../../core/messaging/messages';
+import {
+  EMPTY_BILINGUAL_PAGE_STATE,
+  type BilingualPageAction,
+  type BilingualPageState,
+} from '../../core/translation/bilingual-page';
+import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   getPausedSiteHosts,
   isSiteHostPaused,
@@ -66,6 +73,7 @@ const pauseSite = element<HTMLInputElement>('pause-site');
 const status = element<HTMLParagraphElement>('status');
 const quickActions = element<HTMLElement>('quick-actions');
 const openSettings = element<HTMLButtonElement>('open-settings');
+const translatePage = element<HTMLButtonElement>('translate-page');
 const openSidebar = element<HTMLButtonElement>('open-sidebar');
 const openWebRegion = element<HTMLButtonElement>('open-web-region');
 const openPdf = element<HTMLButtonElement>('open-pdf');
@@ -106,6 +114,7 @@ let featureGuideProgressState: FeatureDiscoveryProgress = { completed: {}, dismi
 let featureGuideScene: FeatureDiscoveryScene | undefined;
 let featureGuideRevealOverride = false;
 let statusTimer: number | undefined;
+let bilingualPageState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
 
 type PopupStatusTone = 'progress' | 'success' | 'error';
 
@@ -407,6 +416,62 @@ function pdfDiscoveryFeature(): FeatureDiscoveryFeature {
   return featureGuideScene === 'overleaf' ? 'overleaf-pdf' : 'pdf-reader';
 }
 
+function bilingualPageAvailable(): boolean {
+  return Boolean(
+    activeTabId !== undefined &&
+    activeUrl &&
+    !activePdfContext &&
+    !isOverleafProjectUrl(activeUrl) &&
+    generalPageMode !== 'off' &&
+    isInjectableWebUrl(activeUrl)
+  );
+}
+
+function bilingualPageAction(): 'start' | BilingualPageAction {
+  if (bilingualPageState.phase === 'running') return 'pause';
+  if (
+    bilingualPageState.phase === 'paused' ||
+    bilingualPageState.phase === 'stopped' ||
+    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0)
+  ) return 'resume';
+  if (bilingualPageState.phase === 'complete') return 'clear';
+  return 'start';
+}
+
+function renderBilingualPageAction(): void {
+  translatePage.dataset.phase = bilingualPageState.phase;
+  translatePage.textContent = bilingualPageState.phase === 'running'
+    ? `暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+    : bilingualPageState.phase === 'paused'
+      ? `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+      : bilingualPageState.phase === 'stopped'
+        ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+        : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
+          ? `重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+          : bilingualPageState.phase === 'complete'
+            ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+            : '翻译网页正文';
+  translatePage.title = bilingualPageState.message ?? (
+    bilingualPageState.phase === 'idle'
+      ? '保留网页原文，在正文段落下方渐进显示译文'
+      : '正文译文只保留在当前标签页，可随时暂停、停止或清除'
+  );
+}
+
+async function refreshBilingualPageState(): Promise<void> {
+  if (!bilingualPageAvailable() || activeTabId === undefined) {
+    bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+    return;
+  }
+  const response = await browser.runtime.sendMessage({
+    type: 'GET_BILINGUAL_PAGE_STATE',
+    payload: { tabId: activeTabId },
+  } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+  bilingualPageState = response?.ok
+    ? response.data.state
+    : { ...EMPTY_BILINGUAL_PAGE_STATE };
+}
+
 function updateQuickActions(): void {
   openPdf.textContent = activePdfSourceUrl
     ? activePdfContext === 'overleaf'
@@ -418,6 +483,7 @@ function updateQuickActions(): void {
         ? '解决 PDF 读取权限'
         : '打开 PDF 阅读器';
   const sidebarAvailable = sidebarAvailableForActivePage();
+  const pageTranslationAvailable = bilingualPageAvailable();
   const webRegionAvailable = Boolean(
     activeUrl && (
       isOverleafProjectUrl(activeUrl) ||
@@ -425,15 +491,23 @@ function updateQuickActions(): void {
     ),
   );
   const pdfIsCurrent = Boolean(activePdfContext);
-  const pdfIsPrimary = pdfIsCurrent || !sidebarAvailable;
-  const primaryAction = pdfIsPrimary ? openPdf : openSidebar;
+  const pdfIsPrimary = pdfIsCurrent || (!sidebarAvailable && !pageTranslationAvailable);
+  const primaryAction = pdfIsPrimary
+    ? openPdf
+    : pageTranslationAvailable
+      ? translatePage
+      : openSidebar;
   const secondaryAction = pdfIsPrimary ? openSidebar : openPdf;
   openPdf.classList.remove('primary-action', 'secondary-action');
   openSidebar.classList.remove('primary-action', 'secondary-action');
+  translatePage.classList.remove('primary-action');
+  openSidebar.classList.toggle('sidebar-action', pageTranslationAvailable);
   primaryAction.classList.add('primary-action');
   if (sidebarAvailable) secondaryAction.classList.add('secondary-action');
   openSidebar.hidden = !sidebarAvailable;
+  translatePage.hidden = !pageTranslationAvailable;
   openWebRegion.hidden = !webRegionAvailable;
+  renderBilingualPageAction();
   openSidebar.textContent = pdfIsCurrent
     ? '打开翻译侧栏'
     : sidebarMode === 'browser'
@@ -446,7 +520,7 @@ function updateQuickActions(): void {
   } else if (sidebarAvailable) {
     pageContext.textContent = isOverleafProjectUrl(activeUrl ?? '')
       ? '在 Overleaf 选中文字即可翻译；预览、公式和图表可使用框选。'
-      : '在网页中选中文字即可翻译；图表和不可选内容可使用框选。';
+      : '长文章可直接开启双语正文；短内容划词，图表和不可选内容使用框选。';
     pageContext.removeAttribute('data-tone');
   } else if (activeUrl && !isInjectableWebUrl(activeUrl)) {
     pageContext.textContent = '当前页面受 Edge 限制，请切换到普通网页、Overleaf 或 PDF。';
@@ -457,9 +531,11 @@ function updateQuickActions(): void {
   }
   quickActions.dataset.primary = pdfIsCurrent
     ? 'pdf'
-    : sidebarAvailable
-      ? 'sidebar'
-      : 'reader';
+    : pageTranslationAvailable
+      ? 'article'
+      : sidebarAvailable
+        ? 'sidebar'
+        : 'reader';
   quickActions.prepend(primaryAction);
   quickActions.removeAttribute('aria-busy');
   renderFeatureGuide();
@@ -562,6 +638,9 @@ async function load(): Promise<void> {
   sidebarMode = settings.sidebarMode;
   activeTabId = tabs[0]?.id;
   await resolveActivePdfContext(tabs[0] ?? {});
+  await refreshBilingualPageState().catch(() => {
+    bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+  });
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
   else hidePdfAccessAlert();
@@ -685,6 +764,53 @@ openSettings.addEventListener('click', () => {
 
 textApiStatus.addEventListener('click', () => openSettingsPage(textApiSettingsFocus));
 visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettingsFocus));
+
+translatePage.addEventListener('click', () => {
+  if (activeTabId === undefined) return;
+  if (!isSupportedTargetLanguage(targetLanguage.value)) {
+    setStatus('当前目标语言不支持网页正文翻译。', 'error');
+    return;
+  }
+  const action = bilingualPageAction();
+  translatePage.disabled = true;
+  setStatus(
+    action === 'start'
+      ? '正在识别网页正文…'
+      : action === 'clear'
+        ? '正在清除双语正文…'
+        : '正在更新正文翻译状态…',
+    'progress',
+  );
+  const request = action === 'start'
+    ? browser.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: {
+          tabId: activeTabId,
+          targetLanguage: targetLanguage.value,
+        },
+      } satisfies RuntimeMessage)
+    : browser.runtime.sendMessage({
+        type: 'CONTROL_BILINGUAL_PAGE',
+        payload: { tabId: activeTabId, action },
+      } satisfies RuntimeMessage);
+  void (request as Promise<BilingualPageStateResponse | undefined>)
+    .then((response) => {
+      if (!response?.ok) throw new Error(response?.error.message ?? '正文翻译操作失败。');
+      bilingualPageState = response.data.state;
+      updateQuickActions();
+      if (bilingualPageState.phase === 'error') {
+        setStatus(bilingualPageState.message ?? '当前页面没有识别到可翻译的正文。', 'error');
+        return;
+      }
+      window.close();
+    })
+    .catch((error: unknown) => {
+      setStatus(error instanceof Error ? error.message : '正文翻译操作失败。', 'error');
+    })
+    .finally(() => {
+      translatePage.disabled = false;
+    });
+});
 
 openSidebar.addEventListener('click', () => {
   if (sidebarMode === 'browser' && !activePdfContext && activeTabId !== undefined) {

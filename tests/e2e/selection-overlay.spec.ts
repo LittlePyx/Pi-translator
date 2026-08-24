@@ -18,6 +18,8 @@ const EDGE_EXECUTABLE =
   'C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe';
 const OVERLEAF_FIXTURE_URL =
   'https://www.overleaf.com/project/pi-translator-e2e';
+const ARTICLE_FIXTURE_URL =
+  'https://www.overleaf.com/pi-translator-bilingual-article-e2e';
 
 let context: BrowserContext;
 let page: Page;
@@ -27,6 +29,7 @@ const visionRequests: Array<Record<string, unknown>> = [];
 const textRequests: Array<Record<string, unknown>> = [];
 let echoVisionPayloadOnce = false;
 let failNextRevisionRequest = false;
+let bilingualFailuresRemaining = 0;
 let returnRevisedVisionResultOnce = false;
 let returnPendingVisionReviewOnce = false;
 let failNextRecoveryRequestAfterPartial = false;
@@ -625,10 +628,18 @@ test.beforeAll(async () => {
     }> | undefined)?.find((message) => message.role === 'user' &&
       typeof message.content === 'string')?.content;
     let requestedText = '';
+    let requiredPlaceholderTokens: string[] = [];
     if (typeof userMessageContent === 'string') {
       try {
-        const payload = JSON.parse(userMessageContent) as { text?: unknown };
+        const payload = JSON.parse(userMessageContent) as {
+          text?: unknown;
+          requiredPlaceholderTokens?: unknown;
+        };
         if (typeof payload.text === 'string') requestedText = payload.text;
+        if (
+          Array.isArray(payload.requiredPlaceholderTokens) &&
+          payload.requiredPlaceholderTokens.every((token) => typeof token === 'string')
+        ) requiredPlaceholderTokens = payload.requiredPlaceholderTokens;
       } catch {
         requestedText = userMessageContent;
       }
@@ -641,6 +652,7 @@ test.beforeAll(async () => {
     const isGlobalTermSelection = requestedText.includes('benefits every reader');
     const isGlossaryReviewSelection = requestedText.includes('should remain stable');
     const isLexicalLookupSelection = requestedText.includes('continuity');
+    const isBilingualFormulaParagraph = requestedText.includes('npm run build:edge');
     const isDocumentTermSelection = requestedText.includes('The adaptive sensing policy') ||
       requestedText.includes('This adaptive sensing method');
     const isPdfOptimizerFallback = requestedText.includes('Optimizer fallback fixture');
@@ -686,6 +698,20 @@ test.beforeAll(async () => {
         contentType: 'application/json',
         body: JSON.stringify({
           error: { message: 'Synthetic revision failure.', type: 'invalid_request_error' },
+        }),
+      });
+      return;
+    }
+    if (
+      bilingualFailuresRemaining > 0 &&
+      serializedBody.includes('reliable bilingual reading')
+    ) {
+      bilingualFailuresRemaining -= 1;
+      await route.fulfill({
+        status: 429,
+        contentType: 'application/json',
+        body: JSON.stringify({
+          error: { message: 'Synthetic bilingual rate limit.', type: 'rate_limit_error' },
         }),
       });
       return;
@@ -766,6 +792,11 @@ test.beforeAll(async () => {
                   { partOfSpeech: 'noun', meaning: '连贯性' },
                 ],
               },
+            } : isBilingualFormulaParagraph ? {
+              translation: `修改扩展后请运行 \`npm run build:edge\`，同时保留评分函数 ${requiredPlaceholderTokens[0] ?? ''} 及其上下文。`,
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isDocumentTermSelection ? {
               translation: '自适应感知策略在该文档中保持稳定，并在具有层级约束的多阶段重建任务中持续保持一致的技术术语与推理边界。',
               detectedLanguage: 'en',
@@ -850,6 +881,32 @@ test.beforeAll(async () => {
       }),
     });
   });
+  await page.route(ARTICLE_FIXTURE_URL, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html>
+        <html>
+          <head><title>Pi Translator Bilingual Article</title></head>
+          <body style="margin:0;font:18px/1.7 Georgia,serif;color:#1f2937;background:#fff">
+            <nav style="padding:18px 32px;background:#f3f4f6"><p id="article-navigation">Documentation links and related navigation should never be translated as article prose.</p></nav>
+            <main style="max-width:760px;margin:0 auto;padding:48px 28px 120px">
+              <article>
+                <h1 id="article-title">A practical guide to reliable bilingual reading</h1>
+                <p id="article-intro">Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.</p>
+                <p id="article-intro-repeat">Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.</p>
+                <p id="article-method">The translator should process nearby paragraphs first, remain responsive during long articles, and let the reader pause without losing completed work.</p>
+                <pre id="article-code"><code>const result = await translateVisibleParagraphs(article);</code></pre>
+                <p id="article-inline-code">Run <code>npm run build:edge</code> after changing the extension, while keeping the score <span class="katex" data-latex="f(x)=x^2"><span>duplicated rendered x 2</span></span> and its surrounding explanation readable.</p>
+                <form><p id="article-form-help">Payment and account form instructions must not be collected as article content.</p><input type="password" value="private-value" /></form>
+                <div style="height:1500px" aria-hidden="true"></div>
+                <p id="article-later">A later paragraph should wait until the reader approaches it instead of consuming API requests for the entire page immediately.</p>
+                <blockquote id="article-summary">The finished bilingual view must be removable in one action so the webpage returns to its untouched original structure.</blockquote>
+              </article>
+            </main>
+          </body>
+        </html>`,
+    });
+  });
   await page.route(OVERLEAF_FIXTURE_URL, async (route) => {
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
@@ -902,6 +959,7 @@ test.afterAll(async () => {
 test.afterEach(() => {
   echoVisionPayloadOnce = false;
   failNextRevisionRequest = false;
+  bilingualFailuresRemaining = 0;
   returnRevisedVisionResultOnce = false;
   returnPendingVisionReviewOnce = false;
   failNextRecoveryRequestAfterPartial = false;
@@ -926,6 +984,161 @@ test('exposes the native Edge side panel API to the service worker', async () =>
     };
   });
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
+});
+
+test('progressively adds and removes bilingual article translations without touching code or history', async ({}, testInfo) => {
+  const popup = await context.newPage();
+  const sidePanel = await context.newPage();
+  let originalTargetLanguage = 'zh-CN';
+  try {
+    await page.goto(ARTICLE_FIXTURE_URL);
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    await popup.reload();
+    originalTargetLanguage = await popup.locator('#target-language').inputValue();
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.locator('#target-language').selectOption('zh-CN');
+      await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    }
+    const tabId = await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { query(query: object): Promise<Array<{ id?: number }>> } };
+      }).chrome;
+      return (await api.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+    });
+    expect(tabId).toBeDefined();
+    const historyBefore = await popup.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.session.get('translationHistoryByTab');
+      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
+      return history?.[String(id)]?.length ?? 0;
+    }, tabId!);
+    const requestsBefore = textRequests.length;
+
+    const translatePage = popup.locator('#translate-page');
+    await expect(translatePage).toBeVisible();
+    await expect(translatePage).toHaveClass(/primary-action/);
+    await expect(translatePage).toHaveText('翻译网页正文');
+    await popup.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('#translate-page')?.click();
+    });
+
+    const pageControl = page.locator('#pi-translator-bilingual-page-control');
+    await expect(pageControl).toBeVisible();
+    await pageControl.locator('button[data-action="pause"]').click();
+    await expect(pageControl.locator('output')).toContainText('已暂停');
+    const translatedWhilePaused = await page.locator('[data-pi-bilingual-translation]').count();
+    await page.waitForTimeout(450);
+    await expect(page.locator('[data-pi-bilingual-translation]'))
+      .toHaveCount(translatedWhilePaused);
+
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await sidePanel.reload();
+    const sidePanelControl = sidePanel.locator('#bilingual-page-control');
+    await expect(sidePanelControl).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已暂停');
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('继续');
+    await sidePanel.setViewportSize({ width: 300, height: 720 });
+    const controlLayout = await sidePanelControl.evaluate((control) => ({
+      clientWidth: control.clientWidth,
+      scrollWidth: control.scrollWidth,
+      primaryHeight: control.querySelector<HTMLButtonElement>('#bilingual-page-primary')!
+        .getBoundingClientRect().height,
+    }));
+    expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
+    expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(29);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await Promise.all([
+        page.screenshot({ path: testInfo.outputPath('bilingual-article-paused.png'), fullPage: false }),
+        sidePanel.screenshot({ path: testInfo.outputPath('bilingual-sidepanel-300.png'), fullPage: true }),
+      ]);
+    }
+
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
+    await expect.poll(() => page.locator('[data-pi-bilingual-translation]').count())
+      .toBeGreaterThanOrEqual(3);
+    await pageControl.locator('button[data-action="stop"]').click();
+    await expect(pageControl.locator('output')).toContainText('已停止');
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已停止');
+    const translatedAfterStop = await page.locator('[data-pi-bilingual-translation]').count();
+    await page.waitForTimeout(350);
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(translatedAfterStop);
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
+    const requestsBeforeScroll = JSON.stringify(textRequests.slice(requestsBefore));
+    expect(requestsBeforeScroll).not.toContain('A later paragraph should wait');
+    expect(requestsBeforeScroll).not.toContain('translateVisibleParagraphs');
+    await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toBeVisible();
+    await expect(page.locator('#article-intro')).toHaveText(
+      'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.',
+    );
+    await expect(page.locator('#article-code + [data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(page.locator('#article-navigation + [data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(page.locator('#article-form-help + [data-pi-bilingual-translation]')).toHaveCount(0);
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成');
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(page.locator('#article-intro-repeat + [data-pi-bilingual-translation]'))
+      .toBeVisible();
+    const completedRequests = JSON.stringify(textRequests.slice(requestsBefore));
+    expect(completedRequests).toContain('`npm run build:edge`');
+    expect(completedRequests).toContain('⟦FULL1_0001⟧');
+    expect(completedRequests).not.toContain('duplicated rendered x 2');
+    await expect(page.locator('#article-inline-code + [data-pi-bilingual-translation]'))
+      .toContainText('$f(x)=x^2$');
+    const historyAfter = await sidePanel.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const stored = await api.storage.session.get('translationHistoryByTab');
+      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
+      return history?.[String(id)]?.length ?? 0;
+    }, tabId!);
+    expect(historyAfter).toBe(historyBefore);
+
+    await sidePanel.locator('#bilingual-page-clear').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(pageControl).toHaveCount(0);
+    await expect(sidePanel.locator('#bilingual-page-clear')).toBeHidden();
+
+    await page.reload();
+    await page.locator('#article-title').evaluate((title) => {
+      title.textContent = 'Failure recovery keeps reliable bilingual reading under user control';
+    });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.bringToFront();
+    await sidePanel.reload();
+    await expect(sidePanel.locator('#bilingual-page-control')).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('开始');
+    bilingualFailuresRemaining = 2;
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(page.locator('#pi-translator-bilingual-page-control')).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('重试');
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('请求过于频繁');
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
+    await sidePanel.locator('#bilingual-page-clear').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+  } finally {
+    if (originalTargetLanguage !== 'zh-CN' && !popup.isClosed()) {
+      await popup.locator('#target-language').selectOption(originalTargetLanguage).catch(() => undefined);
+      await popup.locator('#status').waitFor({ state: 'visible' }).catch(() => undefined);
+    } else if (originalTargetLanguage !== 'zh-CN') {
+      const settingsPage = await context.newPage();
+      await settingsPage.goto(`chrome-extension://${extensionId}/popup.html`);
+      await settingsPage.locator('#target-language').selectOption(originalTargetLanguage).catch(() => undefined);
+      await expect(settingsPage.locator('#status')).toContainText('目标语言已更新');
+      await settingsPage.close();
+    }
+    await sidePanel.close().catch(() => undefined);
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL);
+  }
 });
 
 test('keeps passive code browsing quiet while continuous and explicit translation remain available', async () => {

@@ -1,6 +1,7 @@
 import type {
   PublicSettings,
   PublicSettingsResponse,
+  BilingualPageStateResponse,
   DocumentMemoryResponse,
   DocumentMemoryLocator,
   OpenOptionsPageResponse,
@@ -70,6 +71,7 @@ import {
   type WebRegionSelectionHandle,
   type WebRegionSelectionSeed,
 } from './web-region-selection';
+import { createBilingualPageTranslator } from './bilingual-page-translator';
 
 interface ContentScriptRuntimeContext {
   onInvalidated(callback: () => void): unknown;
@@ -267,6 +269,22 @@ export async function startSelectionTranslator(
   let pdfSelectionInProgress = false;
   let temporaryTargetLanguage = settings.targetLanguage;
   let temporaryStyle = settings.style;
+  const bilingualPageTranslator = surface === 'general'
+    ? createBilingualPageTranslator({
+        pageUrl: () => options.pageUrl?.() ?? location.href,
+        requestConfig: () => ({
+          sourceLanguage: settings.sourceLanguage,
+          style: temporaryStyle,
+          contentMode: settings.contentMode,
+        }),
+        onStateChange: (state) => {
+          void browser.runtime.sendMessage({
+            type: 'BILINGUAL_PAGE_STATE_UPDATED',
+            payload: { state },
+          } satisfies RuntimeMessage).catch(() => undefined);
+        },
+      })
+    : undefined;
   const markerAnchors = new Map<string, TranslationMarkerAnchor>();
   const segmentMarkerAnchors = new Map<string, TranslationMarkerAnchor>();
   let pendingSelectionMarkerRequestId: string | undefined;
@@ -2190,9 +2208,52 @@ export async function startSelectionTranslator(
 
   const messageListener = (
     message: unknown,
-  ): void | Promise<SettingsRecoveryAck | RuntimeResponse<{ started: true }>> => {
+  ): void | Promise<
+    SettingsRecoveryAck |
+    RuntimeResponse<{ started: true }> |
+    BilingualPageStateResponse
+  > => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     const typed = message as RuntimeMessage;
+    if (typed.type === 'START_BILINGUAL_PAGE_IN_TAB') {
+      if (!bilingualPageTranslator) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_PAGE',
+            message: '当前页面不支持正文双语阅读。',
+            retryable: false,
+          },
+        });
+      }
+      return bilingualPageTranslator.start(typed.payload.targetLanguage)
+        .then((state) => ({ ok: true as const, data: { state } }));
+    }
+    if (typed.type === 'GET_BILINGUAL_PAGE_STATE_IN_TAB') {
+      return Promise.resolve({
+        ok: true,
+        data: { state: bilingualPageTranslator?.state() ?? {
+          phase: 'idle',
+          total: 0,
+          translated: 0,
+          failed: 0,
+        } },
+      });
+    }
+    if (typed.type === 'CONTROL_BILINGUAL_PAGE_IN_TAB') {
+      if (!bilingualPageTranslator) {
+        return Promise.resolve({
+          ok: false,
+          error: {
+            code: 'UNSUPPORTED_PAGE',
+            message: '当前页面不支持正文双语阅读。',
+            retryable: false,
+          },
+        });
+      }
+      return bilingualPageTranslator.control(typed.payload.action)
+        .then((state) => ({ ok: true as const, data: { state } }));
+    }
     if (typed.type === 'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION') {
       return retranslateBrowserSidebarInLanguage(
         typed.payload.expectedRequestId,
@@ -2406,6 +2467,7 @@ export async function startSelectionTranslator(
     browser.runtime.onMessage.removeListener(messageListener);
     activeWebRegionSelection?.cancel();
     activeWebRegionSelection = undefined;
+    bilingualPageTranslator?.dispose();
     overlay.destroy();
     markerManager?.destroy();
     markerManager = undefined;

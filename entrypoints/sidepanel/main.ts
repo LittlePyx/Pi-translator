@@ -1,5 +1,6 @@
 import type {
   OpenOptionsPageResponse,
+  BilingualPageStateResponse,
   PdfSidePanelSession,
   RuntimeMessage,
   RuntimeResponse,
@@ -32,6 +33,7 @@ import {
 import { getSettings } from '../../core/settings/repository';
 import {
   isInjectableWebUrl,
+  isOverleafProjectUrl,
   VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../../core/settings/site-access';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
@@ -68,6 +70,11 @@ import {
   supportedTargetLanguageLabel,
   type SupportedTargetLanguage,
 } from '../../core/language/supported-target-languages';
+import {
+  EMPTY_BILINGUAL_PAGE_STATE,
+  type BilingualPageAction,
+  type BilingualPageState,
+} from '../../core/translation/bilingual-page';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -86,6 +93,10 @@ const continuousTranslationToggle = element<HTMLButtonElement>('continuous-trans
 const continuousTranslationLabel = element<HTMLElement>('continuous-translation-label');
 const startWebRegion = element<HTMLButtonElement>('start-web-region');
 const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
+const bilingualPageControl = element<HTMLElement>('bilingual-page-control');
+const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
+const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
+const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
 const sourceLabel = element<HTMLElement>('source-label');
@@ -172,6 +183,9 @@ let webCapturePermissionRecoveryPending = false;
 let webRegionFeedbackTimer: number | undefined;
 let continuousTranslationPaused = false;
 let continuousTranslationPending = false;
+let bilingualPageState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+let bilingualPagePending = false;
+let bilingualPageFeatureEnabled = true;
 let defaultTargetLanguage: SupportedTargetLanguage = 'zh-CN';
 let targetLanguagePending = false;
 let targetLanguagePendingRequestId: string | undefined;
@@ -653,6 +667,96 @@ async function setCurrentContinuousTranslationPaused(paused: boolean): Promise<v
     if (activeTabId === tabId) {
       continuousTranslationPending = false;
       syncContinuousTranslationControl(true);
+    }
+  }
+}
+
+function bilingualPageAvailable(): boolean {
+  return Boolean(
+    activeTabId !== undefined &&
+    activeTabUrl &&
+    bilingualPageFeatureEnabled &&
+    isInjectableWebUrl(activeTabUrl) &&
+    !isOverleafProjectUrl(activeTabUrl) &&
+    !isEdgeNativePdfContext({ tabUrl: activeTabUrl })
+  );
+}
+
+function syncBilingualPageControl(): void {
+  const available = bilingualPageAvailable();
+  bilingualPageControl.hidden = !available;
+  if (!available) return;
+  const state = bilingualPageState;
+  bilingualPageStatus.textContent = state.phase === 'running'
+    ? `已翻译 ${state.translated}/${state.total} 段 · 滚动继续`
+    : state.phase === 'paused'
+      ? `已暂停 · ${state.translated}/${state.total} 段`
+      : state.phase === 'stopped'
+        ? `已停止 · 保留 ${state.translated}/${state.total} 段`
+        : state.phase === 'complete'
+          ? `已完成 ${state.translated}/${state.total} 段`
+          : state.phase === 'error'
+            ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
+            : '在原段落下方渐进显示译文';
+  bilingualPagePrimary.textContent = bilingualPagePending
+    ? '稍候…'
+    : state.phase === 'running'
+      ? '暂停'
+      : state.phase === 'paused' || state.phase === 'stopped'
+        ? '继续'
+        : state.phase === 'error' && state.total > 0
+          ? '重试'
+          : '开始';
+  bilingualPagePrimary.hidden = state.phase === 'complete';
+  bilingualPagePrimary.disabled = bilingualPagePending;
+  bilingualPageClear.hidden = state.phase === 'idle';
+  bilingualPageClear.disabled = bilingualPagePending;
+}
+
+function bilingualPagePrimaryAction(): 'start' | BilingualPageAction {
+  if (bilingualPageState.phase === 'running') return 'pause';
+  if (
+    bilingualPageState.phase === 'paused' ||
+    bilingualPageState.phase === 'stopped' ||
+    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0)
+  ) return 'resume';
+  return 'start';
+}
+
+async function updateBilingualPage(action: 'start' | BilingualPageAction): Promise<void> {
+  if (bilingualPagePending || activeTabId === undefined || !bilingualPageAvailable()) return;
+  const tabId = activeTabId;
+  bilingualPagePending = true;
+  syncBilingualPageControl();
+  try {
+    const response = await browser.runtime.sendMessage(action === 'start'
+      ? {
+          type: 'START_BILINGUAL_PAGE',
+          payload: {
+            tabId,
+            targetLanguage: sessionTargetLanguage(currentSession),
+          },
+        } satisfies RuntimeMessage
+      : {
+          type: 'CONTROL_BILINGUAL_PAGE',
+          payload: { tabId, action },
+        } satisfies RuntimeMessage) as BilingualPageStateResponse;
+    if (!response.ok) throw new Error(
+      translationErrorMessage(response.error.code, response.error.message),
+    );
+    if (activeTabId !== tabId) return;
+    bilingualPageState = response.data.state;
+  } catch (error) {
+    if (activeTabId !== tabId) return;
+    bilingualPageState = {
+      ...bilingualPageState,
+      phase: 'error',
+      message: error instanceof Error ? error.message : '无法更新网页正文翻译。',
+    };
+  } finally {
+    if (activeTabId === tabId) {
+      bilingualPagePending = false;
+      syncBilingualPageControl();
     }
   }
 }
@@ -1731,6 +1835,8 @@ async function loadActiveSession(
     resetWebHistoryState();
     continuousTranslationPaused = false;
     continuousTranslationPending = false;
+    bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+    bilingualPagePending = false;
     clearTargetLanguagePending();
   }
   activeTabId = requestedTabId;
@@ -1738,11 +1844,17 @@ async function loadActiveSession(
   const nextEmptyContext = await resolveEmptyContext(requestedTabId, requestedTabUrl);
   if (!isCurrentLoad()) return;
   showEmptyContext(nextEmptyContext);
+  syncBilingualPageControl();
   if (requestedTabId === undefined) {
     render(undefined);
     return;
   }
-  const [response, capturePermissionPrompt, continuousTranslationState] = await Promise.all([
+  const [
+    response,
+    capturePermissionPrompt,
+    continuousTranslationState,
+    bilingualStateResponse,
+  ] = await Promise.all([
     browser.runtime.sendMessage({
       type: 'GET_PDF_SIDE_PANEL_SESSION',
       payload: { tabId: requestedTabId },
@@ -1759,11 +1871,21 @@ async function loadActiveSession(
           payload: { tabId: requestedTabId },
         } satisfies RuntimeMessage) as Promise<RuntimeResponse<{ paused: boolean }>>
       : Promise.resolve(undefined),
+    bilingualPageAvailable()
+      ? browser.runtime.sendMessage({
+          type: 'GET_BILINGUAL_PAGE_STATE',
+          payload: { tabId: requestedTabId },
+        } satisfies RuntimeMessage) as Promise<BilingualPageStateResponse>
+      : Promise.resolve(undefined),
   ]);
   if (!isCurrentLoad() || activeTabId !== requestedTabId) return;
   if (continuousTranslationState?.ok) {
     applyContinuousTranslationState(continuousTranslationState.data.paused);
   }
+  if (bilingualStateResponse?.ok) {
+    bilingualPageState = bilingualStateResponse.data.state;
+  }
+  syncBilingualPageControl();
   const capturePermissionRecoveryPending = capturePermissionPrompt.ok &&
     capturePermissionPrompt.data.pending;
   // Opening the side panel only to authorize webpage capture must not switch
@@ -2206,6 +2328,12 @@ targetLanguage.addEventListener('change', () => {
 continuousTranslationToggle.addEventListener('click', () => {
   void setCurrentContinuousTranslationPaused(!continuousTranslationPaused);
 });
+bilingualPagePrimary.addEventListener('click', () => {
+  void updateBilingualPage(bilingualPagePrimaryAction());
+});
+bilingualPageClear.addEventListener('click', () => {
+  void updateBilingualPage('clear');
+});
 startWebRegion.addEventListener('click', () => {
   void startCurrentWebRegionSelection();
 });
@@ -2493,6 +2621,13 @@ browser.runtime.onMessage.addListener((message: unknown) => {
   ) {
     applyContinuousTranslationState(typed.payload.paused);
   }
+  if (
+    typed.type === 'BILINGUAL_PAGE_TAB_STATE_UPDATED' &&
+    typed.payload.tabId === activeTabId
+  ) {
+    bilingualPageState = typed.payload.state;
+    syncBilingualPageControl();
+  }
 });
 
 browser.tabs.onActivated.addListener((activated) => {
@@ -2506,8 +2641,11 @@ browser.tabs.onActivated.addListener((activated) => {
   sessionLoadGate.invalidate();
   resetWebHistoryState();
   clearTargetLanguagePending();
+  bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+  bilingualPagePending = false;
   activeTabId = activated.tabId;
   activeTabUrl = undefined;
+  syncBilingualPageControl();
   showEmptyContext({ kind: 'loading' });
   render(undefined);
   void loadActiveSession(activated)
@@ -2517,6 +2655,7 @@ browser.tabs.onActivated.addListener((activated) => {
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (tabId !== activeTabId || !changeInfo.url) return;
   activeTabUrl = changeInfo.url;
+  syncBilingualPageControl();
   if (currentSession) return;
   sessionLoadGate.invalidate();
   showEmptyContext(emptyContextForTabUrl(changeInfo.url));
@@ -2535,10 +2674,12 @@ browser.storage.onChanged.addListener((changes, areaName) => {
   void getSettings().then((settings) => {
     autoRenderLatex = settings.autoRenderLatex;
     webHistoryLimit = settings.historyLimit;
+    bilingualPageFeatureEnabled = settings.generalPageMode !== 'off';
     if (isSupportedTargetLanguage(settings.targetLanguage)) {
       defaultTargetLanguage = settings.targetLanguage;
     }
     formulaRenderOverride = undefined;
+    syncBilingualPageControl();
     if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
       void refreshWebHistory(activeTabId).catch(() => undefined);
     } else {
@@ -2558,9 +2699,11 @@ window.addEventListener('pagehide', () => {
 void getSettings().then((settings) => {
   autoRenderLatex = settings.autoRenderLatex;
   webHistoryLimit = settings.historyLimit;
+  bilingualPageFeatureEnabled = settings.generalPageMode !== 'off';
   if (isSupportedTargetLanguage(settings.targetLanguage)) {
     defaultTargetLanguage = settings.targetLanguage;
   }
+  syncBilingualPageControl();
   if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
     void refreshWebHistory(activeTabId).catch(() => undefined);
   } else {

@@ -14,6 +14,7 @@ import {
   type ConnectionTestResponse,
   type VisionCapabilityTestResponse,
   type ApiDiagnosticResponse,
+  type BilingualPageStateResponse,
   type ModelListResponse,
   type PdfSidePanelSession,
   type PublicSettings,
@@ -99,6 +100,7 @@ import {
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
 import type { SupportedTargetLanguage } from '../core/language/supported-target-languages';
+import type { BilingualPageAction } from '../core/translation/bilingual-page';
 import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
@@ -385,7 +387,7 @@ type TranslationProgressPayload = Extract<
   RuntimeMessage,
   { type: 'TRANSLATION_PROGRESS' }
 >['payload'];
-type TranslationProgressTarget = 'tab' | 'runtime';
+type TranslationProgressTarget = 'tab' | 'runtime' | 'none';
 
 function pdfSourceLabel(sourceUrl: string | undefined): string {
   if (!sourceUrl) return 'Edge PDF';
@@ -450,6 +452,7 @@ function publishTranslationProgress(
   payload: TranslationProgressPayload,
   target: TranslationProgressTarget = 'tab',
 ): Promise<void> {
+  if (target === 'none') return Promise.resolve();
   const message = {
     type: 'TRANSLATION_PROGRESS',
     payload,
@@ -552,6 +555,17 @@ async function settleTranslationFinalization(
     }
   }
   return historyOutcome.status === 'fulfilled' ? historyOutcome.value : [];
+}
+
+async function settleTransientTranslationMaintenance(
+  tasks: Promise<unknown>[],
+): Promise<void> {
+  const outcomes = await Promise.allSettled(tasks);
+  for (const outcome of outcomes) {
+    if (outcome.status === 'rejected') {
+      void recordLocalDiagnosticError('translate-finalization', outcome.reason);
+    }
+  }
 }
 
 function progressTargetForSender(senderUrl: string | undefined): TranslationProgressTarget {
@@ -1670,6 +1684,7 @@ async function translate(
   tabId: number,
   progressTarget: TranslationProgressTarget = 'tab',
   providerOverride?: NativePdfTranslationProvider,
+  persistence: 'persistent' | 'transient' = 'persistent',
 ): Promise<TranslateRuntimeResponse> {
   const performanceStartedAt = performance.now();
   const performanceTimings: Partial<Record<PerformancePhase, number>> = {};
@@ -1817,6 +1832,11 @@ async function translate(
         });
         await progressDeliveryTail;
         assertActiveRequest(tabId, request.requestId, controller);
+        if (persistence === 'transient') {
+          await clearTranslationCheckpoint(tabId, cacheKey).catch(() => undefined);
+          assertActiveRequest(tabId, request.requestId, controller);
+          return { ok: true, data: { result: evidencedCached, history: [] } };
+        }
         const commitStartedAt = performance.now();
         const finalization = startCommittedTask(
           (operation) => runTranslationCommit(tabId, operation),
@@ -2161,6 +2181,16 @@ async function translate(
     });
     await progressDeliveryTail;
     assertActiveRequest(tabId, request.requestId, controller);
+    if (persistence === 'transient') {
+      await settleTransientTranslationMaintenance([
+        settings.enableSessionCache
+          ? cacheTranslation(tabId, cacheKey, result)
+          : Promise.resolve(),
+        clearTranslationCheckpoint(tabId, cacheKey),
+      ]);
+      assertActiveRequest(tabId, request.requestId, controller);
+      return { ok: true, data: { result, history: [] } };
+    }
     const commitStartedAt = performance.now();
     const finalization = startCommittedTask(
       (operation) => runTranslationCommit(tabId, operation),
@@ -3707,6 +3737,92 @@ async function sendToSelectionContentScript(
   await browser.tabs.sendMessage(tab.id, message);
 }
 
+async function bilingualPageTab(tabId: number): Promise<{
+  id: number;
+  url: string;
+}> {
+  const tab = await browser.tabs.get(tabId);
+  if (
+    tab.id === undefined ||
+    !tab.url ||
+    !isInjectableWebUrl(tab.url) ||
+    isOverleafProjectUrl(tab.url) ||
+    isEdgeNativePdfContext({ tabUrl: tab.url })
+  ) {
+    throw new TranslationError(
+      'UNSUPPORTED_PAGE',
+      '正文双语阅读仅支持普通网页，不会修改 Overleaf 编辑区或 PDF。',
+      false,
+    );
+  }
+  const settings = await getSettings();
+  if (settings.generalPageMode === 'off') {
+    throw new TranslationError(
+      'UNSUPPORTED_PAGE',
+      '请先在设置中启用普通网页翻译。',
+      false,
+    );
+  }
+  return { id: tab.id, url: tab.url };
+}
+
+async function startBilingualPage(
+  tabId: number,
+  targetLanguage: SupportedTargetLanguage,
+): Promise<BilingualPageStateResponse> {
+  try {
+    const tab = await bilingualPageTab(tabId);
+    await sendToSelectionContentScript(tab, {
+      type: 'START_BILINGUAL_PAGE_IN_TAB',
+      payload: { targetLanguage },
+    });
+    const response = await browser.tabs.sendMessage(tabId, {
+      type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB',
+    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    if (!response) throw new Error('The page translator did not respond.');
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
+async function getBilingualPageState(tabId: number): Promise<BilingualPageStateResponse> {
+  try {
+    await bilingualPageTab(tabId);
+    const response = await browser.tabs.sendMessage(tabId, {
+      type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB',
+    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    return response ?? {
+      ok: true,
+      data: { state: { phase: 'idle', total: 0, translated: 0, failed: 0 } },
+    };
+  } catch (error) {
+    const normalized = toTranslationError(error);
+    if (normalized.code === 'UNSUPPORTED_PAGE') return errorResponse(normalized);
+    return {
+      ok: true,
+      data: { state: { phase: 'idle', total: 0, translated: 0, failed: 0 } },
+    };
+  }
+}
+
+async function controlBilingualPage(
+  tabId: number,
+  action: BilingualPageAction,
+): Promise<BilingualPageStateResponse> {
+  try {
+    await bilingualPageTab(tabId);
+    const response = await browser.tabs.sendMessage(tabId, {
+      type: 'CONTROL_BILINGUAL_PAGE_IN_TAB',
+      payload: { action },
+    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    if (!response) throw new Error('The page translator did not respond.');
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
 async function sendContextMenuTranslationToWebPage(
   tab: { id?: number | undefined; url?: string | undefined },
   snapshot: ReturnType<typeof createContextMenuSnapshot>,
@@ -4502,6 +4618,41 @@ export default defineBackground(() => {
         );
       }
 
+      if (message.type === 'BILINGUAL_PAGE_STATE_UPDATED') {
+        const tabId = sender.tab?.id;
+        if (tabId === undefined) return undefined;
+        void browser.runtime.sendMessage({
+          type: 'BILINGUAL_PAGE_TAB_STATE_UPDATED',
+          payload: { tabId, state: message.payload.state },
+        } satisfies RuntimeMessage).catch(() => undefined);
+        return Promise.resolve({ ok: true as const, data: { received: true as const } });
+      }
+
+      if (
+        message.type === 'START_BILINGUAL_PAGE' ||
+        message.type === 'GET_BILINGUAL_PAGE_STATE' ||
+        message.type === 'CONTROL_BILINGUAL_PAGE'
+      ) {
+        const extensionSender = Boolean(sender.url?.startsWith(browser.runtime.getURL('')));
+        if (!extensionSender) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '正文双语阅读只能从 Pi Translator 界面启动。',
+            false,
+          )));
+        }
+        if (message.type === 'START_BILINGUAL_PAGE') {
+          return startBilingualPage(
+            message.payload.tabId,
+            message.payload.targetLanguage,
+          );
+        }
+        if (message.type === 'GET_BILINGUAL_PAGE_STATE') {
+          return getBilingualPageState(message.payload.tabId);
+        }
+        return controlBilingualPage(message.payload.tabId, message.payload.action);
+      }
+
       if (message.type === 'CANCEL_PDF_SIDE_PANEL_TRANSLATION') {
         return cancelPdfSidePanelTranslation(
           message.payload.tabId,
@@ -4873,6 +5024,30 @@ export default defineBackground(() => {
           isExtensionPdfReaderUrl(sender.url, PI_PDF_READER_URL)
             ? 'pdf-selection'
             : undefined,
+        );
+      }
+
+      if (message.type === 'TRANSLATE_BILINGUAL_PAGE_SEGMENT') {
+        const tabId = sender.tab?.id;
+        const sourceUrl = sender.url ?? sender.tab?.url;
+        if (
+          tabId === undefined ||
+          !sourceUrl ||
+          !isInjectableWebUrl(sourceUrl) ||
+          isOverleafProjectUrl(sourceUrl)
+        ) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '正文双语阅读请求必须来自当前普通网页。',
+            false,
+          )));
+        }
+        return translate(
+          message.payload,
+          tabId,
+          'none',
+          undefined,
+          'transient',
         );
       }
 

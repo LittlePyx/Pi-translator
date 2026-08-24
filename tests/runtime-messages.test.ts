@@ -96,6 +96,42 @@ describe('runtime message guard', () => {
       payload: { expectedRequestId: '', targetLanguage: 'fr' },
     })).toBe(false);
     expect(isRuntimeMessage({
+      type: 'START_BILINGUAL_PAGE',
+      payload: { tabId: 7, targetLanguage: 'zh-CN' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'pause' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'BILINGUAL_PAGE_STATE_UPDATED',
+      payload: {
+        state: {
+          phase: 'running',
+          total: 9,
+          translated: 3,
+          failed: 0,
+          targetLanguage: 'en',
+        },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'delete' },
+    })).toBe(false);
+    expect(isRuntimeMessage({
+      type: 'BILINGUAL_PAGE_TAB_STATE_UPDATED',
+      payload: {
+        tabId: 7,
+        state: {
+          phase: 'complete',
+          total: 2,
+          translated: 3,
+          failed: 0,
+        },
+      },
+    })).toBe(false);
+    expect(isRuntimeMessage({
       type: 'GET_WEB_CAPTURE_PERMISSION_PROMPT',
       payload: { tabId: 7 },
     })).toBe(true);
