@@ -74,6 +74,14 @@ import {
   savePdfTranslationMarkers,
   setPdfTranslationMarkerPersistence,
 } from '../../core/pdf/translation-marker-repository';
+import {
+  buildPdfSearchPageIndex,
+  findPdfSearchMatches,
+  normalizePdfSearchText,
+  type PdfSearchMatch,
+  type PdfSearchPageIndex,
+  type PdfSearchTextItem,
+} from '../../core/pdf/search';
 
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfViewerModule = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
@@ -121,6 +129,13 @@ const documentName = element<HTMLElement>('document-name');
 const pageJump = element<HTMLElement>('page-jump');
 const pageNumberInput = element<HTMLInputElement>('page-number');
 const pageCount = element<HTMLOutputElement>('page-count');
+const openSearch = element<HTMLButtonElement>('open-search');
+const searchPanel = element<HTMLElement>('pdf-search');
+const searchQuery = element<HTMLInputElement>('pdf-search-query');
+const searchStatus = element<HTMLOutputElement>('pdf-search-status');
+const searchPrevious = element<HTMLButtonElement>('pdf-search-previous');
+const searchNext = element<HTMLButtonElement>('pdf-search-next');
+const searchClose = element<HTMLButtonElement>('pdf-search-close');
 const recognizePage = element<HTMLButtonElement>('recognize-page');
 const regionTranslate = element<HTMLButtonElement>('region-translate');
 const regionQueueButton = element<HTMLButtonElement>('region-queue');
@@ -182,6 +197,16 @@ let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let currentReadingIdentity: string | undefined;
 let restoringReadingState = false;
 let fileDragDepth = 0;
+const PDF_SEARCH_RESULT_LIMIT = 5_000;
+const PDF_SEARCH_HIGHLIGHT_NAME = 'pi-pdf-search-match';
+const PDF_SEARCH_CURRENT_HIGHLIGHT_NAME = 'pi-pdf-search-current';
+const searchPageIndexes = new Map<number, PdfSearchPageIndex>();
+let searchMatches: PdfSearchMatch[] = [];
+let searchResultIndex = -1;
+let activeSearchQuery = '';
+let searchIndexRunId = 0;
+let searchIndexing = false;
+let searchReturnFocus: HTMLElement | undefined;
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -369,6 +394,7 @@ function setDocumentControls(enabled: boolean): void {
   zoomOut.disabled = !enabled || currentZoom() <= ZOOM_LEVELS[0] + 0.001;
   zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
   fitWidth.disabled = !enabled;
+  openSearch.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
   recognizePage.hidden = !enabled;
   recognizePage.disabled = !enabled;
@@ -817,6 +843,7 @@ function beginDocumentOpen(
   currentReadingIdentity = undefined;
   restoringReadingState = false;
   completedTextSelectionGesture = undefined;
+  resetPdfSearch();
   openOperationId += 1;
   documentEpoch += 1;
   currentDocumentSessionId = crypto.randomUUID();
@@ -997,6 +1024,353 @@ function updatePageControl(anchor = visiblePageAnchor()): void {
   }
 }
 
+function searchMatchIdentity(match: PdfSearchMatch | undefined): string | undefined {
+  return match ? `${match.pageNumber}:${match.start}:${match.end}` : undefined;
+}
+
+function setSearchStatus(message: string): void {
+  searchStatus.value = message;
+  searchStatus.textContent = message;
+}
+
+function stopSearchIndexing(): void {
+  searchIndexRunId += 1;
+  searchIndexing = false;
+}
+
+function renderedSearchSpans(pageElement: HTMLElement): HTMLElement[] {
+  const textLayer = pageElement.querySelector<HTMLElement>('.textLayer');
+  if (!textLayer) return [];
+  return [...textLayer.querySelectorAll<HTMLElement>('span')].filter((span) => (
+    !span.classList.contains('markedContent') &&
+    span.getAttribute('role') !== 'img' &&
+    !span.hasAttribute('data-pi-ocr-block')
+  ));
+}
+
+function originalOffsetForNormalizedOffset(value: string, normalizedOffset: number): number {
+  const leadingWhitespace = value.length - value.trimStart().length;
+  const trimmed = value.trim();
+  if (normalizedOffset <= 0) return leadingWhitespace;
+  for (let offset = 1; offset <= trimmed.length; offset += 1) {
+    if (normalizePdfSearchText(trimmed.slice(0, offset)).length >= normalizedOffset) {
+      return leadingWhitespace + offset;
+    }
+  }
+  return leadingWhitespace + trimmed.length;
+}
+
+function textPositionAtOffset(
+  element: HTMLElement,
+  requestedOffset: number,
+): { node: Text; offset: number } | undefined {
+  const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+  let remaining = Math.max(0, requestedOffset);
+  let last: Text | undefined;
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    const text = node as Text;
+    last = text;
+    if (remaining <= text.data.length) return { node: text, offset: remaining };
+    remaining -= text.data.length;
+  }
+  return last ? { node: last, offset: last.data.length } : undefined;
+}
+
+function rangeForSearchPart(
+  span: HTMLElement | undefined,
+  startOffset: number,
+  endOffset: number,
+): Range | undefined {
+  if (!span) return undefined;
+  const value = span.textContent ?? '';
+  const start = textPositionAtOffset(
+    span,
+    originalOffsetForNormalizedOffset(value, startOffset),
+  );
+  const end = textPositionAtOffset(
+    span,
+    originalOffsetForNormalizedOffset(value, endOffset),
+  );
+  if (!start || !end) return undefined;
+  const range = document.createRange();
+  range.setStart(start.node, start.offset);
+  range.setEnd(end.node, end.offset);
+  return range.collapsed ? undefined : range;
+}
+
+function refreshPdfSearchHighlightsForPage(pageElement: HTMLElement): void {
+  const spans = renderedSearchSpans(pageElement);
+  for (const span of spans) {
+    span.classList.remove('pi-pdf-search-match', 'pi-pdf-search-current');
+  }
+  if (searchPanel.hidden || !activeSearchQuery || !searchMatches.length) return;
+  const pageNumber = Number(pageElement.dataset.pageNumber);
+  const pageMatches = searchMatches.filter((match) => match.pageNumber === pageNumber);
+  for (const match of pageMatches) {
+    for (const itemIndex of match.itemIndexes) {
+      spans[itemIndex]?.classList.add('pi-pdf-search-match');
+    }
+  }
+  const current = searchMatches[searchResultIndex];
+  if (current?.pageNumber !== pageNumber) return;
+  for (const itemIndex of current.itemIndexes) {
+    spans[itemIndex]?.classList.add('pi-pdf-search-current');
+  }
+}
+
+function refreshPdfSearchHighlights(): void {
+  const renderedPages = [
+    ...viewer.querySelectorAll<HTMLElement>('.pdf-page[data-rendered="ready"]'),
+  ];
+  for (const page of renderedPages) {
+    refreshPdfSearchHighlightsForPage(page);
+  }
+  const highlightRegistry = (CSS as typeof CSS & { highlights?: HighlightRegistry }).highlights;
+  if (!highlightRegistry || typeof Highlight === 'undefined') return;
+  highlightRegistry.delete(PDF_SEARCH_HIGHLIGHT_NAME);
+  highlightRegistry.delete(PDF_SEARCH_CURRENT_HIGHLIGHT_NAME);
+  if (searchPanel.hidden || !activeSearchQuery || !searchMatches.length) return;
+  const current = searchMatches[searchResultIndex];
+  const matchRanges: Range[] = [];
+  const currentRanges: Range[] = [];
+  for (const page of renderedPages) {
+    const pageNumber = Number(page.dataset.pageNumber);
+    const spans = renderedSearchSpans(page);
+    for (const match of searchMatches) {
+      if (match.pageNumber !== pageNumber) continue;
+      const target = match === current ? currentRanges : matchRanges;
+      for (const part of match.itemParts) {
+        const range = rangeForSearchPart(
+          spans[part.itemIndex],
+          part.startOffset,
+          part.endOffset,
+        );
+        if (range) target.push(range);
+      }
+    }
+  }
+  if (matchRanges.length) {
+    highlightRegistry.set(PDF_SEARCH_HIGHLIGHT_NAME, new Highlight(...matchRanges));
+  }
+  if (currentRanges.length) {
+    highlightRegistry.set(
+      PDF_SEARCH_CURRENT_HIGHLIGHT_NAME,
+      new Highlight(...currentRanges),
+    );
+  }
+}
+
+function syncPdfSearchStatus(): void {
+  const hasMatches = searchMatches.length > 0;
+  searchPrevious.disabled = !hasMatches;
+  searchNext.disabled = !hasMatches;
+  if (!activeSearchQuery) {
+    setSearchStatus('输入关键词');
+    return;
+  }
+  const totalPages = pdfDocument?.numPages ?? 0;
+  const indexedPages = searchPageIndexes.size;
+  if (hasMatches) {
+    const capped = searchMatches.length >= PDF_SEARCH_RESULT_LIMIT;
+    const total = `${searchMatches.length}${capped ? '+' : ''}`;
+    const progress = searchIndexing && indexedPages < totalPages
+      ? ` · ${indexedPages}/${totalPages} 页`
+      : '';
+    setSearchStatus(`${searchResultIndex + 1} / ${total}${progress}`);
+    return;
+  }
+  if (searchIndexing && indexedPages < totalPages) {
+    setSearchStatus(`正在搜索 ${indexedPages}/${totalPages} 页`);
+    return;
+  }
+  const hasSearchableText = [...searchPageIndexes.values()].some((page) => page.text);
+  setSearchStatus(hasSearchableText ? '未找到' : '当前文档没有可搜索文字');
+}
+
+function updatePdfSearchMatches(preserveCurrent: boolean): void {
+  const currentIdentity = preserveCurrent
+    ? searchMatchIdentity(searchMatches[searchResultIndex])
+    : undefined;
+  searchMatches = findPdfSearchMatches(
+    searchPageIndexes.values(),
+    activeSearchQuery,
+    PDF_SEARCH_RESULT_LIMIT,
+  );
+  const preservedIndex = currentIdentity
+    ? searchMatches.findIndex((match) => searchMatchIdentity(match) === currentIdentity)
+    : -1;
+  searchResultIndex = preservedIndex >= 0 ? preservedIndex : searchMatches.length ? 0 : -1;
+  syncPdfSearchStatus();
+  refreshPdfSearchHighlights();
+}
+
+function navigateToPdfSearchResult(index: number): void {
+  const pdf = pdfDocument;
+  if (!pdf || !searchMatches.length) return;
+  searchResultIndex = (index + searchMatches.length) % searchMatches.length;
+  const match = searchMatches[searchResultIndex]!;
+  scrollToPageAnchor({
+    pageNumber: match.pageNumber,
+    ratio: Math.max(0, match.topRatio - 0.06),
+  });
+  const pageElement = viewer.querySelector<HTMLElement>(
+    `.pdf-page[data-page-number="${match.pageNumber}"]`,
+  );
+  if (pageElement) {
+    requestPageRender(pdf, pageElement, renderGeneration);
+    refreshPdfSearchHighlights();
+  }
+  updatePageControl({ pageNumber: match.pageNumber, ratio: match.topRatio });
+  schedulePageRetention();
+  syncPdfSearchStatus();
+}
+
+function searchTextItemsForPage(page: PDFPageProxy): Promise<PdfSearchTextItem[]> {
+  return page.getTextContent().then((content) => {
+    const viewport = page.getViewport({ scale: 1 });
+    const items: PdfSearchTextItem[] = [];
+    for (const item of content.items) {
+      if (!('str' in item) || !normalizePdfSearchText(item.str)) continue;
+      const baseline = item.transform[5];
+      const topRatio = typeof baseline === 'number' && viewport.height > 0
+        ? clamp(1 - baseline / viewport.height, 0, 1)
+        : undefined;
+      items.push({
+        str: item.str,
+        ...(item.hasEOL ? { hasEOL: true } : {}),
+        ...(topRatio === undefined ? {} : { topRatio }),
+      });
+    }
+    return items;
+  });
+}
+
+function yieldSearchIndexing(): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, 0));
+}
+
+function startPdfSearchIndexing(): void {
+  const pdf = pdfDocument;
+  if (!pdf || !activeSearchQuery || searchPanel.hidden || searchIndexing) return;
+  const epoch = documentEpoch;
+  const runId = ++searchIndexRunId;
+  searchIndexing = true;
+  syncPdfSearchStatus();
+  void (async () => {
+    for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+      if (
+        runId !== searchIndexRunId ||
+        pdfDocument !== pdf ||
+        documentEpoch !== epoch ||
+        searchPanel.hidden ||
+        !activeSearchQuery
+      ) return;
+      if (!searchPageIndexes.has(pageNumber)) {
+        let index: PdfSearchPageIndex;
+        try {
+          const page = await pdf.getPage(pageNumber);
+          if (runId !== searchIndexRunId || pdfDocument !== pdf || documentEpoch !== epoch) return;
+          index = buildPdfSearchPageIndex(pageNumber, await searchTextItemsForPage(page));
+        } catch {
+          index = buildPdfSearchPageIndex(pageNumber, []);
+        }
+        if (runId !== searchIndexRunId || pdfDocument !== pdf || documentEpoch !== epoch) return;
+        const hadMatches = searchMatches.length > 0;
+        searchPageIndexes.set(pageNumber, index);
+        updatePdfSearchMatches(true);
+        if (!hadMatches && searchMatches.length) navigateToPdfSearchResult(searchResultIndex);
+      }
+      await yieldSearchIndexing();
+    }
+    if (runId !== searchIndexRunId) return;
+    searchIndexing = false;
+    syncPdfSearchStatus();
+  })().catch(() => {
+    if (runId !== searchIndexRunId) return;
+    searchIndexing = false;
+    syncPdfSearchStatus();
+  });
+}
+
+function applyPdfSearchQuery(): void {
+  const nextQuery = normalizePdfSearchText(searchQuery.value);
+  if (nextQuery === activeSearchQuery) {
+    if (nextQuery) startPdfSearchIndexing();
+    return;
+  }
+  activeSearchQuery = nextQuery;
+  stopSearchIndexing();
+  updatePdfSearchMatches(false);
+  if (searchMatches.length) navigateToPdfSearchResult(0);
+  if (activeSearchQuery) startPdfSearchIndexing();
+}
+
+function openPdfSearch(): void {
+  if (!pdfDocument) return;
+  if (searchPanel.hidden) {
+    searchReturnFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : undefined;
+    searchPanel.hidden = false;
+  }
+  searchQuery.focus({ preventScroll: true });
+  searchQuery.select();
+  applyPdfSearchQuery();
+  syncPdfSearchStatus();
+}
+
+function closePdfSearch(restoreFocus = true): void {
+  if (searchPanel.hidden) return;
+  searchPanel.hidden = true;
+  stopSearchIndexing();
+  refreshPdfSearchHighlights();
+  if (restoreFocus) {
+    const target = searchReturnFocus?.isConnected ? searchReturnFocus : stage;
+    target.focus({ preventScroll: true });
+  }
+  searchReturnFocus = undefined;
+}
+
+function resetPdfSearch(): void {
+  closePdfSearch(false);
+  stopSearchIndexing();
+  searchPageIndexes.clear();
+  searchMatches = [];
+  searchResultIndex = -1;
+  activeSearchQuery = '';
+  searchQuery.value = '';
+  searchReturnFocus = undefined;
+  syncPdfSearchStatus();
+}
+
+openSearch.addEventListener('click', openPdfSearch);
+searchClose.addEventListener('click', () => closePdfSearch());
+searchPrevious.addEventListener('click', () => navigateToPdfSearchResult(searchResultIndex - 1));
+searchNext.addEventListener('click', () => navigateToPdfSearchResult(searchResultIndex + 1));
+searchQuery.addEventListener('input', applyPdfSearchQuery);
+document.addEventListener('keydown', (event) => {
+  const searchShortcut = (event.ctrlKey || event.metaKey) &&
+    !event.altKey && event.key.toLocaleLowerCase() === 'f';
+  if (searchShortcut && pdfDocument) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    openPdfSearch();
+    return;
+  }
+  if (searchPanel.hidden) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closePdfSearch();
+    return;
+  }
+  if (event.key === 'Enter' && event.target === searchQuery) {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    navigateToPdfSearchResult(searchResultIndex + (event.shiftKey ? -1 : 1));
+  }
+}, true);
+
 function evictPage(pageElement: HTMLElement): void {
   if (activeRegion?.pageElement === pageElement) return;
   pageRenderRevisions.set(pageElement, (pageRenderRevisions.get(pageElement) ?? 0) + 1);
@@ -1166,6 +1540,7 @@ async function renderPage(
         },
       });
     }
+    refreshPdfSearchHighlights();
     schedulePageRetention();
   } finally {
     if (activeRenderTasks.get(pageElement) === renderTask) {
@@ -2702,6 +3077,7 @@ window.addEventListener('resize', onPdfViewportResize, { passive: true });
 
 window.addEventListener('beforeunload', () => {
   hideDropOverlay();
+  stopSearchIndexing();
   if (fitWidthTimer) clearTimeout(fitWidthTimer);
   if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
   void persistReadingState();

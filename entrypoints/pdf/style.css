@@ -80,6 +80,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .toolbar .primary { color: #fff; border-color: #5054db; background: #5659df; }
 .toolbar .primary:hover:not(:disabled) { border-color: #4447c8; background: #484bcf; }
 .toolbar .quiet { padding-inline: 9px; }
+.toolbar .search-open { color: #4f46e5; }
 .toolbar .region-action[aria-pressed="true"] { color: #4338ca; border-color: #8f92ed; background: #eef0ff; }
 .region-tools { position: relative; display: flex; align-items: center; gap: 5px; }
 .toolbar .queue-action { min-height: 25px; padding: 3px 7px; color: #5659df; font-size: 9px; }
@@ -109,6 +110,80 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .toolbar .queue-item button { min-height: 30px; padding: 4px 8px; color: #a33b47; font-size: 10px; }
 .zoom-controls button { width: 28px; padding-inline: 0; font-size: 15px; }
 .zoom-controls output { width: 42px; color: var(--muted); font-size: 10px; text-align: center; }
+
+.pdf-search {
+  position: fixed;
+  z-index: 12;
+  top: 62px;
+  right: 14px;
+  display: grid;
+  grid-template-columns: 15px minmax(150px, 240px) minmax(74px, auto) 30px 30px 30px;
+  align-items: center;
+  gap: 4px;
+  min-height: 40px;
+  padding: 5px 6px 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--toolbar);
+  box-shadow: 0 12px 34px rgba(20, 30, 50, .2);
+  backdrop-filter: blur(16px);
+}
+.pdf-search[hidden] { display: none; }
+.pdf-search-icon {
+  position: relative;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid var(--muted);
+  border-radius: 50%;
+}
+.pdf-search-icon::after {
+  position: absolute;
+  right: -4px;
+  bottom: -3px;
+  width: 5px;
+  height: 1.5px;
+  background: var(--muted);
+  content: "";
+  transform: rotate(45deg);
+  transform-origin: left center;
+}
+.pdf-search input {
+  min-width: 0;
+  height: 28px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  border-radius: 0;
+  padding: 3px 4px;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+}
+.pdf-search input::-webkit-search-cancel-button { cursor: pointer; }
+.pdf-search-status {
+  min-width: 74px;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-search button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 0;
+  color: #58647a;
+  background: transparent;
+  font-size: 14px;
+  line-height: 1;
+}
+.pdf-search button:hover:not(:disabled) { color: #4338ca; background: rgba(99, 102, 241, .09); }
+.pdf-search button:disabled { color: #aeb6c4; cursor: default; }
+.pdf-search .pdf-search-close { color: #7a8496; font-size: 18px; font-weight: 350; }
 
 .document-stage {
   --pdf-sidebar-left: 0px;
@@ -410,6 +485,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
   line-height: 1;
   transform-origin: left top;
 }
+::highlight(pi-pdf-search-match) { background-color: rgba(250, 204, 21, .38); }
+::highlight(pi-pdf-search-current) { background-color: rgba(251, 146, 60, .58); }
 .textLayer ::selection { color: transparent; background: color-mix(in srgb, #06a6c7, transparent 64%); }
 .textLayer br::selection { background: transparent; }
 .textLayer .endOfContent {
@@ -431,14 +508,26 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .region-action::before { color: var(--muted); font-size: 13px; line-height: 1; }
   .toolbar #recognize-page::before { content: "识"; }
   .toolbar #region-translate::before { content: "框"; }
+  .toolbar .search-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
+  .toolbar .search-open::before { color: var(--muted); content: "查"; font-size: 11px; }
   .toolbar .region-action[aria-pressed="true"]::before { color: #4338ca; }
   .brand small { max-width: 28vw; }
   .pdf-viewer { padding-inline: 14px; }
 }
 
+@media (max-width: 560px) {
+  .pdf-search {
+    right: 9px;
+    left: 9px;
+    grid-template-columns: 15px minmax(90px, 1fr) minmax(62px, auto) 30px 30px 30px;
+  }
+}
+
 @media (max-width: 460px) {
   .brand { gap: 0; }
   .brand > span { display: none; }
+  .toolbar #choose-file { width: 42px; overflow: hidden; padding-inline: 0; font-size: 0; white-space: nowrap; }
+  .toolbar #choose-file::before { content: "PDF"; font-size: 10px; }
   .region-tools:has(.queue-action:not([hidden])) #recognize-page { display: none; }
   .toolbar .queue-action { width: 32px; min-height: 30px; padding-inline: 0; font-size: 0; }
   .toolbar .queue-action::before { content: "队"; font-size: 10px; }
@@ -461,6 +550,10 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .region-action[aria-pressed="true"]::before { color: #a5b4fc; }
   .toolbar .queue-action { color: #a5b4fc; }
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
+  .toolbar .search-open { color: #a5b4fc; }
+  .pdf-search button { color: #b7c0cf; }
+  .pdf-search button:hover:not(:disabled) { color: #c7d2fe; background: rgba(99, 102, 241, .16); }
+  .pdf-search button:disabled { color: #596579; }
   .region-confirm button { color: #cbd5e1; }
   .pdf-drop-overlay { background: rgba(17, 24, 36, .84); }
   .pdf-drop-card { color: #e5e7eb; border-color: #4c596e; background: rgba(29, 38, 52, .97); }

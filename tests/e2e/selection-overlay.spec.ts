@@ -3339,6 +3339,84 @@ test('loads the PDF runtime only after a document is opened', async () => {
   await pdfPage.close();
 });
 
+test('searches every text PDF page locally and navigates highlighted matches', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 900, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'searchable-long.pdf',
+      mimeType: 'application/pdf',
+      buffer: createMultiPageTextPdf(Array.from({ length: 12 }, (_, index) => ({
+        text: [4, 11].includes(index + 1)
+          ? `Page ${index + 1} contains the local Needle result.`
+          : `Ordinary content on page ${index + 1}.`,
+      }))),
+    });
+    await expect(pdfPage.locator('#page-count')).toHaveText('12');
+    await expect(pdfPage.locator('#open-search')).toBeEnabled();
+    await expect(pdfPage.locator('.pdf-page[data-page-number="11"]'))
+      .not.toHaveAttribute('data-rendered', /.+/);
+
+    await pdfPage.locator('#document-stage').press('Control+f');
+    const search = pdfPage.locator('#pdf-search');
+    const query = pdfPage.locator('#pdf-search-query');
+    await expect(search).toBeVisible();
+    await expect(query).toBeFocused();
+    await query.fill('needle');
+    await expect(pdfPage.locator('#pdf-search-status')).toContainText('1 / 2');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    const pageFour = pdfPage.locator('.pdf-page[data-page-number="4"]');
+    await expect(pageFour).toHaveAttribute('data-rendered', 'ready');
+    await expect(pageFour.locator('.pi-pdf-search-current')).toContainText('Needle');
+
+    await query.press('Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('11');
+    const pageEleven = pdfPage.locator('.pdf-page[data-page-number="11"]');
+    await expect(pageEleven).toHaveAttribute('data-rendered', 'ready');
+    await expect(pageEleven.locator('.pi-pdf-search-current')).toContainText('Needle');
+    await expect(pdfPage.locator('#pdf-search-status')).toContainText('2 / 2');
+    if (process.env.PI_VISUAL_QA) {
+      await pdfPage.screenshot({ path: testInfo.outputPath('pdf-search.png') });
+    }
+
+    await query.press('Shift+Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('4');
+    await query.press('Escape');
+    await expect(search).toBeHidden();
+    await expect(pdfPage.locator('.pi-pdf-search-match')).toHaveCount(0);
+    await expect(pdfPage.locator('#document-stage')).toBeFocused();
+
+    await pdfPage.locator('#open-search').click();
+    await expect(query).toHaveValue('needle');
+    await expect(pdfPage.locator('#pdf-search-status')).toContainText('/ 2');
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('keeps scanned PDF search local and does not start OCR automatically', async () => {
+  const pdfPage = await context.newPage();
+  const visionRequestsBefore = visionRequests.length;
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'scan-search.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#document-stage').press('Control+f');
+    await pdfPage.locator('#pdf-search-query').fill('needle');
+    await expect(pdfPage.locator('#pdf-search-status'))
+      .toHaveText('当前文档没有可搜索文字');
+    expect(visionRequests).toHaveLength(visionRequestsBefore);
+    await expect(pdfPage.locator('#recognize-page')).toBeVisible();
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('passes a PDF hash page through the background handoff', async () => {
   const sender = await context.newPage();
   await sender.goto(`chrome-extension://${extensionId}/popup.html`);

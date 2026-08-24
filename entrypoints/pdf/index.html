@@ -20,6 +20,7 @@
           <span aria-hidden="true">/</span>
           <output id="page-count" aria-label="总页数">0</output>
         </label>
+        <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
       </div>
       <div class="region-tools">
         <button
@@ -63,7 +64,24 @@
       <button id="open-settings" class="quiet" type="button">设置</button>
     </header>
 
-    <main id="document-stage" class="document-stage">
+    <section id="pdf-search" class="pdf-search" role="search" aria-label="搜索当前 PDF" hidden>
+      <span class="pdf-search-icon" aria-hidden="true"></span>
+      <input
+        id="pdf-search-query"
+        type="search"
+        maxlength="160"
+        autocomplete="off"
+        spellcheck="false"
+        aria-label="搜索当前 PDF"
+        placeholder="搜索当前 PDF"
+      />
+      <output id="pdf-search-status" class="pdf-search-status" aria-live="polite">输入关键词</output>
+      <button id="pdf-search-previous" type="button" title="上一个结果（Shift+Enter）" aria-label="上一个搜索结果" disabled>↑</button>
+      <button id="pdf-search-next" type="button" title="下一个结果（Enter）" aria-label="下一个搜索结果" disabled>↓</button>
+      <button id="pdf-search-close" class="pdf-search-close" type="button" title="关闭搜索（Esc）" aria-label="关闭搜索">×</button>
+    </section>
+
+    <main id="document-stage" class="document-stage" tabindex="-1">
       <section id="empty-state" class="empty-state">
         <img src="/brand/pi_logo.png" alt="" />
         <h1>打开一份 PDF 开始阅读</h1>
