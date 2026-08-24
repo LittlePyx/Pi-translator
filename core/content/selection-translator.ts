@@ -425,7 +425,7 @@ export async function startSelectionTranslator(
     },
     ...(surface === 'pdf'
       ? {}
-      : { onStartWebRegion: () => startWebRegionSelection() }),
+      : { onStartWebRegion: () => void startWebRegionSelectionWithPreflight() }),
     canAdjustWebRegion: (result) => Boolean(webRegionSelectionForResult(result)),
     onAdjustWebRegion: (result) => {
       const selection = result
@@ -1170,6 +1170,7 @@ export async function startSelectionTranslator(
       if (permissionFailure) {
         await browser.runtime.sendMessage({
           type: 'PREPARE_WEB_CAPTURE_PERMISSION',
+          payload: { intent: 'restore' },
         } satisfies RuntimeMessage).catch(() => undefined);
       }
       overlay.showError({
@@ -1184,6 +1185,28 @@ export async function startSelectionTranslator(
         ...(attemptedSelection ? { webRegionRecovery: true } : {}),
       }, attemptedSelection?.rect);
     });
+  }
+
+  async function startWebRegionSelectionWithPreflight(): Promise<void> {
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'PREPARE_WEB_CAPTURE_PERMISSION',
+        payload: { intent: 'start' },
+      } satisfies RuntimeMessage) as RuntimeResponse<{
+        ready: true;
+        granted: boolean;
+      }>;
+      if (response.ok && !response.data.granted) {
+        cancelActiveTranslation();
+        failedWebRegionSelection = undefined;
+        overlay.showWebCapturePermissionPrompt();
+        return;
+      }
+    } catch {
+      // Fall through to the existing capture recovery path if the service
+      // worker restarts while checking the optional permission.
+    }
+    startWebRegionSelection();
   }
 
   function rememberMarkerAnchor(

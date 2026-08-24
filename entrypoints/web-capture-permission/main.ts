@@ -14,6 +14,9 @@ const grant = element<HTMLButtonElement>('grant');
 const label = element<HTMLElement>('label');
 const detail = element<HTMLElement>('detail');
 const status = element<HTMLElement>('status');
+const intent = new URLSearchParams(location.search).get('intent') === 'start'
+  ? 'start'
+  : 'restore';
 let requestPending = false;
 let authorizationReady = false;
 document.body.dataset.theme = new URLSearchParams(location.search).get('theme') === 'dark'
@@ -44,13 +47,21 @@ async function grantAndResume(): Promise<void> {
       setState('denied', '未允许，点击重试', '也可以改用下方的浏览器侧栏授权');
       return;
     }
-    setState('pending', '已允许，正在恢复…', '即将回到刚才框选的网页区域');
+    setState(
+      'pending',
+      intent === 'start' ? '已允许，正在进入框选…' : '已允许，正在恢复…',
+      intent === 'start' ? '即将在当前网页开始框选' : '即将回到刚才框选的网页区域',
+    );
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
-      payload: { restorePreviousRegion: true },
+      ...(intent === 'restore' ? { payload: { restorePreviousRegion: true } } : {}),
     } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
     if (!response.ok) throw new Error(response.error.message);
-    setState('complete', '已恢复框选', '请继续调整或翻译当前区域');
+    setState(
+      'complete',
+      intent === 'start' ? '已进入框选' : '已恢复框选',
+      intent === 'start' ? '请在当前网页拖动选择区域' : '请继续调整或翻译当前区域',
+    );
   } catch (error) {
     setState(
       'error',
@@ -86,7 +97,13 @@ async function initialize(): Promise<void> {
     }
     authorizationReady = true;
     grant.disabled = false;
-    setState('idle', '允许截图并继续', 'Edge 将询问一次，授权后自动恢复框选');
+    setState(
+      'idle',
+      intent === 'start' ? '允许截图并开始框选' : '允许截图并继续',
+      intent === 'start'
+        ? 'Edge 将询问一次，允许后自动进入框选'
+        : 'Edge 将询问一次，授权后自动恢复框选',
+    );
     if (document.hasFocus()) grant.focus({ preventScroll: true });
   } catch {
     setState('error', '无法验证授权来源', '请改用下方的浏览器侧栏授权');

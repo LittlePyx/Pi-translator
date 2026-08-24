@@ -4374,8 +4374,20 @@ export default defineBackground(() => {
             false,
           )));
         }
-        markWebCapturePermissionPrompt(tabId);
-        return Promise.resolve({ ok: true as const, data: { ready: true as const } });
+        const intent = message.payload?.intent ?? 'restore';
+        return browser.permissions.contains({
+          origins: [VISIBLE_TAB_CAPTURE_PERMISSION],
+        }).then((granted) => {
+          if (granted && intent === 'start') {
+            pendingWebCapturePermissionTabs.delete(tabId);
+          } else {
+            markWebCapturePermissionPrompt(tabId);
+          }
+          return {
+            ok: true as const,
+            data: { ready: true as const, granted },
+          };
+        });
       }
 
       if (message.type === 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT') {
@@ -4475,9 +4487,7 @@ export default defineBackground(() => {
               ));
             }
             await sendToSelectionContentScript(tab, message);
-            if (message.payload?.restorePreviousRegion) {
-              pendingWebCapturePermissionTabs.delete(tab.id!);
-            }
+            pendingWebCapturePermissionTabs.delete(tab.id!);
             if (tab.url) {
               await completeFeatureDiscovery(
                 isOverleafProjectUrl(tab.url) ? 'overleaf-region' : 'web-region',

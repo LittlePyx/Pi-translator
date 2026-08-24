@@ -166,7 +166,10 @@ export type RuntimeMessage =
       type: 'START_WEB_REGION_SELECTION';
       payload?: { restorePreviousRegion?: boolean };
     }
-  | { type: 'PREPARE_WEB_CAPTURE_PERMISSION' }
+  | {
+      type: 'PREPARE_WEB_CAPTURE_PERMISSION';
+      payload?: { intent?: 'start' | 'restore' };
+    }
   | { type: 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT' }
   | { type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' }
   | { type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' }

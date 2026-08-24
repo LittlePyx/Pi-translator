@@ -45,6 +45,10 @@ describe('runtime message guard', () => {
     })).toBe(true);
     expect(isRuntimeMessage({ type: 'OPEN_WEB_CAPTURE_PERMISSION_PANEL' })).toBe(true);
     expect(isRuntimeMessage({ type: 'PREPARE_WEB_CAPTURE_PERMISSION' })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'PREPARE_WEB_CAPTURE_PERMISSION',
+      payload: { intent: 'start' },
+    })).toBe(true);
     expect(isRuntimeMessage({ type: 'GET_CURRENT_WEB_CAPTURE_PERMISSION_PROMPT' })).toBe(true);
     expect(isRuntimeMessage({ type: 'CLEAR_WEB_CAPTURE_PERMISSION_PROMPT' })).toBe(true);
     expect(isRuntimeMessage({

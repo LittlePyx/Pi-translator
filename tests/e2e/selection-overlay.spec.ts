@@ -9095,7 +9095,49 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   }
   const requestsBeforeRegionSelection = textRequests.length;
   await webRegionAction.click();
-  await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await expect(overlay.locator('.error')).toHaveCount(0);
+  await expect(overlay.locator('.capture-permission')).toContainText(
+    '首次框选需要一次截图授权',
+  );
+  await expect(overlay.locator('.capture-permission')).toContainText(
+    '允许后立即进入框选',
+  );
+  await expect(overlay.locator('.sidebar-region-action')).toHaveCount(0);
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({
+      path: testInfo.outputPath('web-floating-sidebar-permission-preflight.png'),
+    });
+  }
+  const preflightFrameElement = overlay.locator('.capture-permission-frame');
+  const preflightFrameHandle = await preflightFrameElement.elementHandle();
+  const preflightFrame = await preflightFrameHandle?.contentFrame();
+  expect(preflightFrame).toBeDefined();
+  await expect(preflightFrame!.locator('#label')).toHaveText('允许截图并开始框选');
+  expect(new URL(preflightFrame!.url()).searchParams.get('intent')).toBe('start');
+  await preflightFrame!.evaluate(() => {
+    const extensionChrome = (globalThis as typeof globalThis & {
+      chrome: { permissions: object };
+    }).chrome;
+    Object.defineProperty(extensionChrome.permissions, 'request', {
+      configurable: true,
+      value: async () => false,
+    });
+  });
+  await preflightFrame!.getByRole('button', { name: /允许截图并开始框选/ }).click();
+  await expect(preflightFrame!.locator('#label')).toHaveText('未允许，点击重试');
+  await expect(page.locator('#pi-web-region-selection-root')).toHaveCount(0);
+  await preflightFrame!.evaluate(() => {
+    const extensionChrome = (globalThis as typeof globalThis & {
+      chrome: { permissions: object };
+    }).chrome;
+    Object.defineProperty(extensionChrome.permissions, 'request', {
+      configurable: true,
+      value: async () => true,
+    });
+  });
+  await preflightFrame!.getByRole('button', { name: /未允许，点击重试/ })
+    .evaluate((button) => (button as HTMLButtonElement).click());
   const webRegion = page.locator('#pi-web-region-selection-root');
   await expect(webRegion).toBeVisible();
   await page.keyboard.press('Escape');
@@ -9103,6 +9145,49 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.locator('.sidebar-region-action')).toBeVisible();
   expect(textRequests).toHaveLength(requestsBeforeRegionSelection);
+  const worker = context.serviceWorkers()[0];
+  expect(worker).toBeDefined();
+  await worker!.evaluate(() => {
+    const scope = globalThis as typeof globalThis & {
+      __piOriginalPermissionsContains?: (query: { origins?: string[] }) => Promise<boolean>;
+      chrome: {
+        permissions: {
+          contains(query: { origins?: string[] }): Promise<boolean>;
+        };
+      };
+    };
+    const permissions = scope.chrome.permissions;
+    scope.__piOriginalPermissionsContains ??= permissions.contains.bind(permissions);
+    Object.defineProperty(permissions, 'contains', {
+      configurable: true,
+      value: async (query: { origins?: string[] }) => (
+        query.origins?.includes('<all_urls>')
+          ? true
+          : scope.__piOriginalPermissionsContains!(query)
+      ),
+    });
+  });
+  try {
+    await overlay.locator('.sidebar-region-action').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await expect(webRegion).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(webRegion).toHaveCount(0);
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  } finally {
+    await worker!.evaluate(() => {
+      const scope = globalThis as typeof globalThis & {
+        __piOriginalPermissionsContains?: (query: { origins?: string[] }) => Promise<boolean>;
+        chrome: { permissions: object };
+      };
+      if (!scope.__piOriginalPermissionsContains) return;
+      Object.defineProperty(scope.chrome.permissions, 'contains', {
+        configurable: true,
+        value: scope.__piOriginalPermissionsContains,
+      });
+      delete scope.__piOriginalPermissionsContains;
+    });
+  }
   const moreMenu = overlay.locator('details.more');
   await moreMenu.locator('summary').click();
   const menu = overlay.locator('.menu');
@@ -9131,7 +9216,19 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expand.press('Enter');
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.getByTitle('收起侧栏')).toBeFocused();
-  await webRegionAction.click();
+  await worker!.evaluate(async (targetUrl) => {
+    const api = (globalThis as typeof globalThis & {
+      chrome: {
+        tabs: {
+          query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+          sendMessage(tabId: number, message: object): Promise<unknown>;
+        };
+      };
+    }).chrome;
+    const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+    if (target?.id === undefined) throw new Error('Missing active web test tab.');
+    await api.tabs.sendMessage(target.id, { type: 'START_WEB_REGION_SELECTION' });
+  }, page.url());
   const formulaBox = await page.locator('#math-source').boundingBox();
   expect(formulaBox).not.toBeNull();
   if (formulaBox) {
