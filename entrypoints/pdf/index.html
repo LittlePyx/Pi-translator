@@ -69,7 +69,7 @@
         <h1>打开一份 PDF 开始阅读</h1>
         <p>选择文字或拖选段落后，使用旁边的小 Pi 按钮翻译。</p>
         <button id="empty-open" class="primary" type="button">选择本地 PDF</button>
-        <small>文件仅在当前浏览器标签页中读取，不会上传给扩展服务器。</small>
+        <small>也可将 PDF 拖到此处；文件仅在当前标签页中读取，不会上传给扩展服务器。</small>
       </section>
       <div id="loading" class="loading" hidden role="status" aria-live="polite">
         <span class="spinner" aria-hidden="true"></span>
@@ -78,6 +78,15 @@
       <section id="notice" class="notice" hidden role="status" aria-live="polite" aria-atomic="true"></section>
       <div id="pdf-viewer" class="pdf-viewer" hidden></div>
     </main>
+    <section id="pdf-drop-overlay" class="pdf-drop-overlay" role="status" aria-live="polite" hidden>
+      <div class="pdf-drop-card">
+        <span class="pdf-drop-badge" aria-hidden="true">PDF</span>
+        <span>
+          <strong id="pdf-drop-title">松开以打开 PDF</strong>
+          <small id="pdf-drop-description">文件只在当前标签页中读取</small>
+        </span>
+      </div>
+    </section>
 
     <script type="module" src="./main.ts"></script>
   </body>

@@ -137,6 +137,54 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .empty-state button { padding: 8px 16px; border: 0; border-radius: 5px; color: #fff; background: #5659df; font-weight: 700; }
 .empty-state small { max-width: 430px; margin-top: 12px; color: var(--muted); font-size: 10px; line-height: 1.6; }
 
+.pdf-drop-overlay {
+  position: fixed;
+  z-index: 9;
+  inset: 54px 0 0;
+  display: grid;
+  place-items: center;
+  padding: 22px;
+  background: rgba(236, 240, 247, .82);
+  backdrop-filter: blur(4px);
+  pointer-events: none;
+}
+.pdf-drop-overlay[hidden] { display: none; }
+.pdf-drop-card {
+  display: flex;
+  width: min(420px, 100%);
+  align-items: center;
+  gap: 13px;
+  padding: 16px 18px;
+  border: 1px solid #bfc9d9;
+  border-radius: 8px;
+  color: #344056;
+  background: rgba(255, 255, 255, .96);
+  box-shadow: 0 16px 42px rgba(30, 41, 59, .14);
+}
+.pdf-drop-badge {
+  display: grid;
+  flex: 0 0 auto;
+  width: 42px;
+  height: 42px;
+  place-items: center;
+  border: 1px solid #c9cbf4;
+  border-radius: 6px;
+  color: #5154d3;
+  background: #f1f2ff;
+  font-size: 10px;
+  font-weight: 850;
+  letter-spacing: .08em;
+}
+.pdf-drop-card > span:last-child { display: grid; gap: 3px; min-width: 0; }
+.pdf-drop-card strong { font-size: 15px; }
+.pdf-drop-card small { color: var(--muted); font-size: 11px; }
+.pdf-drop-overlay[data-tone="invalid"] .pdf-drop-card { border-color: #dfc47a; }
+.pdf-drop-overlay[data-tone="invalid"] .pdf-drop-badge {
+  color: #8a6516;
+  border-color: #e4cf99;
+  background: #fff8e7;
+}
+
 .loading {
   position: sticky;
   z-index: 4;
@@ -414,6 +462,11 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .queue-action { color: #a5b4fc; }
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
   .region-confirm button { color: #cbd5e1; }
+  .pdf-drop-overlay { background: rgba(17, 24, 36, .84); }
+  .pdf-drop-card { color: #e5e7eb; border-color: #4c596e; background: rgba(29, 38, 52, .97); }
+  .pdf-drop-badge { color: #bec5ff; border-color: #545996; background: #292d57; }
+  .pdf-drop-overlay[data-tone="invalid"] .pdf-drop-card { border-color: #76622d; }
+  .pdf-drop-overlay[data-tone="invalid"] .pdf-drop-badge { color: #efd68f; border-color: #76622d; background: #352e1c; }
 }
 
 @media (prefers-reduced-motion: reduce) {

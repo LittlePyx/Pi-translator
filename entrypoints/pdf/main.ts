@@ -65,6 +65,11 @@ import {
 } from '../../core/pdf/reading-state';
 import { pdfWheelZoomDelta, pdfWheelZoomStepCount } from '../../core/pdf/wheel-zoom';
 import {
+  hasPdfFileSignature,
+  pdfOpenErrorMessage,
+  validateLocalPdfFiles,
+} from '../../core/pdf/local-file';
+import {
   clearPdfTranslationMarkers,
   getPdfTranslationMarkerState,
   savePdfTranslationMarkers,
@@ -104,6 +109,9 @@ const loading = element<HTMLElement>('loading');
 const loadingText = element<HTMLElement>('loading-text');
 const notice = element<HTMLElement>('notice');
 const viewer = element<HTMLElement>('pdf-viewer');
+const dropOverlay = element<HTMLElement>('pdf-drop-overlay');
+const dropTitle = element<HTMLElement>('pdf-drop-title');
+const dropDescription = element<HTMLElement>('pdf-drop-description');
 
 const ZOOM_LEVELS = [0.5, 0.67, 0.8, 1, 1.25, 1.5, 1.75, 2, 2.5, 3] as const;
 const RETAINED_PAGE_RADIUS = 2;
@@ -144,6 +152,7 @@ let continuousSidebarActive = false;
 let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
 let currentReadingIdentity: string | undefined;
 let restoringReadingState = false;
+let fileDragDepth = 0;
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -1246,7 +1255,7 @@ async function openPdfData(
     viewer.hidden = true;
     pageJump.hidden = true;
     setDocumentControls(false);
-    showNotice(error instanceof Error ? `无法打开 PDF：${error.message}` : '无法打开这个 PDF。', {
+    showNotice(pdfOpenErrorMessage(error), {
       tone: 'error',
     });
   } finally {
@@ -1256,8 +1265,23 @@ async function openPdfData(
 }
 
 async function openLocalFile(file: File): Promise<void> {
-  if (file.type && file.type !== 'application/pdf' && !file.name.toLowerCase().endsWith('.pdf')) {
-    showNotice('请选择 PDF 文件。', { transient: true, tone: 'warning' });
+  const validation = validateLocalPdfFiles([file]);
+  if (!validation.ok) {
+    showNotice(validation.message, { transient: true, tone: 'warning' });
+    return;
+  }
+  try {
+    const prefix = new Uint8Array(await file.slice(0, 1024).arrayBuffer());
+    if (!hasPdfFileSignature(prefix)) {
+      showNotice('无法打开 PDF：文件可能已损坏，或并不是有效的 PDF。', {
+        tone: 'error',
+      });
+      return;
+    }
+  } catch (error) {
+    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。', {
+      tone: 'error',
+    });
     return;
   }
   const operation = beginDocumentOpen('正在读取本地 PDF…');
@@ -2355,6 +2379,90 @@ function chooseLocalPdf(): void {
   fileInput.click();
 }
 
+function isFileDrag(transfer: DataTransfer | null): transfer is DataTransfer {
+  return Boolean(transfer && [...transfer.types].includes('Files'));
+}
+
+function dropPresentation(transfer: DataTransfer): {
+  invalid: boolean;
+  title: string;
+  description: string;
+} {
+  const items = [...transfer.items].filter((item) => item.kind === 'file');
+  if (items.length > 1) {
+    return {
+      invalid: true,
+      title: '一次只能打开一份 PDF',
+      description: '请只保留一个文件后重试',
+    };
+  }
+  const knownType = items[0]?.type.toLowerCase();
+  if (
+    knownType &&
+    !['application/pdf', 'application/x-pdf', 'application/octet-stream'].includes(knownType)
+  ) {
+    return {
+      invalid: true,
+      title: '这里只能打开 PDF',
+      description: '当前拖入的文件类型不受支持',
+    };
+  }
+  return {
+    invalid: false,
+    title: pdfDocument ? '松开以更换当前 PDF' : '松开以打开 PDF',
+    description: pdfDocument
+      ? '新文档将在当前阅读器中打开'
+      : '文件只在当前标签页中读取',
+  };
+}
+
+function showDropOverlay(transfer: DataTransfer): void {
+  const presentation = dropPresentation(transfer);
+  dropTitle.textContent = presentation.title;
+  dropDescription.textContent = presentation.description;
+  dropOverlay.dataset.tone = presentation.invalid ? 'invalid' : 'ready';
+  dropOverlay.hidden = false;
+}
+
+function hideDropOverlay(): void {
+  fileDragDepth = 0;
+  dropOverlay.hidden = true;
+  dropOverlay.removeAttribute('data-tone');
+}
+
+window.addEventListener('dragenter', (event) => {
+  if (!isFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  fileDragDepth += 1;
+  showDropOverlay(event.dataTransfer);
+});
+window.addEventListener('dragover', (event) => {
+  if (!isFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  const presentation = dropPresentation(event.dataTransfer);
+  event.dataTransfer.dropEffect = presentation.invalid ? 'none' : 'copy';
+  showDropOverlay(event.dataTransfer);
+});
+window.addEventListener('dragleave', (event) => {
+  if (dropOverlay.hidden || !isFileDrag(event.dataTransfer)) return;
+  fileDragDepth = Math.max(0, fileDragDepth - 1);
+  if (fileDragDepth === 0) hideDropOverlay();
+});
+window.addEventListener('dragend', hideDropOverlay);
+window.addEventListener('blur', hideDropOverlay);
+window.addEventListener('drop', (event) => {
+  if (!isFileDrag(event.dataTransfer)) return;
+  event.preventDefault();
+  const files = [...event.dataTransfer.files];
+  hideDropOverlay();
+  const validation = validateLocalPdfFiles(files);
+  if (!validation.ok) {
+    showNotice(validation.message, { transient: true, tone: 'warning' });
+    return;
+  }
+  void openLocalFile(validation.file);
+});
+
 chooseFile.addEventListener('click', chooseLocalPdf);
 emptyOpen.addEventListener('click', chooseLocalPdf);
 fileInput.addEventListener('change', () => {
@@ -2547,6 +2655,7 @@ const onPdfViewportResize = (): void => applyPdfSidebarLayout(pdfSidebarLayout);
 window.addEventListener('resize', onPdfViewportResize, { passive: true });
 
 window.addEventListener('beforeunload', () => {
+  hideDropOverlay();
   if (fitWidthTimer) clearTimeout(fitWidthTimer);
   if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
   void persistReadingState();

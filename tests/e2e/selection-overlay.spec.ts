@@ -3,6 +3,7 @@ import {
   test,
   chromium,
   type BrowserContext,
+  type JSHandle,
   type Locator,
   type Page,
   type Route,
@@ -97,6 +98,28 @@ function createMultilineTextPdf(lines: string[]): Buffer {
   body += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
   body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
   return Buffer.from(body);
+}
+
+async function createFileDataTransfer(
+  targetPage: Page,
+  files: Array<{ name: string; mimeType: string; buffer: Buffer }>,
+): Promise<JSHandle<DataTransfer>> {
+  return targetPage.evaluateHandle((payloads) => {
+    const transfer = new DataTransfer();
+    for (const payload of payloads) {
+      const binary = atob(payload.base64);
+      const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+      transfer.items.add(new File([bytes], payload.name, {
+        type: payload.mimeType,
+        lastModified: 1_780_000_000_000,
+      }));
+    }
+    return transfer;
+  }, files.map((file) => ({
+    name: file.name,
+    mimeType: file.mimeType,
+    base64: file.buffer.toString('base64'),
+  })));
 }
 
 function createTwoColumnTextPdf(
@@ -4103,6 +4126,101 @@ test('protects and previews selections in a real two-column PDF', async ({}, tes
   await pdfPage.close();
 });
 
+test('opens and replaces local PDFs by dropping one file at a time', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  await pdfPage.setViewportSize({ width: 360, height: 700 });
+  await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+  await expect(pdfPage.locator('#empty-state small')).toContainText('拖到此处');
+  const dropOverlay = pdfPage.locator('#pdf-drop-overlay');
+  await expect(dropOverlay).toBeHidden();
+
+  const textTransfer = await pdfPage.evaluateHandle(() => {
+    const transfer = new DataTransfer();
+    transfer.setData('text/plain', 'ordinary text drag');
+    return transfer;
+  });
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: textTransfer });
+  await expect(dropOverlay).toBeHidden();
+  await textTransfer.dispose();
+
+  const firstTransfer = await createFileDataTransfer(pdfPage, [{
+    name: 'dropped-paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('First dropped PDF document.'),
+  }]);
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: firstTransfer });
+  await expect(dropOverlay).toBeVisible();
+  await expect(pdfPage.locator('#pdf-drop-title')).toHaveText('松开以打开 PDF');
+  await expect(dropOverlay).toHaveAttribute('data-tone', 'ready');
+  if (process.env.PI_VISUAL_QA) {
+    await pdfPage.screenshot({ path: testInfo.outputPath('pdf-drop-empty-360-light.png') });
+  }
+  await pdfPage.dispatchEvent('body', 'dragleave', { dataTransfer: firstTransfer });
+  await expect(dropOverlay).toBeHidden();
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: firstTransfer });
+  await pdfPage.dispatchEvent('body', 'dragover', { dataTransfer: firstTransfer });
+  await pdfPage.dispatchEvent('body', 'drop', { dataTransfer: firstTransfer });
+  await firstTransfer.dispose();
+  await expect(dropOverlay).toBeHidden();
+  await expect(pdfPage.locator('#document-name')).toHaveText('dropped-paper.pdf');
+  await expect(pdfPage.locator('.textLayer')).toContainText('First dropped PDF document.');
+
+  const replacementTransfer = await createFileDataTransfer(pdfPage, [{
+    name: 'replacement-paper.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('Replacement PDF document.'),
+  }]);
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: replacementTransfer });
+  await expect(pdfPage.locator('#pdf-drop-title')).toHaveText('松开以更换当前 PDF');
+  await pdfPage.dispatchEvent('body', 'drop', { dataTransfer: replacementTransfer });
+  await replacementTransfer.dispose();
+  await expect(pdfPage.locator('#document-name')).toHaveText('replacement-paper.pdf');
+  await expect(pdfPage.locator('.textLayer')).toContainText('Replacement PDF document.');
+
+  const invalidTransfer = await createFileDataTransfer(pdfPage, [{
+    name: 'notes.txt',
+    mimeType: 'text/plain',
+    buffer: Buffer.from('not a PDF'),
+  }]);
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: invalidTransfer });
+  await expect(pdfPage.locator('#pdf-drop-title')).toHaveText('这里只能打开 PDF');
+  await expect(dropOverlay).toHaveAttribute('data-tone', 'invalid');
+  await pdfPage.dispatchEvent('body', 'drop', { dataTransfer: invalidTransfer });
+  await invalidTransfer.dispose();
+  await expect(pdfPage.locator('#notice')).toContainText('不是 PDF 文件');
+  await expect(pdfPage.locator('#document-name')).toHaveText('replacement-paper.pdf');
+
+  const multipleTransfer = await createFileDataTransfer(pdfPage, [{
+    name: 'one.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('One.'),
+  }, {
+    name: 'two.pdf',
+    mimeType: 'application/pdf',
+    buffer: createTextPdf('Two.'),
+  }]);
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: multipleTransfer });
+  await expect(pdfPage.locator('#pdf-drop-title')).toHaveText('一次只能打开一份 PDF');
+  await pdfPage.dispatchEvent('body', 'drop', { dataTransfer: multipleTransfer });
+  await multipleTransfer.dispose();
+  await expect(pdfPage.locator('#notice')).toContainText('一次只能打开一份 PDF');
+  await expect(pdfPage.locator('#document-name')).toHaveText('replacement-paper.pdf');
+
+  const damagedTransfer = await createFileDataTransfer(pdfPage, [{
+    name: 'damaged.pdf',
+    mimeType: 'application/pdf',
+    buffer: Buffer.from('renamed but not actually a PDF'),
+  }]);
+  await pdfPage.dispatchEvent('body', 'dragenter', { dataTransfer: damagedTransfer });
+  await pdfPage.dispatchEvent('body', 'drop', { dataTransfer: damagedTransfer });
+  await damagedTransfer.dispose();
+  await expect(pdfPage.locator('#notice')).toContainText('可能已损坏');
+  await expect(pdfPage.locator('#document-name')).toHaveText('replacement-paper.pdf');
+  await expect(pdfPage.locator('.textLayer')).toContainText('Replacement PDF document.');
+
+  await pdfPage.close();
+});
+
 test('retains an explicitly traversed spanning formula in a real two-column PDF', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
@@ -7029,7 +7147,7 @@ test('keeps recoverable PDF warnings compact and document errors persistent', as
     mimeType: 'text/plain',
     buffer: Buffer.from('not a PDF'),
   });
-  await expect(notice).toContainText('请选择 PDF 文件');
+  await expect(notice).toContainText('“notes.txt”不是 PDF 文件');
   await expect(notice).toHaveClass(/transient/);
   await expect(notice).toHaveAttribute('data-tone', 'warning');
   await expect(notice).toHaveAttribute('role', 'status');
