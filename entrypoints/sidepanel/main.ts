@@ -30,6 +30,7 @@ import {
   isSamePdfSidePanelSession,
 } from '../../core/pdf/sidepanel-session';
 import { getSettings } from '../../core/settings/repository';
+import { webPagePermissionPattern } from '../../core/settings/site-access';
 import { containsRenderableLatex } from '../../core/translation/latex-display';
 import { normalizeVisionLatexText } from '../../core/translation/formula-output-validation';
 import {
@@ -128,6 +129,7 @@ const retryPdfAccess = element<HTMLButtonElement>('retry-pdf-access');
 
 let activeTabId: number | undefined;
 let activeWindowId: number | undefined;
+let activeTabUrl: string | undefined;
 let currentSession: PdfSidePanelSession | undefined;
 let latestWebSession: PdfSidePanelSession | undefined;
 let webHistory: TranslationHistoryEntry[] = [];
@@ -574,6 +576,16 @@ async function startCurrentWebRegionSelection(): Promise<void> {
   startWebRegionLabel.textContent = '启动中…';
   setWebRegionFeedback('');
   try {
+    const pagePermission = activeTabUrl
+      ? webPagePermissionPattern(activeTabUrl)
+      : undefined;
+    if (!pagePermission) throw new Error('当前标签页不支持网页框选。');
+    // Keep this as the first asynchronous browser call in the click path so
+    // Edge preserves the user's activation for an optional origin request.
+    const granted = await browser.permissions.request({ origins: [pagePermission] });
+    if (!granted) {
+      throw new Error('需要允许 Pi Translator 访问当前站点，才能截取你确认的框内画面。');
+    }
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
     } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
@@ -1488,6 +1500,7 @@ async function loadActiveSession(
   }
   if (activeTabId !== requestedTabId) resetWebHistoryState();
   activeTabId = requestedTabId;
+  activeTabUrl = requestedTabUrl;
   const nextEmptyContext = await resolveEmptyContext(requestedTabId, requestedTabUrl);
   if (!isCurrentLoad()) return;
   showEmptyContext(nextEmptyContext);
@@ -2215,6 +2228,7 @@ browser.tabs.onActivated.addListener((activated) => {
   sessionLoadGate.invalidate();
   resetWebHistoryState();
   activeTabId = activated.tabId;
+  activeTabUrl = undefined;
   showEmptyContext({ kind: 'loading' });
   render(undefined);
   void loadActiveSession(activated)
@@ -2222,7 +2236,9 @@ browser.tabs.onActivated.addListener((activated) => {
 });
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
-  if (tabId !== activeTabId || !changeInfo.url || currentSession) return;
+  if (tabId !== activeTabId || !changeInfo.url) return;
+  activeTabUrl = changeInfo.url;
+  if (currentSession) return;
   sessionLoadGate.invalidate();
   showEmptyContext(emptyContextForTabUrl(changeInfo.url));
   void loadActiveSession({ tabId, windowId: tab.windowId })

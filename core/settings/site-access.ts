@@ -24,6 +24,11 @@ export function isInjectableWebUrl(url: string): boolean {
   }
 }
 
+export function webPagePermissionPattern(url: string): string | undefined {
+  if (!isInjectableWebUrl(url)) return undefined;
+  return `${new URL(url).origin}/*`;
+}
+
 export function normalizeSiteEntry(value: string): string | undefined {
   const trimmed = value.trim().toLowerCase();
   if (!trimmed) return undefined;

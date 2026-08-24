@@ -3176,7 +3176,7 @@ test('shows contextual guidance once and keeps dismissal local', async () => {
   }
 });
 
-test('always sends confirmed webpage regions through the multimodal capture path', async () => {
+test('always sends confirmed webpage regions through the multimodal capture path', async ({}, testInfo) => {
   async function startFromPopup(): Promise<void> {
     const popup = await context.newPage();
     try {
@@ -3212,8 +3212,17 @@ test('always sends confirmed webpage regions through the multimodal capture path
   const textBefore = textRequests.length;
   const visionBefore = visionRequests.length;
   await startFromPopup();
-  await drawAround('#math-source');
   const webRegion = page.locator('#pi-web-region-selection-root');
+  await page.mouse.move(180, 180);
+  const reticle = webRegion.locator('.reticle');
+  await expect(reticle).toHaveCSS('opacity', '1');
+  await expect(webRegion.locator('.stage')).toHaveCSS('cursor', 'none');
+  await expect(reticle.locator('.reticle-dot')).toHaveCSS('background-color', 'rgb(101, 88, 217)');
+  if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+    await page.screenshot({ path: testInfo.outputPath('web-region-reticle.png') });
+  }
+  await drawAround('#math-source');
+  await expect(reticle).toHaveCSS('opacity', '0');
   await expect(webRegion.locator('.status')).toContainText('使用多模态模型翻译');
   await expect(webRegion.locator('.privacy')).toContainText('只截取当前可见页中的框内区域');
   await expect(webRegion.locator('.confirm')).toHaveText('翻译框选内容');
@@ -3228,7 +3237,7 @@ test('always sends confirmed webpage regions through the multimodal capture path
   // region containing both DOM text and a rendered formula did not fall back
   // to TRANSLATE_SELECTION and lose the formula.
   await expect(page.locator('#tex-selection-translator-root .error'))
-    .toContainText('没有成功截取这个网页区域');
+    .toContainText(/截图权限|没有返回当前网页截图/u);
   expect(textRequests).toHaveLength(textBefore);
   expect(visionRequests).toHaveLength(visionBefore);
 
@@ -3266,7 +3275,7 @@ test('always sends confirmed webpage regions through the multimodal capture path
   await adjustedRegion.locator('.confirm').click();
   await expect(adjustedRegion).toHaveCount(0);
   await expect(resultOverlay.locator('.error'))
-    .toContainText('没有成功截取这个网页区域');
+    .toContainText(/截图权限|没有返回当前网页截图/u);
   expect(textRequests).toHaveLength(textBefore);
   expect(visionRequests).toHaveLength(visionBefore);
 

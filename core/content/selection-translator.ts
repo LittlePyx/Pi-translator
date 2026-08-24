@@ -64,7 +64,7 @@ import {
   type TranslationAdjustmentRequest,
   type ViewportInsetsProvider,
 } from '../../ui/translation-overlay';
-import { captureWebRegion } from './web-region-capture';
+import { captureWebRegion, WebRegionCaptureError } from './web-region-capture';
 import {
   createWebRegionSelection,
   type WebRegionSelectionHandle,
@@ -1144,16 +1144,6 @@ export async function startSelectionTranslator(
       const capture = await captureWebRegion(region.rect, pageUrl);
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;
-      if (!capture) {
-        failedWebRegionSelection = webRegionSelection;
-        overlay.showError({
-          message: '没有成功截取这个网页区域，请重新框选后再试。',
-          showSettings: false,
-          retryable: false,
-          webRegionRecovery: true,
-        }, region.rect);
-        return;
-      }
       capture.webRegionSelection = webRegionSelection;
       await translateImageRegion(capture);
     }).catch((error: unknown) => {
@@ -1161,7 +1151,9 @@ export async function startSelectionTranslator(
       activeWebRegionSelection = undefined;
       failedWebRegionSelection = attemptedSelection;
       overlay.showError({
-        message: runtimeConnectionErrorMessage(error),
+        message: error instanceof WebRegionCaptureError
+          ? error.message
+          : runtimeConnectionErrorMessage(error),
         showSettings: false,
         retryable: true,
         ...(attemptedSelection ? { webRegionRecovery: true } : {}),

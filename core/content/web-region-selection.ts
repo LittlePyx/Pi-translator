@@ -106,13 +106,14 @@ function styleText(): string {
       inset: 0;
       overflow: hidden;
       color: #f8fafc;
-      background: rgba(15, 23, 42, .54);
+      background: rgba(15, 23, 42, .42);
       cursor: crosshair;
       font: 13px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       user-select: none;
       touch-action: none;
     }
     .stage[data-has-selection="true"] { background: transparent; }
+    .stage[data-reticle-visible="true"] { cursor: none; }
     .intro {
       position: fixed;
       top: 18px;
@@ -136,10 +137,45 @@ function styleText(): string {
       border: 2px solid #8b7cf6;
       border-radius: 4px;
       background: rgba(255, 255, 255, .04);
-      box-shadow: 0 0 0 9999px rgba(15, 23, 42, .58), 0 0 0 1px rgba(255, 255, 255, .72);
+      box-shadow: 0 0 0 9999px rgba(15, 23, 42, .5), 0 0 0 1px rgba(255, 255, 255, .78);
       cursor: move;
     }
     .selection[data-visible="true"] { display: block; }
+    .reticle {
+      position: fixed;
+      left: -100px;
+      top: -100px;
+      z-index: 3;
+      width: 34px;
+      height: 34px;
+      opacity: 0;
+      transform: translate(-50%, -50%);
+      pointer-events: none;
+    }
+    .stage[data-reticle-visible="true"] .reticle { opacity: 1; }
+    .reticle::before,
+    .reticle::after {
+      content: "";
+      position: absolute;
+      border-radius: 999px;
+      background: #fff;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, .95), 0 0 7px rgba(15, 23, 42, .6);
+    }
+    .reticle::before { left: 1px; right: 1px; top: 16px; height: 2px; }
+    .reticle::after { top: 1px; bottom: 1px; left: 16px; width: 2px; }
+    .reticle-dot {
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      z-index: 1;
+      width: 8px;
+      height: 8px;
+      border: 2px solid #fff;
+      border-radius: 50%;
+      background: #6558d9;
+      box-shadow: 0 0 0 1px rgba(15, 23, 42, .9), 0 2px 7px rgba(15, 23, 42, .45);
+      transform: translate(-50%, -50%);
+    }
     .handle {
       position: absolute;
       width: 18px;
@@ -209,6 +245,7 @@ export function createWebRegionSelection(
   stage.setAttribute('aria-label', '框选网页区域');
   stage.innerHTML = `
     <div class="intro">拖动框选网页文字、公式、图表或图像 · Esc 取消</div>
+    <span class="reticle" aria-hidden="true"><span class="reticle-dot"></span></span>
     <div class="selection" data-visible="false">
       <span class="handle" data-handle="nw" aria-hidden="true"></span>
       <span class="handle" data-handle="ne" aria-hidden="true"></span>
@@ -228,6 +265,7 @@ export function createWebRegionSelection(
   document.documentElement.append(host);
 
   const selection = shadow.querySelector<HTMLElement>('.selection')!;
+  const reticle = shadow.querySelector<HTMLElement>('.reticle')!;
   const controls = shadow.querySelector<HTMLElement>('.controls')!;
   const status = shadow.querySelector<HTMLElement>('.status')!;
   const privacy = shadow.querySelector<HTMLElement>('.privacy')!;
@@ -312,6 +350,18 @@ export function createWebRegionSelection(
     };
   }
 
+  function updateReticle(event: PointerEvent, forceHidden = false): void {
+    const target = event.composedPath()[0];
+    const visible = !forceHidden &&
+      (!currentRect || drag?.kind === 'draw') &&
+      target instanceof Element &&
+      !controls.contains(target);
+    stage.dataset.reticleVisible = visible ? 'true' : 'false';
+    if (!visible) return;
+    reticle.style.left = `${event.clientX}px`;
+    reticle.style.top = `${event.clientY}px`;
+  }
+
   function onPointerDown(event: PointerEvent): void {
     if (event.button !== 0) return;
     const target = event.composedPath()[0];
@@ -335,6 +385,7 @@ export function createWebRegionSelection(
   }
 
   function onPointerMove(event: PointerEvent): void {
+    updateReticle(event);
     if (!drag || drag.pointerId !== event.pointerId) return;
     const point = currentPoint(event);
     if (drag.kind === 'draw') {
@@ -373,6 +424,7 @@ export function createWebRegionSelection(
       rectWidth(currentRect) < MIN_REGION_EDGE ||
       rectHeight(currentRect) < MIN_REGION_EDGE
     ) currentRect = undefined;
+    updateReticle(event, Boolean(currentRect));
     update();
     event.preventDefault();
     event.stopPropagation();
@@ -449,6 +501,7 @@ export function createWebRegionSelection(
   stage.addEventListener('pointermove', onPointerMove);
   stage.addEventListener('pointerup', onPointerUp);
   stage.addEventListener('pointercancel', onPointerUp);
+  stage.addEventListener('pointerleave', (event) => updateReticle(event, true));
   stage.addEventListener('wheel', (event) => event.preventDefault(), { passive: false });
   cancelButton.addEventListener('click', cancel);
   confirmButton.addEventListener('click', confirm);

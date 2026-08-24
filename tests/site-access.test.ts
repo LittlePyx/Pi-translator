@@ -6,6 +6,7 @@ import {
   isOverleafProjectUrl,
   normalizeSiteAllowlist,
   siteAllowlistToMatchPatterns,
+  webPagePermissionPattern,
 } from '../core/settings/site-access';
 
 describe('general page access', () => {
@@ -40,6 +41,14 @@ describe('general page access', () => {
     expect(isOverleafProjectUrl('https://www.overleaf.com/project/abc')).toBe(true);
     expect(isInjectableWebUrl('https://example.com/article')).toBe(true);
     expect(isInjectableWebUrl('edge://extensions')).toBe(false);
+  });
+
+  it('limits webpage capture permission to the current HTTP origin', () => {
+    expect(webPagePermissionPattern('https://example.com/article?id=1'))
+      .toBe('https://example.com/*');
+    expect(webPagePermissionPattern('http://localhost:3000/page'))
+      .toBe('http://localhost:3000/*');
+    expect(webPagePermissionPattern('edge://extensions')).toBeUndefined();
   });
 
   it('matches allowlisted domains and subdomains', () => {
