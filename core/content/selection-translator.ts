@@ -1141,23 +1141,6 @@ export async function startSelectionTranslator(
         mode: region.mode,
       };
       attemptedSelection = webRegionSelection;
-      if (region.mode === 'text' && region.extractedText) {
-        activeWebRegionSelection = undefined;
-        const requestId = crypto.randomUUID();
-        const snapshot: SelectionSnapshot = {
-          requestId,
-          sourceText: region.extractedText,
-          normalizedText: region.extractedText.trim(),
-          source: 'window-selection',
-          pageUrl,
-          capturedAt: Date.now(),
-          selectionHash: `${requestId}:${region.extractedText.length}`,
-          rect: region.rect,
-        };
-        latestSelection = snapshot;
-        await translate(snapshot, false, { webRegionSelection });
-        return;
-      }
       const capture = await captureWebRegion(region.rect, pageUrl);
       if (activeWebRegionSelection !== handle) return;
       activeWebRegionSelection = undefined;

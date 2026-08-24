@@ -3176,7 +3176,7 @@ test('shows contextual guidance once and keeps dismissal local', async () => {
   }
 });
 
-test('frames webpage regions with local text first and screenshot only when needed', async () => {
+test('always sends confirmed webpage regions through the multimodal capture path', async () => {
   async function startFromPopup(): Promise<void> {
     const popup = await context.newPage();
     try {
@@ -3210,42 +3210,36 @@ test('frames webpage regions with local text first and screenshot only when need
   await closeVisibleTranslationSurfaceForCleanup();
   await clearBrowserSelection();
   const textBefore = textRequests.length;
-  const visionBeforeText = visionRequests.length;
+  const visionBefore = visionRequests.length;
   await startFromPopup();
-  await drawAround('#source', 0.55);
-  const textRegion = page.locator('#pi-web-region-selection-root');
-  await expect(textRegion.locator('.status')).toContainText('已在本地提取文字');
-  await expect(textRegion.locator('.privacy')).toContainText('不上传网页截图');
-  await expect(textRegion.locator('.confirm')).toHaveText('翻译文字');
-  await textRegion.locator('.mode').click();
-  await expect(textRegion.locator('.privacy')).toContainText('发送给已配置的图像接口');
-  await expect(textRegion.locator('.confirm')).toHaveText('翻译截图');
-  await textRegion.locator('.mode').click();
-  await expect(textRegion.locator('.confirm')).toHaveText('翻译文字');
-  const originalRegionBounds = await textRegion.locator('.selection').boundingBox();
+  await drawAround('#math-source');
+  const webRegion = page.locator('#pi-web-region-selection-root');
+  await expect(webRegion.locator('.status')).toContainText('使用多模态模型翻译');
+  await expect(webRegion.locator('.privacy')).toContainText('只截取当前可见页中的框内区域');
+  await expect(webRegion.locator('.confirm')).toHaveText('翻译框选内容');
+  await expect(webRegion.locator('.mode')).toHaveCount(0);
+  const originalRegionBounds = await webRegion.locator('.selection').boundingBox();
   expect(originalRegionBounds).not.toBeNull();
-  await textRegion.locator('.confirm').click();
-  await expect(textRegion).toHaveCount(0);
-  await expect(page.locator('#tex-selection-translator-root .body'))
-    .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
-  expect(textRequests).toHaveLength(textBefore + 1);
-  const selectedRegionPayload = JSON.parse(String(
-    (textRequests.at(-1)?.messages as Array<{ role?: string; content?: string }> | undefined)
-      ?.find((message) => message.role === 'user')?.content,
-  )) as { text?: string };
-  expect(selectedRegionPayload.text).toContain('A consistent academic translation');
-  expect(selectedRegionPayload.text).not.toContain('research papers');
-  expect(visionRequests).toHaveLength(visionBeforeText);
+  await webRegion.locator('.confirm').click();
+  await expect(webRegion).toHaveCount(0);
+
+  // A Playwright-opened extension page does not grant activeTab the way the
+  // real toolbar popup does. Reaching the capture error proves that a webpage
+  // region containing both DOM text and a rendered formula did not fall back
+  // to TRANSLATE_SELECTION and lose the formula.
+  await expect(page.locator('#tex-selection-translator-root .error'))
+    .toContainText('没有成功截取这个网页区域');
+  expect(textRequests).toHaveLength(textBefore);
+  expect(visionRequests).toHaveLength(visionBefore);
 
   const resultOverlay = page.locator('#tex-selection-translator-root');
-  await resultOverlay.locator('details.more > summary').click();
   await expect(resultOverlay.getByRole('button', { name: '调整区域' })).toBeVisible();
   await expect(resultOverlay.getByRole('button', { name: '重新框选' })).toBeVisible();
   await resultOverlay.getByRole('button', { name: '调整区域' }).click();
   const adjustedRegion = page.locator('#pi-web-region-selection-root');
   await expect(adjustedRegion.locator('.selection')).toBeVisible();
   await expect(adjustedRegion.locator('.selection')).toBeFocused();
-  await expect(adjustedRegion.locator('.confirm')).toHaveText('翻译文字');
+  await expect(adjustedRegion.locator('.confirm')).toHaveText('翻译框选内容');
   const restoredRegionBounds = await adjustedRegion.locator('.selection').boundingBox();
   expect(restoredRegionBounds).not.toBeNull();
   if (originalRegionBounds && restoredRegionBounds) {
@@ -3254,7 +3248,7 @@ test('frames webpage regions with local text first and screenshot only when need
     expect(restoredRegionBounds.width).toBeCloseTo(originalRegionBounds.width, 0);
     expect(restoredRegionBounds.height).toBeCloseTo(originalRegionBounds.height, 0);
   }
-  expect(textRequests).toHaveLength(textBefore + 1);
+  expect(textRequests).toHaveLength(textBefore);
   await adjustedRegion.locator('.selection').press('ArrowRight');
   const movedRegionBounds = await adjustedRegion.locator('.selection').boundingBox();
   expect(movedRegionBounds).not.toBeNull();
@@ -3268,17 +3262,18 @@ test('frames webpage regions with local text first and screenshot only when need
   if (movedRegionBounds && resizedRegionBounds) {
     expect(resizedRegionBounds.width).toBeCloseTo(movedRegionBounds.width + 6, 0);
   }
-  expect(textRequests).toHaveLength(textBefore + 1);
+  expect(textRequests).toHaveLength(textBefore);
   await adjustedRegion.locator('.confirm').click();
-  await expect.poll(() => textRequests.length).toBe(textBefore + 2);
-  await expect(resultOverlay.locator('.body'))
-    .toHaveText('一致的学术翻译能够提升研究论文的可读性。');
+  await expect(adjustedRegion).toHaveCount(0);
+  await expect(resultOverlay.locator('.error'))
+    .toContainText('没有成功截取这个网页区域');
+  expect(textRequests).toHaveLength(textBefore);
+  expect(visionRequests).toHaveLength(visionBefore);
 
-  await resultOverlay.locator('details.more > summary').click();
   await resultOverlay.getByRole('button', { name: '重新框选' }).click();
   const keyboardRegion = page.locator('#pi-web-region-selection-root');
   await expect(keyboardRegion.locator('.selection')).toBeHidden();
-  expect(textRequests).toHaveLength(textBefore + 2);
+  expect(textRequests).toHaveLength(textBefore);
   await page.keyboard.press('Enter');
   await expect(keyboardRegion.locator('.selection')).toBeVisible();
   await expect(keyboardRegion.locator('.selection')).toBeFocused();
@@ -3290,37 +3285,9 @@ test('frames webpage regions with local text first and screenshot only when need
   if (keyboardRegionBounds && fineMovedRegionBounds) {
     expect(fineMovedRegionBounds.x).toBeCloseTo(keyboardRegionBounds.x + 1, 0);
   }
-  expect(textRequests).toHaveLength(textBefore + 2);
+  expect(textRequests).toHaveLength(textBefore);
   await page.keyboard.press('Escape');
   await expect(keyboardRegion).toHaveCount(0);
-  await closeVisibleTranslationSurfaceForCleanup();
-
-  const visionBeforeImage = visionRequests.length;
-  await page.locator('#visual-region').scrollIntoViewIfNeeded();
-  await startFromPopup();
-  await drawAround('#visual-region');
-  const imageRegion = page.locator('#pi-web-region-selection-root');
-  await expect(imageRegion.locator('.status')).toContainText('没有可靠的可编辑文字');
-  await expect(imageRegion.locator('.privacy')).toContainText('只截取当前可见页中的框内区域');
-  await expect(imageRegion.locator('.confirm')).toHaveText('翻译截图');
-  await imageRegion.locator('.confirm').click();
-  await expect(imageRegion).toHaveCount(0);
-  // A Playwright-opened extension page does not grant activeTab the way the
-  // real toolbar popup does. The integration test therefore verifies the
-  // explicit capture failure path; viewport mapping and image translation
-  // are covered independently by unit and PDF image tests.
-  await expect(page.locator('#tex-selection-translator-root .error'))
-    .toContainText('没有成功截取这个网页区域');
-  const captureFailure = page.locator('#tex-selection-translator-root');
-  await expect(captureFailure.getByRole('button', { name: '调整区域' })).toBeVisible();
-  await expect(captureFailure.getByRole('button', { name: '重新框选' })).toBeVisible();
-  await captureFailure.getByRole('button', { name: '调整区域' }).click();
-  const restoredImageRegion = page.locator('#pi-web-region-selection-root');
-  await expect(restoredImageRegion.locator('.selection')).toBeVisible();
-  await expect(restoredImageRegion.locator('.confirm')).toHaveText('翻译截图');
-  expect(visionRequests).toHaveLength(visionBeforeImage);
-  await restoredImageRegion.locator('.cancel').click();
-  await expect(restoredImageRegion).toHaveCount(0);
   await closeVisibleTranslationSurfaceForCleanup();
 
   await page.locator('#payment').scrollIntoViewIfNeeded();

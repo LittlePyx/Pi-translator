@@ -1,14 +1,13 @@
 import { isSensitiveTextControl } from '../selection/selection-context';
-import { MAX_SELECTION_LENGTH, type ViewportRect } from '../selection/types';
+import { type ViewportRect } from '../selection/types';
 
 export const WEB_REGION_SELECTION_ROOT_ID = 'pi-web-region-selection-root';
 
-export type WebRegionSelectionMode = 'text' | 'image';
+export type WebRegionSelectionMode = 'image';
 
 export interface WebRegionSelectionResult {
   rect: ViewportRect;
   mode: WebRegionSelectionMode;
-  extractedText?: string;
 }
 
 export interface WebRegionSelectionSeed {
@@ -83,121 +82,6 @@ function intersects(left: ViewportRect, right: DOMRect): boolean {
     left.top < right.bottom &&
     left.bottom > right.top
   );
-}
-
-function elementExcludedFromLocalText(element: Element): boolean {
-  if (element.closest(
-    `#${WEB_REGION_SELECTION_ROOT_ID},#tex-selection-translator-root,script,style,noscript,template,input,textarea,select,option,button,svg,canvas`,
-  )) return true;
-  const style = getComputedStyle(element);
-  return (
-    style.display === 'none' ||
-    style.visibility === 'hidden' ||
-    Number.parseFloat(style.opacity || '1') === 0
-  );
-}
-
-function meaningfulText(value: string): boolean {
-  return (value.match(/[\p{L}\p{N}]/gu)?.length ?? 0) >= 2;
-}
-
-/**
- * Reads visible DOM text intersecting the box. This never accesses the
- * network and deliberately ignores form controls and Pi Translator UI.
- */
-export function extractLocalTextFromWebRegion(rect: ViewportRect): string | undefined {
-  if (!document.body) return undefined;
-  const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT, {
-    acceptNode(node) {
-      const value = node.textContent?.replace(/\s+/g, ' ').trim();
-      const parent = node.parentElement;
-      if (!value || !parent || elementExcludedFromLocalText(parent)) {
-        return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-  const parts: string[] = [];
-  let length = 0;
-  let inspectedCharacters = 0;
-  const maxInspectedCharacters = 100_000;
-  let rangeOperations = 0;
-  const maxRangeOperations = 150_000;
-  let node: Node | null;
-  while ((node = walker.nextNode())) {
-    const range = document.createRange();
-    range.selectNodeContents(node);
-    const nodeIntersectsRegion = Array.from(range.getClientRects()).some((box) => (
-      box.width > 0 && box.height > 0 && intersects(rect, box)
-    ));
-    if (!nodeIntersectsRegion) {
-      range.detach();
-      continue;
-    }
-    const value = node.textContent ?? '';
-    let nodePart = '';
-    let previousIncludedEnd: number | undefined;
-    for (let chunkStart = 0; chunkStart < value.length;) {
-      let chunkEnd = Math.min(value.length, chunkStart + 128);
-      if (chunkEnd < value.length && /[\uD800-\uDBFF]/u.test(value[chunkEnd - 1] ?? '')) {
-        chunkEnd += 1;
-      }
-      range.setStart(node, chunkStart);
-      range.setEnd(node, chunkEnd);
-      rangeOperations += 1;
-      const chunkIntersects = Array.from(range.getClientRects()).some((box) => (
-        box.width > 0 && box.height > 0 && intersects(rect, box)
-      ));
-      if (chunkIntersects) {
-        let offset = chunkStart;
-        for (const character of value.slice(chunkStart, chunkEnd)) {
-          const start = offset;
-          const end = start + character.length;
-          offset = end;
-          inspectedCharacters += 1;
-          if (
-            inspectedCharacters > maxInspectedCharacters ||
-            rangeOperations > maxRangeOperations
-          ) break;
-          range.setStart(node, start);
-          range.setEnd(node, end);
-          rangeOperations += 1;
-          const included = Array.from(range.getClientRects()).some((box) => (
-            box.width > 0 && box.height > 0 && intersects(rect, box)
-          ));
-          if (!included) continue;
-          if (
-            previousIncludedEnd !== undefined &&
-            start > previousIncludedEnd &&
-            !/\s$/u.test(nodePart)
-          ) nodePart += ' ';
-          nodePart += character;
-          previousIncludedEnd = end;
-          if (length + nodePart.length >= MAX_SELECTION_LENGTH) break;
-        }
-      }
-      chunkStart = chunkEnd;
-      if (
-        length + nodePart.length >= MAX_SELECTION_LENGTH ||
-        inspectedCharacters > maxInspectedCharacters ||
-        rangeOperations > maxRangeOperations
-      ) break;
-    }
-    range.detach();
-    const normalizedPart = nodePart.replace(/\s+/g, ' ').trim();
-    if (normalizedPart) {
-      const remaining = MAX_SELECTION_LENGTH - length;
-      parts.push(normalizedPart.slice(0, remaining));
-      length += normalizedPart.length + 1;
-    }
-    if (
-      length >= MAX_SELECTION_LENGTH ||
-      inspectedCharacters > maxInspectedCharacters ||
-      rangeOperations > maxRangeOperations
-    ) break;
-  }
-  const text = parts.join(' ').replace(/\s+/g, ' ').trim().slice(0, MAX_SELECTION_LENGTH);
-  return meaningfulText(text) ? text : undefined;
 }
 
 function containsSensitiveField(rect: ViewportRect): boolean {
@@ -324,7 +208,7 @@ export function createWebRegionSelection(
   stage.setAttribute('role', 'dialog');
   stage.setAttribute('aria-label', '框选网页区域');
   stage.innerHTML = `
-    <div class="intro">拖动框选网页图像或复杂内容 · Esc 取消</div>
+    <div class="intro">拖动框选网页文字、公式、图表或图像 · Esc 取消</div>
     <div class="selection" data-visible="false">
       <span class="handle" data-handle="nw" aria-hidden="true"></span>
       <span class="handle" data-handle="ne" aria-hidden="true"></span>
@@ -335,7 +219,6 @@ export function createWebRegionSelection(
       <p class="status" role="status"></p>
       <p class="privacy"></p>
       <div class="actions">
-        <button class="mode" type="button"></button>
         <button class="cancel" type="button">取消</button>
         <button class="confirm" type="button"></button>
       </div>
@@ -348,7 +231,6 @@ export function createWebRegionSelection(
   const controls = shadow.querySelector<HTMLElement>('.controls')!;
   const status = shadow.querySelector<HTMLElement>('.status')!;
   const privacy = shadow.querySelector<HTMLElement>('.privacy')!;
-  const modeButton = shadow.querySelector<HTMLButtonElement>('.mode')!;
   const cancelButton = shadow.querySelector<HTMLButtonElement>('.cancel')!;
   const confirmButton = shadow.querySelector<HTMLButtonElement>('.confirm')!;
   selection.tabIndex = 0;
@@ -360,9 +242,6 @@ export function createWebRegionSelection(
   let currentRect: ViewportRect | undefined = initialSelection
     ? fitRectToViewport(initialSelection.rect)
     : undefined;
-  let extractedText: string | undefined;
-  let mode: WebRegionSelectionMode = initialSelection?.mode ?? 'image';
-  let modeExplicitlyChosen = Boolean(initialSelection);
   let sensitive = false;
   let drag: DragState | undefined;
   let settled = false;
@@ -385,10 +264,6 @@ export function createWebRegionSelection(
     finish(undefined);
   }
 
-  function preview(value: string): string {
-    return value.length > 48 ? `${value.slice(0, 48)}…` : value;
-  }
-
   function update(analyzeContent = true): void {
     const rect = currentRect;
     if (!rect) {
@@ -407,26 +282,16 @@ export function createWebRegionSelection(
       controls.dataset.visible = 'false';
       return;
     }
-    extractedText = extractLocalTextFromWebRegion(rect);
     sensitive = containsSensitiveField(rect);
-    if (!extractedText) mode = 'image';
-    else if (!modeExplicitlyChosen) mode = 'text';
     controls.classList.toggle('sensitive', sensitive);
     if (sensitive) {
       status.textContent = '框内包含密码、验证码或支付字段';
       privacy.textContent = '为避免泄露敏感信息，此区域不能发送。请调整选框。';
-    } else if (mode === 'text' && extractedText) {
-      status.textContent = `已在本地提取文字：“${preview(extractedText)}”`;
-      privacy.textContent = '确认后只发送框内文字，不上传网页截图。';
     } else {
-      status.textContent = extractedText
-        ? '已切换为截图翻译'
-        : '框内没有可靠的可编辑文字，将使用截图翻译';
-      privacy.textContent = '确认后只截取当前可见页中的框内区域，并发送给已配置的图像接口。';
+      status.textContent = '将截取框内画面并使用多模态模型翻译';
+      privacy.textContent = '确认后只截取当前可见页中的框内区域，并发送给已配置的视觉接口。';
     }
-    modeButton.hidden = !extractedText;
-    modeButton.textContent = mode === 'text' ? '改用截图' : '改用本地文字';
-    confirmButton.textContent = mode === 'text' ? '翻译文字' : '翻译截图';
+    confirmButton.textContent = '翻译框选内容';
     confirmButton.disabled = sensitive;
     const width = Math.min(CONTROLS_WIDTH, innerWidth - 24);
     const left = clamp(rect.left, 12, Math.max(12, innerWidth - width - 12));
@@ -461,7 +326,6 @@ export function createWebRegionSelection(
       drag = { kind: 'move', pointerId: event.pointerId, start: point, origin: currentRect };
     } else {
       drag = { kind: 'draw', pointerId: event.pointerId, start: point };
-      modeExplicitlyChosen = false;
       currentRect = { left: point.x, right: point.x, top: point.y, bottom: point.y };
     }
     controls.dataset.visible = 'false';
@@ -518,8 +382,7 @@ export function createWebRegionSelection(
     if (!currentRect || sensitive) return;
     finish({
       rect: currentRect,
-      mode,
-      ...(extractedText ? { extractedText } : {}),
+      mode: 'image',
     });
   }
 
@@ -575,7 +438,6 @@ export function createWebRegionSelection(
     event.stopPropagation();
     if (!currentRect) {
       currentRect = defaultKeyboardRect();
-      modeExplicitlyChosen = false;
       update();
       selection.focus({ preventScroll: true });
     } else if (!sensitive) {
@@ -588,12 +450,6 @@ export function createWebRegionSelection(
   stage.addEventListener('pointerup', onPointerUp);
   stage.addEventListener('pointercancel', onPointerUp);
   stage.addEventListener('wheel', (event) => event.preventDefault(), { passive: false });
-  modeButton.addEventListener('click', () => {
-    if (!extractedText) return;
-    modeExplicitlyChosen = true;
-    mode = mode === 'text' ? 'image' : 'text';
-    update();
-  });
   cancelButton.addEventListener('click', cancel);
   confirmButton.addEventListener('click', confirm);
   window.addEventListener('keydown', onKeyDown, true);

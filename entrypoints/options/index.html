@@ -58,7 +58,7 @@
             <input id="onboarding-model" type="text" list="onboarding-model-list" spellcheck="false" />
             <datalist id="onboarding-model-list"></datalist>
           </label>
-          <p class="onboarding-vision-note">扫描版 PDF 属于可选能力：框选图片需要视觉模型；“识别本页”需要官方 Qwen / 阿里云百炼。完成文字 API 后也可稍后配置。</p>
+          <p class="onboarding-vision-note">网页框选与扫描版 PDF 属于可选能力：框选内容需要视觉模型；“识别本页”需要官方 Qwen / 阿里云百炼。完成文字 API 后也可稍后配置。</p>
         </section>
         <section id="onboarding-success" class="onboarding-step onboarding-success" hidden>
           <div class="onboarding-success-heading">
@@ -197,7 +197,7 @@
               <details id="vision-setup-details" class="vision-setup-details">
                 <summary><span>手动选择或检查视觉配置</span></summary>
                 <div class="vision-setup-content">
-                  <p id="vision-setup-guide" class="vision-setup-guide">网页、Overleaf 和文字型 PDF 不需要视觉模型；框选扫描件或模糊公式时才需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
+                  <p id="vision-setup-guide" class="vision-setup-guide">普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
                   <div class="grid">
                     <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。</small></label>
                     <label><span>视觉模型</span><input id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus" /><small>模型必须支持图片输入。</small></label>

@@ -445,7 +445,7 @@ async function finishOnboarding():Promise<void>{
   if(!transaction.revisionId)throw new Error('首次设置未能提交。');
   const completionMessage=visionSupported
     ? `首次设置已完成；文字模型为 ${model}，图像翻译模型为 ${visionDetection.model}。`
-    : '首次设置已完成，网页、Overleaf 和可选文字 PDF 已可翻译；需要框选扫描件或使用“识别本页”时，再在连接页配置 Qwen。';
+    : '首次设置已完成，普通网页划词、Overleaf 划词和可选文字 PDF 已可翻译；网页框选或框选扫描件需要视觉模型，“识别本页”需要官方 Qwen / 阿里云百炼。';
   setStatus(completionMessage);
   if(activeSettingsRecovery){
     onboardingDialog.close();
