@@ -20,6 +20,11 @@ import {
 } from '../translation/bilingual-page';
 
 const TRANSLATION_ATTRIBUTE = 'data-pi-bilingual-translation';
+const TRANSLATION_TEXT_ATTRIBUTE = 'data-pi-bilingual-text';
+const TRANSLATION_ACTIONS_ATTRIBUTE = 'data-pi-bilingual-actions';
+const TRANSLATION_FEEDBACK_ATTRIBUTE = 'data-pi-bilingual-feedback';
+const TRANSLATION_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-hidden';
+const TRANSLATION_BUSY_ATTRIBUTE = 'data-pi-bilingual-busy';
 const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
@@ -73,6 +78,11 @@ interface BilingualBlock {
   status: BlockStatus;
   translation?: HTMLElement;
   errorElement?: HTMLElement;
+  bypassCacheNext?: boolean;
+  restoreStateAfterRetranslation?: Pick<
+    BilingualPageState,
+    'phase' | 'message' | 'pauseReason'
+  >;
 }
 
 export interface BilingualPageRequestConfig {
@@ -182,12 +192,53 @@ function targetLanguageHtmlCode(targetLanguage: string): string {
   return targetLanguage === 'zh-CN' ? 'zh-CN' : targetLanguage;
 }
 
-function translationElement(block: BilingualBlock, translatedText: string, targetLanguage: string): HTMLElement {
+interface BilingualTranslationActions {
+  copy(): void;
+  retranslate(): void;
+  toggleHidden(): void;
+}
+
+function translationActionButton(
+  action: 'copy' | 'retranslate' | 'visibility',
+  label: string,
+  listener: () => void,
+): HTMLButtonElement {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.dataset.action = action;
+  button.textContent = label;
+  button.addEventListener('click', listener);
+  return button;
+}
+
+function translationElement(
+  block: BilingualBlock,
+  translatedText: string,
+  targetLanguage: string,
+  actions: BilingualTranslationActions,
+): HTMLElement {
   const translation = document.createElement('pi-translator-bilingual');
   translation.setAttribute(TRANSLATION_ATTRIBUTE, '');
   translation.setAttribute('lang', targetLanguageHtmlCode(targetLanguage));
   translation.setAttribute('aria-label', 'Pi Translator 双语译文');
-  translation.textContent = translatedText.trim();
+  const text = document.createElement('span');
+  text.setAttribute(TRANSLATION_TEXT_ATTRIBUTE, '');
+  text.textContent = translatedText.trim();
+  const toolbar = document.createElement('span');
+  toolbar.setAttribute(TRANSLATION_ACTIONS_ATTRIBUTE, '');
+  toolbar.setAttribute('role', 'toolbar');
+  toolbar.setAttribute('aria-label', '本段译文操作');
+  const feedback = document.createElement('span');
+  feedback.setAttribute(TRANSLATION_FEEDBACK_ATTRIBUTE, '');
+  feedback.setAttribute('role', 'status');
+  feedback.setAttribute('aria-live', 'polite');
+  toolbar.append(
+    feedback,
+    translationActionButton('copy', '复制', actions.copy),
+    translationActionButton('retranslate', '重译本段', actions.retranslate),
+    translationActionButton('visibility', '隐藏', actions.toggleHidden),
+  );
+  translation.append(text, toolbar);
   applySourceTypography(translation, block, 18);
   return translation;
 }
@@ -215,7 +266,8 @@ function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
 }
 
 function insertTranslation(block: BilingualBlock, translation: HTMLElement): void {
-  insertAfterSource(block, translation);
+  if (block.translation?.isConnected) block.translation.replaceWith(translation);
+  else insertAfterSource(block, translation);
   block.translation = translation;
 }
 
@@ -266,6 +318,97 @@ function installTranslationStyle(): void {
       text-transform: none !important;
       white-space: pre-wrap !important;
       overflow-wrap: anywhere !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] {
+      all: initial !important;
+      display: block !important;
+      color: inherit !important;
+      font: inherit !important;
+      line-height: inherit !important;
+      letter-spacing: inherit !important;
+      white-space: pre-wrap !important;
+      overflow-wrap: anywhere !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+      all: initial !important;
+      display: flex !important;
+      box-sizing: border-box !important;
+      max-height: 0 !important;
+      margin-top: 0 !important;
+      align-items: center !important;
+      justify-content: flex-end !important;
+      gap: 4px !important;
+      overflow: hidden !important;
+      opacity: 0 !important;
+      pointer-events: none !important;
+      transform: translateY(-2px) !important;
+      transition: opacity 120ms ease, transform 120ms ease, margin 120ms ease !important;
+      color: color-mix(in srgb, var(--pi-bilingual-color) 70%, #4f46e5 30%) !important;
+      font: 500 11px/1.2 var(--pi-bilingual-font) !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}]:hover > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
+    [${TRANSLATION_ATTRIBUTE}]:focus-within > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_BUSY_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+      max-height: 32px !important;
+      margin-top: .28em !important;
+      opacity: .9 !important;
+      pointer-events: auto !important;
+      transform: translateY(0) !important;
+    }
+    [${TRANSLATION_FEEDBACK_ATTRIBUTE}] {
+      all: initial !important;
+      min-width: 0 !important;
+      margin-right: auto !important;
+      color: inherit !important;
+      font: inherit !important;
+      overflow: hidden !important;
+      text-overflow: ellipsis !important;
+      white-space: nowrap !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button {
+      all: initial !important;
+      min-height: 28px !important;
+      box-sizing: border-box !important;
+      border: 0 !important;
+      border-radius: 6px !important;
+      padding: 4px 7px !important;
+      color: inherit !important;
+      background: color-mix(in srgb, currentColor 7%, transparent) !important;
+      font: 600 11px/1.2 var(--pi-bilingual-font) !important;
+      cursor: pointer !important;
+      white-space: nowrap !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button:hover {
+      background: color-mix(in srgb, currentColor 13%, transparent) !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button:focus-visible {
+      outline: 2px solid #6366f1 !important;
+      outline-offset: 1px !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button:disabled {
+      opacity: .55 !important;
+      cursor: default !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[hidden] { display: none !important; }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_TEXT_ATTRIBUTE}] {
+      display: none !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] {
+      margin-bottom: .5em !important;
+      opacity: .72 !important;
+    }
+    @media (hover: none) {
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+        max-height: 32px !important;
+        margin-top: .28em !important;
+        opacity: .72 !important;
+        pointer-events: auto !important;
+        transform: translateY(0) !important;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] { transition: none !important; }
     }
     li > [${TRANSLATION_ATTRIBUTE}] { margin-bottom: .35em !important; }
     [${ERROR_ATTRIBUTE}] {
@@ -431,6 +574,77 @@ export function createBilingualPageTranslator(
     else queue.push(block);
   };
 
+  const translationText = (block: BilingualBlock): string =>
+    block.translation
+      ?.querySelector<HTMLElement>(`[${TRANSLATION_TEXT_ATTRIBUTE}]`)
+      ?.textContent
+      ?.trim() ?? '';
+
+  const setTranslationFeedback = (
+    block: BilingualBlock,
+    message: string,
+    timeoutMs = 1_600,
+  ): void => {
+    const translation = block.translation;
+    const feedback = translation
+      ?.querySelector<HTMLElement>(`[${TRANSLATION_FEEDBACK_ATTRIBUTE}]`);
+    if (!translation || !feedback) return;
+    feedback.textContent = message;
+    if (timeoutMs <= 0) return;
+    window.setTimeout(() => {
+      if (translation.isConnected && feedback.textContent === message) feedback.textContent = '';
+    }, timeoutMs);
+  };
+
+  const setTranslationBusy = (block: BilingualBlock, busy: boolean): void => {
+    const translation = block.translation;
+    if (!translation) return;
+    translation.toggleAttribute(TRANSLATION_BUSY_ATTRIBUTE, busy);
+    const button = translation.querySelector<HTMLButtonElement>(
+      `[${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"]`,
+    );
+    if (button) {
+      button.disabled = busy;
+      button.textContent = busy ? '重译中…' : '重译本段';
+    }
+    if (busy) setTranslationFeedback(block, '正在重新翻译本段…', 0);
+  };
+
+  const setTranslationHidden = (block: BilingualBlock, hidden: boolean): void => {
+    const translation = block.translation;
+    if (!translation) return;
+    translation.toggleAttribute(TRANSLATION_HIDDEN_ATTRIBUTE, hidden);
+    const copy = translation.querySelector<HTMLButtonElement>('button[data-action="copy"]');
+    const retranslate = translation.querySelector<HTMLButtonElement>(
+      'button[data-action="retranslate"]',
+    );
+    const visibility = translation.querySelector<HTMLButtonElement>(
+      'button[data-action="visibility"]',
+    );
+    if (copy) copy.hidden = hidden;
+    if (retranslate) retranslate.hidden = hidden;
+    if (visibility) visibility.textContent = hidden ? '显示译文' : '隐藏';
+    setTranslationFeedback(block, hidden ? '本段译文已隐藏' : '', 0);
+  };
+
+  const copyBlockTranslation = async (block: BilingualBlock): Promise<void> => {
+    const text = translationText(block);
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      const button = block.translation?.querySelector<HTMLButtonElement>(
+        'button[data-action="copy"]',
+      );
+      if (button) button.textContent = '已复制';
+      setTranslationFeedback(block, '译文已复制');
+      window.setTimeout(() => {
+        if (button?.isConnected && button.textContent === '已复制') button.textContent = '复制';
+      }, 1_600);
+    } catch {
+      setTranslationFeedback(block, '复制失败，请重试');
+    }
+  };
+
   const renderControl = (): void => {
     if (currentState.phase === 'idle') {
       destroyControl();
@@ -573,8 +787,75 @@ export function createBilingualPageTranslator(
     publish();
   };
 
+  const restorePageStateAfterRetranslation = (block: BilingualBlock): boolean => {
+    const restore = block.restoreStateAfterRetranslation;
+    delete block.restoreStateAfterRetranslation;
+    if (!restore) return false;
+    currentState = { ...currentState, phase: restore.phase };
+    delete currentState.message;
+    delete currentState.pauseReason;
+    if (restore.message !== undefined) currentState.message = restore.message;
+    if (restore.pauseReason !== undefined) currentState.pauseReason = restore.pauseReason;
+    syncCounts();
+    publish();
+    return true;
+  };
+
+  const finishRetranslationFailure = (
+    block: BilingualBlock,
+    message: string,
+    globalFailure: boolean,
+  ): void => {
+    delete block.bypassCacheNext;
+    block.status = 'done';
+    setTranslationBusy(block, false);
+    setTranslationFeedback(
+      block,
+      `重译失败：${message.split('\n')[0]?.slice(0, 100) || '请重试'}`,
+      3_000,
+    );
+    if (restorePageStateAfterRetranslation(block)) return;
+    syncCounts();
+    if (globalFailure) {
+      delete currentState.pauseReason;
+      setState({ phase: 'error', message: `本段重译失败：${message}` });
+      return;
+    }
+    if (!settleCompletedState()) publish();
+  };
+
+  const requestBlockRetranslation = (block: BilingualBlock): void => {
+    if (block.status !== 'done' || !block.translation?.isConnected) return;
+    if (interactiveSuspensions.size) {
+      setTranslationFeedback(block, '当前选区翻译完成后再重试本段');
+      return;
+    }
+    if (['paused', 'stopped', 'error'].includes(currentState.phase)) {
+      block.restoreStateAfterRetranslation = {
+        phase: currentState.phase,
+        ...(currentState.message !== undefined ? { message: currentState.message } : {}),
+        ...(currentState.pauseReason !== undefined
+          ? { pauseReason: currentState.pauseReason }
+          : {}),
+      };
+    } else delete block.restoreStateAfterRetranslation;
+    queue = queue.filter((candidate) => candidate !== block);
+    block.bypassCacheNext = true;
+    block.status = 'idle';
+    enqueue(block, 'front');
+    setTranslationBusy(block, true);
+    syncCounts();
+    consecutiveIsolatedFailures = 0;
+    delete currentState.message;
+    delete currentState.pauseReason;
+    setState({ phase: 'running' });
+    void processQueue();
+  };
+
   const translateBlock = async (block: BilingualBlock, revision: number): Promise<void> => {
     const requestId = crypto.randomUUID();
+    const replacingTranslation = Boolean(block.translation);
+    const preserveHidden = block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE) ?? false;
     activeRequestId = requestId;
     block.status = 'translating';
     const config = options.requestConfig();
@@ -589,6 +870,7 @@ export function createBilingualPageTranslator(
           sourceLanguage: config.sourceLanguage,
           style: config.style,
           contentMode: config.contentMode,
+          ...(block.bypassCacheNext ? { bypassCache: true } : {}),
         },
       } satisfies RuntimeMessage) as TranslateRuntimeResponse;
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
@@ -602,6 +884,14 @@ export function createBilingualPageTranslator(
           return;
         }
         const message = translationErrorMessage(response.error.code, response.error.message);
+        if (replacingTranslation) {
+          finishRetranslationFailure(
+            block,
+            message,
+            !isIsolatedBilingualBlockError(response.error.code),
+          );
+          return;
+        }
         if (isIsolatedBilingualBlockError(response.error.code)) {
           markIsolatedFailure(block, message);
           return;
@@ -615,20 +905,35 @@ export function createBilingualPageTranslator(
         return;
       }
       if (!block.element.isConnected) {
+        if (replacingTranslation) {
+          finishRetranslationFailure(block, '网页正文已经变化，请重新开始正文翻译。', true);
+          return;
+        }
         block.status = 'error';
         syncCounts();
         setState({ phase: 'error', message: '网页正文已经变化，请清除后重新开始。' });
         return;
       }
       interactionPreemptedRequestIds.delete(requestId);
+      delete block.bypassCacheNext;
       const translation = translationElement(
         block,
         response.data.result.translatedText,
         currentState.targetLanguage!,
+        {
+          copy: () => void copyBlockTranslation(block),
+          retranslate: () => requestBlockRetranslation(block),
+          toggleHidden: () => setTranslationHidden(
+            block,
+            !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE),
+          ),
+        },
       );
       insertTranslation(block, translation);
+      if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
       consecutiveIsolatedFailures = 0;
+      if (restorePageStateAfterRetranslation(block)) return;
       if (!settleCompletedState()) publish();
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
@@ -638,6 +943,14 @@ export function createBilingualPageTranslator(
         enqueue(block, 'front');
         syncCounts();
         publish();
+        return;
+      }
+      if (replacingTranslation) {
+        finishRetranslationFailure(
+          block,
+          error instanceof Error ? error.message : '无法重新翻译本段。',
+          true,
+        );
         return;
       }
       block.status = 'error';
@@ -791,7 +1104,11 @@ export function createBilingualPageTranslator(
       resumeAfterInteractive = false;
       interactionPreemptedRequestIds.clear();
       blocks.forEach((block) => {
-        if (block.status === 'queued' || block.status === 'translating') block.status = 'idle';
+        if (block.status !== 'queued' && block.status !== 'translating') return;
+        block.status = block.translation?.isConnected ? 'done' : 'idle';
+        delete block.bypassCacheNext;
+        delete block.restoreStateAfterRetranslation;
+        setTranslationBusy(block, false);
       });
       queue = [];
       syncCounts();

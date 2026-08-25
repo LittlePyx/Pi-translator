@@ -31,6 +31,7 @@ let echoVisionPayloadOnce = false;
 let failNextRevisionRequest = false;
 let bilingualFailuresRemaining = 0;
 let failBilingualFormulaPreservation = false;
+let returnBilingualRetranslationOnce = false;
 let returnRevisedVisionResultOnce = false;
 let returnPendingVisionReviewOnce = false;
 let failNextRecoveryRequestAfterPartial = false;
@@ -662,6 +663,9 @@ test.beforeAll(async () => {
     const isGlossaryReviewSelection = requestedText.includes('should remain stable');
     const isLexicalLookupSelection = requestedText.includes('continuity');
     const isBilingualFormulaParagraph = requestedText.includes('npm run build:edge');
+    const isBilingualRetranslation = returnBilingualRetranslationOnce && requestedText.includes(
+      'Bilingual reading should preserve the original article',
+    );
     const isDocumentTermSelection = requestedText.includes('The adaptive sensing policy') ||
       requestedText.includes('This adaptive sensing method');
     const isPdfOptimizerFallback = requestedText.includes('Optimizer fallback fixture');
@@ -670,6 +674,7 @@ test.beforeAll(async () => {
       'A recovery request may already contain a partial translation.',
     );
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
+    if (isBilingualRetranslation) returnBilingualRetranslationOnce = false;
     if (
       holdNextBilingualRequest &&
       requestedText.includes('A practical guide to reliable bilingual reading')
@@ -819,6 +824,11 @@ test.beforeAll(async () => {
                   { partOfSpeech: 'noun', meaning: '连贯性' },
                 ],
               },
+            } : isBilingualRetranslation ? {
+              translation: '重新翻译后的段落只替换当前译文。',
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isBilingualFormulaParagraph ? {
               translation: failBilingualFormulaPreservation
                 ? '修改扩展后请重新构建，并核对评分函数。'
@@ -990,6 +1000,7 @@ test.afterEach(() => {
   failNextRevisionRequest = false;
   bilingualFailuresRemaining = 0;
   failBilingualFormulaPreservation = false;
+  returnBilingualRetranslationOnce = false;
   returnRevisedVisionResultOnce = false;
   returnPendingVisionReviewOnce = false;
   failNextRecoveryRequestAfterPartial = false;
@@ -1131,6 +1142,71 @@ test('progressively adds and removes bilingual article translations without touc
     expect(completedRequests).not.toContain('duplicated rendered x 2');
     await expect(page.locator('#article-inline-code + [data-pi-bilingual-translation]'))
       .toContainText('$f(x)=x^2$');
+
+    const introTranslation = page.locator(
+      '#article-intro + [data-pi-bilingual-translation]',
+    );
+    const introActions = introTranslation.locator('[data-pi-bilingual-actions]');
+    await expect(introActions).toHaveAttribute('role', 'toolbar');
+    expect(await introActions.evaluate((element) => getComputedStyle(element).opacity)).toBe('0');
+    await introTranslation.hover();
+    await expect.poll(() => introActions.evaluate(
+      (element) => Number.parseFloat(getComputedStyle(element).opacity),
+    )).toBeGreaterThan(0);
+    const copyTranslation = introActions.getByRole('button', { name: '复制' });
+    const retranslateBlock = introActions.getByRole('button', { name: '重译本段' });
+    const toggleTranslation = introActions.getByRole('button', { name: '隐藏' });
+    await retranslateBlock.focus();
+    expect(await retranslateBlock.evaluate((button) => button.getBoundingClientRect().height))
+      .toBeGreaterThanOrEqual(28);
+    await copyTranslation.click();
+    await expect(introActions.locator('[data-pi-bilingual-feedback]'))
+      .toContainText('译文已复制');
+    await toggleTranslation.click();
+    await expect(introTranslation).toHaveAttribute('data-pi-bilingual-hidden', '');
+    await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeHidden();
+    await expect(introActions.getByRole('button', { name: '显示译文' })).toBeVisible();
+    await introActions.getByRole('button', { name: '显示译文' }).press('Enter');
+    await expect(introTranslation).not.toHaveAttribute('data-pi-bilingual-hidden', '');
+    await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeVisible();
+
+    returnBilingualRetranslationOnce = true;
+    const requestsBeforeRetranslation = textRequests.length;
+    await retranslateBlock.click();
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeRetranslation);
+    await expect(introTranslation.locator('[data-pi-bilingual-text]'))
+      .toHaveText('重新翻译后的段落只替换当前译文。');
+    await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toHaveCount(1);
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
+
+    const formulaTranslation = page.locator(
+      '#article-inline-code + [data-pi-bilingual-translation]',
+    );
+    const formulaActions = formulaTranslation.locator('[data-pi-bilingual-actions]');
+    failBilingualFormulaPreservation = true;
+    const requestsBeforeFailedRetranslation = textRequests.length;
+    await formulaTranslation.hover();
+    const formulaRetranslate = formulaActions.getByRole('button', { name: '重译本段' });
+    await formulaRetranslate.focus();
+    await formulaRetranslate.press('Enter');
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeFailedRetranslation);
+    await expect(formulaActions.locator('[data-pi-bilingual-feedback]'))
+      .toContainText('重译失败');
+    await expect(formulaTranslation.locator('[data-pi-bilingual-text]'))
+      .toContainText('$f(x)=x^2$');
+    await expect(page.locator('#article-inline-code + [data-pi-bilingual-error]')).toHaveCount(0);
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
+    failBilingualFormulaPreservation = false;
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await introTranslation.hover();
+      await page.screenshot({
+        path: testInfo.outputPath('bilingual-paragraph-actions.png'),
+        fullPage: false,
+      });
+    }
+
     const historyAfter = await sidePanel.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
