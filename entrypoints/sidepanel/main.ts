@@ -690,7 +690,9 @@ function syncBilingualPageControl(): void {
   bilingualPageStatus.textContent = state.phase === 'running'
     ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 滚动继续`
     : state.phase === 'paused'
-      ? `已暂停 · ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+      ? state.pauseReason === 'interactive'
+        ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
+        : `已暂停 · ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
       : state.phase === 'stopped'
         ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
         : state.phase === 'complete'
@@ -702,17 +704,19 @@ function syncBilingualPageControl(): void {
             : '在原段落下方渐进显示译文';
   bilingualPagePrimary.textContent = bilingualPagePending
     ? '稍候…'
-    : state.phase === 'running'
-      ? '暂停'
-      : state.phase === 'paused' || state.phase === 'stopped'
-        ? '继续'
-        : state.phase === 'error' && state.total > 0
-          ? '重试'
-          : state.phase === 'complete' && state.failed > 0
-            ? `重试 ${state.failed} 段`
-            : '开始';
+    : state.pauseReason === 'interactive'
+      ? '稍后继续'
+      : state.phase === 'running'
+        ? '暂停'
+        : state.phase === 'paused' || state.phase === 'stopped'
+          ? '继续'
+          : state.phase === 'error' && state.total > 0
+            ? '重试'
+            : state.phase === 'complete' && state.failed > 0
+              ? `重试 ${state.failed} 段`
+              : '开始';
   bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
-  bilingualPagePrimary.disabled = bilingualPagePending;
+  bilingualPagePrimary.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
 }

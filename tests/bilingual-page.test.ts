@@ -33,6 +33,15 @@ describe('bilingual webpage reading', () => {
       targetLanguage: 'zh-CN',
     })).toBe(true);
     expect(isBilingualPageState({
+      phase: 'paused',
+      total: 12,
+      translated: 4,
+      failed: 0,
+      targetLanguage: 'zh-CN',
+      pauseReason: 'interactive',
+      message: '正在处理划词，正文稍后继续。',
+    })).toBe(true);
+    expect(isBilingualPageState({
       phase: 'running',
       total: 2,
       translated: 3,
@@ -45,6 +54,13 @@ describe('bilingual webpage reading', () => {
       translated: 1,
       failed: 0,
       targetLanguage: 'xx',
+    })).toBe(false);
+    expect(isBilingualPageState({
+      phase: 'paused',
+      total: 1,
+      translated: 0,
+      failed: 0,
+      pauseReason: 'unexpected',
     })).toBe(false);
   });
 

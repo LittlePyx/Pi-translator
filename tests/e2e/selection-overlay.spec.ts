@@ -37,6 +37,14 @@ let failNextRecoveryRequestAfterPartial = false;
 let partialRecoveryRequestIndex = 0;
 let releasePartialRecoveryFailure: (() => void) | undefined;
 let partialRecoveryFailureGate: Promise<void> = Promise.resolve();
+let holdNextBilingualRequest = false;
+let bilingualRequestStarted: (() => void) | undefined;
+let releaseHeldBilingualRequest: (() => void) | undefined;
+let heldBilingualRequestGate: Promise<void> = Promise.resolve();
+let holdNextInteractiveRequest = false;
+let interactiveRequestStarted: (() => void) | undefined;
+let releaseHeldInteractiveRequest: (() => void) | undefined;
+let heldInteractiveRequestGate: Promise<void> = Promise.resolve();
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -662,6 +670,24 @@ test.beforeAll(async () => {
       'A recovery request may already contain a partial translation.',
     );
     if (!isVisionProbe && !isImageTranslation) textRequests.push(body);
+    if (
+      holdNextBilingualRequest &&
+      requestedText.includes('A practical guide to reliable bilingual reading')
+    ) {
+      holdNextBilingualRequest = false;
+      bilingualRequestStarted?.();
+      bilingualRequestStarted = undefined;
+      await heldBilingualRequestGate;
+    }
+    if (
+      holdNextInteractiveRequest &&
+      requestedText.includes('Bilingual reading should preserve the original article')
+    ) {
+      holdNextInteractiveRequest = false;
+      interactiveRequestStarted?.();
+      interactiveRequestStarted = undefined;
+      await heldInteractiveRequestGate;
+    }
     if (isPartialRecoverySelection && failNextRecoveryRequestAfterPartial) {
       partialRecoveryRequestIndex += 1;
       if (partialRecoveryRequestIndex === 1) {
@@ -971,6 +997,16 @@ test.afterEach(() => {
   releasePartialRecoveryFailure?.();
   releasePartialRecoveryFailure = undefined;
   partialRecoveryFailureGate = Promise.resolve();
+  holdNextBilingualRequest = false;
+  bilingualRequestStarted = undefined;
+  releaseHeldBilingualRequest?.();
+  releaseHeldBilingualRequest = undefined;
+  heldBilingualRequestGate = Promise.resolve();
+  holdNextInteractiveRequest = false;
+  interactiveRequestStarted = undefined;
+  releaseHeldInteractiveRequest?.();
+  releaseHeldInteractiveRequest = undefined;
+  heldInteractiveRequestGate = Promise.resolve();
 });
 
 test('exposes the native Edge side panel API to the service worker', async () => {
@@ -1176,6 +1212,160 @@ test('progressively adds and removes bilingual article translations without touc
       await settingsPage.close();
     }
     await sidePanel.close().catch(() => undefined);
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL);
+  }
+});
+
+test('prioritizes an explicit selection and resumes bilingual article translation without a false failure', async () => {
+  const popup = await context.newPage();
+  const sidePanel = await context.newPage();
+  try {
+    await page.goto(ARTICLE_FIXTURE_URL);
+    await page.locator('#article-title').evaluate((element) => {
+      element.append(' Interactive selection priority fixture.');
+    });
+    await page.locator('#article-intro').evaluate((element) => {
+      element.append(' Explicit selection priority fixture.');
+    });
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+
+    const bilingualStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
+    const startResponse = await popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          runtime: { sendMessage(message: object): Promise<unknown> };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id === undefined) throw new Error('Article tab not found.');
+      return api.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: { tabId: tab.id, targetLanguage: 'zh-CN' },
+      });
+    }, page.url());
+    expect(startResponse).toMatchObject({ ok: true });
+    await bilingualStarted;
+    await popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: {
+          query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+          sendMessage(tabId: number, message: object): Promise<unknown>;
+        } };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id !== undefined) {
+        await api.tabs.sendMessage(tab.id, { type: 'BROWSER_SIDEBAR_CLOSED' });
+      }
+    }, page.url());
+    const historyBefore = await popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          storage: { session: { get(key: string): Promise<Record<string, unknown>> } };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id === undefined) throw new Error('Article tab not found.');
+      const stored = await api.storage.session.get('translationHistoryByTab');
+      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
+      return history?.[String(tab.id)]?.length ?? 0;
+    }, page.url());
+
+    const interactiveStarted = new Promise<void>((resolve) => {
+      interactiveRequestStarted = resolve;
+    });
+    heldInteractiveRequestGate = new Promise<void>((resolve) => {
+      releaseHeldInteractiveRequest = resolve;
+    });
+    holdNextInteractiveRequest = true;
+    await selectElementText('#article-intro');
+    const overlay = page.locator('#tex-selection-translator-root');
+    const startedAutomatically = await Promise.race([
+      interactiveStarted.then(() => true),
+      page.waitForTimeout(450).then(() => false),
+    ]);
+    if (!startedAutomatically) {
+      await popup.evaluate(async (targetUrl) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { tabs: {
+            query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+            sendMessage(tabId: number, message: object): Promise<unknown>;
+          } };
+        }).chrome;
+        const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+        if (tab?.id === undefined) throw new Error('Article tab not found.');
+        await api.tabs.sendMessage(tab.id, { type: 'TRIGGER_TRANSLATE' });
+      }, page.url());
+      await interactiveStarted;
+    }
+
+    const pageControl = page.locator('#pi-translator-bilingual-page-control');
+    await expect(pageControl.locator('output'))
+      .toContainText('正在处理划词，正文稍后继续');
+    await expect(pageControl.locator('button[data-action="pause"]')).toBeDisabled();
+    await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
+
+    await sidePanel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await sidePanel.reload();
+    await expect(sidePanel.locator('#bilingual-page-status'))
+      .toContainText('正在处理划词，正文稍后继续');
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('稍后继续');
+    await expect(sidePanel.locator('#bilingual-page-primary')).toBeDisabled();
+
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
+    releaseHeldInteractiveRequest?.();
+    releaseHeldInteractiveRequest = undefined;
+    await expect.poll(() => popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          storage: { session: { get(key: string): Promise<Record<string, unknown>> } };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id === undefined) return -1;
+      const stored = await api.storage.session.get('translationHistoryByTab');
+      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
+      return history?.[String(tab.id)]?.length ?? 0;
+    }, page.url())).toBe(historyBefore + 1);
+    await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
+
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toHaveCount(1);
+    await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
+    await sidePanel.locator('#bilingual-page-clear').click();
+  } finally {
+    releaseHeldBilingualRequest?.();
+    releaseHeldInteractiveRequest?.();
+    await sidePanel.close().catch(() => undefined);
+    if (!popup.isClosed()) {
+      await popup.evaluate(async (targetUrl) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { tabs: {
+            query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+            sendMessage(tabId: number, message: object): Promise<unknown>;
+          } };
+        }).chrome;
+        const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+        if (tab?.id !== undefined) {
+          await api.tabs.sendMessage(tab.id, { type: 'BROWSER_SIDEBAR_CLOSED' });
+        }
+      }, page.url()).catch(() => undefined);
+    }
     await popup.close().catch(() => undefined);
     await page.goto(OVERLEAF_FIXTURE_URL);
   }

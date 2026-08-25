@@ -90,6 +90,8 @@ interface BilingualPageTranslatorOptions {
 export interface BilingualPageTranslator {
   start(targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState>;
   control(action: BilingualPageAction): Promise<BilingualPageState>;
+  suspendForInteractiveTranslation(): string | undefined;
+  resumeAfterInteractiveTranslation(token: string | undefined): void;
   state(): BilingualPageState;
   dispose(): void;
 }
@@ -342,6 +344,9 @@ export function createBilingualPageTranslator(
   let disposed = false;
   let controlHost: HTMLElement | undefined;
   let consecutiveIsolatedFailures = 0;
+  const interactiveSuspensions = new Set<string>();
+  const interactionPreemptedRequestIds = new Set<string>();
+  let resumeAfterInteractive = false;
 
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
@@ -406,6 +411,9 @@ export function createBilingualPageTranslator(
     navigationTimer = undefined;
     sourcePageIdentity = '';
     consecutiveIsolatedFailures = 0;
+    interactiveSuspensions.clear();
+    interactionPreemptedRequestIds.clear();
+    resumeAfterInteractive = false;
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
     destroyControl();
     if (notify) options.onStateChange(snapshot());
@@ -441,6 +449,7 @@ export function createBilingualPageTranslator(
           output { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
           button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#e4e2ff; }
+          button:disabled { opacity:.62;cursor:default; }
           button[data-action="clear"] { color:#657084;background:transparent; }
           @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"]{color:#aab3c2;background:transparent} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px} }
@@ -480,19 +489,24 @@ export function createBilingualPageTranslator(
             ? `双语正文 ${currentState.translated}/${currentState.total} · ${currentState.failed} 段待重试`
             : `双语正文已完成 ${currentState.translated}/${currentState.total}`
           : currentState.phase === 'paused'
-            ? `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
+            ? currentState.pauseReason === 'interactive'
+              ? `正在处理划词，正文稍后继续 · ${currentState.translated}/${currentState.total}`
+              : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
               ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
               : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`;
     }
     if (pause) {
       const retryCompleted = currentState.phase === 'complete' && currentState.failed > 0;
-      pause.textContent = retryCompleted
+      pause.textContent = currentState.pauseReason === 'interactive'
+        ? '稍后继续'
+        : retryCompleted
         ? `重试 ${currentState.failed} 段`
         : currentState.phase === 'paused' || currentState.phase === 'error' || currentState.phase === 'stopped'
           ? '继续'
           : '暂停';
       pause.hidden = (currentState.phase === 'complete' && !currentState.failed) || currentState.total === 0;
+      pause.disabled = currentState.pauseReason === 'interactive';
     }
     if (stop) stop.hidden = currentState.phase === 'complete' || currentState.phase === 'stopped';
   };
@@ -519,6 +533,8 @@ export function createBilingualPageTranslator(
     syncCounts();
     if (currentState.translated + currentState.failed < currentState.total) return false;
     delete currentState.message;
+    delete currentState.pauseReason;
+    resumeAfterInteractive = false;
     setState({ phase: 'complete' });
     return true;
   };
@@ -578,6 +594,13 @@ export function createBilingualPageTranslator(
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
       if (!response.ok) {
+        if (interactionPreemptedRequestIds.delete(requestId)) {
+          block.status = 'idle';
+          enqueue(block, 'front');
+          syncCounts();
+          publish();
+          return;
+        }
         const message = translationErrorMessage(response.error.code, response.error.message);
         if (isIsolatedBilingualBlockError(response.error.code)) {
           markIsolatedFailure(block, message);
@@ -597,6 +620,7 @@ export function createBilingualPageTranslator(
         setState({ phase: 'error', message: '网页正文已经变化，请清除后重新开始。' });
         return;
       }
+      interactionPreemptedRequestIds.delete(requestId);
       const translation = translationElement(
         block,
         response.data.result.translatedText,
@@ -609,6 +633,13 @@ export function createBilingualPageTranslator(
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
+      if (interactionPreemptedRequestIds.delete(requestId)) {
+        block.status = 'idle';
+        enqueue(block, 'front');
+        syncCounts();
+        publish();
+        return;
+      }
       block.status = 'error';
       syncCounts();
       setState({
@@ -636,9 +667,11 @@ export function createBilingualPageTranslator(
     await activeTask;
   };
 
-  const resume = (): void => {
+  const resume = (retryFailed = true): void => {
     consecutiveIsolatedFailures = 0;
-    const failedBlocks = blocks.filter((block) => block.status === 'error');
+    const failedBlocks = retryFailed
+      ? blocks.filter((block) => block.status === 'error')
+      : [];
     queue = queue.filter((block) => block.status === 'queued');
     for (const block of [...failedBlocks].reverse()) {
       removeBlockError(block);
@@ -650,8 +683,43 @@ export function createBilingualPageTranslator(
     }
     syncCounts();
     delete currentState.message;
+    delete currentState.pauseReason;
     setState({ phase: 'running' });
     void processQueue();
+  };
+
+  const suspendForInteractiveTranslation = (): string | undefined => {
+    if (currentState.phase === 'paused' && currentState.pauseReason === 'user') {
+      if (activeRequestId) interactionPreemptedRequestIds.add(activeRequestId);
+      return undefined;
+    }
+    if (
+      currentState.phase !== 'running' &&
+      !(currentState.phase === 'paused' && currentState.pauseReason === 'interactive')
+    ) return undefined;
+    const token = crypto.randomUUID();
+    interactiveSuspensions.add(token);
+    if (currentState.phase === 'running') {
+      resumeAfterInteractive = true;
+      if (activeRequestId) interactionPreemptedRequestIds.add(activeRequestId);
+      setState({
+        phase: 'paused',
+        pauseReason: 'interactive',
+        message: '正在处理划词，正文稍后继续。',
+      });
+    }
+    return token;
+  };
+
+  const resumeAfterInteractiveTranslation = (token: string | undefined): void => {
+    if (!token || !interactiveSuspensions.delete(token) || interactiveSuspensions.size) return;
+    if (
+      !resumeAfterInteractive ||
+      currentState.phase !== 'paused' ||
+      currentState.pauseReason !== 'interactive'
+    ) return;
+    resumeAfterInteractive = false;
+    resume(false);
   };
 
   const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> => {
@@ -703,23 +771,32 @@ export function createBilingualPageTranslator(
       (currentState.phase === 'complete' && currentState.failed === 0)
     ) return snapshot();
     if (action === 'pause' && currentState.phase === 'running') {
-      setState({ phase: 'paused' });
+      resumeAfterInteractive = false;
+      delete currentState.message;
+      setState({ phase: 'paused', pauseReason: 'user' });
     } else if (
       action === 'resume' && (
         ['paused', 'stopped', 'error'].includes(currentState.phase) ||
         (currentState.phase === 'complete' && currentState.failed > 0)
       )
     ) {
+      if (currentState.pauseReason === 'interactive' && interactiveSuspensions.size) {
+        return snapshot();
+      }
+      resumeAfterInteractive = false;
       resume();
     } else if (action === 'stop') {
       taskRevision += 1;
       cancelActiveRequest();
+      resumeAfterInteractive = false;
+      interactionPreemptedRequestIds.clear();
       blocks.forEach((block) => {
         if (block.status === 'queued' || block.status === 'translating') block.status = 'idle';
       });
       queue = [];
       syncCounts();
       delete currentState.message;
+      delete currentState.pauseReason;
       setState({ phase: 'stopped' });
     }
     return snapshot();
@@ -728,6 +805,8 @@ export function createBilingualPageTranslator(
   return {
     start,
     control,
+    suspendForInteractiveTranslation,
+    resumeAfterInteractiveTranslation,
     state: snapshot,
     dispose: () => {
       if (disposed) return;

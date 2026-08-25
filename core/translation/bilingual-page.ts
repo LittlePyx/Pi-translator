@@ -18,6 +18,7 @@ export interface BilingualPageState {
   failed: number;
   targetLanguage?: string;
   message?: string;
+  pauseReason?: 'user' | 'interactive';
 }
 
 export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
@@ -78,6 +79,9 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     (state.targetLanguage === undefined || isSupportedTargetLanguage(state.targetLanguage)) &&
     (state.message === undefined || (
       typeof state.message === 'string' && state.message.length <= 300
+    )) &&
+    (state.pauseReason === undefined || ['user', 'interactive'].includes(
+      typeof state.pauseReason === 'string' ? state.pauseReason : '',
     ))
   );
 }

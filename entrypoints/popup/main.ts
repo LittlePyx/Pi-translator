@@ -444,7 +444,9 @@ function renderBilingualPageAction(): void {
   translatePage.textContent = bilingualPageState.phase === 'running'
     ? `暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
     : bilingualPageState.phase === 'paused'
-      ? `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+      ? bilingualPageState.pauseReason === 'interactive'
+        ? '划词翻译中 · 正文稍后继续'
+        : `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
       : bilingualPageState.phase === 'stopped'
         ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
         : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
@@ -459,6 +461,7 @@ function renderBilingualPageAction(): void {
       ? '保留网页原文，在正文段落下方渐进显示译文'
       : '正文译文只保留在当前标签页，可随时暂停、停止或清除'
   );
+  translatePage.disabled = bilingualPageState.pauseReason === 'interactive';
 }
 
 async function refreshBilingualPageState(): Promise<void> {

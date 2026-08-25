@@ -1915,6 +1915,8 @@ export async function startSelectionTranslator(
         ? normalizePdfSelectionText(snapshot.contextText)
         : snapshot.contextText
       : undefined;
+    const bilingualPauseToken = bilingualPageTranslator
+      ?.suspendForInteractiveTranslation();
     try {
       const payload = {
           requestId: snapshot.requestId,
@@ -2017,6 +2019,8 @@ export async function startSelectionTranslator(
         },
         selectionRect(snapshot),
       );
+    } finally {
+      bilingualPageTranslator?.resumeAfterInteractiveTranslation(bilingualPauseToken);
     }
   }
 
@@ -2090,6 +2094,8 @@ export async function startSelectionTranslator(
     }
     overlay.showLoading(requestId, capture.rect);
     const documentId = options.documentId?.();
+    const bilingualPauseToken = bilingualPageTranslator
+      ?.suspendForInteractiveTranslation();
     try {
       const response = (await browser.runtime.sendMessage({
         type: 'TRANSLATE_IMAGE_REGION',
@@ -2183,6 +2189,8 @@ export async function startSelectionTranslator(
         },
         capture.rect,
       );
+    } finally {
+      bilingualPageTranslator?.resumeAfterInteractiveTranslation(bilingualPauseToken);
     }
   }
 
