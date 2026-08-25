@@ -13,12 +13,14 @@ import type {
 import {
   EMPTY_BILINGUAL_PAGE_STATE,
   isBilingualPageTextCandidate,
+  isIsolatedBilingualBlockError,
   normalizeBilingualPageText,
   type BilingualPageAction,
   type BilingualPageState,
 } from '../translation/bilingual-page';
 
 const TRANSLATION_ATTRIBUTE = 'data-pi-bilingual-translation';
+const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
 const BLOCK_SELECTOR = 'h1, h2, h3, h4, p, blockquote, figcaption, li';
@@ -59,6 +61,7 @@ const EXCLUDED_ANCESTOR_SELECTOR = [
   '.katex-display',
   '.MathJax_Display',
   `[${TRANSLATION_ATTRIBUTE}]`,
+  `[${ERROR_ATTRIBUTE}]`,
   `#${CONTROL_HOST_ID}`,
 ].join(',');
 
@@ -69,6 +72,7 @@ interface BilingualBlock {
   text: string;
   status: BlockStatus;
   translation?: HTMLElement;
+  errorElement?: HTMLElement;
 }
 
 export interface BilingualPageRequestConfig {
@@ -126,6 +130,7 @@ function readableElementText(element: HTMLElement): string {
     'select',
     'textarea',
     `[${TRANSLATION_ATTRIBUTE}]`,
+    `[${ERROR_ATTRIBUTE}]`,
   ].join(',')).forEach((node) => node.remove());
   return normalizeBilingualPageText(clone.textContent ?? '');
 }
@@ -181,21 +186,55 @@ function translationElement(block: BilingualBlock, translatedText: string, targe
   translation.setAttribute('lang', targetLanguageHtmlCode(targetLanguage));
   translation.setAttribute('aria-label', 'Pi Translator 双语译文');
   translation.textContent = translatedText.trim();
-  const sourceStyle = getComputedStyle(block.element);
-  const sourceFontSize = Number.parseFloat(sourceStyle.fontSize);
-  translation.style.setProperty('--pi-bilingual-color', sourceStyle.color);
-  translation.style.setProperty('--pi-bilingual-font', sourceStyle.fontFamily);
-  translation.style.setProperty(
-    '--pi-bilingual-size',
-    Number.isFinite(sourceFontSize) ? `${Math.min(18, sourceFontSize)}px` : sourceStyle.fontSize,
-  );
+  applySourceTypography(translation, block, 18);
   return translation;
 }
 
+function applySourceTypography(
+  target: HTMLElement,
+  block: BilingualBlock,
+  maximumFontSize: number,
+): void {
+  const sourceStyle = getComputedStyle(block.element);
+  const sourceFontSize = Number.parseFloat(sourceStyle.fontSize);
+  target.style.setProperty('--pi-bilingual-color', sourceStyle.color);
+  target.style.setProperty('--pi-bilingual-font', sourceStyle.fontFamily);
+  target.style.setProperty(
+    '--pi-bilingual-size',
+    Number.isFinite(sourceFontSize)
+      ? `${Math.min(maximumFontSize, sourceFontSize)}px`
+      : sourceStyle.fontSize,
+  );
+}
+
+function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
+  if (block.element.tagName === 'LI') block.element.append(element);
+  else block.element.insertAdjacentElement('afterend', element);
+}
+
 function insertTranslation(block: BilingualBlock, translation: HTMLElement): void {
-  if (block.element.tagName === 'LI') block.element.append(translation);
-  else block.element.insertAdjacentElement('afterend', translation);
+  insertAfterSource(block, translation);
   block.translation = translation;
+}
+
+function blockErrorElement(
+  block: BilingualBlock,
+  message: string,
+  retry: () => void,
+): HTMLElement {
+  const error = document.createElement('pi-translator-bilingual-error');
+  error.setAttribute(ERROR_ATTRIBUTE, '');
+  error.setAttribute('role', 'status');
+  error.setAttribute('aria-label', 'Pi Translator 本段翻译失败');
+  const copy = document.createElement('span');
+  copy.textContent = `本段未译：${message.split('\n')[0] ?? message}`;
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.textContent = '重试本段';
+  button.addEventListener('click', retry);
+  error.append(copy, button);
+  applySourceTypography(error, block, 14);
+  return error;
 }
 
 function installTranslationStyle(): void {
@@ -227,6 +266,49 @@ function installTranslationStyle(): void {
       overflow-wrap: anywhere !important;
     }
     li > [${TRANSLATION_ATTRIBUTE}] { margin-bottom: .35em !important; }
+    [${ERROR_ATTRIBUTE}] {
+      all: initial !important;
+      display: flex !important;
+      box-sizing: border-box !important;
+      width: auto !important;
+      margin: .28em 0 .72em !important;
+      align-items: center !important;
+      gap: .65em !important;
+      border-left: 2px solid color-mix(in srgb, var(--pi-bilingual-color) 20%, #d97706 80%) !important;
+      padding: .18em 0 .18em .72em !important;
+      color: color-mix(in srgb, var(--pi-bilingual-color) 78%, #92400e 22%) !important;
+      background: transparent !important;
+      font-family: var(--pi-bilingual-font) !important;
+      font-size: var(--pi-bilingual-size) !important;
+      font-style: normal !important;
+      font-weight: 400 !important;
+      line-height: 1.45 !important;
+    }
+    [${ERROR_ATTRIBUTE}] > span {
+      all: initial !important;
+      min-width: 0 !important;
+      flex: 1 1 auto !important;
+      color: inherit !important;
+      font: inherit !important;
+      overflow-wrap: anywhere !important;
+    }
+    [${ERROR_ATTRIBUTE}] > button {
+      all: initial !important;
+      flex: 0 0 auto !important;
+      min-height: 28px !important;
+      box-sizing: border-box !important;
+      border: 1px solid color-mix(in srgb, currentColor 20%, transparent) !important;
+      border-radius: 6px !important;
+      padding: 4px 8px !important;
+      color: inherit !important;
+      background: color-mix(in srgb, currentColor 7%, transparent) !important;
+      font: 600 11px/1.2 var(--pi-bilingual-font) !important;
+      cursor: pointer !important;
+      white-space: nowrap !important;
+    }
+    [${ERROR_ATTRIBUTE}] > button:hover { background: color-mix(in srgb, currentColor 12%, transparent) !important; }
+    [${ERROR_ATTRIBUTE}] > button:focus-visible { outline: 2px solid #6366f1 !important; outline-offset: 2px !important; }
+    li > [${ERROR_ATTRIBUTE}] { margin-bottom: .35em !important; }
   `;
   (document.head ?? document.documentElement).append(style);
 }
@@ -259,6 +341,7 @@ export function createBilingualPageTranslator(
   let navigationTimer: number | undefined;
   let disposed = false;
   let controlHost: HTMLElement | undefined;
+  let consecutiveIsolatedFailures = 0;
 
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
@@ -296,8 +379,13 @@ export function createBilingualPageTranslator(
   };
 
   const removeInjectedContent = (): void => {
-    for (const block of blocks) block.translation?.remove();
-    document.querySelectorAll(`[${TRANSLATION_ATTRIBUTE}]`).forEach((element) => element.remove());
+    for (const block of blocks) {
+      block.translation?.remove();
+      block.errorElement?.remove();
+    }
+    document.querySelectorAll(
+      `[${TRANSLATION_ATTRIBUTE}], [${ERROR_ATTRIBUTE}]`,
+    ).forEach((element) => element.remove());
     blocks = [];
     queue = [];
     observer?.disconnect();
@@ -317,6 +405,7 @@ export function createBilingualPageTranslator(
     if (navigationTimer !== undefined) window.clearInterval(navigationTimer);
     navigationTimer = undefined;
     sourcePageIdentity = '';
+    consecutiveIsolatedFailures = 0;
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
     destroyControl();
     if (notify) options.onStateChange(snapshot());
@@ -327,10 +416,11 @@ export function createBilingualPageTranslator(
     return bounds.bottom >= -window.innerHeight * .35 && bounds.top <= window.innerHeight * 2.2;
   };
 
-  const enqueue = (block: BilingualBlock): void => {
-    if (block.status !== 'idle' && block.status !== 'error') return;
+  const enqueue = (block: BilingualBlock, position: 'front' | 'end' = 'end'): void => {
+    if (block.status !== 'idle') return;
     block.status = 'queued';
-    queue.push(block);
+    if (position === 'front') queue.unshift(block);
+    else queue.push(block);
   };
 
   const renderControl = (): void => {
@@ -366,7 +456,11 @@ export function createBilingualPageTranslator(
         button.addEventListener('click', () => {
           const action = button.dataset.action;
           if (action === 'pause') {
-            void control(currentState.phase === 'paused' ? 'resume' : 'pause');
+            const shouldResume = currentState.phase === 'paused' ||
+              currentState.phase === 'error' ||
+              currentState.phase === 'stopped' ||
+              (currentState.phase === 'complete' && currentState.failed > 0);
+            void control(shouldResume ? 'resume' : 'pause');
           } else if (action === 'stop' || action === 'clear') {
             void control(action);
           }
@@ -382,18 +476,23 @@ export function createBilingualPageTranslator(
       output.textContent = currentState.phase === 'error'
         ? currentState.message ?? '正文翻译暂时中断'
         : currentState.phase === 'complete'
-          ? `双语正文已完成 ${currentState.translated}/${currentState.total}`
+          ? currentState.failed
+            ? `双语正文 ${currentState.translated}/${currentState.total} · ${currentState.failed} 段待重试`
+            : `双语正文已完成 ${currentState.translated}/${currentState.total}`
           : currentState.phase === 'paused'
-            ? `双语正文已暂停 ${currentState.translated}/${currentState.total}`
+            ? `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
-              ? `双语正文已停止 ${currentState.translated}/${currentState.total}`
-              : `双语正文 ${currentState.translated}/${currentState.total} · 滚动继续`;
+              ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
+              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`;
     }
     if (pause) {
-      pause.textContent = currentState.phase === 'paused' || currentState.phase === 'error' || currentState.phase === 'stopped'
-        ? '继续'
-        : '暂停';
-      pause.hidden = currentState.phase === 'complete' || currentState.total === 0;
+      const retryCompleted = currentState.phase === 'complete' && currentState.failed > 0;
+      pause.textContent = retryCompleted
+        ? `重试 ${currentState.failed} 段`
+        : currentState.phase === 'paused' || currentState.phase === 'error' || currentState.phase === 'stopped'
+          ? '继续'
+          : '暂停';
+      pause.hidden = (currentState.phase === 'complete' && !currentState.failed) || currentState.total === 0;
     }
     if (stop) stop.hidden = currentState.phase === 'complete' || currentState.phase === 'stopped';
   };
@@ -409,6 +508,53 @@ export function createBilingualPageTranslator(
       void processQueue();
     }, { rootMargin: '100% 0px 140% 0px' });
     blocks.forEach((block) => observer?.observe(block.element));
+  };
+
+  const removeBlockError = (block: BilingualBlock): void => {
+    block.errorElement?.remove();
+    delete block.errorElement;
+  };
+
+  const settleCompletedState = (): boolean => {
+    syncCounts();
+    if (currentState.translated + currentState.failed < currentState.total) return false;
+    delete currentState.message;
+    setState({ phase: 'complete' });
+    return true;
+  };
+
+  const retryBlock = (block: BilingualBlock): void => {
+    if (block.status !== 'error' || !block.element.isConnected) return;
+    removeBlockError(block);
+    queue = queue.filter((candidate) => candidate !== block);
+    block.status = 'idle';
+    enqueue(block, 'front');
+    for (const candidate of blocks) {
+      if (candidate.status === 'idle' && eligibleForViewport(candidate)) enqueue(candidate);
+    }
+    syncCounts();
+    consecutiveIsolatedFailures = 0;
+    delete currentState.message;
+    setState({ phase: 'running' });
+    void processQueue();
+  };
+
+  const markIsolatedFailure = (block: BilingualBlock, message: string): void => {
+    block.status = 'error';
+    removeBlockError(block);
+    const error = blockErrorElement(block, message, () => retryBlock(block));
+    insertAfterSource(block, error);
+    block.errorElement = error;
+    consecutiveIsolatedFailures += 1;
+    if (settleCompletedState()) return;
+    if (consecutiveIsolatedFailures >= 3) {
+      setState({
+        phase: 'error',
+        message: '连续多个段落翻译失败，已暂停后续请求；可稍后重试失败段。',
+      });
+      return;
+    }
+    publish();
   };
 
   const translateBlock = async (block: BilingualBlock, revision: number): Promise<void> => {
@@ -432,11 +578,16 @@ export function createBilingualPageTranslator(
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
       if (!response.ok) {
+        const message = translationErrorMessage(response.error.code, response.error.message);
+        if (isIsolatedBilingualBlockError(response.error.code)) {
+          markIsolatedFailure(block, message);
+          return;
+        }
         block.status = 'error';
         syncCounts();
         setState({
           phase: 'error',
-          message: translationErrorMessage(response.error.code, response.error.message),
+          message,
         });
         return;
       }
@@ -453,12 +604,8 @@ export function createBilingualPageTranslator(
       );
       insertTranslation(block, translation);
       block.status = 'done';
-      syncCounts();
-      if (currentState.translated + currentState.failed >= currentState.total) {
-        setState({ phase: currentState.failed ? 'error' : 'complete' });
-      } else {
-        publish();
-      }
+      consecutiveIsolatedFailures = 0;
+      if (!settleCompletedState()) publish();
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
@@ -490,8 +637,15 @@ export function createBilingualPageTranslator(
   };
 
   const resume = (): void => {
+    consecutiveIsolatedFailures = 0;
+    const failedBlocks = blocks.filter((block) => block.status === 'error');
+    queue = queue.filter((block) => block.status === 'queued');
+    for (const block of [...failedBlocks].reverse()) {
+      removeBlockError(block);
+      block.status = 'idle';
+      enqueue(block, 'front');
+    }
     for (const block of blocks) {
-      if (block.status === 'error') block.status = 'idle';
       if (block.status === 'idle' && eligibleForViewport(block)) enqueue(block);
     }
     syncCounts();
@@ -506,7 +660,10 @@ export function createBilingualPageTranslator(
       const shouldRedetect = currentState.targetLanguage === targetLanguage &&
         currentState.phase === 'error' && currentState.total === 0;
       if (currentState.targetLanguage === targetLanguage && !shouldRedetect) {
-        if (['paused', 'stopped', 'error'].includes(currentState.phase)) resume();
+        if (
+          ['paused', 'stopped', 'error'].includes(currentState.phase) ||
+          (currentState.phase === 'complete' && currentState.failed > 0)
+        ) resume();
         return snapshot();
       }
       clear(false);
@@ -527,7 +684,7 @@ export function createBilingualPageTranslator(
     installTranslationStyle();
     taskRevision += 1;
     observeBlocks();
-    blocks.filter(eligibleForViewport).forEach(enqueue);
+    blocks.filter(eligibleForViewport).forEach((block) => enqueue(block));
     if (!queue.length && blocks[0]) enqueue(blocks[0]);
     navigationTimer = window.setInterval(() => {
       if (pageIdentity(options.pageUrl()) !== sourcePageIdentity) clear();
@@ -541,10 +698,18 @@ export function createBilingualPageTranslator(
       clear();
       return snapshot();
     }
-    if (currentState.phase === 'idle' || currentState.phase === 'complete') return snapshot();
+    if (
+      currentState.phase === 'idle' ||
+      (currentState.phase === 'complete' && currentState.failed === 0)
+    ) return snapshot();
     if (action === 'pause' && currentState.phase === 'running') {
       setState({ phase: 'paused' });
-    } else if (action === 'resume' && ['paused', 'stopped', 'error'].includes(currentState.phase)) {
+    } else if (
+      action === 'resume' && (
+        ['paused', 'stopped', 'error'].includes(currentState.phase) ||
+        (currentState.phase === 'complete' && currentState.failed > 0)
+      )
+    ) {
       resume();
     } else if (action === 'stop') {
       taskRevision += 1;

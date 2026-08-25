@@ -30,6 +30,7 @@ const textRequests: Array<Record<string, unknown>> = [];
 let echoVisionPayloadOnce = false;
 let failNextRevisionRequest = false;
 let bilingualFailuresRemaining = 0;
+let failBilingualFormulaPreservation = false;
 let returnRevisedVisionResultOnce = false;
 let returnPendingVisionReviewOnce = false;
 let failNextRecoveryRequestAfterPartial = false;
@@ -793,7 +794,9 @@ test.beforeAll(async () => {
                 ],
               },
             } : isBilingualFormulaParagraph ? {
-              translation: `修改扩展后请运行 \`npm run build:edge\`，同时保留评分函数 ${requiredPlaceholderTokens[0] ?? ''} 及其上下文。`,
+              translation: failBilingualFormulaPreservation
+                ? '修改扩展后请重新构建，并核对评分函数。'
+                : `修改扩展后请运行 \`npm run build:edge\`，同时保留评分函数 ${requiredPlaceholderTokens[0] ?? ''} 及其上下文。`,
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
@@ -960,6 +963,7 @@ test.afterEach(() => {
   echoVisionPayloadOnce = false;
   failNextRevisionRequest = false;
   bilingualFailuresRemaining = 0;
+  failBilingualFormulaPreservation = false;
   returnRevisedVisionResultOnce = false;
   returnPendingVisionReviewOnce = false;
   failNextRecoveryRequestAfterPartial = false;
@@ -1105,6 +1109,42 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(pageControl).toHaveCount(0);
     await expect(sidePanel.locator('#bilingual-page-clear')).toBeHidden();
+
+    await page.reload();
+    await page.locator('#article-inline-code').evaluate((paragraph) => {
+      paragraph.append(' Retry isolation fixture.');
+    });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.bringToFront();
+    await sidePanel.reload();
+    failBilingualFormulaPreservation = true;
+    await sidePanel.locator('#bilingual-page-primary').click();
+    const blockError = page.locator('#article-inline-code + [data-pi-bilingual-error]');
+    await expect(blockError).toBeVisible();
+    await expect(blockError).toContainText('本段未译');
+    await expect(blockError.locator('button')).toHaveText('重试本段');
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('1 段待重试');
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('重试 1 段');
+    await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(6);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await blockError.scrollIntoViewIfNeeded();
+      await Promise.all([
+        page.screenshot({ path: testInfo.outputPath('bilingual-block-error.png'), fullPage: false }),
+        sidePanel.screenshot({ path: testInfo.outputPath('bilingual-block-error-sidepanel.png'), fullPage: true }),
+      ]);
+    }
+    failBilingualFormulaPreservation = false;
+    const retryRequestsBefore = textRequests.length;
+    await blockError.locator('button').click();
+    await expect.poll(() => textRequests.length).toBeGreaterThan(retryRequestsBefore);
+    await expect(blockError).toHaveCount(0);
+    await expect(page.locator('#article-inline-code + [data-pi-bilingual-translation]'))
+      .toContainText('$f(x)=x^2$');
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
+    await sidePanel.locator('#bilingual-page-clear').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
 
     await page.reload();
     await page.locator('#article-title').evaluate((title) => {

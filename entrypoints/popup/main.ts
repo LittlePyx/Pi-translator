@@ -432,7 +432,8 @@ function bilingualPageAction(): 'start' | BilingualPageAction {
   if (
     bilingualPageState.phase === 'paused' ||
     bilingualPageState.phase === 'stopped' ||
-    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0)
+    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0) ||
+    (bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0)
   ) return 'resume';
   if (bilingualPageState.phase === 'complete') return 'clear';
   return 'start';
@@ -448,9 +449,11 @@ function renderBilingualPageAction(): void {
         ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
         : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
           ? `重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-          : bilingualPageState.phase === 'complete'
-            ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-            : '翻译网页正文';
+          : bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0
+            ? `重试 ${bilingualPageState.failed} 段 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+            : bilingualPageState.phase === 'complete'
+              ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+              : '翻译网页正文';
   translatePage.title = bilingualPageState.message ?? (
     bilingualPageState.phase === 'idle'
       ? '保留网页原文，在正文段落下方渐进显示译文'

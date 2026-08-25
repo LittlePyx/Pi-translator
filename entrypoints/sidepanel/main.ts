@@ -688,13 +688,15 @@ function syncBilingualPageControl(): void {
   if (!available) return;
   const state = bilingualPageState;
   bilingualPageStatus.textContent = state.phase === 'running'
-    ? `已翻译 ${state.translated}/${state.total} 段 · 滚动继续`
+    ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 滚动继续`
     : state.phase === 'paused'
-      ? `已暂停 · ${state.translated}/${state.total} 段`
+      ? `已暂停 · ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
       : state.phase === 'stopped'
-        ? `已停止 · 保留 ${state.translated}/${state.total} 段`
+        ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
         : state.phase === 'complete'
-          ? `已完成 ${state.translated}/${state.total} 段`
+          ? state.failed
+            ? `已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
+            : `已完成 ${state.translated}/${state.total} 段`
           : state.phase === 'error'
             ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
             : '在原段落下方渐进显示译文';
@@ -706,8 +708,10 @@ function syncBilingualPageControl(): void {
         ? '继续'
         : state.phase === 'error' && state.total > 0
           ? '重试'
-          : '开始';
-  bilingualPagePrimary.hidden = state.phase === 'complete';
+          : state.phase === 'complete' && state.failed > 0
+            ? `重试 ${state.failed} 段`
+            : '开始';
+  bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
   bilingualPagePrimary.disabled = bilingualPagePending;
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
@@ -718,7 +722,8 @@ function bilingualPagePrimaryAction(): 'start' | BilingualPageAction {
   if (
     bilingualPageState.phase === 'paused' ||
     bilingualPageState.phase === 'stopped' ||
-    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0)
+    (bilingualPageState.phase === 'error' && bilingualPageState.total > 0) ||
+    (bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0)
   ) return 'resume';
   return 'start';
 }

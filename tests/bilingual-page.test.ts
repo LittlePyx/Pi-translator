@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isBilingualPageState,
   isBilingualPageTextCandidate,
+  isIsolatedBilingualBlockError,
   normalizeBilingualPageText,
 } from '../core/translation/bilingual-page';
 
@@ -45,5 +46,14 @@ describe('bilingual webpage reading', () => {
       failed: 0,
       targetLanguage: 'xx',
     })).toBe(false);
+  });
+
+  it('isolates paragraph-specific output failures without retrying global outages', () => {
+    expect(isIsolatedBilingualBlockError('LATEX_VALIDATION_FAILED')).toBe(true);
+    expect(isIsolatedBilingualBlockError('SELECTION_TOO_LONG')).toBe(true);
+    expect(isIsolatedBilingualBlockError('INVALID_RESPONSE')).toBe(true);
+    expect(isIsolatedBilingualBlockError('RATE_LIMITED')).toBe(false);
+    expect(isIsolatedBilingualBlockError('NETWORK_ERROR')).toBe(false);
+    expect(isIsolatedBilingualBlockError('AUTH_FAILED')).toBe(false);
   });
 });

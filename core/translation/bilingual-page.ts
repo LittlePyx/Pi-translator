@@ -1,4 +1,5 @@
 import { isSupportedTargetLanguage } from '../language/supported-target-languages';
+import type { TranslationErrorCode } from '../messaging/errors';
 
 export type BilingualPagePhase =
   | 'idle'
@@ -25,6 +26,19 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   translated: 0,
   failed: 0,
 };
+
+const ISOLATED_BLOCK_ERROR_CODES = new Set<TranslationErrorCode>([
+  'EMPTY_SELECTION',
+  'SELECTION_TOO_LONG',
+  'EMPTY_RESPONSE',
+  'INVALID_RESPONSE',
+  'LATEX_VALIDATION_FAILED',
+]);
+
+/** Errors attributable to one paragraph may be skipped without retrying the whole page. */
+export function isIsolatedBilingualBlockError(code: TranslationErrorCode): boolean {
+  return ISOLATED_BLOCK_ERROR_CODES.has(code);
+}
 
 export function normalizeBilingualPageText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
