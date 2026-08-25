@@ -1046,6 +1046,12 @@ test('progressively adds and removes bilingual article translations without touc
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
     await page.bringToFront();
     await popup.reload();
+    await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.remove('bilingualParagraphActionsHintSeen');
+    });
     originalTargetLanguage = await popup.locator('#target-language').inputValue();
     if (originalTargetLanguage !== 'zh-CN') {
       await popup.locator('#target-language').selectOption('zh-CN');
@@ -1078,6 +1084,25 @@ test('progressively adds and removes bilingual article translations without touc
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl).toBeVisible();
+    const hintedTranslation = page.locator('[data-pi-bilingual-translation]').first();
+    await expect(hintedTranslation).toBeVisible();
+    await expect(hintedTranslation).toHaveAttribute('data-pi-bilingual-hint', '');
+    const hintedActions = hintedTranslation.locator('[data-pi-bilingual-actions]');
+    await expect(hintedActions.locator('[data-pi-bilingual-feedback]'))
+      .toHaveText('悬停译文可复制、重译或隐藏');
+    await expect.poll(() => hintedActions.evaluate(
+      (element) => Number.parseFloat(getComputedStyle(element).opacity),
+    )).toBeGreaterThan(0);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await page.screenshot({
+        path: testInfo.outputPath('bilingual-paragraph-actions-hint.png'),
+        fullPage: false,
+      });
+    }
+    await hintedActions.getByRole('button', { name: '复制' }).click();
+    await expect(hintedTranslation).not.toHaveAttribute('data-pi-bilingual-hint', '');
+    await expect(hintedActions.locator('[data-pi-bilingual-feedback]'))
+      .toHaveText('译文已复制');
     await pageControl.locator('button[data-action="pause"]').click();
     await expect(pageControl.locator('output')).toContainText('已暂停');
     const translatedWhilePaused = await page.locator('[data-pi-bilingual-translation]').count();
@@ -1170,9 +1195,45 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(introTranslation).not.toHaveAttribute('data-pi-bilingual-hidden', '');
     await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeVisible();
 
+    const cdp = await context.newCDPSession(page);
+    try {
+      await cdp.send('Emulation.setTouchEmulationEnabled', {
+        enabled: true,
+        maxTouchPoints: 1,
+      });
+      expect(await page.evaluate(() => matchMedia('(any-hover: none)').matches)).toBe(true);
+      const moreActions = introActions.locator('button[data-action="more"]');
+      await expect(moreActions).toBeVisible();
+      await expect(moreActions).toHaveText('更多');
+      await expect(moreActions).toHaveAttribute('aria-expanded', 'false');
+      await expect(copyTranslation).toBeHidden();
+      expect(await moreActions.evaluate((button) => button.getBoundingClientRect().height))
+        .toBeGreaterThanOrEqual(28);
+      await moreActions.click();
+      await expect(moreActions).toHaveText('收起');
+      await expect(moreActions).toHaveAttribute('aria-expanded', 'true');
+      await expect(copyTranslation).toBeVisible();
+      if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+        await page.screenshot({
+          path: testInfo.outputPath('bilingual-paragraph-actions-touch.png'),
+          fullPage: false,
+        });
+      }
+      await moreActions.press('Enter');
+      await expect(moreActions).toHaveAttribute('aria-expanded', 'false');
+      await expect(copyTranslation).toBeHidden();
+    } finally {
+      await cdp.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+      await expect.poll(() => page.evaluate(
+        () => matchMedia('(any-hover: none)').matches,
+      )).toBe(false);
+      await cdp.detach();
+    }
+
     returnBilingualRetranslationOnce = true;
     const requestsBeforeRetranslation = textRequests.length;
-    await retranslateBlock.click();
+    await retranslateBlock.focus();
+    await retranslateBlock.press('Enter');
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeRetranslation);
     await expect(introTranslation.locator('[data-pi-bilingual-text]'))
       .toHaveText('重新翻译后的段落只替换当前译文。');
@@ -1235,6 +1296,8 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(blockError).toBeVisible();
     await expect(blockError).toContainText('本段未译');
     await expect(blockError.locator('button')).toHaveText('重试本段');
+    await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-hint]')).toHaveCount(0);
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('1 段待重试');
     await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('重试 1 段');

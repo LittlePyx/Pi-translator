@@ -25,6 +25,12 @@ const TRANSLATION_ACTIONS_ATTRIBUTE = 'data-pi-bilingual-actions';
 const TRANSLATION_FEEDBACK_ATTRIBUTE = 'data-pi-bilingual-feedback';
 const TRANSLATION_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-hidden';
 const TRANSLATION_BUSY_ATTRIBUTE = 'data-pi-bilingual-busy';
+const TRANSLATION_HINT_ATTRIBUTE = 'data-pi-bilingual-hint';
+const TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE = 'data-pi-bilingual-touch-expanded';
+const ACTIONS_HINT_STORAGE_KEY = 'bilingualParagraphActionsHintSeen';
+const ACTIONS_HINT_DURATION_MS = 3_200;
+const ACTIONS_HINT_MOUSE_MESSAGE = '悬停译文可复制、重译或隐藏';
+const ACTIONS_HINT_TOUCH_MESSAGE = '点“更多”可复制、重译或隐藏';
 const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
@@ -196,10 +202,11 @@ interface BilingualTranslationActions {
   copy(): void;
   retranslate(): void;
   toggleHidden(): void;
+  toggleMore(): void;
 }
 
 function translationActionButton(
-  action: 'copy' | 'retranslate' | 'visibility',
+  action: 'copy' | 'retranslate' | 'visibility' | 'more',
   label: string,
   listener: () => void,
 ): HTMLButtonElement {
@@ -237,7 +244,10 @@ function translationElement(
     translationActionButton('copy', '复制', actions.copy),
     translationActionButton('retranslate', '重译本段', actions.retranslate),
     translationActionButton('visibility', '隐藏', actions.toggleHidden),
+    translationActionButton('more', '更多', actions.toggleMore),
   );
+  toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]')
+    ?.setAttribute('aria-expanded', 'false');
   translation.append(text, toolbar);
   applySourceTypography(translation, block, 18);
   return translation;
@@ -349,7 +359,8 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ATTRIBUTE}]:hover > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}]:focus-within > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
-    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_BUSY_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_BUSY_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HINT_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       max-height: 32px !important;
       margin-top: .28em !important;
       opacity: .9 !important;
@@ -391,6 +402,7 @@ function installTranslationStyle(): void {
       cursor: default !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[hidden] { display: none !important; }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] { display: none !important; }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_TEXT_ATTRIBUTE}] {
       display: none !important;
     }
@@ -398,13 +410,40 @@ function installTranslationStyle(): void {
       margin-bottom: .5em !important;
       opacity: .72 !important;
     }
-    @media (hover: none) {
+    @media (any-hover: none) {
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
         max-height: 32px !important;
         margin-top: .28em !important;
         opacity: .72 !important;
         pointer-events: auto !important;
         transform: translateY(0) !important;
+      }
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+        display: none !important;
+      }
+      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] {
+        display: inline-flex !important;
+        align-items: center !important;
+      }
+      [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+        > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
+      [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+        > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],
+      [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+        > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+        display: inline-flex !important;
+        align-items: center !important;
+      }
+      [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}]
+        > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+        display: inline-flex !important;
+        align-items: center !important;
+      }
+      [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}]
+        > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] {
+        display: none !important;
       }
     }
     @media (prefers-reduced-motion: reduce) {
@@ -487,6 +526,7 @@ export function createBilingualPageTranslator(
   let disposed = false;
   let controlHost: HTMLElement | undefined;
   let consecutiveIsolatedFailures = 0;
+  let actionsHintClaimed = false;
   const interactiveSuspensions = new Set<string>();
   const interactionPreemptedRequestIds = new Set<string>();
   let resumeAfterInteractive = false;
@@ -596,6 +636,61 @@ export function createBilingualPageTranslator(
     }, timeoutMs);
   };
 
+  const dismissTranslationActionsHint = (block: BilingualBlock): void => {
+    const translation = block.translation;
+    if (!translation?.hasAttribute(TRANSLATION_HINT_ATTRIBUTE)) return;
+    translation.removeAttribute(TRANSLATION_HINT_ATTRIBUTE);
+    const feedback = translation.querySelector<HTMLElement>(
+      `[${TRANSLATION_FEEDBACK_ATTRIBUTE}]`,
+    );
+    if (
+      feedback?.textContent === ACTIONS_HINT_MOUSE_MESSAGE ||
+      feedback?.textContent === ACTIONS_HINT_TOUCH_MESSAGE
+    ) feedback.textContent = '';
+  };
+
+  const setTouchActionsExpanded = (block: BilingualBlock, expanded: boolean): void => {
+    const translation = block.translation;
+    if (!translation) return;
+    dismissTranslationActionsHint(block);
+    translation.toggleAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE, expanded);
+    const more = translation.querySelector<HTMLButtonElement>('button[data-action="more"]');
+    if (more) {
+      more.setAttribute('aria-expanded', String(expanded));
+      more.textContent = expanded ? '收起' : '更多';
+    }
+  };
+
+  const revealTranslationActionsHint = async (block: BilingualBlock): Promise<void> => {
+    if (actionsHintClaimed) return;
+    actionsHintClaimed = true;
+    try {
+      const stored = await browser.storage.session.get(ACTIONS_HINT_STORAGE_KEY);
+      if (stored[ACTIONS_HINT_STORAGE_KEY] === true) return;
+    } catch {
+      // The in-memory claim still prevents repeated hints if session storage is unavailable.
+    }
+    const translation = block.translation;
+    if (!translation?.isConnected || block.status !== 'done') return;
+    try {
+      await browser.storage.session.set({ [ACTIONS_HINT_STORAGE_KEY]: true });
+    } catch {
+      // A storage failure only limits the hint to once per current page instance.
+    }
+    if (!translation.isConnected || block.translation !== translation) return;
+    const touchOnly = window.matchMedia('(any-hover: none)').matches;
+    const message = touchOnly ? ACTIONS_HINT_TOUCH_MESSAGE : ACTIONS_HINT_MOUSE_MESSAGE;
+    const feedback = translation.querySelector<HTMLElement>(
+      `[${TRANSLATION_FEEDBACK_ATTRIBUTE}]`,
+    );
+    translation.setAttribute(TRANSLATION_HINT_ATTRIBUTE, '');
+    if (feedback) feedback.textContent = message;
+    window.setTimeout(() => {
+      if (translation.isConnected) translation.removeAttribute(TRANSLATION_HINT_ATTRIBUTE);
+      if (feedback?.textContent === message) feedback.textContent = '';
+    }, ACTIONS_HINT_DURATION_MS);
+  };
+
   const setTranslationBusy = (block: BilingualBlock, busy: boolean): void => {
     const translation = block.translation;
     if (!translation) return;
@@ -613,6 +708,7 @@ export function createBilingualPageTranslator(
   const setTranslationHidden = (block: BilingualBlock, hidden: boolean): void => {
     const translation = block.translation;
     if (!translation) return;
+    setTouchActionsExpanded(block, false);
     translation.toggleAttribute(TRANSLATION_HIDDEN_ATTRIBUTE, hidden);
     const copy = translation.querySelector<HTMLButtonElement>('button[data-action="copy"]');
     const retranslate = translation.querySelector<HTMLButtonElement>(
@@ -628,6 +724,7 @@ export function createBilingualPageTranslator(
   };
 
   const copyBlockTranslation = async (block: BilingualBlock): Promise<void> => {
+    setTouchActionsExpanded(block, false);
     const text = translationText(block);
     if (!text) return;
     try {
@@ -826,6 +923,7 @@ export function createBilingualPageTranslator(
 
   const requestBlockRetranslation = (block: BilingualBlock): void => {
     if (block.status !== 'done' || !block.translation?.isConnected) return;
+    setTouchActionsExpanded(block, false);
     if (interactiveSuspensions.size) {
       setTranslationFeedback(block, '当前选区翻译完成后再重试本段');
       return;
@@ -927,12 +1025,17 @@ export function createBilingualPageTranslator(
             block,
             !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE),
           ),
+          toggleMore: () => setTouchActionsExpanded(
+            block,
+            !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
+          ),
         },
       );
       insertTranslation(block, translation);
       if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
       consecutiveIsolatedFailures = 0;
+      if (!replacingTranslation) void revealTranslationActionsHint(block);
       if (restorePageStateAfterRetranslation(block)) return;
       if (!settleCompletedState()) publish();
     } catch (error) {
