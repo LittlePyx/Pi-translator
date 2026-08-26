@@ -210,8 +210,6 @@ const readingPositions = new Map<string, SidePanelReadingPosition>();
 let pendingReadingStartIdentity: string | undefined;
 let pendingReadingStartInteractionRevision = 0;
 let readingInteractionRevision = 0;
-let programmaticReadingScroll = false;
-let programmaticReadingScrollRevision = 0;
 
 function resetWebHistoryState(): void {
   webHistoryLoadRevision += 1;
@@ -1195,15 +1193,14 @@ function readingBounds(): {
 function setReadingScrollTop(scrollTop: number): void {
   const scrollRoot = document.scrollingElement;
   if (!scrollRoot) return;
-  const revision = ++programmaticReadingScrollRevision;
-  programmaticReadingScroll = true;
   scrollRoot.scrollTop = Math.max(0, Math.min(
     scrollTop,
     scrollRoot.scrollHeight - scrollRoot.clientHeight,
   ));
-  window.requestAnimationFrame(() => {
-    if (revision === programmaticReadingScrollRevision) programmaticReadingScroll = false;
-  });
+}
+
+function markReadingInteraction(): void {
+  readingInteractionRevision += 1;
 }
 
 function rememberCurrentReadingPosition(): void {
@@ -1391,7 +1388,7 @@ function scrollReadingToEdge(edge: 'top' | 'bottom'): void {
   const bounds = readingBounds();
   if (!bounds || readingNavigation.hidden) return;
   const moveFocus = document.activeElement === readingTop || document.activeElement === readingBottom;
-  readingInteractionRevision += 1;
+  markReadingInteraction();
   setReadingScrollTop(edge === 'top' ? bounds.top : bounds.bottom);
   rememberCurrentReadingPosition();
   updateReadingNavigation();
@@ -2530,19 +2527,24 @@ window.addEventListener('resize', () => {
   syncSourceDisclosure(session, translationRenderRevision);
   window.requestAnimationFrame(updateReadingNavigation);
 });
+window.addEventListener('wheel', markReadingInteraction, { passive: true });
+window.addEventListener('touchmove', markReadingInteraction, { passive: true });
+window.addEventListener('pointerdown', (event) => {
+  if (
+    event.pointerType === 'mouse'
+    && event.clientX >= document.documentElement.clientWidth
+  ) markReadingInteraction();
+}, { passive: true });
 window.addEventListener('scroll', () => {
-  if (!programmaticReadingScroll) readingInteractionRevision += 1;
   rememberCurrentReadingPosition();
   updateReadingNavigation();
 }, { passive: true });
 window.addEventListener('keydown', (event) => {
   if (
-    readingNavigation.hidden
-    || event.altKey
+    event.altKey
     || event.ctrlKey
     || event.metaKey
     || event.shiftKey
-    || (event.key !== 'Home' && event.key !== 'End')
   ) return;
   const target = event.target;
   if (
@@ -2551,6 +2553,15 @@ window.addEventListener('keydown', (event) => {
     || target instanceof HTMLSelectElement
     || (target instanceof HTMLElement && target.isContentEditable)
   ) return;
+  if (event.key !== 'Home' && event.key !== 'End') {
+    if (
+      !['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', ' '].includes(event.key)
+      || (target instanceof HTMLElement && target.closest('button, a, [role="button"]'))
+    ) return;
+    markReadingInteraction();
+    return;
+  }
+  if (readingNavigation.hidden) return;
   event.preventDefault();
   scrollReadingToEdge(event.key === 'Home' ? 'top' : 'bottom');
 });

@@ -1375,6 +1375,16 @@ test('progressively adds and removes bilingual article translations without touc
       article.append(paragraph);
     }, heldDynamicText);
     await heldDynamicStarted;
+    const heldDynamicPending = page.locator(
+      '#article-dynamic-held + [data-pi-bilingual-pending]',
+    );
+    await expect(heldDynamicPending).toBeVisible();
+    await globalVisibility.click();
+    await expect(globalVisibility).toHaveText('展开译文');
+    await expect(heldDynamicPending).toHaveCount(0);
+    await globalVisibility.click();
+    await expect(globalVisibility).toHaveText('收起译文');
+    await expect(heldDynamicPending).toBeVisible();
     await pageControl.locator('button[data-action="pause"]').click();
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已暂停');
 
@@ -1449,6 +1459,7 @@ test('progressively adds and removes bilingual article translations without touc
     await sidePanel.locator('#bilingual-page-primary').click();
     const blockError = page.locator('#article-inline-code + [data-pi-bilingual-error]');
     await expect(blockError).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-pending]')).toHaveCount(0);
     await expect(blockError).toContainText('本段未译');
     await expect(blockError.locator('button')).toHaveText('重试本段');
     await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
@@ -1511,9 +1522,9 @@ test('progressively adds and removes bilingual article translations without touc
   }
 });
 
-test('reprioritizes pending bilingual paragraphs around the current viewport', async () => {
+test('reprioritizes pending bilingual paragraphs around the current viewport', async ({}, testInfo) => {
   const popup = await context.newPage();
-  const titleText = 'A practical guide to reliable bilingual reading';
+  const titleText = 'A practical guide to reliable bilingual reading. Viewport queue priority fixture.';
   const oldQueuedText = 'This initially nearby paragraph should wait after the reader jumps to a distant section.';
   const currentViewportText = 'This paragraph at the current reading position should be translated before the old queue.';
   try {
@@ -1561,6 +1572,26 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
     }, page.url());
     expect(startResponse).toMatchObject({ ok: true });
     await firstRequestStarted;
+    const titlePending = page.locator(
+      '#priority-title + [data-pi-bilingual-pending]',
+    );
+    await expect(titlePending).toBeVisible();
+    await expect(titlePending).toHaveText('正在翻译此段…');
+    expect(await titlePending.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      opacity: Number.parseFloat(getComputedStyle(element).opacity),
+    }))).toMatchObject({
+      height: expect.any(Number),
+      opacity: 0.56,
+    });
+    expect(await titlePending.evaluate((element) => element.getBoundingClientRect().height))
+      .toBeLessThanOrEqual(24);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await page.screenshot({
+        path: testInfo.outputPath('bilingual-paragraph-pending.png'),
+        fullPage: false,
+      });
+    }
     await page.locator('#priority-current-viewport').scrollIntoViewIfNeeded();
     await expect.poll(() => page.locator('#priority-current-viewport').evaluate((element) => {
       const bounds = element.getBoundingClientRect();
@@ -1573,8 +1604,12 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
     releaseHeldBilingualRequest = undefined;
 
     await expect(page.locator(
+      '#priority-title + [data-pi-bilingual-translation]',
+    )).toBeAttached();
+    await expect(page.locator(
       '#priority-current-viewport + [data-pi-bilingual-translation]',
     )).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-pending]')).toHaveCount(0);
     await expect.poll(() => textRequests.length).toBeGreaterThanOrEqual(requestsBefore + 3);
     const requestedSources = textRequests.slice(requestsBefore).map((body) => {
       const messages = body.messages as Array<{ role?: string; content?: unknown }> | undefined;
@@ -1638,6 +1673,10 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
     }, page.url());
     expect(startResponse).toMatchObject({ ok: true });
     await bilingualStarted;
+    const bilingualPending = page.locator(
+      '#article-title + [data-pi-bilingual-pending]',
+    );
+    await expect(bilingualPending).toBeVisible();
     await popup.evaluate(async (targetUrl) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { tabs: {
@@ -1691,6 +1730,7 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
       }, page.url());
       await interactiveStarted;
     }
+    await expect(bilingualPending).toHaveCount(0);
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl.locator('output'))
