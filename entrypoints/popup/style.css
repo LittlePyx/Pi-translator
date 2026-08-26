@@ -127,6 +127,7 @@ header small { color: #7c889e; font-size: 10px; letter-spacing: .08em; }
 
 label { display: grid; gap: 7px; color: #475569; font-size: 12px; font-weight: 680; }
 main > label + label { margin-top: 12px; }
+main > .bilingual-language-confirmation + label { margin-top: 12px; }
 
 select {
   width: 100%;
@@ -136,6 +137,39 @@ select {
   color: #172033;
   background: #fff;
   font: inherit;
+}
+
+.bilingual-language-confirmation {
+  margin-top: 8px;
+  border: 1px solid #d9dcf2;
+  border-radius: 10px;
+  padding: 10px;
+  color: #4f5970;
+  background: #f8f7ff;
+}
+.bilingual-language-confirmation p { margin: 0; font-size: 11px; line-height: 1.5; }
+.bilingual-language-confirmation > div {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 8px;
+}
+.bilingual-language-confirmation button {
+  width: auto;
+  min-height: 30px;
+  border-radius: 7px;
+  padding: 5px 9px;
+  font-size: 11px;
+}
+.bilingual-language-confirmation #bilingual-language-cancel {
+  border-color: transparent;
+  color: #667085;
+  background: transparent;
+}
+.bilingual-language-confirmation #bilingual-language-confirm {
+  border-color: #5b52d6;
+  color: #fff;
+  background: #5b52d6;
 }
 
 .site-control {
@@ -361,6 +395,9 @@ button:focus-visible, select:focus-visible, input:focus-visible {
   .switch-row input:checked { border-color: #7168ec; background: #7168ec; }
   .switch-row:has(input:disabled) { color: #93a1b6; }
   select { border-color: #465269; color: #eef2f7; background: #182131; }
+  .bilingual-language-confirmation { color: #d6dce8; border-color: #44466d; background: #1d2535; }
+  .bilingual-language-confirmation #bilingual-language-cancel { color: #aab5c5; background: transparent; }
+  .bilingual-language-confirmation #bilingual-language-confirm { color: #fff; border-color: #7168ec; background: #665de3; }
   button { border-color: #465269; color: #e2e8f0; background: #202938; }
   .primary-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }
   .quick-actions .page-action { color: #fff; border-color: #6366f1; background: linear-gradient(135deg, #5b5ee5, #765fe7); }

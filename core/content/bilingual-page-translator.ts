@@ -4,13 +4,18 @@ import type {
 } from '../messaging/messages';
 import { translationErrorMessage } from '../messaging/user-facing-error';
 import { isLikelyTargetLanguage } from '../language/target-language';
-import type { SupportedTargetLanguage } from '../language/supported-target-languages';
+import {
+  isSupportedTargetLanguage,
+  SUPPORTED_TARGET_LANGUAGES,
+  type SupportedTargetLanguage,
+} from '../language/supported-target-languages';
 import { isLikelySourceCode } from '../selection/passive-selection-intent';
 import type {
   TranslationContentMode,
   TranslationStyle,
 } from '../translation/types';
 import {
+  bilingualPageLanguageSwitchConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
@@ -643,6 +648,7 @@ export function createBilingualPageTranslator(
   const interactiveSuspensions = new Set<string>();
   const interactionPreemptedRequestIds = new Set<string>();
   let resumeAfterInteractive = false;
+  let pendingLanguageSwitch: SupportedTargetLanguage | undefined;
 
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
@@ -717,6 +723,7 @@ export function createBilingualPageTranslator(
     interactiveSuspensions.clear();
     interactionPreemptedRequestIds.clear();
     resumeAfterInteractive = false;
+    pendingLanguageSwitch = undefined;
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
     destroyControl();
     if (notify) options.onStateChange(snapshot());
@@ -995,23 +1002,36 @@ export function createBilingualPageTranslator(
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .bar { display:flex;align-items:center;gap:8px;max-width:min(500px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
+          .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
           .mark { color:#5548d9;font-weight:800;font-size:15px; }
           output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+          .language { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
+          select { min-height:28px;box-sizing:border-box;border:1px solid rgba(99,102,241,.18);border-radius:6px;padding:3px 22px 3px 6px;color:#4f46e5;background:#f7f7ff;cursor:pointer;font:600 11px/1.2 inherit; }
+          select:disabled { opacity:.62;cursor:default; }
           button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#e4e2ff; }
           button:disabled { opacity:.62;cursor:default; }
           button[data-action="clear"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"]{color:#aab3c2;background:transparent} }
-          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px} }
+          .language-confirmation { display:flex;flex:1 0 100%;align-items:center;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          .language-confirmation[hidden] { display:none; }
+          .language-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
+          .language-confirmation button[data-action="cancel-language"] { color:#657084;background:transparent; }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"]{color:#aab3c2;background:transparent}.language-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar" role="status" aria-live="polite">
           <span class="mark" aria-hidden="true">π</span>
           <output></output>
+          <label class="language"><span>译为</span><select data-action="language" aria-label="正文目标语言">${SUPPORTED_TARGET_LANGUAGES.map((language) => `<option value="${language.value}">${language.shortLabel}</option>`).join('')}</select></label>
           <button type="button" data-action="visibility"></button>
           <button type="button" data-action="pause"></button>
           <button type="button" data-action="stop">停止</button>
           <button type="button" data-action="clear">清除</button>
+          <div class="language-confirmation" role="alert" hidden>
+            <span></span>
+            <button type="button" data-action="cancel-language">取消</button>
+            <button type="button" data-action="confirm-language">清除并改译</button>
+          </div>
         </div>`;
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
         button.addEventListener('click', () => {
@@ -1026,9 +1046,35 @@ export function createBilingualPageTranslator(
             void control(shouldResume ? 'resume' : 'pause');
           } else if (action === 'stop' || action === 'clear') {
             void control(action);
+          } else if (action === 'cancel-language') {
+            pendingLanguageSwitch = undefined;
+            renderControl();
+          } else if (action === 'confirm-language' && pendingLanguageSwitch) {
+            const requestedLanguage = pendingLanguageSwitch;
+            pendingLanguageSwitch = undefined;
+            void start(requestedLanguage);
           }
         });
       });
+      shadow.querySelector<HTMLSelectElement>('select[data-action="language"]')
+        ?.addEventListener('change', (event) => {
+          const select = event.currentTarget as HTMLSelectElement;
+          const requestedLanguage = select.value;
+          const currentLanguage = currentState.targetLanguage;
+          if (
+            !isSupportedTargetLanguage(requestedLanguage) ||
+            !isSupportedTargetLanguage(currentLanguage) ||
+            requestedLanguage === currentLanguage
+          ) return;
+          select.value = currentLanguage;
+          if (bilingualPageLanguageSwitchConfirmation(currentState, requestedLanguage)) {
+            pendingLanguageSwitch = requestedLanguage;
+            renderControl();
+          } else {
+            pendingLanguageSwitch = undefined;
+            void start(requestedLanguage);
+          }
+        });
       document.documentElement.append(controlHost);
     }
     const shadow = controlHost.shadowRoot;
@@ -1036,6 +1082,8 @@ export function createBilingualPageTranslator(
     const visibility = shadow?.querySelector<HTMLButtonElement>('[data-action="visibility"]');
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
+    const language = shadow?.querySelector<HTMLSelectElement>('[data-action="language"]');
+    const languageConfirmation = shadow?.querySelector<HTMLElement>('.language-confirmation');
     if (output) {
       output.textContent = currentState.phase === 'error'
         ? currentState.message ?? '正文翻译暂时中断'
@@ -1072,6 +1120,21 @@ export function createBilingualPageTranslator(
       pause.disabled = currentState.pauseReason === 'interactive';
     }
     if (stop) stop.hidden = currentState.phase === 'complete' || currentState.phase === 'stopped';
+    if (language && isSupportedTargetLanguage(currentState.targetLanguage)) {
+      language.value = currentState.targetLanguage;
+      language.disabled = currentState.pauseReason === 'interactive';
+    }
+    if (languageConfirmation) {
+      const confirmation = pendingLanguageSwitch
+        ? bilingualPageLanguageSwitchConfirmation(currentState, pendingLanguageSwitch)
+        : undefined;
+      languageConfirmation.hidden = !confirmation;
+      const message = languageConfirmation.querySelector('span');
+      if (message) message.textContent = confirmation ?? '';
+      languageConfirmation.querySelectorAll<HTMLButtonElement>('button')
+        .forEach((button) => { button.disabled = currentState.pauseReason === 'interactive'; });
+      if (!confirmation) pendingLanguageSwitch = undefined;
+    }
   };
 
   const observeBlocks = (): void => {
@@ -1608,6 +1671,7 @@ export function createBilingualPageTranslator(
 
   const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> => {
     if (disposed) return snapshot();
+    pendingLanguageSwitch = undefined;
     if (currentState.phase !== 'idle') {
       const shouldRedetect = currentState.targetLanguage === targetLanguage &&
         currentState.phase === 'error' && currentState.total === 0;

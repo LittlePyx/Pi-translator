@@ -138,7 +138,8 @@ main {
 .text-action:hover { color: #4f46e5; }
 
 .bilingual-page-control {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   min-height: 44px;
   align-items: center;
   justify-content: space-between;
@@ -147,6 +148,7 @@ main {
   color: #657084;
 }
 .bilingual-page-copy { display: grid; min-width: 0; gap: 1px; }
+.bilingual-page-heading { display: flex; min-width: 0; align-items: center; gap: 7px; }
 .bilingual-page-copy strong { color: #3f485b; font-size: 11px; }
 .bilingual-page-copy span {
   overflow: hidden;
@@ -154,8 +156,30 @@ main {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.bilingual-page-language {
+  display: inline-flex;
+  min-width: 0;
+  align-items: center;
+  gap: 2px;
+  color: #7a8496;
+  font-size: 9.5px;
+  font-weight: 560;
+}
+.bilingual-page-language select {
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 18px 2px 4px;
+  color: #4f46e5;
+  background: transparent;
+  cursor: pointer;
+  font: 650 10.5px/1.2 inherit;
+}
+.bilingual-page-language select:hover:not(:disabled) { background: #f0efff; }
+.bilingual-page-language select:disabled { color: #929aaa; cursor: wait; }
 .bilingual-page-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
-.bilingual-page-actions button {
+.bilingual-page-actions button,
+.bilingual-page-language-confirmation button {
   min-height: 30px;
   border: 0;
   border-radius: 5px;
@@ -167,8 +191,27 @@ main {
   font-weight: 680;
 }
 .bilingual-page-actions button:hover:not(:disabled) { background: #e3e1ff; }
-.bilingual-page-actions button:disabled { opacity: .65; cursor: wait; }
+.bilingual-page-actions button:disabled,
+.bilingual-page-language-confirmation button:disabled { opacity: .65; cursor: wait; }
 .bilingual-page-actions #bilingual-page-clear { color: #737d90; background: transparent; }
+.bilingual-page-language-confirmation {
+  display: grid;
+  grid-column: 1 / -1;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 5px;
+  border-top: 1px solid #e8eaf1;
+  padding: 6px 0;
+  color: #596579;
+  font-size: 10px;
+  line-height: 1.45;
+}
+.bilingual-page-language-confirmation span { min-width: 0; }
+.bilingual-page-language-confirmation button { padding-inline: 7px; }
+.bilingual-page-language-confirmation #bilingual-page-language-cancel {
+  color: #737d90;
+  background: transparent;
+}
 
 .empty-state {
   display: grid;
@@ -661,9 +704,15 @@ button:focus-visible {
   .source-toggle, .translation-heading-tools button { color: #a6afbd; }
   .bilingual-page-control { color: #98a4b5; border-bottom-color: #303846; }
   .bilingual-page-copy strong { color: #d6dce6; }
+  .bilingual-page-language { color: #8f9aab; }
+  .bilingual-page-language select { color: #c1bcff; }
+  .bilingual-page-language select:hover:not(:disabled) { background: #202938; }
   .bilingual-page-actions button { color: #c7c3ff; background: #292943; }
   .bilingual-page-actions button:hover:not(:disabled) { background: #363653; }
   .bilingual-page-actions #bilingual-page-clear { color: #a6afbd; background: transparent; }
+  .bilingual-page-language-confirmation { color: #c2cad6; border-top-color: #303846; }
+  .bilingual-page-language-confirmation button { color: #c7c3ff; background: #292943; }
+  .bilingual-page-language-confirmation #bilingual-page-language-cancel { color: #a6afbd; background: transparent; }
   .target-language-control { color: #8f9aab; }
   .target-language-control select { color: #c1bcff; background-color: transparent; }
   .target-language-control select:hover:not(:disabled) { background-color: #202938; }
@@ -774,6 +823,10 @@ button:focus-visible {
   }
   .web-region-action { padding-inline: 7px; }
   .text-action { padding-left: 6px; }
+  .bilingual-page-language > span { display: none; }
+  .bilingual-page-language-confirmation span { grid-column: 1 / -1; }
+  .bilingual-page-language-confirmation button { justify-self: end; }
+  .bilingual-page-language-confirmation #bilingual-page-language-cancel { grid-column: 2; }
   .correction-term-fields { grid-template-columns: 1fr; }
   .correction-undo.is-error { flex: 1 0 100%; order: 10; align-items: flex-start; padding-top: 4px; border-top: 1px solid #e2e6ee; line-height: 1.45; }
   @media (prefers-color-scheme: dark) {

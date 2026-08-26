@@ -1,4 +1,8 @@
-import { isSupportedTargetLanguage } from '../language/supported-target-languages';
+import {
+  isSupportedTargetLanguage,
+  supportedTargetLanguageLabel,
+  type SupportedTargetLanguage,
+} from '../language/supported-target-languages';
 import type { TranslationErrorCode } from '../messaging/errors';
 
 export type BilingualPagePhase =
@@ -34,6 +38,19 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   failed: 0,
   translationsHidden: false,
 };
+
+/** Only completed paragraphs carry a user-visible replacement cost. */
+export function bilingualPageLanguageSwitchConfirmation(
+  state: BilingualPageState,
+  targetLanguage: SupportedTargetLanguage,
+): string | undefined {
+  if (
+    !isSupportedTargetLanguage(state.targetLanguage) ||
+    state.targetLanguage === targetLanguage ||
+    state.translated === 0
+  ) return undefined;
+  return `切换为${supportedTargetLanguageLabel(targetLanguage)}将清除已译 ${state.translated} 段，并重新调用翻译接口。`;
+}
 
 export interface BilingualPageReferenceContextInput {
   currentText: string;

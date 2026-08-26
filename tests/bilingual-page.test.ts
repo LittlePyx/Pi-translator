@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bilingualPageLanguageSwitchConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   isBilingualPageState,
@@ -103,6 +104,29 @@ describe('bilingual webpage reading', () => {
       translated: 0,
       failed: 0,
     })).toBe(false);
+  });
+
+  it('confirms a language switch only when completed paragraph translations will be replaced', () => {
+    const state = {
+      phase: 'running' as const,
+      total: 12,
+      translated: 4,
+      failed: 1,
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    };
+    expect(bilingualPageLanguageSwitchConfirmation(state, 'en'))
+      .toBe('切换为英文将清除已译 4 段，并重新调用翻译接口。');
+    expect(bilingualPageLanguageSwitchConfirmation(state, 'zh-CN')).toBeUndefined();
+    expect(bilingualPageLanguageSwitchConfirmation({ ...state, translated: 0 }, 'ja'))
+      .toBeUndefined();
+    expect(bilingualPageLanguageSwitchConfirmation({
+      ...state,
+      phase: 'idle',
+      total: 0,
+      translated: 0,
+      failed: 0,
+    }, 'de')).toBeUndefined();
   });
 
   it('isolates paragraph-specific output failures without retrying global outages', () => {

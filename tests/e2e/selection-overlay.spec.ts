@@ -1128,10 +1128,13 @@ test('progressively adds and removes bilingual article translations without touc
         .getBoundingClientRect().height,
       visibilityHeight: control.querySelector<HTMLButtonElement>('#bilingual-page-visibility')!
         .getBoundingClientRect().height,
+      languageHeight: control.querySelector<HTMLSelectElement>('#bilingual-page-language')!
+        .getBoundingClientRect().height,
     }));
     expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
     expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(29);
     expect(controlLayout.visibilityHeight).toBeGreaterThanOrEqual(29);
+    expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(29);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await Promise.all([
         page.screenshot({ path: testInfo.outputPath('bilingual-article-paused.png'), fullPage: false }),
@@ -1432,17 +1435,112 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 3/3');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(3);
 
-    const historyAfter = await sidePanel.evaluate(async (id) => {
-      const api = (globalThis as typeof globalThis & {
-        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
-      }).chrome;
-      const stored = await api.storage.session.get('translationHistoryByTab');
-      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
-      return history?.[String(id)]?.length ?? 0;
-    }, tabId!);
-    expect(historyAfter).toBe(historyBefore);
+    const languagePopup = await context.newPage();
+    try {
+      await languagePopup.goto(`chrome-extension://${extensionId}/popup.html`);
+      await page.bringToFront();
+      await languagePopup.reload();
+      const popupPageLanguage = languagePopup.locator('#target-language');
+      const sidePanelPageLanguage = sidePanel.locator('#bilingual-page-language');
+      const pageControlLanguage = pageControl.locator('select[data-action="language"]');
+      await expect(popupPageLanguage).toHaveValue('zh-CN');
+      await expect(sidePanelPageLanguage).toHaveValue('zh-CN');
+      await expect(pageControlLanguage).toHaveValue('zh-CN');
 
-    await sidePanel.locator('#bilingual-page-clear').click();
+      const requestsBeforeCancelledPopupSwitch = textRequests.length;
+      await popupPageLanguage.selectOption('ja');
+      const popupLanguageConfirmation = languagePopup.locator(
+        '#bilingual-language-confirmation',
+      );
+      await expect(popupLanguageConfirmation).toBeVisible();
+      await expect(languagePopup.locator('#bilingual-language-message'))
+        .toHaveText('切换为日语将清除已译 3 段，并重新调用翻译接口。');
+      await expect(popupPageLanguage).toHaveValue('zh-CN');
+      await expect(sidePanelPageLanguage).toHaveValue('zh-CN');
+      await expect(pageControlLanguage).toHaveValue('zh-CN');
+      expect(textRequests).toHaveLength(requestsBeforeCancelledPopupSwitch);
+      await languagePopup.locator('#bilingual-language-cancel').click();
+      await expect(popupLanguageConfirmation).toBeHidden();
+      await expect(languagePopup.locator('#status')).toContainText('已保留当前中文正文');
+      await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(3);
+      expect(textRequests).toHaveLength(requestsBeforeCancelledPopupSwitch);
+
+      await popupPageLanguage.selectOption('ja');
+      await expect(popupLanguageConfirmation).toBeVisible();
+      await languagePopup.locator('#bilingual-language-confirm').click();
+      await expect(sidePanelPageLanguage).toHaveValue('ja');
+      await expect(pageControlLanguage).toHaveValue('ja');
+      await expect(popupLanguageConfirmation).toBeHidden();
+      await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 3/3');
+      await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(3);
+      await expect.poll(() => JSON.stringify(
+        textRequests.slice(requestsBeforeCancelledPopupSwitch),
+      )).toContain('to ja');
+
+      const requestsBeforeCancelledSidePanelSwitch = textRequests.length;
+      await sidePanelPageLanguage.selectOption('de');
+      const sidePanelLanguageConfirmation = sidePanel.locator(
+        '#bilingual-page-language-confirmation',
+      );
+      await expect(sidePanelLanguageConfirmation).toBeVisible();
+      await expect(sidePanel.locator('#bilingual-page-language-message'))
+        .toHaveText('切换为德语将清除已译 3 段，并重新调用翻译接口。');
+      await sidePanel.locator('#bilingual-page-language-cancel').click();
+      await expect(sidePanelLanguageConfirmation).toBeHidden();
+      await expect(sidePanelPageLanguage).toHaveValue('ja');
+      await expect(pageControlLanguage).toHaveValue('ja');
+      expect(textRequests).toHaveLength(requestsBeforeCancelledSidePanelSwitch);
+
+      const requestsBeforeCancelledPageSwitch = textRequests.length;
+      await pageControlLanguage.selectOption('fr');
+      const pageLanguageConfirmation = pageControl.locator('.language-confirmation');
+      await expect(pageLanguageConfirmation).toBeVisible();
+      await expect(pageLanguageConfirmation.locator('span'))
+        .toHaveText('切换为法语将清除已译 3 段，并重新调用翻译接口。');
+      await pageLanguageConfirmation.locator('button[data-action="cancel-language"]').click();
+      await expect(pageLanguageConfirmation).toBeHidden();
+      await expect(pageControlLanguage).toHaveValue('ja');
+      await expect(sidePanelPageLanguage).toHaveValue('ja');
+      expect(textRequests).toHaveLength(requestsBeforeCancelledPageSwitch);
+
+      await sidePanel.locator('#bilingual-page-clear').click();
+      await expect(pageControl).toHaveCount(0);
+      await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+      const requestsBeforeIdleLanguageChoice = textRequests.length;
+      await sidePanelPageLanguage.selectOption('de');
+      await expect(sidePanelPageLanguage).toHaveValue('de');
+      await expect(sidePanelLanguageConfirmation).toBeHidden();
+      expect(textRequests).toHaveLength(requestsBeforeIdleLanguageChoice);
+      await sidePanel.locator('#bilingual-page-primary').click();
+      await expect(pageControl.locator('select[data-action="language"]')).toHaveValue('de');
+      await expect.poll(() => JSON.stringify(
+        textRequests.slice(requestsBeforeIdleLanguageChoice),
+      )).toContain('to de');
+
+      const historyAfter = await sidePanel.evaluate(async (id) => {
+        const api = (globalThis as typeof globalThis & {
+          chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+        }).chrome;
+        const stored = await api.storage.session.get('translationHistoryByTab');
+        const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
+        return history?.[String(id)]?.length ?? 0;
+      }, tabId!);
+      expect(historyAfter).toBe(historyBefore);
+
+      await sidePanel.locator('#bilingual-page-clear').click();
+      await expect(pageControl).toHaveCount(0);
+
+      await page.bringToFront();
+      await languagePopup.reload();
+      await expect(popupPageLanguage).toHaveValue('ja');
+      await popupPageLanguage.selectOption('zh-CN');
+      await expect(languagePopup.locator('#status')).toContainText('目标语言已更新');
+      await expect(sidePanelPageLanguage).toHaveValue('zh-CN');
+    } finally {
+      await languagePopup.close().catch(() => undefined);
+      await page.bringToFront();
+    }
+
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(pageControl).toHaveCount(0);
     await expect(sidePanel.locator('#bilingual-page-clear')).toBeHidden();

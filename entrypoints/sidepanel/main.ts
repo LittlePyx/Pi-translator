@@ -71,6 +71,7 @@ import {
   type SupportedTargetLanguage,
 } from '../../core/language/supported-target-languages';
 import {
+  bilingualPageLanguageSwitchConfirmation,
   EMPTY_BILINGUAL_PAGE_STATE,
   type BilingualPageAction,
   type BilingualPageState,
@@ -98,6 +99,13 @@ const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
 const bilingualPageVisibility = element<HTMLButtonElement>('bilingual-page-visibility');
 const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
+const bilingualPageLanguage = element<HTMLSelectElement>('bilingual-page-language');
+const bilingualPageLanguageConfirmation = element<HTMLElement>(
+  'bilingual-page-language-confirmation',
+);
+const bilingualPageLanguageMessage = element<HTMLElement>('bilingual-page-language-message');
+const bilingualPageLanguageCancel = element<HTMLButtonElement>('bilingual-page-language-cancel');
+const bilingualPageLanguageConfirm = element<HTMLButtonElement>('bilingual-page-language-confirm');
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
 const sourceLabel = element<HTMLElement>('source-label');
@@ -188,6 +196,8 @@ let bilingualPageState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
 let bilingualPagePending = false;
 let bilingualPageFeatureEnabled = true;
 let defaultTargetLanguage: SupportedTargetLanguage = 'zh-CN';
+let bilingualPagePreferredTargetLanguage: SupportedTargetLanguage | undefined;
+let pendingBilingualPageLanguageSwitch: SupportedTargetLanguage | undefined;
 let targetLanguagePending = false;
 let targetLanguagePendingRequestId: string | undefined;
 let targetLanguagePendingTimer: number | undefined;
@@ -681,11 +691,33 @@ function bilingualPageAvailable(): boolean {
   );
 }
 
+function currentBilingualPageTargetLanguage(): SupportedTargetLanguage {
+  if (isSupportedTargetLanguage(bilingualPageState.targetLanguage)) {
+    return bilingualPageState.targetLanguage;
+  }
+  return bilingualPagePreferredTargetLanguage ?? sessionTargetLanguage(currentSession);
+}
+
 function syncBilingualPageControl(): void {
   const available = bilingualPageAvailable();
   bilingualPageControl.hidden = !available;
   if (!available) return;
   const state = bilingualPageState;
+  if (
+    state.phase === 'idle' ||
+    pendingBilingualPageLanguageSwitch === state.targetLanguage
+  ) pendingBilingualPageLanguageSwitch = undefined;
+  const currentTargetLanguage = currentBilingualPageTargetLanguage();
+  bilingualPageLanguage.value = currentTargetLanguage;
+  bilingualPageLanguage.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  const languageConfirmation = pendingBilingualPageLanguageSwitch
+    ? bilingualPageLanguageSwitchConfirmation(state, pendingBilingualPageLanguageSwitch)
+    : undefined;
+  bilingualPageLanguageConfirmation.hidden = !languageConfirmation;
+  bilingualPageLanguageMessage.textContent = languageConfirmation ?? '';
+  bilingualPageLanguageCancel.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  bilingualPageLanguageConfirm.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  if (!languageConfirmation) pendingBilingualPageLanguageSwitch = undefined;
   bilingualPageStatus.textContent = state.phase === 'running'
     ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 滚动继续`
     : state.phase === 'paused'
@@ -738,7 +770,10 @@ function bilingualPagePrimaryAction(): 'start' | BilingualPageAction {
   return 'start';
 }
 
-async function updateBilingualPage(action: 'start' | BilingualPageAction): Promise<void> {
+async function updateBilingualPage(
+  action: 'start' | BilingualPageAction,
+  requestedTargetLanguage = currentBilingualPageTargetLanguage(),
+): Promise<void> {
   if (bilingualPagePending || activeTabId === undefined || !bilingualPageAvailable()) return;
   const tabId = activeTabId;
   bilingualPagePending = true;
@@ -749,7 +784,7 @@ async function updateBilingualPage(action: 'start' | BilingualPageAction): Promi
           type: 'START_BILINGUAL_PAGE',
           payload: {
             tabId,
-            targetLanguage: sessionTargetLanguage(currentSession),
+            targetLanguage: requestedTargetLanguage,
           },
         } satisfies RuntimeMessage
       : {
@@ -761,6 +796,10 @@ async function updateBilingualPage(action: 'start' | BilingualPageAction): Promi
     );
     if (activeTabId !== tabId) return;
     bilingualPageState = response.data.state;
+    if (isSupportedTargetLanguage(response.data.state.targetLanguage)) {
+      bilingualPagePreferredTargetLanguage = response.data.state.targetLanguage;
+    }
+    pendingBilingualPageLanguageSwitch = undefined;
   } catch (error) {
     if (activeTabId !== tabId) return;
     bilingualPageState = {
@@ -2351,6 +2390,38 @@ bilingualPageVisibility.addEventListener('click', () => {
 bilingualPageClear.addEventListener('click', () => {
   void updateBilingualPage('clear');
 });
+bilingualPageLanguage.addEventListener('change', () => {
+  if (!isSupportedTargetLanguage(bilingualPageLanguage.value)) {
+    syncBilingualPageControl();
+    return;
+  }
+  const requestedLanguage = bilingualPageLanguage.value;
+  const currentLanguage = currentBilingualPageTargetLanguage();
+  if (requestedLanguage === currentLanguage) return;
+  bilingualPageLanguage.value = currentLanguage;
+  if (bilingualPageState.phase === 'idle') {
+    bilingualPagePreferredTargetLanguage = requestedLanguage;
+    syncBilingualPageControl();
+    return;
+  }
+  if (bilingualPageLanguageSwitchConfirmation(bilingualPageState, requestedLanguage)) {
+    pendingBilingualPageLanguageSwitch = requestedLanguage;
+    syncBilingualPageControl();
+    return;
+  }
+  bilingualPagePreferredTargetLanguage = requestedLanguage;
+  void updateBilingualPage('start', requestedLanguage);
+});
+bilingualPageLanguageCancel.addEventListener('click', () => {
+  pendingBilingualPageLanguageSwitch = undefined;
+  syncBilingualPageControl();
+});
+bilingualPageLanguageConfirm.addEventListener('click', () => {
+  const requestedLanguage = pendingBilingualPageLanguageSwitch;
+  if (!requestedLanguage) return;
+  bilingualPagePreferredTargetLanguage = requestedLanguage;
+  void updateBilingualPage('start', requestedLanguage);
+});
 startWebRegion.addEventListener('click', () => {
   void startCurrentWebRegionSelection();
 });
@@ -2674,6 +2745,8 @@ browser.tabs.onActivated.addListener((activated) => {
   clearTargetLanguagePending();
   bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
   bilingualPagePending = false;
+  bilingualPagePreferredTargetLanguage = undefined;
+  pendingBilingualPageLanguageSwitch = undefined;
   activeTabId = activated.tabId;
   activeTabUrl = undefined;
   syncBilingualPageControl();
@@ -2708,6 +2781,9 @@ browser.storage.onChanged.addListener((changes, areaName) => {
     bilingualPageFeatureEnabled = settings.generalPageMode !== 'off';
     if (isSupportedTargetLanguage(settings.targetLanguage)) {
       defaultTargetLanguage = settings.targetLanguage;
+      if (bilingualPageState.phase === 'idle') {
+        bilingualPagePreferredTargetLanguage = settings.targetLanguage;
+      }
     }
     formulaRenderOverride = undefined;
     syncBilingualPageControl();
@@ -2733,6 +2809,9 @@ void getSettings().then((settings) => {
   bilingualPageFeatureEnabled = settings.generalPageMode !== 'off';
   if (isSupportedTargetLanguage(settings.targetLanguage)) {
     defaultTargetLanguage = settings.targetLanguage;
+    if (bilingualPageState.phase === 'idle') {
+      bilingualPagePreferredTargetLanguage = settings.targetLanguage;
+    }
   }
   syncBilingualPageControl();
   if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {

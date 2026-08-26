@@ -20,11 +20,16 @@ import type {
   RuntimeResponse,
 } from '../../core/messaging/messages';
 import {
+  bilingualPageLanguageSwitchConfirmation,
   EMPTY_BILINGUAL_PAGE_STATE,
   type BilingualPageAction,
   type BilingualPageState,
 } from '../../core/translation/bilingual-page';
-import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
+import {
+  isSupportedTargetLanguage,
+  supportedTargetLanguageLabel,
+  type SupportedTargetLanguage,
+} from '../../core/language/supported-target-languages';
 import {
   getPausedSiteHosts,
   isSiteHostPaused,
@@ -65,6 +70,10 @@ function element<T extends HTMLElement>(id: string): T {
 }
 
 const targetLanguage = element<HTMLSelectElement>('target-language');
+const bilingualLanguageConfirmation = element<HTMLElement>('bilingual-language-confirmation');
+const bilingualLanguageMessage = element<HTMLElement>('bilingual-language-message');
+const bilingualLanguageCancel = element<HTMLButtonElement>('bilingual-language-cancel');
+const bilingualLanguageConfirm = element<HTMLButtonElement>('bilingual-language-confirm');
 const apiProfileField = element<HTMLElement>('api-profile-field');
 const apiProfile = element<HTMLSelectElement>('api-profile');
 const siteControl = element<HTMLElement>('site-control');
@@ -115,6 +124,9 @@ let featureGuideScene: FeatureDiscoveryScene | undefined;
 let featureGuideRevealOverride = false;
 let statusTimer: number | undefined;
 let bilingualPageState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+let configuredTargetLanguage: SupportedTargetLanguage = 'zh-CN';
+let pendingBilingualLanguageSwitch: SupportedTargetLanguage | undefined;
+let targetLanguageUpdatePending = false;
 
 type PopupStatusTone = 'progress' | 'success' | 'error';
 
@@ -440,6 +452,25 @@ function bilingualPageAction(): 'start' | BilingualPageAction {
 }
 
 function renderBilingualPageAction(): void {
+  if (pendingBilingualLanguageSwitch === bilingualPageState.targetLanguage) {
+    pendingBilingualLanguageSwitch = undefined;
+  }
+  const activeTargetLanguage = isSupportedTargetLanguage(bilingualPageState.targetLanguage)
+    ? bilingualPageState.targetLanguage
+    : undefined;
+  targetLanguage.value = activeTargetLanguage ?? configuredTargetLanguage;
+  targetLanguage.disabled = targetLanguageUpdatePending;
+  const languageConfirmation = pendingBilingualLanguageSwitch
+    ? bilingualPageLanguageSwitchConfirmation(
+        bilingualPageState,
+        pendingBilingualLanguageSwitch,
+      )
+    : undefined;
+  bilingualLanguageConfirmation.hidden = !languageConfirmation;
+  bilingualLanguageMessage.textContent = languageConfirmation ?? '';
+  bilingualLanguageCancel.disabled = targetLanguageUpdatePending;
+  bilingualLanguageConfirm.disabled = targetLanguageUpdatePending;
+  if (!languageConfirmation) pendingBilingualLanguageSwitch = undefined;
   translatePage.dataset.phase = bilingualPageState.phase;
   translatePage.textContent = bilingualPageState.phase === 'running'
     ? `暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
@@ -462,6 +493,61 @@ function renderBilingualPageAction(): void {
       : '正文译文只保留在当前标签页，可随时暂停、停止或清除'
   );
   translatePage.disabled = bilingualPageState.pauseReason === 'interactive';
+}
+
+async function applyPopupTargetLanguage(
+  requestedLanguage: SupportedTargetLanguage,
+  restartBilingualPage: boolean,
+): Promise<void> {
+  if (targetLanguageUpdatePending) return;
+  const previousConfiguredLanguage = configuredTargetLanguage;
+  const tabId = activeTabId;
+  let settingsUpdated = false;
+  targetLanguageUpdatePending = true;
+  renderBilingualPageAction();
+  setStatus(
+    restartBilingualPage
+      ? `正在清除并改译为${supportedTargetLanguageLabel(requestedLanguage)}…`
+      : '正在更新目标语言…',
+    'progress',
+  );
+  try {
+    await mutateSettings((settings) => ({
+      nextSettings: {
+        ...settings,
+        targetLanguage: requestedLanguage,
+      },
+      value: undefined,
+    }));
+    configuredTargetLanguage = requestedLanguage;
+    settingsUpdated = true;
+    if (restartBilingualPage && tabId !== undefined) {
+      const response = await browser.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: { tabId, targetLanguage: requestedLanguage },
+      } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+      if (!response?.ok) {
+        throw new Error(response?.error.message ?? '当前正文改译失败。');
+      }
+      if (activeTabId !== tabId) return;
+      bilingualPageState = response.data.state;
+      pendingBilingualLanguageSwitch = undefined;
+      setStatus(`已开始改译为${supportedTargetLanguageLabel(requestedLanguage)}。`);
+    } else {
+      setStatus('目标语言已更新。');
+    }
+  } catch (error) {
+    if (!settingsUpdated) configuredTargetLanguage = previousConfiguredLanguage;
+    setStatus(
+      settingsUpdated && restartBilingualPage
+        ? `目标语言已保存，但当前正文没有改译：${error instanceof Error ? error.message : '请重试。'}`
+        : '目标语言更新失败，已保留原设置。',
+      'error',
+    );
+  } finally {
+    targetLanguageUpdatePending = false;
+    updateQuickActions();
+  }
 }
 
 async function refreshBilingualPageState(): Promise<void> {
@@ -631,7 +717,10 @@ async function load(): Promise<void> {
     getFeatureDiscoveryProgress().catch(() => ({ completed: {}, dismissed: {} })),
   ]);
   featureGuideProgressState = discoveryProgress;
-  targetLanguage.value = settings.targetLanguage;
+  configuredTargetLanguage = isSupportedTargetLanguage(settings.targetLanguage)
+    ? settings.targetLanguage
+    : 'zh-CN';
+  targetLanguage.value = configuredTargetLanguage;
   apiProfile.replaceChildren(...settings.apiProfiles.map((profile) => {
     const option = document.createElement('option');
     option.value = profile.id;
@@ -674,23 +763,38 @@ async function load(): Promise<void> {
 }
 
 targetLanguage.addEventListener('change', () => {
+  if (!isSupportedTargetLanguage(targetLanguage.value)) {
+    renderBilingualPageAction();
+    return;
+  }
   const requestedLanguage = targetLanguage.value;
-  setControlPending(targetLanguage, true);
-  setStatus('正在更新目标语言…', 'progress');
-  void (async () => {
-    await mutateSettings((settings) => ({
-      nextSettings: {
-        ...settings,
-        targetLanguage: requestedLanguage,
-      },
-      value: undefined,
-    }));
-    setStatus('目标语言已更新。');
-  })().catch(async () => {
-    const settings = await getSettings().catch(() => undefined);
-    if (settings) targetLanguage.value = settings.targetLanguage;
-    setStatus('目标语言更新失败，已保留原设置。', 'error');
-  }).finally(() => setControlPending(targetLanguage, false));
+  const activeTargetLanguage = isSupportedTargetLanguage(bilingualPageState.targetLanguage)
+    ? bilingualPageState.targetLanguage
+    : undefined;
+  if (!activeTargetLanguage || requestedLanguage === activeTargetLanguage) {
+    void applyPopupTargetLanguage(requestedLanguage, false);
+    return;
+  }
+  targetLanguage.value = activeTargetLanguage;
+  if (bilingualPageLanguageSwitchConfirmation(bilingualPageState, requestedLanguage)) {
+    pendingBilingualLanguageSwitch = requestedLanguage;
+    renderBilingualPageAction();
+    return;
+  }
+  void applyPopupTargetLanguage(requestedLanguage, true);
+});
+bilingualLanguageCancel.addEventListener('click', () => {
+  pendingBilingualLanguageSwitch = undefined;
+  renderBilingualPageAction();
+  const language = isSupportedTargetLanguage(bilingualPageState.targetLanguage)
+    ? supportedTargetLanguageLabel(bilingualPageState.targetLanguage)
+    : supportedTargetLanguageLabel(configuredTargetLanguage);
+  setStatus(`已保留当前${language}正文。`);
+});
+bilingualLanguageConfirm.addEventListener('click', () => {
+  const requestedLanguage = pendingBilingualLanguageSwitch;
+  if (!requestedLanguage) return;
+  void applyPopupTargetLanguage(requestedLanguage, true);
 });
 
 apiProfile.addEventListener('change', () => {
