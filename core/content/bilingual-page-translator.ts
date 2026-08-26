@@ -657,6 +657,7 @@ function pageIdentity(value: string): string {
 export function createBilingualPageTranslator(
   options: BilingualPageTranslatorOptions,
 ): BilingualPageTranslator {
+  const logoUrl = browser.runtime.getURL('/brand/pi_logo.png');
   let currentState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
   let blocks: BilingualBlock[] = [];
   let queue: BilingualBlock[] = [];
@@ -790,16 +791,16 @@ export function createBilingualPageTranslator(
           .launcher { display:flex;align-items:center;box-sizing:border-box;border:1px solid rgba(99,102,241,.25);border-radius:999px;padding:3px;color:#30394c;background:rgba(255,255,255,.94);box-shadow:0 6px 22px rgba(15,23,42,.15);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
           button { min-height:30px;box-sizing:border-box;border:0;border-radius:999px;padding:5px 8px;color:#5a50d6;background:transparent;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#f0efff; }
-          button[data-action="start"] { padding-left:9px;color:#fff;background:linear-gradient(135deg,#5b5ee5,#765fe7); }
+          button[data-action="start"] { display:inline-flex;align-items:center;padding-left:9px;color:#fff;background:linear-gradient(135deg,#5b5ee5,#765fe7); }
           button[data-action="start"]:hover { filter:brightness(.97); }
-          .mark { margin-right:4px;font-size:13px;font-weight:850; }
+          .mark { display:block;width:15px;height:13px;margin-right:5px;object-fit:contain;filter:brightness(0) invert(1); }
           .count { margin-left:3px;opacity:.82;font-weight:550; }
           button[data-action="dismiss"] { min-width:28px;padding-inline:5px;color:#8791a2;font-size:14px;font-weight:500; }
           @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:rgba(24,32,47,.95);box-shadow:0 7px 24px rgba(0,0,0,.34)} button{color:#cbc7ff} button:hover{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="dismiss"]{color:#9ca7b8} }
           @media (max-width:480px) { .launcher{padding:2px} button{min-height:32px}.count{display:none} }
         </style>
         <div class="launcher" role="group" aria-label="网页正文翻译">
-          <button type="button" data-action="start"><span class="mark" aria-hidden="true">π</span>译全文<span class="count"></span></button>
+          <button type="button" data-action="start"><img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />译全文<span class="count"></span></button>
           <button type="button" data-action="scope">范围</button>
           <button type="button" data-action="dismiss" aria-label="暂时隐藏译全文入口" title="暂时隐藏">×</button>
         </div>`;
@@ -1322,7 +1323,7 @@ export function createBilingualPageTranslator(
         <style>
           :host { color-scheme: light dark; }
           .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
-          .mark { color:#5548d9;font-weight:800;font-size:15px; }
+          .mark { flex:0 0 auto;width:16px;height:14px;object-fit:contain; }
           output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
           .language { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
           select { min-height:28px;box-sizing:border-box;border:1px solid rgba(99,102,241,.18);border-radius:6px;padding:3px 22px 3px 6px;color:#4f46e5;background:#f7f7ff;cursor:pointer;font:600 11px/1.2 inherit; }
@@ -1339,11 +1340,11 @@ export function createBilingualPageTranslator(
           .scope-panel[hidden] { display:none; }
           .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar" role="status" aria-live="polite">
-          <span class="mark" aria-hidden="true">π</span>
+          <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
           <output></output>
           <label class="language"><span>译为</span><select data-action="language" aria-label="正文目标语言">${SUPPORTED_TARGET_LANGUAGES.map((language) => `<option value="${language.value}">${language.shortLabel}</option>`).join('')}</select></label>
           <button type="button" data-action="visibility"></button>

@@ -18,12 +18,12 @@
 | ZIP 文件结构 | 33 项；`manifest.json` 位于根目录；与当前生产构建逐文件一致 |
 | ZIP Manifest | MV3，版本 `0.13.0`；权限清单与 `v0.12.1` 一致 |
 
-安装包：`.output/tex-selection-translator-0.13.0-edge.zip`（1,104,462 bytes）
+安装包：`.output/tex-selection-translator-0.13.0-edge.zip`（1,104,528 bytes）
 
 SHA-256：
 
 ```text
-4B24FAE35DF4C9598A4C1A95515CE5808E4321BE69A3ADFC33455B9C9C739514
+7B149BC3602E1A66124A92D6B45B2922D633B459C7D1FE0ACC38B281B3C511C2
 ```
 
 本节记录发布候选的本地自动化与真实网页验收结果。用户此前已从 Edge 工具栏在真实普通网页确认网页框选可用；2026-08-26 又在公开长页 `3.2 Functional Programming` 上从 Pi Translator 快捷面板启动正文双语阅读：40/40 个标题或正文块完成翻译，无失败和残留等待状态；译文插入 33 个正文段落、1 个二级标题和 6 个三级标题，页面中的 199 个 `pre` / `code` 节点均未插入译文。收起/展开、暂停/继续、目标语言确认切换、正文范围调整与取消零请求由 114 项 Edge 端到端套件覆盖。自动化与真实长网页烟测均已通过；本轮尚未创建 Git tag、GitHub Release，也未提交 Edge 商店审核。

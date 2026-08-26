@@ -1059,6 +1059,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     const scopeCandidates = page.locator('[data-pi-bilingual-scope-preview]');
     const requestCountBeforePreview = textRequests.length;
     await expect(launcher).toBeVisible();
+    await expect(launcher.locator('img.mark')).toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(launcher.locator('button[data-action="start"]')).toContainText('译全文');
     await expect(launcher.locator('.count')).toHaveText('· 7 段');
 
