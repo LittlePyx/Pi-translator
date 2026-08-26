@@ -11,6 +11,7 @@ import type {
   TranslationStyle,
 } from '../translation/types';
 import {
+  bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
   isBilingualPageTextCandidate,
@@ -89,6 +90,7 @@ interface BilingualBlock {
   status: BlockStatus;
   translation?: HTMLElement;
   errorElement?: HTMLElement;
+  urgentQueue?: boolean;
   bypassCacheNext?: boolean;
   restoreStateAfterRetranslation?: Pick<
     BilingualPageState,
@@ -686,8 +688,42 @@ export function createBilingualPageTranslator(
   const enqueue = (block: BilingualBlock, position: 'front' | 'end' = 'end'): void => {
     if (block.status !== 'idle') return;
     block.status = 'queued';
-    if (position === 'front') queue.unshift(block);
-    else queue.push(block);
+    if (position === 'front') {
+      block.urgentQueue = true;
+      queue.unshift(block);
+    } else {
+      delete block.urgentQueue;
+      queue.push(block);
+    }
+  };
+
+  const prioritizeQueueForViewport = (): void => {
+    if (queue.length < 2) return;
+    const viewportHeight = Math.max(
+      1,
+      window.innerHeight || document.documentElement.clientHeight,
+    );
+    const queueOrder = new Map(queue.map((block, index) => [block, index] as const));
+    const documentOrder = new Map(blocks.map((block, index) => [block, index] as const));
+    const priorities = new Map(queue.map((block) => [
+      block,
+      bilingualPageViewportPriority(block.element.getBoundingClientRect(), viewportHeight),
+    ] as const));
+    queue.sort((left, right) => {
+      if (left.urgentQueue !== right.urgentQueue) return left.urgentQueue ? -1 : 1;
+      if (left.urgentQueue && right.urgentQueue) {
+        return (queueOrder.get(left) ?? 0) - (queueOrder.get(right) ?? 0);
+      }
+      const leftPriority = priorities.get(left)!;
+      const rightPriority = priorities.get(right)!;
+      if (leftPriority.tier !== rightPriority.tier) {
+        return leftPriority.tier - rightPriority.tier;
+      }
+      if (leftPriority.distance !== rightPriority.distance) {
+        return leftPriority.distance - rightPriority.distance;
+      }
+      return (documentOrder.get(left) ?? 0) - (documentOrder.get(right) ?? 0);
+    });
   };
 
   const translationText = (block: BilingualBlock): string =>
@@ -1387,9 +1423,11 @@ export function createBilingualPageTranslator(
     const revision = taskRevision;
     activeTask = (async () => {
       while (currentState.phase === 'running' && revision === taskRevision) {
+        prioritizeQueueForViewport();
         const block = queue.shift();
         if (!block) break;
         if (block.status !== 'queued') continue;
+        delete block.urgentQueue;
         await translateBlock(block, revision);
         if (currentState.phase !== 'running') break;
       }

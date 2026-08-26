@@ -42,6 +42,16 @@ export interface BilingualPageReferenceContextInput {
   previousTranslation?: string;
 }
 
+export interface BilingualPageViewportBounds {
+  top: number;
+  bottom: number;
+}
+
+export interface BilingualPageViewportPriority {
+  tier: 0 | 1 | 2 | 3;
+  distance: number;
+}
+
 const MAX_BILINGUAL_REFERENCE_CONTEXT = 800;
 const MAX_BILINGUAL_TITLE_CONTEXT = 160;
 const MAX_BILINGUAL_PREVIOUS_SOURCE_CONTEXT = 220;
@@ -62,6 +72,24 @@ export function isIsolatedBilingualBlockError(code: TranslationErrorCode): boole
 
 export function normalizeBilingualPageText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
+}
+
+/** Current reading position first, upcoming content second, and content already passed last. */
+export function bilingualPageViewportPriority(
+  bounds: BilingualPageViewportBounds,
+  viewportHeight: number,
+): BilingualPageViewportPriority {
+  const height = Math.max(1, Number.isFinite(viewportHeight) ? viewportHeight : 1);
+  if (!Number.isFinite(bounds.top) || !Number.isFinite(bounds.bottom)) {
+    return { tier: 3, distance: Number.MAX_SAFE_INTEGER };
+  }
+  if (bounds.bottom >= 0 && bounds.top <= height) {
+    return { tier: 0, distance: Math.max(0, bounds.top) };
+  }
+  if (bounds.top > height) {
+    return { tier: 1, distance: bounds.top - height };
+  }
+  return { tier: 2, distance: Math.max(0, -bounds.bottom) };
 }
 
 export function buildBilingualPageReferenceContext(

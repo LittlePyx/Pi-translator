@@ -1511,6 +1511,96 @@ test('progressively adds and removes bilingual article translations without touc
   }
 });
 
+test('reprioritizes pending bilingual paragraphs around the current viewport', async () => {
+  const popup = await context.newPage();
+  const titleText = 'A practical guide to reliable bilingual reading';
+  const oldQueuedText = 'This initially nearby paragraph should wait after the reader jumps to a distant section.';
+  const currentViewportText = 'This paragraph at the current reading position should be translated before the old queue.';
+  try {
+    await page.goto(ARTICLE_FIXTURE_URL);
+    await page.locator('article').evaluate((article, fixture) => {
+      const title = document.createElement('h1');
+      title.id = 'priority-title';
+      title.textContent = fixture.titleText;
+      const oldQueued = document.createElement('p');
+      oldQueued.id = 'priority-old-queued';
+      oldQueued.textContent = fixture.oldQueuedText;
+      const spacer = document.createElement('div');
+      spacer.style.height = '2800px';
+      spacer.setAttribute('aria-hidden', 'true');
+      const currentViewport = document.createElement('p');
+      currentViewport.id = 'priority-current-viewport';
+      currentViewport.textContent = fixture.currentViewportText;
+      article.replaceChildren(title, oldQueued, spacer, currentViewport);
+    }, { titleText, oldQueuedText, currentViewportText });
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+
+    const requestsBefore = textRequests.length;
+    const firstRequestStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
+    const startResponse = await popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          runtime: { sendMessage(message: object): Promise<unknown> };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id === undefined) throw new Error('Article tab not found.');
+      return api.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: { tabId: tab.id, targetLanguage: 'zh-CN' },
+      });
+    }, page.url());
+    expect(startResponse).toMatchObject({ ok: true });
+    await firstRequestStarted;
+    await page.locator('#priority-current-viewport').scrollIntoViewIfNeeded();
+    await expect.poll(() => page.locator('#priority-current-viewport').evaluate((element) => {
+      const bounds = element.getBoundingClientRect();
+      return bounds.bottom >= 0 && bounds.top <= window.innerHeight;
+    })).toBe(true);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
+
+    await expect(page.locator(
+      '#priority-current-viewport + [data-pi-bilingual-translation]',
+    )).toBeVisible();
+    await expect.poll(() => textRequests.length).toBeGreaterThanOrEqual(requestsBefore + 3);
+    const requestedSources = textRequests.slice(requestsBefore).map((body) => {
+      const messages = body.messages as Array<{ role?: string; content?: unknown }> | undefined;
+      const content = messages?.find((message) => message.role === 'user')?.content;
+      if (typeof content !== 'string') return '';
+      try {
+        const payload = JSON.parse(content) as { text?: unknown };
+        return typeof payload.text === 'string' ? payload.text : content;
+      } catch {
+        return content;
+      }
+    });
+    expect(requestedSources[0]).toBe(titleText);
+    expect(requestedSources.indexOf(currentViewportText)).toBeGreaterThan(0);
+    expect(requestedSources.indexOf(currentViewportText))
+      .toBeLessThan(requestedSources.indexOf(oldQueuedText));
+    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
+      .click();
+  } finally {
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL);
+  }
+});
+
 test('prioritizes an explicit selection and resumes bilingual article translation without a false failure', async () => {
   const popup = await context.newPage();
   const sidePanel = await context.newPage();

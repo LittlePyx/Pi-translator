@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   isBilingualPageState,
   isBilingualPageTextCandidate,
@@ -23,6 +24,34 @@ describe('bilingual webpage reading', () => {
       38,
     )).toBe(false);
     expect(isBilingualPageTextCandidate('Methods overview', 'H2')).toBe(true);
+  });
+
+  it('prioritizes the current viewport before upcoming and already-passed paragraphs', () => {
+    const viewportHeight = 800;
+    const positions = [
+      { id: 'far-below', bounds: { top: 2_400, bottom: 2_480 } },
+      { id: 'just-above', bounds: { top: -120, bottom: -20 } },
+      { id: 'lower-visible', bounds: { top: 620, bottom: 700 } },
+      { id: 'upper-visible', bounds: { top: 80, bottom: 160 } },
+      { id: 'next-screen', bounds: { top: 940, bottom: 1_020 } },
+    ];
+    positions.sort((left, right) => {
+      const leftPriority = bilingualPageViewportPriority(left.bounds, viewportHeight);
+      const rightPriority = bilingualPageViewportPriority(right.bounds, viewportHeight);
+      return leftPriority.tier - rightPriority.tier ||
+        leftPriority.distance - rightPriority.distance;
+    });
+    expect(positions.map(({ id }) => id)).toEqual([
+      'upper-visible',
+      'lower-visible',
+      'next-screen',
+      'far-below',
+      'just-above',
+    ]);
+    expect(bilingualPageViewportPriority(
+      { top: Number.NaN, bottom: Number.NaN },
+      viewportHeight,
+    )).toEqual({ tier: 3, distance: Number.MAX_SAFE_INTEGER });
   });
 
   it('validates tab state updates without accepting arbitrary languages or counts', () => {
