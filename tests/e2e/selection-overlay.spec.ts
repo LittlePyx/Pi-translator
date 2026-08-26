@@ -1046,6 +1046,20 @@ test('discovers bilingual article translation and lets the reader adjust its sco
   try {
     await page.goto(ARTICLE_FIXTURE_URL);
     await page.bringToFront();
+    await page.evaluate(() => {
+      const widget = document.createElement('button');
+      widget.id = 'article-fixed-widget';
+      widget.textContent = 'Page help';
+      widget.style.cssText = [
+        'position:fixed',
+        'right:8px',
+        'bottom:8px',
+        'z-index:2147483000',
+        'width:210px',
+        'height:52px',
+      ].join(';');
+      document.body.append(widget);
+    });
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
     originalTargetLanguage = await popup.locator('#target-language').inputValue();
     if (originalTargetLanguage !== 'zh-CN') {
@@ -1062,6 +1076,57 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(launcher.locator('img.mark')).toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(launcher.locator('button[data-action="start"]')).toContainText('译全文');
     await expect(launcher.locator('.count')).toHaveText('· 7 段');
+    await expect(launcher).not.toHaveAttribute('data-pi-placement', 'bottom-right');
+    const launcherAvoidance = await page.evaluate(() => {
+      const launcherRect = document.getElementById('pi-translator-bilingual-page-launcher')!
+        .getBoundingClientRect();
+      const widgetRect = document.getElementById('article-fixed-widget')!
+        .getBoundingClientRect();
+      return {
+        launcher: launcherRect.toJSON(),
+        widget: widgetRect.toJSON(),
+        clear: !(
+          launcherRect.left < widgetRect.right + 8 &&
+          launcherRect.right > widgetRect.left - 8 &&
+          launcherRect.top < widgetRect.bottom + 8 &&
+          launcherRect.bottom > widgetRect.top - 8
+        ),
+      };
+    });
+    expect(launcherAvoidance.clear, JSON.stringify(launcherAvoidance)).toBe(true);
+    await page.locator('#article-fixed-widget').evaluate((element) => element.remove());
+    await expect(launcher).toHaveAttribute('data-pi-placement', 'bottom-right');
+
+    await page.setViewportSize({ width: 480, height: 720 });
+    await expect(launcher.locator('button[data-action="scope"]')).toBeHidden();
+    await expect(launcher.locator('details.more')).toBeVisible();
+    await launcher.locator('details.more > summary').click();
+    await expect(launcher.locator('button[data-action="scope-menu"]')).toBeVisible();
+    await page.setViewportSize({ width: 1280, height: 720 });
+
+    await page.bringToFront();
+    const articleTabId = await popup.evaluate(async (url) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { query(queryInfo: object): Promise<Array<{ id?: number; url?: string }>> } };
+      }).chrome;
+      const tabs = await api.tabs.query({});
+      return tabs.find((tab) => tab.url?.startsWith(url))?.id;
+    }, ARTICLE_FIXTURE_URL);
+    expect(articleTabId).toBeDefined();
+    await popup.evaluate(async (tabId) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { sendMessage(id: number, message: object): Promise<void> } };
+      }).chrome;
+      await api.tabs.sendMessage(tabId!, { type: 'BROWSER_SIDEBAR_ACTIVE' });
+    }, articleTabId);
+    await expect(launcher).toHaveCount(0);
+    await popup.evaluate(async (tabId) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { sendMessage(id: number, message: object): Promise<void> } };
+      }).chrome;
+      await api.tabs.sendMessage(tabId!, { type: 'BROWSER_SIDEBAR_CLOSED' });
+    }, articleTabId);
+    await expect(launcher).toBeVisible();
 
     await launcher.locator('button[data-action="scope"]').click();
     await expect(launcher).toHaveCount(0);
@@ -1127,6 +1192,30 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await page.evaluate(() => history.pushState({}, '', '/pi-translator-bilingual-article-e2e-next'));
     await expect(launcher).toBeVisible();
     await launcher.locator('button[data-action="dismiss"]').click();
+
+    await page.evaluate(() => {
+      const chineseParagraph = '这是一段用于双语阅读的中文正文，包含完整的自然语言叙述、阅读上下文和足够的信息密度，应当只在目标语言不是中文时提供整页翻译入口。';
+      document.querySelectorAll<HTMLElement>('article > h1, article > p, article > blockquote')
+        .forEach((element, index) => {
+          element.textContent = `${chineseParagraph}${chineseParagraph}（第 ${index + 1} 段）`;
+        });
+      history.pushState({}, '', '/pi-translator-bilingual-chinese-article');
+    });
+    await page.waitForTimeout(1_100);
+    await expect(launcher).toHaveCount(0);
+
+    await popup.bringToFront();
+    await popup.locator('#target-language').selectOption('en');
+    await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    await page.bringToFront();
+    await expect(launcher).toBeVisible();
+    await expect(launcher.locator('.count')).toHaveText('· 7 段');
+
+    await popup.bringToFront();
+    await popup.locator('#target-language').selectOption('zh-CN');
+    await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    await page.bringToFront();
+    await expect(launcher).toHaveCount(0);
   } finally {
     await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
       .click({ timeout: 500 }).catch(() => undefined);

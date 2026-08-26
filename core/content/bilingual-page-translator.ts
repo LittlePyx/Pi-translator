@@ -125,6 +125,7 @@ interface BilingualPageTranslatorOptions {
   requestConfig(): BilingualPageRequestConfig;
   preferredTargetLanguage(): SupportedTargetLanguage;
   launcherEnabled(): boolean;
+  launcherSuppressed(): boolean;
   onStateChange(state: BilingualPageState): void;
 }
 
@@ -676,6 +677,8 @@ export function createBilingualPageTranslator(
   let launcherHost: HTMLElement | undefined;
   let launcherRefreshTimer: number | undefined;
   let launcherNavigationTimer: number | undefined;
+  let launcherPlacementTimer: number | undefined;
+  let launcherLastScrollAt = 0;
   let launcherPageIdentity = '';
   let launcherDismissedPageIdentity = '';
   let launcherCandidateCount = 0;
@@ -753,7 +756,24 @@ export function createBilingualPageTranslator(
     controlHost = undefined;
   };
 
+  const scheduleLauncherPlacement = (delayMs = 0): void => {
+    if (launcherPlacementTimer !== undefined) window.clearTimeout(launcherPlacementTimer);
+    launcherPlacementTimer = window.setTimeout(placeLauncher, delayMs);
+  };
+
+  const handleLauncherScroll = (): void => {
+    launcherLastScrollAt = Date.now();
+    scheduleLauncherPlacement(220);
+  };
+
+  const handleLauncherViewportChange = (): void => scheduleLauncherPlacement();
+
   const destroyLauncher = (): void => {
+    if (launcherPlacementTimer !== undefined) window.clearTimeout(launcherPlacementTimer);
+    launcherPlacementTimer = undefined;
+    window.removeEventListener('scroll', handleLauncherScroll, true);
+    window.removeEventListener('resize', handleLauncherViewportChange);
+    window.visualViewport?.removeEventListener('resize', handleLauncherViewportChange);
     launcherHost?.remove();
     launcherHost = undefined;
   };
@@ -766,9 +786,132 @@ export function createBilingualPageTranslator(
   const ensureLauncherNavigationMonitor = (): void => {
     if (launcherNavigationTimer !== undefined) return;
     launcherNavigationTimer = window.setInterval(() => {
-      if (pageIdentity(options.pageUrl()) !== launcherPageIdentity) discoverLauncher();
+      if (pageIdentity(options.pageUrl()) !== launcherPageIdentity) {
+        discoverLauncher();
+      } else if (Date.now() - launcherLastScrollAt > 240) {
+        scheduleLauncherPlacement();
+      }
     }, 1_000);
   };
+
+  const rectanglesOverlap = (first: DOMRect, second: DOMRect, gap = 8): boolean => (
+    first.left < second.right + gap &&
+    first.right > second.left - gap &&
+    first.top < second.bottom + gap &&
+    first.bottom > second.top - gap
+  );
+
+  const piOverlayObstacles = (): DOMRect[] => {
+    const overlay = document.getElementById('tex-selection-translator-root');
+    const root = overlay?.shadowRoot;
+    if (!overlay || !root) return [];
+    const view = overlay.dataset.piView;
+    const selector = view === 'sidebar'
+      ? '.surface.sidebar'
+      : view === 'sidebar-collapsed'
+        ? '.collapsed-tab'
+        : view === 'card' || view === 'notice'
+          ? '.surface.card'
+          : '';
+    if (!selector) return [];
+    return [...root.querySelectorAll<HTMLElement>(selector)]
+      .filter((element) => elementVisible(element))
+      .map((element) => element.getBoundingClientRect())
+      .filter((rect) => rect.width >= 20 && rect.height >= 20);
+  };
+
+  const fixedPageObstaclesAt = (rect: DOMRect): DOMRect[] => {
+    const margin = 8;
+    const left = Math.max(1, rect.left - margin);
+    const right = Math.min(innerWidth - 1, rect.right + margin);
+    const top = Math.max(1, rect.top - margin);
+    const bottom = Math.min(innerHeight - 1, rect.bottom + margin);
+    const xValues = [left, (left + right) / 2, right];
+    const yValues = [top, (top + bottom) / 2, bottom];
+    const obstacles = new Map<HTMLElement, DOMRect>();
+    for (const x of xValues) {
+      for (const y of yValues) {
+        for (const element of document.elementsFromPoint(x, y)) {
+          if (
+            element === launcherHost ||
+            element === document.documentElement ||
+            element === document.body ||
+            element.id === LAUNCHER_HOST_ID ||
+            element.id === CONTROL_HOST_ID ||
+            element.id === 'tex-selection-translator-root'
+          ) continue;
+          let candidate = element instanceof HTMLElement ? element : element.parentElement;
+          while (candidate && candidate !== document.body) {
+            const style = getComputedStyle(candidate);
+            if (style.position === 'fixed' || style.position === 'sticky') {
+              const candidateRect = candidate.getBoundingClientRect();
+              const viewportArea = Math.max(1, innerWidth * innerHeight);
+              if (
+                style.display !== 'none' &&
+                style.visibility !== 'hidden' &&
+                style.pointerEvents !== 'none' &&
+                Number.parseFloat(style.opacity || '1') > 0.05 &&
+                candidateRect.width >= 20 &&
+                candidateRect.height >= 20 &&
+                candidateRect.width * candidateRect.height < viewportArea * 0.58
+              ) obstacles.set(candidate, candidateRect);
+              break;
+            }
+            candidate = candidate.parentElement;
+          }
+        }
+      }
+    }
+    return [...obstacles.values()];
+  };
+
+  function placeLauncher(): void {
+    launcherPlacementTimer = undefined;
+    if (!launcherHost?.isConnected) return;
+    const currentRect = launcherHost.getBoundingClientRect();
+    const width = Math.max(1, currentRect.width);
+    const height = Math.max(1, currentRect.height);
+    const edge = 14;
+    const baseBottom = 18;
+    const lift = Math.max(52, height + 14);
+    const piObstacles = piOverlayObstacles();
+    const rightSideOccupied = piObstacles.some((rect) => (
+      rect.right > innerWidth / 2 && rect.height > innerHeight * 0.35
+    ));
+    const preferredSide: 'left' | 'right' = rightSideOccupied ? 'left' : 'right';
+    const alternateSide: 'left' | 'right' = preferredSide === 'right' ? 'left' : 'right';
+    const placements: Array<{ side: 'left' | 'right'; level: number }> = [
+      { side: preferredSide, level: 0 },
+      { side: preferredSide, level: 1 },
+      { side: alternateSide, level: 0 },
+      { side: preferredSide, level: 2 },
+      { side: alternateSide, level: 1 },
+      { side: preferredSide, level: 3 },
+      { side: alternateSide, level: 2 },
+      { side: alternateSide, level: 3 },
+    ];
+    let selected = placements[0]!;
+    let selectedBottom = baseBottom;
+    for (const placement of placements) {
+      const bottomOffset = baseBottom + placement.level * lift;
+      const left = placement.side === 'left' ? edge : innerWidth - edge - width;
+      const top = innerHeight - bottomOffset - height;
+      if (left < 0 || top < 4) continue;
+      const candidateRect = new DOMRect(left, top, width, height);
+      const obstacles = [...piObstacles, ...fixedPageObstaclesAt(candidateRect)];
+      if (obstacles.some((obstacle) => rectanglesOverlap(candidateRect, obstacle))) continue;
+      selected = placement;
+      selectedBottom = bottomOffset;
+      break;
+    }
+    launcherHost.style.left = selected.side === 'left' ? `${edge}px` : 'auto';
+    launcherHost.style.right = selected.side === 'right' ? `${edge}px` : 'auto';
+    launcherHost.style.bottom = `${selectedBottom}px`;
+    launcherHost.style.visibility = 'visible';
+    launcherHost.dataset.piPlacement = selected.level === 0
+      ? `bottom-${selected.side}`
+      : `raised-${selected.side}-${selected.level}`;
+  }
 
   const renderLauncher = (): void => {
     if (
@@ -783,12 +926,12 @@ export function createBilingualPageTranslator(
     if (!launcherHost?.isConnected) {
       launcherHost = document.createElement('div');
       launcherHost.id = LAUNCHER_HOST_ID;
-      launcherHost.style.cssText = 'all:initial;position:fixed;z-index:2147483644;right:14px;bottom:18px;';
+      launcherHost.style.cssText = 'all:initial;position:fixed;z-index:2147483644;right:14px;bottom:18px;visibility:hidden;';
       const shadow = launcherHost.attachShadow({ mode: 'open' });
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .launcher { display:flex;align-items:center;box-sizing:border-box;border:1px solid rgba(99,102,241,.25);border-radius:999px;padding:3px;color:#30394c;background:rgba(255,255,255,.94);box-shadow:0 6px 22px rgba(15,23,42,.15);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
+          .launcher { position:relative;display:flex;align-items:center;box-sizing:border-box;border:1px solid rgba(99,102,241,.25);border-radius:999px;padding:3px;color:#30394c;background:rgba(255,255,255,.94);box-shadow:0 6px 22px rgba(15,23,42,.15);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
           button { min-height:30px;box-sizing:border-box;border:0;border-radius:999px;padding:5px 8px;color:#5a50d6;background:transparent;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#f0efff; }
           button[data-action="start"] { display:inline-flex;align-items:center;padding-left:9px;color:#fff;background:linear-gradient(135deg,#5b5ee5,#765fe7); }
@@ -796,27 +939,45 @@ export function createBilingualPageTranslator(
           .mark { display:block;width:15px;height:13px;margin-right:5px;object-fit:contain;filter:brightness(0) invert(1); }
           .count { margin-left:3px;opacity:.82;font-weight:550; }
           button[data-action="dismiss"] { min-width:28px;padding-inline:5px;color:#8791a2;font-size:14px;font-weight:500; }
-          @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:rgba(24,32,47,.95);box-shadow:0 7px 24px rgba(0,0,0,.34)} button{color:#cbc7ff} button:hover{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="dismiss"]{color:#9ca7b8} }
-          @media (max-width:480px) { .launcher{padding:2px} button{min-height:32px}.count{display:none} }
+          details.more { position:relative;display:none; }
+          details.more > summary { display:grid;place-items:center;width:30px;min-height:30px;box-sizing:border-box;border-radius:999px;color:#697386;cursor:pointer;font:700 14px/1 inherit;list-style:none; }
+          details.more > summary::-webkit-details-marker { display:none; }
+          details.more > summary:hover,details.more[open] > summary { background:#f0efff;color:#5a50d6; }
+          .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:112px;box-sizing:border-box;border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:5px;background:rgba(255,255,255,.98);box-shadow:0 10px 28px rgba(15,23,42,.18); }
+          .menu button { width:100%;border-radius:7px;text-align:left; }
+          @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:rgba(24,32,47,.95);box-shadow:0 7px 24px rgba(0,0,0,.34)} button{color:#cbc7ff} button:hover,details.more > summary:hover,details.more[open] > summary{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="dismiss"],details.more > summary{color:#9ca7b8}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)} }
+          @media (max-width:520px) { .launcher{padding:2px} button{min-height:32px}.count,.launcher>button[data-action="scope"],.launcher>button[data-action="dismiss"]{display:none}details.more{display:block} }
         </style>
         <div class="launcher" role="group" aria-label="网页正文翻译">
           <button type="button" data-action="start"><img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />译全文<span class="count"></span></button>
           <button type="button" data-action="scope">范围</button>
           <button type="button" data-action="dismiss" aria-label="暂时隐藏译全文入口" title="暂时隐藏">×</button>
+          <details class="more">
+            <summary aria-label="更多正文翻译操作" title="更多">•••</summary>
+            <div class="menu" role="menu">
+              <button type="button" data-action="scope-menu" role="menuitem">调整范围</button>
+              <button type="button" data-action="dismiss-menu" role="menuitem">暂时隐藏</button>
+            </div>
+          </details>
         </div>`;
       shadow.querySelector<HTMLButtonElement>('button[data-action="start"]')
         ?.addEventListener('click', () => {
           destroyLauncher();
           void start(options.preferredTargetLanguage());
         });
-      shadow.querySelector<HTMLButtonElement>('button[data-action="scope"]')
-        ?.addEventListener('click', () => beginScopePreview());
-      shadow.querySelector<HTMLButtonElement>('button[data-action="dismiss"]')
-        ?.addEventListener('click', () => {
+      shadow.querySelectorAll<HTMLButtonElement>(
+        'button[data-action="scope"],button[data-action="scope-menu"]',
+      ).forEach((button) => button.addEventListener('click', () => beginScopePreview()));
+      shadow.querySelectorAll<HTMLButtonElement>(
+        'button[data-action="dismiss"],button[data-action="dismiss-menu"]',
+      ).forEach((button) => button.addEventListener('click', () => {
           launcherDismissedPageIdentity = pageIdentity(options.pageUrl());
           destroyLauncher();
-        });
+        }));
       document.documentElement.append(launcherHost);
+      window.addEventListener('scroll', handleLauncherScroll, true);
+      window.addEventListener('resize', handleLauncherViewportChange);
+      window.visualViewport?.addEventListener('resize', handleLauncherViewportChange);
     }
     const shadow = launcherHost.shadowRoot;
     const count = shadow?.querySelector<HTMLElement>('.count');
@@ -826,12 +987,13 @@ export function createBilingualPageTranslator(
       'aria-label',
       `翻译网页正文，已识别 ${launcherCandidateCount} 段`,
     );
+    scheduleLauncherPlacement();
   };
 
   const discoverLauncher = (): void => {
     if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
     launcherRefreshTimer = undefined;
-    if (disposed || !options.launcherEnabled()) {
+    if (disposed || !options.launcherEnabled() || options.launcherSuppressed()) {
       destroyLauncher();
       stopLauncherNavigationMonitor();
       return;

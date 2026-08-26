@@ -282,6 +282,7 @@ export async function startSelectionTranslator(
           ? temporaryTargetLanguage
           : 'zh-CN',
         launcherEnabled: () => settings.generalPageMode !== 'off',
+        launcherSuppressed: () => browserSidebarActive,
         onStateChange: (state) => {
           void browser.runtime.sendMessage({
             type: 'BILINGUAL_PAGE_STATE_UPDATED',
@@ -2394,6 +2395,7 @@ export async function startSelectionTranslator(
       browserSidebarActive = true;
       overlay.deactivateSidebar();
       lastAutoSelectionHash = activeSelection?.selectionHash;
+      bilingualPageTranslator?.refreshDiscovery();
       scheduleRefresh();
       return;
     }
@@ -2402,6 +2404,7 @@ export async function startSelectionTranslator(
       lastAutoSelectionHash = undefined;
       dismissedPassiveSelectionHash = undefined;
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      bilingualPageTranslator?.refreshDiscovery();
       scheduleRefresh();
       return;
     }
