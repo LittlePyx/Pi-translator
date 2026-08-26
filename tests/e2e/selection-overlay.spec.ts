@@ -677,7 +677,10 @@ test.beforeAll(async () => {
     if (isBilingualRetranslation) returnBilingualRetranslationOnce = false;
     if (
       holdNextBilingualRequest &&
-      requestedText.includes('A practical guide to reliable bilingual reading')
+      (
+        requestedText.includes('A practical guide to reliable bilingual reading') ||
+        requestedText.includes('A held dynamically loaded paragraph')
+      )
     ) {
       holdNextBilingualRequest = false;
       bilingualRequestStarted?.();
@@ -1267,6 +1270,97 @@ test('progressively adds and removes bilingual article translations without touc
         fullPage: false,
       });
     }
+
+    const dynamicText = 'A dynamically loaded paragraph should join bilingual reading only when it approaches the reader viewport.';
+    const requestsBeforeDynamicBlock = textRequests.length;
+    await page.locator('article').evaluate((article, text) => {
+      const paragraph = document.createElement('p');
+      paragraph.id = 'article-dynamic';
+      paragraph.textContent = text;
+      article.append(paragraph);
+    }, dynamicText);
+    const dynamicTranslation = page.locator(
+      '#article-dynamic + [data-pi-bilingual-translation]',
+    );
+    await page.waitForTimeout(650);
+    expect(textRequests.length).toBe(requestsBeforeDynamicBlock);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('7/8');
+    await page.locator('#article-dynamic').scrollIntoViewIfNeeded();
+    await expect(dynamicTranslation).toBeVisible();
+    await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeDynamicBlock);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 8/8');
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
+
+    const requestsBeforeSameTextRerender = textRequests.length;
+    await page.locator('#article-dynamic').evaluate((paragraph) => {
+      paragraph.replaceWith(paragraph.cloneNode(true));
+    });
+    await expect(dynamicTranslation).toBeVisible();
+    await page.waitForTimeout(650);
+    expect(textRequests.length).toBe(requestsBeforeSameTextRerender);
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
+
+    const heldDynamicText = 'A held dynamically loaded paragraph keeps its request visible while the reader pauses translation.';
+    const heldDynamicStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
+    await page.locator('article').evaluate((article, text) => {
+      const paragraph = document.createElement('p');
+      paragraph.id = 'article-dynamic-held';
+      paragraph.textContent = text;
+      article.append(paragraph);
+    }, heldDynamicText);
+    await heldDynamicStarted;
+    await pageControl.locator('button[data-action="pause"]').click();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已暂停');
+
+    const pausedDynamicText = 'A paragraph added during the pause must wait for the reader to resume before using the translation API.';
+    const requestsWhilePaused = textRequests.length;
+    await page.locator('article').evaluate((article, text) => {
+      const paragraph = document.createElement('p');
+      paragraph.id = 'article-dynamic-paused';
+      paragraph.textContent = text;
+      article.append(paragraph);
+    }, pausedDynamicText);
+    await page.waitForTimeout(650);
+    expect(JSON.stringify(textRequests.slice(requestsWhilePaused))).not.toContain(pausedDynamicText);
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
+    await expect(page.locator(
+      '#article-dynamic-held + [data-pi-bilingual-translation]',
+    )).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已暂停');
+    expect(JSON.stringify(textRequests.slice(requestsWhilePaused))).not.toContain(pausedDynamicText);
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(page.locator(
+      '#article-dynamic-paused + [data-pi-bilingual-translation]',
+    )).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 10/10');
+
+    await page.locator('article').evaluate((article) => {
+      const heading = document.createElement('h1');
+      heading.id = 'spa-article-title';
+      heading.textContent = 'A different dynamically routed article replaces the previous bilingual document';
+      const firstParagraph = document.createElement('p');
+      firstParagraph.id = 'spa-article-intro';
+      firstParagraph.textContent = 'The new route should ask the reader before translating a substantially different article.';
+      const secondParagraph = document.createElement('p');
+      secondParagraph.id = 'spa-article-detail';
+      secondParagraph.textContent = 'Translations from the previous route must disappear instead of attaching to unrelated content.';
+      article.replaceChildren(heading, firstParagraph, secondParagraph);
+    });
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('页面正文已更新');
+    await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('开始');
+    await sidePanel.locator('#bilingual-page-primary').click();
+    await expect(page.locator('#spa-article-intro + [data-pi-bilingual-translation]'))
+      .toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 3/3');
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(3);
 
     const historyAfter = await sidePanel.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {

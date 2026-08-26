@@ -31,6 +31,9 @@ const ACTIONS_HINT_STORAGE_KEY = 'bilingualParagraphActionsHintSeen';
 const ACTIONS_HINT_DURATION_MS = 3_200;
 const ACTIONS_HINT_MOUSE_MESSAGE = '悬停译文可复制、重译或隐藏';
 const ACTIONS_HINT_TOUCH_MESSAGE = '点“更多”可复制、重译或隐藏';
+const MAX_BILINGUAL_BLOCKS = 240;
+const DYNAMIC_SCAN_DELAY_MS = 280;
+const ARTICLE_CHANGED_MESSAGE = '页面正文已更新，请重新开始正文翻译。';
 const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
@@ -175,15 +178,15 @@ function candidateElements(root: ParentNode, targetLanguage: string): BilingualB
       isLikelyTargetLanguage(text, targetLanguage)
     ) continue;
     candidates.push({ element, text, status: 'idle' });
-    if (candidates.length >= 240) break;
+    if (candidates.length >= MAX_BILINGUAL_BLOCKS) break;
   }
   return candidates;
 }
 
-function articleRoot(targetLanguage: string): { root: ParentNode; blocks: BilingualBlock[] } {
+function articleRoot(targetLanguage: string): { root: HTMLElement; blocks: BilingualBlock[] } {
   const containers = [...document.querySelectorAll<HTMLElement>('article, main, [role="main"]')]
     .filter((element) => !element.closest(EXCLUDED_ANCESTOR_SELECTOR) && elementVisible(element));
-  let best: { root: ParentNode; blocks: BilingualBlock[]; score: number } | undefined;
+  let best: { root: HTMLElement; blocks: BilingualBlock[]; score: number } | undefined;
   for (const root of containers) {
     const blocks = candidateElements(root, targetLanguage);
     const score = blocks.reduce((total, block) => total + Math.min(block.text.length, 800), 0);
@@ -192,6 +195,49 @@ function articleRoot(targetLanguage: string): { root: ParentNode; blocks: Biling
   if (best && (best.blocks.length >= 2 || best.score >= 240)) return best;
   const root = document.body;
   return { root, blocks: root ? candidateElements(root, targetLanguage) : [] };
+}
+
+function blockSignature(block: Pick<BilingualBlock, 'element' | 'text'>): string {
+  return `${block.element.tagName}\u0000${block.text}`;
+}
+
+function matchingBlockSignatureCount(
+  previous: BilingualBlock[],
+  next: BilingualBlock[],
+): number {
+  const remaining = new Map<string, number>();
+  for (const block of previous) {
+    const signature = blockSignature(block);
+    remaining.set(signature, (remaining.get(signature) ?? 0) + 1);
+  }
+  let matched = 0;
+  for (const block of next) {
+    const signature = blockSignature(block);
+    const count = remaining.get(signature) ?? 0;
+    if (!count) continue;
+    matched += 1;
+    if (count === 1) remaining.delete(signature);
+    else remaining.set(signature, count - 1);
+  }
+  return matched;
+}
+
+function leadingHeadingText(blocks: BilingualBlock[]): string | undefined {
+  return blocks.find((block) => /^H[1-4]$/u.test(block.element.tagName))?.text;
+}
+
+function looksLikeArticleReplacement(
+  previous: BilingualBlock[],
+  next: BilingualBlock[],
+): boolean {
+  const baseline = Math.min(previous.length, next.length);
+  if (baseline < 2) return false;
+  const matched = matchingBlockSignatureCount(previous, next);
+  const overlap = matched / baseline;
+  if (baseline >= 3 && overlap < .34) return true;
+  const previousHeading = leadingHeadingText(previous);
+  const nextHeading = leadingHeadingText(next);
+  return Boolean(previousHeading && nextHeading && previousHeading !== nextHeading && overlap < .6);
 }
 
 function targetLanguageHtmlCode(targetLanguage: string): string {
@@ -522,6 +568,10 @@ export function createBilingualPageTranslator(
   let activeTask: Promise<void> | undefined;
   let taskRevision = 0;
   let sourcePageIdentity = '';
+  let articleContainer: HTMLElement | undefined;
+  let mutationObserver: MutationObserver | undefined;
+  let mutationTimer: number | undefined;
+  let emptyCandidateScans = 0;
   let navigationTimer: number | undefined;
   let disposed = false;
   let controlHost: HTMLElement | undefined;
@@ -567,6 +617,10 @@ export function createBilingualPageTranslator(
   };
 
   const removeInjectedContent = (): void => {
+    mutationObserver?.disconnect();
+    mutationObserver = undefined;
+    if (mutationTimer !== undefined) window.clearTimeout(mutationTimer);
+    mutationTimer = undefined;
     for (const block of blocks) {
       block.translation?.remove();
       block.errorElement?.remove();
@@ -578,6 +632,8 @@ export function createBilingualPageTranslator(
     queue = [];
     observer?.disconnect();
     observer = undefined;
+    articleContainer = undefined;
+    emptyCandidateScans = 0;
     removeTranslationStyle();
   };
 
@@ -600,6 +656,20 @@ export function createBilingualPageTranslator(
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
     destroyControl();
     if (notify) options.onStateChange(snapshot());
+  };
+
+  const resetForArticleChange = (message = ARTICLE_CHANGED_MESSAGE): void => {
+    const targetLanguage = currentState.targetLanguage;
+    clear(false);
+    currentState = {
+      phase: 'error',
+      total: 0,
+      translated: 0,
+      failed: 0,
+      ...(targetLanguage ? { targetLanguage } : {}),
+      message,
+    };
+    publish();
   };
 
   const eligibleForViewport = (block: BilingualBlock): boolean => {
@@ -835,6 +905,172 @@ export function createBilingualPageTranslator(
     blocks.forEach((block) => observer?.observe(block.element));
   };
 
+  const extensionOwnedMutationNode = (node: Node): boolean => {
+    const element = node.nodeType === Node.ELEMENT_NODE
+      ? node as Element
+      : node.parentElement;
+    return Boolean(element?.closest(
+      `[${TRANSLATION_ATTRIBUTE}], [${ERROR_ATTRIBUTE}], #${CONTROL_HOST_ID}`,
+    ));
+  };
+
+  const mutationNeedsDynamicScan = (mutation: MutationRecord): boolean => {
+    if (mutation.type === 'characterData') return !extensionOwnedMutationNode(mutation.target);
+    const changedNodes = [...mutation.addedNodes, ...mutation.removedNodes];
+    return changedNodes.length === 0 || changedNodes.some(
+      (node) => !extensionOwnedMutationNode(node),
+    );
+  };
+
+  const scheduleDynamicScan = (delayMs = DYNAMIC_SCAN_DELAY_MS): void => {
+    if (disposed || currentState.phase === 'idle') return;
+    if (mutationTimer !== undefined) window.clearTimeout(mutationTimer);
+    mutationTimer = window.setTimeout(() => {
+      mutationTimer = undefined;
+      refreshDynamicBlocks();
+    }, delayMs);
+  };
+
+  const observeArticleMutations = (): void => {
+    mutationObserver?.disconnect();
+    mutationObserver = undefined;
+    if (!articleContainer?.isConnected) return;
+    mutationObserver = new MutationObserver((mutations) => {
+      if (mutations.some(mutationNeedsDynamicScan)) scheduleDynamicScan();
+    });
+    mutationObserver.observe(articleContainer, {
+      childList: true,
+      subtree: true,
+      characterData: true,
+    });
+  };
+
+  const reconcileDynamicBlocks = (
+    candidates: BilingualBlock[],
+    nextRoot: HTMLElement,
+  ): void => {
+    if (!candidates.length) {
+      emptyCandidateScans += 1;
+      if (emptyCandidateScans < 2) scheduleDynamicScan(480);
+      else resetForArticleChange();
+      return;
+    }
+    emptyCandidateScans = 0;
+    if (blocks.length && looksLikeArticleReplacement(blocks, candidates)) {
+      resetForArticleChange();
+      return;
+    }
+
+    const previousBlocks = blocks;
+    const previousByElement = new Map(
+      previousBlocks.map((block) => [block.element, block] as const),
+    );
+    const disconnectedBySignature = new Map<string, BilingualBlock[]>();
+    for (const block of previousBlocks) {
+      if (block.element.isConnected) continue;
+      const signature = blockSignature(block);
+      const matching = disconnectedBySignature.get(signature) ?? [];
+      matching.push(block);
+      disconnectedBySignature.set(signature, matching);
+    }
+
+    const used = new Set<BilingualBlock>();
+    const nextBlocks: BilingualBlock[] = [];
+    let newWork = false;
+    let structureChanged = articleContainer !== nextRoot;
+    for (const candidate of candidates) {
+      let block = previousByElement.get(candidate.element);
+      if (block && !used.has(block)) {
+        used.add(block);
+        if (block.text !== candidate.text) {
+          block.translation?.remove();
+          block.errorElement?.remove();
+          delete block.translation;
+          delete block.errorElement;
+          delete block.bypassCacheNext;
+          delete block.restoreStateAfterRetranslation;
+          block.text = candidate.text;
+          block.status = 'idle';
+          newWork = true;
+        }
+      } else {
+        const reusable = disconnectedBySignature.get(blockSignature(candidate));
+        block = reusable?.find((item) => !used.has(item));
+        if (block) {
+          observer?.unobserve(block.element);
+          block.element = candidate.element;
+          used.add(block);
+          if (block.status === 'done' && block.translation) {
+            insertAfterSource(block, block.translation);
+            applySourceTypography(block.translation, block, 18);
+          } else if (block.status === 'error' && block.errorElement) {
+            insertAfterSource(block, block.errorElement);
+            applySourceTypography(block.errorElement, block, 14);
+          } else if (block.status === 'done' || block.status === 'error') {
+            block.status = 'idle';
+            newWork = true;
+          }
+          structureChanged = true;
+        } else {
+          block = candidate;
+          used.add(block);
+          newWork = true;
+          structureChanged = true;
+        }
+      }
+      nextBlocks.push(block);
+    }
+
+    for (const block of previousBlocks) {
+      if (used.has(block)) continue;
+      block.translation?.remove();
+      block.errorElement?.remove();
+      structureChanged = true;
+    }
+    const retained = new Set(nextBlocks);
+    queue = queue.filter((block) => retained.has(block) && block.status === 'queued');
+    blocks = nextBlocks;
+    if (articleContainer !== nextRoot) {
+      articleContainer = nextRoot;
+      observeArticleMutations();
+    }
+    if (structureChanged) observeBlocks();
+    if (!newWork && !structureChanged) return;
+
+    if (newWork && currentState.phase === 'complete') {
+      currentState = { ...currentState, phase: 'running' };
+      delete currentState.message;
+      delete currentState.pauseReason;
+    }
+    if (currentState.phase === 'running') {
+      for (const block of blocks) {
+        if (block.status === 'idle' && eligibleForViewport(block)) enqueue(block);
+      }
+    }
+    syncCounts();
+    if (
+      currentState.phase === 'running' &&
+      currentState.translated + currentState.failed === currentState.total
+    ) {
+      settleCompletedState();
+      return;
+    }
+    publish();
+    if (currentState.phase === 'running') void processQueue();
+  };
+
+  const refreshDynamicBlocks = (): void => {
+    const targetLanguage = currentState.targetLanguage;
+    if (!targetLanguage || currentState.phase === 'idle') return;
+    const selection = articleContainer?.isConnected
+      ? {
+          root: articleContainer,
+          blocks: candidateElements(articleContainer, targetLanguage),
+        }
+      : articleRoot(targetLanguage);
+    reconcileDynamicBlocks(selection.blocks, selection.root);
+  };
+
   const removeBlockError = (block: BilingualBlock): void => {
     block.errorElement?.remove();
     delete block.errorElement;
@@ -950,8 +1186,26 @@ export function createBilingualPageTranslator(
     void processQueue();
   };
 
+  const blockRequestStillCurrent = (block: BilingualBlock, requestedText: string): boolean =>
+    blocks.includes(block) &&
+    block.element.isConnected &&
+    block.text === requestedText &&
+    readableElementText(block.element) === requestedText;
+
+  const discardStaleBlockRequest = (
+    block: BilingualBlock,
+    requestId: string,
+  ): void => {
+    interactionPreemptedRequestIds.delete(requestId);
+    if (blocks.includes(block) && block.status === 'translating') block.status = 'idle';
+    syncCounts();
+    publish();
+    scheduleDynamicScan(0);
+  };
+
   const translateBlock = async (block: BilingualBlock, revision: number): Promise<void> => {
     const requestId = crypto.randomUUID();
+    const requestedText = block.text;
     const replacingTranslation = Boolean(block.translation);
     const preserveHidden = block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE) ?? false;
     activeRequestId = requestId;
@@ -973,6 +1227,10 @@ export function createBilingualPageTranslator(
       } satisfies RuntimeMessage) as TranslateRuntimeResponse;
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
+      if (!blockRequestStillCurrent(block, requestedText)) {
+        discardStaleBlockRequest(block, requestId);
+        return;
+      }
       if (!response.ok) {
         if (interactionPreemptedRequestIds.delete(requestId)) {
           block.status = 'idle';
@@ -1041,6 +1299,10 @@ export function createBilingualPageTranslator(
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
+      if (!blockRequestStillCurrent(block, requestedText)) {
+        discardStaleBlockRequest(block, requestId);
+        return;
+      }
       if (interactionPreemptedRequestIds.delete(requestId)) {
         block.status = 'idle';
         enqueue(block, 'front');
@@ -1154,6 +1416,7 @@ export function createBilingualPageTranslator(
     }
     const selection = articleRoot(targetLanguage);
     blocks = selection.blocks;
+    articleContainer = selection.root;
     sourcePageIdentity = pageIdentity(options.pageUrl());
     currentState = {
       phase: blocks.length ? 'running' : 'error',
@@ -1168,10 +1431,15 @@ export function createBilingualPageTranslator(
     installTranslationStyle();
     taskRevision += 1;
     observeBlocks();
+    observeArticleMutations();
     blocks.filter(eligibleForViewport).forEach((block) => enqueue(block));
     if (!queue.length && blocks[0]) enqueue(blocks[0]);
     navigationTimer = window.setInterval(() => {
-      if (pageIdentity(options.pageUrl()) !== sourcePageIdentity) clear();
+      if (pageIdentity(options.pageUrl()) !== sourcePageIdentity) {
+        resetForArticleChange('页面已切换，请重新开始正文翻译。');
+        return;
+      }
+      if (!articleContainer?.isConnected) scheduleDynamicScan(0);
     }, 750);
     void processQueue();
     return snapshot();

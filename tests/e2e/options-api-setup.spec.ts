@@ -23,6 +23,18 @@ interface TestChromeApi {
   };
 }
 
+async function openExtensionPage(page: Page, url: string): Promise<void> {
+  try {
+    await page.goto(url);
+  } catch (error) {
+    const interruptedBySamePage = error instanceof Error &&
+      error.message.includes('interrupted by another navigation') &&
+      page.url() === url;
+    if (!interruptedBySamePage) throw error;
+    await page.waitForLoadState('load');
+  }
+}
+
 test.beforeAll(async () => {
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-options-e2e-'));
   const extensionPath = path.resolve('.output/edge-mv3');
@@ -40,7 +52,7 @@ test.beforeAll(async () => {
   if (!serviceWorker) serviceWorker = await context.waitForEvent('serviceworker');
   extensionId = new URL(serviceWorker.url()).host;
   options = context.pages()[0] ?? await context.newPage();
-  await options.goto(`chrome-extension://${extensionId}/options.html`);
+  await openExtensionPage(options, `chrome-extension://${extensionId}/options.html`);
   const onboardingDialog = options.locator('#onboarding-dialog');
   if (await onboardingDialog.isVisible()) {
     await options.locator('#onboarding-skip').click();
