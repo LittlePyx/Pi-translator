@@ -1173,6 +1173,7 @@ export async function startSelectionTranslator(
   } catch {
     // Defaults keep the content UI usable while the service worker restarts.
   }
+  await bilingualPageTranslator?.restoreSession();
   bilingualPageTranslator?.refreshDiscovery();
 
   try {

@@ -115,11 +115,53 @@ describe('runtime message guard', () => {
           total: 9,
           translated: 3,
           failed: 0,
+          restored: 2,
           translationsHidden: false,
           targetLanguage: 'en',
         },
       },
     })).toBe(true);
+    const sessionDescriptor = {
+      pageKey: 'page-abc123',
+      targetLanguage: 'zh-CN',
+      sourceLanguage: 'auto',
+      style: 'general',
+      contentMode: 'auto',
+    };
+    const blockSignature = 'block-abc123';
+    expect(isRuntimeMessage({
+      type: 'GET_BILINGUAL_PAGE_SESSION',
+      payload: { descriptor: sessionDescriptor },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'SAVE_BILINGUAL_PAGE_SESSION',
+      payload: {
+        descriptor: sessionDescriptor,
+        documentSignatures: [blockSignature],
+        excludedSignatures: [],
+        translationsHidden: false,
+        activity: 'active',
+        block: {
+          signature: blockSignature,
+          translatedText: '恢复的译文',
+          hidden: false,
+        },
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CLEAR_BILINGUAL_PAGE_SESSION',
+      payload: { descriptor: sessionDescriptor },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'SAVE_BILINGUAL_PAGE_SESSION',
+      payload: {
+        descriptor: sessionDescriptor,
+        documentSignatures: [blockSignature],
+        excludedSignatures: ['block-not-in-document'],
+        translationsHidden: false,
+        activity: 'active',
+      },
+    })).toBe(false);
     expect(isRuntimeMessage({
       type: 'CONTROL_BILINGUAL_PAGE',
       payload: { tabId: 7, action: 'delete' },

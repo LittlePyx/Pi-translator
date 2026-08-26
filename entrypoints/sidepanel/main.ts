@@ -718,7 +718,8 @@ function syncBilingualPageControl(): void {
   bilingualPageLanguageCancel.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageLanguageConfirm.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   if (!languageConfirmation) pendingBilingualPageLanguageSwitch = undefined;
-  bilingualPageStatus.textContent = state.phase === 'running'
+  const restoredPrefix = state.restored ? `已恢复 ${state.restored} 段 · ` : '';
+  bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'running'
     ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 滚动继续`
     : state.phase === 'paused'
       ? state.pauseReason === 'interactive'
@@ -732,7 +733,7 @@ function syncBilingualPageControl(): void {
             : `已完成 ${state.translated}/${state.total} 段`
           : state.phase === 'error'
             ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
-            : '在原段落下方渐进显示译文';
+            : '在原段落下方渐进显示译文');
   bilingualPagePrimary.textContent = bilingualPagePending
     ? '稍候…'
     : state.pauseReason === 'interactive'

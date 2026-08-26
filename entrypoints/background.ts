@@ -48,6 +48,7 @@ import {
   ConfigurationRevisionMismatchError,
   configurationRevisionFromStorageChange,
 } from '../core/settings/configuration-revision';
+import { translationBehaviorFingerprint } from '../core/settings/translation-configuration';
 import { apiOriginPattern } from '../core/settings/api-access';
 import {
   getAutoInjectionPatterns,
@@ -101,6 +102,12 @@ import { splitTranslationSegments } from '../core/translation/sentence-segmentat
 import { splitLongTranslationText } from '../core/translation/text-chunker';
 import type { SupportedTargetLanguage } from '../core/language/supported-target-languages';
 import type { BilingualPageAction } from '../core/translation/bilingual-page';
+import {
+  bilingualPageSessionBehaviorKey,
+  clearBilingualPageSession,
+  getBilingualPageSession,
+  saveBilingualPageSession,
+} from '../core/translation/bilingual-page-session';
 import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
@@ -3766,6 +3773,12 @@ async function bilingualPageTab(tabId: number): Promise<{
   return { id: tab.id, url: tab.url };
 }
 
+async function currentBilingualPageSessionBehaviorKey(): Promise<string> {
+  return bilingualPageSessionBehaviorKey(
+    translationBehaviorFingerprint(await getSettings()),
+  );
+}
+
 async function startBilingualPage(
   tabId: number,
   targetLanguage: SupportedTargetLanguage,
@@ -3919,7 +3932,10 @@ export default defineBackground(() => {
       if (!revision.invalidatesTranslationState) return;
       for (const active of activeRequests.values()) active.controller.abort();
       activeRequests.clear();
-      await clearTranslationCheckpoint();
+      await Promise.all([
+        clearTranslationCheckpoint(),
+        clearBilingualPageSession(),
+      ]);
     },
   });
   void restrictSensitiveStorageAccess();
@@ -4245,6 +4261,7 @@ export default defineBackground(() => {
         clearTranslationCache(tabId),
         clearImageRegionTranslationCache(tabId),
         clearTranslationCheckpoint(tabId),
+        clearBilingualPageSession(tabId),
         clearSettingsRecoveryTicketsForTab(tabId),
         removeStoredPdfSidePanelSession(tabId),
         setContinuousTranslationPaused(tabId, false),
@@ -4360,6 +4377,56 @@ export default defineBackground(() => {
   browser.runtime.onMessage.addListener(
     (message: unknown, sender): Promise<unknown> | undefined => {
       if (!isRuntimeMessage(message)) return undefined;
+
+      if (
+        message.type === 'GET_BILINGUAL_PAGE_SESSION' ||
+        message.type === 'SAVE_BILINGUAL_PAGE_SESSION' ||
+        message.type === 'CLEAR_BILINGUAL_PAGE_SESSION'
+      ) {
+        const tabId = sender.tab?.id;
+        const sourceUrl = sender.url ?? sender.tab?.url;
+        if (
+          tabId === undefined ||
+          (sender.frameId ?? 0) !== 0 ||
+          !sourceUrl ||
+          !isInjectableWebUrl(sourceUrl) ||
+          isOverleafProjectUrl(sourceUrl)
+        ) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '正文会话只能由当前普通网页恢复。',
+            false,
+          )));
+        }
+        return (async () => {
+          try {
+            const behaviorKey = await currentBilingualPageSessionBehaviorKey();
+            if (message.type === 'GET_BILINGUAL_PAGE_SESSION') {
+              const session = await getBilingualPageSession(
+                tabId,
+                message.payload.descriptor,
+                behaviorKey,
+              );
+              return {
+                ok: true as const,
+                data: { ...(session ? { session } : {}) },
+              };
+            }
+            if (message.type === 'SAVE_BILINGUAL_PAGE_SESSION') {
+              await saveBilingualPageSession(
+                tabId,
+                message.payload,
+                behaviorKey,
+              );
+              return { ok: true as const, data: {} };
+            }
+            await clearBilingualPageSession(tabId, message.payload.descriptor);
+            return { ok: true as const, data: {} };
+          } catch (error) {
+            return errorResponse(error);
+          }
+        })();
+      }
 
       if (message.type === 'GET_PUBLIC_SETTINGS') {
         return Promise.all([getSettings(), getPausedSiteHosts()]).then(

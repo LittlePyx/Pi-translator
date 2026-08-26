@@ -487,7 +487,10 @@ function renderBilingualPageAction(): void {
             : bilingualPageState.phase === 'complete'
               ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
               : '翻译网页正文';
-  translatePage.title = bilingualPageState.message ?? (
+  const restoredHint = bilingualPageState.restored
+    ? `已从当前浏览器会话恢复 ${bilingualPageState.restored} 段译文。`
+    : '';
+  translatePage.title = restoredHint || bilingualPageState.message || (
     bilingualPageState.phase === 'idle'
       ? '保留网页原文，在正文段落下方渐进显示译文'
       : '正文译文只保留在当前标签页，可随时暂停、停止或清除'

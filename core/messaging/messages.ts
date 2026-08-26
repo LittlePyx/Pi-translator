@@ -38,6 +38,13 @@ import {
   type BilingualPageAction,
   type BilingualPageState,
 } from '../translation/bilingual-page';
+import {
+  isBilingualPageSessionDescriptor,
+  isBilingualPageSessionUpdate,
+  type BilingualPageSessionDescriptor,
+  type BilingualPageSessionSnapshot,
+  type BilingualPageSessionUpdate,
+} from '../translation/bilingual-page-session';
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
@@ -196,6 +203,18 @@ export type RuntimeMessage =
   | {
       type: 'BILINGUAL_PAGE_TAB_STATE_UPDATED';
       payload: { tabId: number; state: BilingualPageState };
+    }
+  | {
+      type: 'GET_BILINGUAL_PAGE_SESSION';
+      payload: { descriptor: BilingualPageSessionDescriptor };
+    }
+  | {
+      type: 'SAVE_BILINGUAL_PAGE_SESSION';
+      payload: BilingualPageSessionUpdate;
+    }
+  | {
+      type: 'CLEAR_BILINGUAL_PAGE_SESSION';
+      payload: { descriptor: BilingualPageSessionDescriptor };
     }
   | {
       type: 'START_WEB_REGION_SELECTION';
@@ -389,6 +408,9 @@ export interface TranslationSessionResult {
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
 export type BilingualPageStateResponse = RuntimeResponse<{ state: BilingualPageState }>;
+export type BilingualPageSessionResponse = RuntimeResponse<{
+  session?: BilingualPageSessionSnapshot;
+}>;
 export type RecognizePdfPageResponse = RuntimeResponse<{ page: CoordinateOcrPage }>;
 export type ConnectionTestResponse = RuntimeResponse<{
   connected: true;
@@ -764,6 +786,17 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       validTabId(payload.tabId) &&
       isBilingualPageState(payload.state),
     );
+  }
+  if (type === 'GET_BILINGUAL_PAGE_SESSION' || type === 'CLEAR_BILINGUAL_PAGE_SESSION') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['descriptor']) &&
+      isBilingualPageSessionDescriptor(payload.descriptor)
+    );
+  }
+  if (type === 'SAVE_BILINGUAL_PAGE_SESSION') {
+    return isBilingualPageSessionUpdate(message.payload);
   }
   if (type === 'GET_CONTINUOUS_TRANSLATION_STATE') {
     if (message.payload === undefined) return true;

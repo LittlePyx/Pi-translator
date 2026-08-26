@@ -32,6 +32,7 @@ let failNextRevisionRequest = false;
 let bilingualFailuresRemaining = 0;
 let failBilingualFormulaPreservation = false;
 let returnBilingualRetranslationOnce = false;
+let bilingualArticleRevision = 0;
 let returnRevisedVisionResultOnce = false;
 let returnPendingVisionReviewOnce = false;
 let failNextRecoveryRequestAfterPartial = false;
@@ -936,13 +937,18 @@ test.beforeAll(async () => {
                 <h1 id="article-title">A practical guide to reliable bilingual reading</h1>
                 <p id="article-intro">Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.</p>
                 <p id="article-intro-repeat">Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.</p>
-                <p id="article-method">The translator should process nearby paragraphs first, remain responsive during long articles, and let the reader pause without losing completed work.</p>
+                <p id="article-method">${bilingualArticleRevision
+                  ? 'The updated translator should restore unchanged paragraphs and translate only the article content that actually changed.'
+                  : 'The translator should process nearby paragraphs first, remain responsive during long articles, and let the reader pause without losing completed work.'}</p>
                 <pre id="article-code"><code>const result = await translateVisibleParagraphs(article);</code></pre>
                 <p id="article-inline-code">Run <code>npm run build:edge</code> after changing the extension, while keeping the score <span class="katex" data-latex="f(x)=x^2"><span>duplicated rendered x 2</span></span> and its surrounding explanation readable.</p>
                 <form><p id="article-form-help">Payment and account form instructions must not be collected as article content.</p><input type="password" value="private-value" /></form>
                 <div style="height:1500px" aria-hidden="true"></div>
                 <p id="article-later">A later paragraph should wait until the reader approaches it instead of consuming API requests for the entire page immediately.</p>
                 <blockquote id="article-summary">The finished bilingual view must be removable in one action so the webpage returns to its untouched original structure.</blockquote>
+                ${bilingualArticleRevision
+                  ? '<p id="article-new">A newly published paragraph should be translated after the reader refreshes the same article.</p>'
+                  : ''}
               </article>
             </main>
           </body>
@@ -1004,6 +1010,7 @@ test.afterEach(() => {
   bilingualFailuresRemaining = 0;
   failBilingualFormulaPreservation = false;
   returnBilingualRetranslationOnce = false;
+  bilingualArticleRevision = 0;
   returnRevisedVisionResultOnce = false;
   returnPendingVisionReviewOnce = false;
   failNextRecoveryRequestAfterPartial = false;
@@ -1235,6 +1242,118 @@ test('discovers bilingual article translation and lets the reader adjust its sco
   }
 });
 
+test('restores unchanged bilingual paragraphs after refresh and translates only changed content', async () => {
+  const popup = await context.newPage();
+  let originalTargetLanguage = 'zh-CN';
+  try {
+    await page.goto(ARTICLE_FIXTURE_URL);
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    originalTargetLanguage = await popup.locator('#target-language').inputValue();
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.locator('#target-language').selectOption('zh-CN');
+      await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    }
+    await page.bringToFront();
+    const startResponse = await popup.evaluate(async (articleUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          runtime: { sendMessage(message: object): Promise<unknown> };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === articleUrl);
+      return api.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: { tabId: tab?.id, targetLanguage: 'zh-CN' },
+      });
+    }, ARTICLE_FIXTURE_URL) as { ok?: boolean };
+    expect(startResponse.ok).toBe(true);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(page.locator('#pi-translator-bilingual-page-control output'))
+      .toContainText('已完成 7/7');
+
+    const introTranslation = page.locator(
+      '#article-intro + [data-pi-bilingual-translation]',
+    );
+    await introTranslation.hover();
+    await introTranslation.locator('button[data-action="visibility"]')
+      .evaluate((button) => (button as HTMLButtonElement).click());
+    await expect(introTranslation).toHaveAttribute('data-pi-bilingual-hidden', '');
+    await page.waitForTimeout(250);
+    await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.remove('translationCacheByTab');
+    });
+
+    const requestsBeforeRefresh = textRequests.length;
+    bilingualArticleRevision = 1;
+    await page.reload();
+    const restoredState = await popup.evaluate(async (articleUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          runtime: { sendMessage(message: object): Promise<unknown> };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === articleUrl);
+      return api.runtime.sendMessage({
+        type: 'GET_BILINGUAL_PAGE_STATE',
+        payload: { tabId: tab?.id },
+      });
+    }, ARTICLE_FIXTURE_URL) as { ok?: boolean };
+    expect(restoredState.ok).toBe(true);
+    await page.bringToFront();
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+
+    const pageControl = page.locator('#pi-translator-bilingual-page-control');
+    await expect(pageControl).toBeVisible();
+    await expect(pageControl.locator('output')).toContainText('已恢复 6 段');
+    await expect(page.locator('#article-intro + [data-pi-bilingual-translation]'))
+      .toHaveAttribute('data-pi-bilingual-hidden', '');
+    await expect(page.locator('#article-method + [data-pi-bilingual-translation]'))
+      .toBeVisible();
+    await expect(page.locator('#article-new + [data-pi-bilingual-translation]'))
+      .toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
+    await expect(pageControl.locator('output')).toContainText('已完成 8/8');
+    expect(textRequests.length - requestsBeforeRefresh).toBe(2);
+
+    await pageControl.locator('button[data-action="clear"]').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect.poll(() => popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.session.get('bilingualPageSessionsByTabV1');
+      return JSON.stringify(result.bilingualPageSessionsByTabV1 ?? {}).includes('page-');
+    })).toBe(false);
+  } finally {
+    bilingualArticleRevision = 0;
+    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
+      .click({ timeout: 500 }).catch(() => undefined);
+    await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { remove(keys: string | string[]): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.remove([
+        'translationCacheByTab',
+        'bilingualPageSessionsByTabV1',
+      ]);
+    }).catch(() => undefined);
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.bringToFront().catch(() => undefined);
+      await popup.reload().catch(() => undefined);
+      await popup.locator('#target-language').selectOption(originalTargetLanguage)
+        .catch(() => undefined);
+    }
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL).catch(() => undefined);
+  }
+});
+
 test('progressively adds and removes bilingual article translations without touching code or history', async ({}, testInfo) => {
   const popup = await context.newPage();
   const sidePanel = await context.newPage();
@@ -1303,6 +1422,9 @@ test('progressively adds and removes bilingual article translations without touc
       .toHaveText('译文已复制');
     await pageControl.locator('button[data-action="pause"]').click();
     await expect(pageControl.locator('output')).toContainText('已暂停');
+    // A request already sent before pausing is allowed to finish; no new request
+    // should begin once that active paragraph has settled.
+    await page.waitForTimeout(450);
     const translatedWhilePaused = await page.locator('[data-pi-bilingual-translation]').count();
     await page.waitForTimeout(450);
     await expect(page.locator('[data-pi-bilingual-translation]'))
@@ -2775,8 +2897,12 @@ test('dismisses one passive trigger and can pause the current site in place', as
     const style = getComputedStyle(button);
     return { opacity: style.opacity, pointerEvents: style.pointerEvents };
   })).toEqual({ opacity: '0', pointerEvents: 'none' });
-  await triggerShell.hover();
-  await expect.poll(() => dismiss.evaluate((button) => getComputedStyle(button).opacity)).toBe('1');
+  await expect.poll(async () => {
+    // Selection stabilization may replace the trigger once; re-hover the live
+    // shell so this assertion does not depend on the old node retaining :hover.
+    await triggerShell.hover();
+    return dismiss.evaluate((button) => getComputedStyle(button).opacity);
+  }).toBe('1');
   await expect.poll(() => triggerShell.locator('img').evaluate((image) => (
     image instanceof HTMLImageElement && image.complete && image.naturalWidth > 0
   ))).toBe(true);

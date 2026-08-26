@@ -25,6 +25,8 @@ export interface BilingualPageState {
   total: number;
   translated: number;
   failed: number;
+  /** Completed paragraphs restored from the current browser session. */
+  restored?: number;
   translationsHidden: boolean;
   targetLanguage?: string;
   message?: string;
@@ -190,7 +192,9 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     validCount(state.total) &&
     validCount(state.translated) &&
     validCount(state.failed) &&
+    (state.restored === undefined || validCount(state.restored)) &&
     (state.translated as number) + (state.failed as number) <= (state.total as number) &&
+    (state.restored === undefined || (state.restored as number) <= (state.translated as number)) &&
     typeof state.translationsHidden === 'boolean' &&
     (state.targetLanguage === undefined || isSupportedTargetLanguage(state.targetLanguage)) &&
     (state.message === undefined || (

@@ -1,4 +1,5 @@
 import type {
+  BilingualPageSessionResponse,
   RuntimeMessage,
   TranslateRuntimeResponse,
 } from '../messaging/messages';
@@ -25,6 +26,16 @@ import {
   type BilingualPageAction,
   type BilingualPageState,
 } from '../translation/bilingual-page';
+import {
+  bilingualPageSessionBlockSignature,
+  bilingualPageSessionMatchesDocument,
+  bilingualPageSessionPageKey,
+  type BilingualPageSessionActivity,
+  type BilingualPageSessionBlock,
+  type BilingualPageSessionDescriptor,
+  type BilingualPageSessionSnapshot,
+  type BilingualPageSessionUpdate,
+} from '../translation/bilingual-page-session';
 
 const TRANSLATION_ATTRIBUTE = 'data-pi-bilingual-translation';
 const TRANSLATION_TEXT_ATTRIBUTE = 'data-pi-bilingual-text';
@@ -102,6 +113,8 @@ interface BilingualBlock {
   element: HTMLElement;
   text: string;
   status: BlockStatus;
+  sessionSignature?: string;
+  restoredFromSession?: boolean;
   translation?: HTMLElement;
   pendingElement?: HTMLElement;
   pendingTimer?: number;
@@ -131,6 +144,7 @@ interface BilingualPageTranslatorOptions {
 
 export interface BilingualPageTranslator {
   start(targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState>;
+  restoreSession(): Promise<BilingualPageState | undefined>;
   control(action: BilingualPageAction): Promise<BilingualPageState>;
   suspendForInteractiveTranslation(): string | undefined;
   resumeAfterInteractiveTranslation(token: string | undefined): void;
@@ -693,6 +707,112 @@ export function createBilingualPageTranslator(
   let scopePreviewBlocks: BilingualBlock[] = [];
   let scopeDraftExcludedElements = new Set<HTMLElement>();
   const scopeExcludedElements = new Set<HTMLElement>();
+  let activeSessionDescriptor: BilingualPageSessionDescriptor | undefined;
+  let sessionDocumentSignatures: string[] = [];
+  let sessionExcludedSignatures = new Set<string>();
+  let sessionPersistenceTimer: number | undefined;
+  let sessionWriteTail: Promise<void> = Promise.resolve();
+  let scheduleSessionStatePersistence: () => void = () => undefined;
+  let persistSessionBlock: (block: BilingualBlock) => Promise<void> = async () => undefined;
+
+  const assignSessionSignatures = (candidates: BilingualBlock[]): void => {
+    const occurrences = new Map<string, number>();
+    for (const block of candidates) {
+      const base = blockSignature(block);
+      const occurrence = occurrences.get(base) ?? 0;
+      occurrences.set(base, occurrence + 1);
+      block.sessionSignature = bilingualPageSessionBlockSignature(
+        block.element.tagName,
+        block.text,
+        occurrence,
+      );
+    }
+  };
+
+  const sessionDescriptor = (
+    targetLanguage: SupportedTargetLanguage,
+  ): BilingualPageSessionDescriptor => {
+    const config = options.requestConfig();
+    return {
+      pageKey: bilingualPageSessionPageKey(pageIdentity(options.pageUrl())),
+      targetLanguage,
+      sourceLanguage: config.sourceLanguage,
+      style: config.style,
+      contentMode: config.contentMode,
+    };
+  };
+
+  const sessionActivity = (): BilingualPageSessionActivity => {
+    if (currentState.phase === 'paused' && currentState.pauseReason === 'user') return 'paused';
+    if (currentState.phase === 'stopped' || currentState.phase === 'error') return 'stopped';
+    return 'active';
+  };
+
+  const sessionUpdate = (block?: BilingualPageSessionBlock): BilingualPageSessionUpdate | undefined => {
+    if (!activeSessionDescriptor || !sessionDocumentSignatures.length) return undefined;
+    return {
+      descriptor: activeSessionDescriptor,
+      documentSignatures: [...sessionDocumentSignatures],
+      excludedSignatures: [...sessionExcludedSignatures]
+        .filter((signature) => sessionDocumentSignatures.includes(signature)),
+      translationsHidden: currentState.translationsHidden,
+      activity: sessionActivity(),
+      ...(block ? { block } : {}),
+    };
+  };
+
+  const enqueueSessionWrite = (update: BilingualPageSessionUpdate): Promise<void> => {
+    const write = sessionWriteTail.catch(() => undefined).then(async () => {
+      const response = await browser.runtime.sendMessage({
+        type: 'SAVE_BILINGUAL_PAGE_SESSION',
+        payload: update,
+      } satisfies RuntimeMessage) as BilingualPageSessionResponse;
+      if (!response.ok) throw new Error(response.error.message);
+    });
+    sessionWriteTail = write.catch(() => undefined);
+    return sessionWriteTail;
+  };
+
+  const persistSessionState = async (): Promise<void> => {
+    const update = sessionUpdate();
+    if (update) await enqueueSessionWrite(update);
+  };
+
+  scheduleSessionStatePersistence = (): void => {
+    if (!activeSessionDescriptor || !sessionDocumentSignatures.length || disposed) return;
+    if (sessionPersistenceTimer !== undefined) window.clearTimeout(sessionPersistenceTimer);
+    sessionPersistenceTimer = window.setTimeout(() => {
+      sessionPersistenceTimer = undefined;
+      void persistSessionState();
+    }, 120);
+  };
+
+  const discardSession = async (
+    descriptor = activeSessionDescriptor,
+  ): Promise<void> => {
+    if (!descriptor) return;
+    if (sessionPersistenceTimer !== undefined) window.clearTimeout(sessionPersistenceTimer);
+    sessionPersistenceTimer = undefined;
+    await sessionWriteTail.catch(() => undefined);
+    await browser.runtime.sendMessage({
+      type: 'CLEAR_BILINGUAL_PAGE_SESSION',
+      payload: { descriptor },
+    } satisfies RuntimeMessage).catch(() => undefined);
+  };
+
+  const readSession = async (
+    descriptor: BilingualPageSessionDescriptor,
+  ): Promise<BilingualPageSessionSnapshot | undefined> => {
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'GET_BILINGUAL_PAGE_SESSION',
+        payload: { descriptor },
+      } satisfies RuntimeMessage) as BilingualPageSessionResponse;
+      return response.ok ? response.data.session : undefined;
+    } catch {
+      return undefined;
+    }
+  };
 
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
@@ -700,6 +820,7 @@ export function createBilingualPageTranslator(
     if (disposed) return;
     renderControl();
     options.onStateChange(snapshot());
+    scheduleSessionStatePersistence();
   };
 
   const setState = (next: Partial<BilingualPageState>): void => {
@@ -711,12 +832,17 @@ export function createBilingualPageTranslator(
   const failedCount = (): number => blocks.filter((block) => block.status === 'error').length;
 
   const syncCounts = (): void => {
+    const restored = blocks.filter(
+      (block) => block.status === 'done' && block.restoredFromSession,
+    ).length;
     currentState = {
       ...currentState,
       total: blocks.length,
       translated: translatedCount(),
       failed: failedCount(),
+      ...(restored ? { restored } : {}),
     };
+    if (!restored) delete currentState.restored;
   };
 
   const cancelActiveRequest = (): void => {
@@ -1111,11 +1237,15 @@ export function createBilingualPageTranslator(
         }
       : articleRoot(targetLanguage);
     if (!selection.blocks.length) return;
+    assignSessionSignatures(selection.blocks);
     scopePreviewBlocks = selection.blocks;
     scopeDraftExcludedElements = new Set(
       selection.blocks
         .map((block) => block.element)
-        .filter((element) => scopeExcludedElements.has(element)),
+        .filter((element, index) => (
+          scopeExcludedElements.has(element) ||
+          sessionExcludedSignatures.has(selection.blocks[index]?.sessionSignature ?? '')
+        )),
     );
     resumeAfterScopePreview = currentState.phase === 'running';
     scopePreviewActive = true;
@@ -1161,7 +1291,14 @@ export function createBilingualPageTranslator(
   const applyScopePreview = (): void => {
     if (!scopePreviewActive || scopeSelectedCount() === 0) return;
     scopeExcludedElements.clear();
+    sessionExcludedSignatures.clear();
     for (const element of scopeDraftExcludedElements) scopeExcludedElements.add(element);
+    for (const block of scopePreviewBlocks) {
+      if (
+        scopeDraftExcludedElements.has(block.element) &&
+        block.sessionSignature
+      ) sessionExcludedSignatures.add(block.sessionSignature);
+    }
     const shouldStart = currentState.phase === 'idle';
     if (!shouldStart && articleContainer?.isConnected && currentState.targetLanguage) {
       const activeBlock = blocks.find((block) => block.status === 'translating');
@@ -1176,6 +1313,7 @@ export function createBilingualPageTranslator(
       );
     }
     finishScopePreview(!shouldStart);
+    scheduleSessionStatePersistence();
     if (shouldStart) void start(options.preferredTargetLanguage());
   };
 
@@ -1192,6 +1330,11 @@ export function createBilingualPageTranslator(
     removeInjectedContent();
     if (navigationTimer !== undefined) window.clearInterval(navigationTimer);
     navigationTimer = undefined;
+    if (sessionPersistenceTimer !== undefined) window.clearTimeout(sessionPersistenceTimer);
+    sessionPersistenceTimer = undefined;
+    activeSessionDescriptor = undefined;
+    sessionDocumentSignatures = [];
+    sessionExcludedSignatures.clear();
     sourcePageIdentity = '';
     consecutiveIsolatedFailures = 0;
     interactiveSuspensions.clear();
@@ -1276,6 +1419,19 @@ export function createBilingualPageTranslator(
       ?.querySelector<HTMLElement>(`[${TRANSLATION_TEXT_ATTRIBUTE}]`)
       ?.textContent
       ?.trim() ?? '';
+
+  persistSessionBlock = async (block: BilingualBlock): Promise<void> => {
+    const translatedText = translationText(block);
+    if (!block.sessionSignature || !translatedText) return;
+    if (sessionPersistenceTimer !== undefined) window.clearTimeout(sessionPersistenceTimer);
+    sessionPersistenceTimer = undefined;
+    const update = sessionUpdate({
+      signature: block.sessionSignature,
+      translatedText,
+      hidden: block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE) ?? false,
+    });
+    if (update) await enqueueSessionWrite(update);
+  };
 
   const articleTitleText = (): string | undefined => {
     const heading = blocks.find((block) => block.element.tagName === 'H1')?.text;
@@ -1399,6 +1555,7 @@ export function createBilingualPageTranslator(
     if (retranslate) retranslate.hidden = hidden;
     if (visibility) visibility.textContent = hidden ? '显示译文' : '隐藏';
     setTranslationFeedback(block, hidden ? '本段译文已隐藏' : '', 0);
+    void persistSessionBlock(block);
   };
 
   const showBlockPending = (
@@ -1636,7 +1793,10 @@ export function createBilingualPageTranslator(
     }
     if (clearButton) clearButton.hidden = false;
     if (output) {
-      output.textContent = currentState.phase === 'error'
+      const restoredPrefix = currentState.restored
+        ? `已恢复 ${currentState.restored} 段 · `
+        : '';
+      output.textContent = restoredPrefix + (currentState.phase === 'error'
         ? currentState.message ?? '正文翻译暂时中断'
         : currentState.phase === 'complete'
           ? currentState.failed
@@ -1648,7 +1808,7 @@ export function createBilingualPageTranslator(
               : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
               ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
-              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`;
+              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`);
     }
     if (visibility) {
       const actionLabel = currentState.translationsHidden ? '展开译文' : '收起译文';
@@ -1786,16 +1946,21 @@ export function createBilingualPageTranslator(
           delete block.errorElement;
           delete block.bypassCacheNext;
           delete block.restoreStateAfterRetranslation;
+          delete block.restoredFromSession;
           block.text = candidate.text;
           block.status = 'idle';
           newWork = true;
         }
+        if (candidate.sessionSignature) block.sessionSignature = candidate.sessionSignature;
+        else delete block.sessionSignature;
       } else {
         const reusable = disconnectedBySignature.get(blockSignature(candidate));
         block = reusable?.find((item) => !used.has(item));
         if (block) {
           observer?.unobserve(block.element);
           block.element = candidate.element;
+          if (candidate.sessionSignature) block.sessionSignature = candidate.sessionSignature;
+          else delete block.sessionSignature;
           used.add(block);
           if (block.status === 'done' && block.translation) {
             insertAfterSource(block, block.translation);
@@ -1866,10 +2031,24 @@ export function createBilingualPageTranslator(
     const selection = articleContainer?.isConnected
       ? {
           root: articleContainer,
-          blocks: candidateElements(articleContainer, targetLanguage, scopeExcludedElements),
+          blocks: candidateElements(articleContainer, targetLanguage),
         }
-      : articleRoot(targetLanguage, scopeExcludedElements);
-    reconcileDynamicBlocks(selection.blocks, selection.root);
+      : articleRoot(targetLanguage);
+    assignSessionSignatures(selection.blocks);
+    sessionDocumentSignatures = selection.blocks
+      .map((block) => block.sessionSignature)
+      .filter((signature): signature is string => Boolean(signature));
+    scopeExcludedElements.clear();
+    for (const block of selection.blocks) {
+      if (
+        block.sessionSignature &&
+        sessionExcludedSignatures.has(block.sessionSignature)
+      ) scopeExcludedElements.add(block.element);
+    }
+    reconcileDynamicBlocks(
+      selection.blocks.filter((block) => !scopeExcludedElements.has(block.element)),
+      selection.root,
+    );
   };
 
   const removeBlockError = (block: BilingualBlock): void => {
@@ -2104,12 +2283,17 @@ export function createBilingualPageTranslator(
       insertTranslation(block, translation);
       if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
+      delete block.restoredFromSession;
       consecutiveIsolatedFailures = 0;
       if (!replacingTranslation && !currentState.translationsHidden) {
         void revealTranslationActionsHint(block);
       }
-      if (restorePageStateAfterRetranslation(block)) return;
+      if (restorePageStateAfterRetranslation(block)) {
+        void persistSessionBlock(block);
+        return;
+      }
       if (!settleCompletedState()) publish();
+      void persistSessionBlock(block);
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
@@ -2220,7 +2404,10 @@ export function createBilingualPageTranslator(
     resume(false);
   };
 
-  const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> => {
+  const begin = async (
+    targetLanguage: SupportedTargetLanguage,
+    requireStoredSession: boolean,
+  ): Promise<BilingualPageState | undefined> => {
     if (disposed) return snapshot();
     destroyLauncher();
     stopLauncherNavigationMonitor();
@@ -2235,10 +2422,45 @@ export function createBilingualPageTranslator(
         ) resume();
         return snapshot();
       }
+      await discardSession();
       clear(false);
     }
-    const selection = articleRoot(targetLanguage, scopeExcludedElements);
-    blocks = selection.blocks;
+    const selection = articleRoot(targetLanguage);
+    assignSessionSignatures(selection.blocks);
+    const descriptor = sessionDescriptor(targetLanguage);
+    let stored = await readSession(descriptor);
+    if (disposed) return snapshot();
+    const documentSignatures = selection.blocks
+      .map((block) => block.sessionSignature)
+      .filter((signature): signature is string => Boolean(signature));
+    if (stored && !bilingualPageSessionMatchesDocument(
+      stored.documentSignatures,
+      documentSignatures,
+    )) {
+      await discardSession(descriptor);
+      stored = undefined;
+    }
+    if (requireStoredSession && !stored) return undefined;
+
+    const selectedScopeSignatures = new Set(
+      selection.blocks
+        .filter((block) => scopeExcludedElements.has(block.element))
+        .map((block) => block.sessionSignature)
+        .filter((signature): signature is string => Boolean(signature)),
+    );
+    activeSessionDescriptor = descriptor;
+    sessionDocumentSignatures = documentSignatures;
+    sessionExcludedSignatures = new Set(
+      stored?.excludedSignatures ?? selectedScopeSignatures,
+    );
+    scopeExcludedElements.clear();
+    for (const block of selection.blocks) {
+      if (
+        block.sessionSignature &&
+        sessionExcludedSignatures.has(block.sessionSignature)
+      ) scopeExcludedElements.add(block.element);
+    }
+    blocks = selection.blocks.filter((block) => !scopeExcludedElements.has(block.element));
     articleContainer = selection.root;
     sourcePageIdentity = pageIdentity(options.pageUrl());
     currentState = {
@@ -2246,18 +2468,66 @@ export function createBilingualPageTranslator(
       total: blocks.length,
       translated: 0,
       failed: 0,
-      translationsHidden: false,
+      translationsHidden: stored?.translationsHidden ?? false,
       targetLanguage,
       ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
     };
+    if (stored) {
+      const storedBlocks = new Map(stored.blocks.map((block) => [block.signature, block]));
+      for (const block of blocks) {
+        const restored = block.sessionSignature
+          ? storedBlocks.get(block.sessionSignature)
+          : undefined;
+        if (!restored) continue;
+        const translation = translationElement(
+          block,
+          restored.translatedText,
+          targetLanguage,
+          {
+            copy: () => void copyBlockTranslation(block),
+            retranslate: () => requestBlockRetranslation(block),
+            toggleHidden: () => setTranslationHidden(
+              block,
+              !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE),
+            ),
+            toggleMore: () => setTouchActionsExpanded(
+              block,
+              !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
+            ),
+          },
+        );
+        translation.toggleAttribute(
+          TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE,
+          currentState.translationsHidden,
+        );
+        insertTranslation(block, translation);
+        if (restored.hidden) setTranslationHidden(block, true);
+        block.status = 'done';
+        block.restoredFromSession = true;
+      }
+      syncCounts();
+      if (stored.activity === 'paused') {
+        currentState.phase = 'paused';
+        currentState.pauseReason = 'user';
+        currentState.message = '已恢复上次暂停的正文翻译。';
+      } else if (stored.activity === 'stopped') {
+        currentState.phase = 'stopped';
+        currentState.message = '已恢复上次停止时的正文译文。';
+      } else if (currentState.translated === currentState.total) {
+        currentState.phase = 'complete';
+      }
+    }
     publish();
     if (!blocks.length) return snapshot();
     installTranslationStyle();
     taskRevision += 1;
     observeBlocks();
     observeArticleMutations();
-    blocks.filter(eligibleForViewport).forEach((block) => enqueue(block));
-    if (!queue.length && blocks[0]) enqueue(blocks[0]);
+    if (currentState.phase === 'running') {
+      blocks.filter(eligibleForViewport).forEach((block) => enqueue(block));
+      const firstPendingBlock = blocks.find((block) => block.status === 'idle');
+      if (!queue.length && firstPendingBlock) enqueue(firstPendingBlock);
+    }
     navigationTimer = window.setInterval(() => {
       if (pageIdentity(options.pageUrl()) !== sourcePageIdentity) {
         resetForArticleChange('页面已切换，请重新开始正文翻译。');
@@ -2265,12 +2535,22 @@ export function createBilingualPageTranslator(
       }
       if (!articleContainer?.isConnected) scheduleDynamicScan(0);
     }, 750);
-    void processQueue();
+    void persistSessionState();
+    if (currentState.phase === 'running') void processQueue();
     return snapshot();
+  };
+
+  const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> =>
+    await begin(targetLanguage, false) ?? snapshot();
+
+  const restoreSession = async (): Promise<BilingualPageState | undefined> => {
+    if (disposed || currentState.phase !== 'idle') return undefined;
+    return begin(options.preferredTargetLanguage(), true);
   };
 
   const control = async (action: BilingualPageAction): Promise<BilingualPageState> => {
     if (action === 'clear') {
+      await discardSession();
       clear();
       return snapshot();
     }
@@ -2323,6 +2603,7 @@ export function createBilingualPageTranslator(
 
   return {
     start,
+    restoreSession,
     control,
     refreshDiscovery,
     suspendForInteractiveTranslation,
@@ -2332,6 +2613,7 @@ export function createBilingualPageTranslator(
       if (disposed) return;
       if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
       launcherRefreshTimer = undefined;
+      void persistSessionState();
       clear(false);
       scopeExcludedElements.clear();
       stopLauncherNavigationMonitor();
