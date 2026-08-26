@@ -108,6 +108,10 @@ describe('runtime message guard', () => {
       payload: { tabId: 7, action: 'toggle-translations' },
     })).toBe(true);
     expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'display-translation' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
       type: 'BILINGUAL_PAGE_STATE_UPDATED',
       payload: {
         state: {
@@ -116,6 +120,7 @@ describe('runtime message guard', () => {
           translated: 3,
           failed: 0,
           restored: 2,
+          displayMode: 'translation',
           translationsHidden: false,
           targetLanguage: 'en',
         },
@@ -139,6 +144,7 @@ describe('runtime message guard', () => {
         descriptor: sessionDescriptor,
         documentSignatures: [blockSignature],
         excludedSignatures: [],
+        displayMode: 'bilingual',
         translationsHidden: false,
         activity: 'active',
         block: {
@@ -158,6 +164,7 @@ describe('runtime message guard', () => {
         descriptor: sessionDescriptor,
         documentSignatures: [blockSignature],
         excludedSignatures: ['block-not-in-document'],
+        displayMode: 'bilingual',
         translationsHidden: false,
         activity: 'active',
       },

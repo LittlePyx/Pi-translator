@@ -18,7 +18,12 @@ export type BilingualPageAction =
   | 'resume'
   | 'stop'
   | 'clear'
-  | 'toggle-translations';
+  | 'toggle-translations'
+  | 'display-bilingual'
+  | 'display-translation'
+  | 'display-source';
+
+export type BilingualPageDisplayMode = 'bilingual' | 'translation' | 'source';
 
 export interface BilingualPageState {
   phase: BilingualPagePhase;
@@ -27,6 +32,8 @@ export interface BilingualPageState {
   failed: number;
   /** Completed paragraphs restored from the current browser session. */
   restored?: number;
+  /** Explicit reading layout; omitted states from older content scripts remain bilingual/source. */
+  displayMode?: BilingualPageDisplayMode;
   translationsHidden: boolean;
   targetLanguage?: string;
   message?: string;
@@ -38,8 +45,15 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   total: 0,
   translated: 0,
   failed: 0,
+  displayMode: 'bilingual',
   translationsHidden: false,
 };
+
+export function bilingualPageDisplayMode(
+  state: Pick<BilingualPageState, 'displayMode' | 'translationsHidden'>,
+): BilingualPageDisplayMode {
+  return state.displayMode ?? (state.translationsHidden ? 'source' : 'bilingual');
+}
 
 /** Only completed paragraphs carry a user-visible replacement cost. */
 export function bilingualPageLanguageSwitchConfirmation(
@@ -195,6 +209,12 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     (state.restored === undefined || validCount(state.restored)) &&
     (state.translated as number) + (state.failed as number) <= (state.total as number) &&
     (state.restored === undefined || (state.restored as number) <= (state.translated as number)) &&
+    (state.displayMode === undefined || ['bilingual', 'translation', 'source'].includes(
+      typeof state.displayMode === 'string' ? state.displayMode : '',
+    )) &&
+    (state.displayMode === undefined || (
+      state.translationsHidden === (state.displayMode === 'source')
+    )) &&
     typeof state.translationsHidden === 'boolean' &&
     (state.targetLanguage === undefined || isSupportedTargetLanguage(state.targetLanguage)) &&
     (state.message === undefined || (

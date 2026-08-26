@@ -178,6 +178,31 @@ main {
 .bilingual-page-language select:hover:not(:disabled) { background: #f0efff; }
 .bilingual-page-language select:disabled { color: #929aaa; cursor: wait; }
 .bilingual-page-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 3px; }
+.bilingual-page-display {
+  display: inline-flex;
+  min-height: 30px;
+  align-items: center;
+  gap: 2px;
+  border-radius: 5px;
+  padding-left: 5px;
+  color: #737d90;
+  background: #f4f4ff;
+  font-size: 9.5px;
+  font-weight: 560;
+}
+.bilingual-page-display select {
+  min-height: 30px;
+  border: 0;
+  border-radius: 5px;
+  padding: 2px 18px 2px 3px;
+  color: #4f46e5;
+  background: transparent;
+  cursor: pointer;
+  font: 650 10.5px/1.2 inherit;
+}
+.bilingual-page-display:hover { background: #e9e8ff; }
+.bilingual-page-display:has(select:disabled) { opacity: .65; cursor: wait; }
+.bilingual-page-display select:disabled { cursor: wait; }
 .bilingual-page-actions button,
 .bilingual-page-language-confirmation button {
   min-height: 30px;
@@ -707,6 +732,9 @@ button:focus-visible {
   .bilingual-page-language { color: #8f9aab; }
   .bilingual-page-language select { color: #c1bcff; }
   .bilingual-page-language select:hover:not(:disabled) { background: #202938; }
+  .bilingual-page-display { color: #9ba5b5; background: #292943; }
+  .bilingual-page-display:hover { background: #363653; }
+  .bilingual-page-display select { color: #c7c3ff; }
   .bilingual-page-actions button { color: #c7c3ff; background: #292943; }
   .bilingual-page-actions button:hover:not(:disabled) { background: #363653; }
   .bilingual-page-actions #bilingual-page-clear { color: #a6afbd; background: transparent; }
@@ -823,7 +851,8 @@ button:focus-visible {
   }
   .web-region-action { padding-inline: 7px; }
   .text-action { padding-left: 6px; }
-  .bilingual-page-language > span { display: none; }
+  .bilingual-page-language > span,
+  .bilingual-page-display > span { display: none; }
   .bilingual-page-language-confirmation span { grid-column: 1 / -1; }
   .bilingual-page-language-confirmation button { justify-self: end; }
   .bilingual-page-language-confirmation #bilingual-page-language-cancel { grid-column: 2; }

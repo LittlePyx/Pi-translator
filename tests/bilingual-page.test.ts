@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  bilingualPageDisplayMode,
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
@@ -69,11 +70,30 @@ describe('bilingual webpage reading', () => {
       total: 12,
       translated: 4,
       failed: 0,
+      displayMode: 'source',
       translationsHidden: true,
       targetLanguage: 'zh-CN',
       pauseReason: 'interactive',
       message: '正在处理划词，正文稍后继续。',
     })).toBe(true);
+    expect(isBilingualPageState({
+      phase: 'complete',
+      total: 2,
+      translated: 2,
+      failed: 0,
+      displayMode: 'translation',
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    })).toBe(true);
+    expect(isBilingualPageState({
+      phase: 'complete',
+      total: 2,
+      translated: 2,
+      failed: 0,
+      displayMode: 'source',
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    })).toBe(false);
     expect(isBilingualPageState({
       phase: 'running',
       total: 2,
@@ -104,6 +124,15 @@ describe('bilingual webpage reading', () => {
       translated: 0,
       failed: 0,
     })).toBe(false);
+  });
+
+  it('derives a compatible display mode for older tab state updates', () => {
+    expect(bilingualPageDisplayMode({ translationsHidden: false })).toBe('bilingual');
+    expect(bilingualPageDisplayMode({ translationsHidden: true })).toBe('source');
+    expect(bilingualPageDisplayMode({
+      displayMode: 'translation',
+      translationsHidden: false,
+    })).toBe('translation');
   });
 
   it('confirms a language switch only when completed paragraph translations will be replaced', () => {

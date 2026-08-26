@@ -39,6 +39,7 @@ const update = (
   descriptor: sessionDescriptor,
   documentSignatures: signatures,
   excludedSignatures: [signatures[2]!],
+  displayMode: 'bilingual',
   translationsHidden: false,
   activity: 'active',
   block,
@@ -85,12 +86,14 @@ describe('bilingual webpage session repository', () => {
         translatedText: '可恢复的第一段正文。',
         hidden: true,
       }),
+      displayMode: 'source',
       translationsHidden: true,
       activity: 'paused',
     }, behavior);
 
     const restored = await getBilingualPageSession(7, descriptor(), behavior);
     expect(restored).toMatchObject({
+      displayMode: 'source',
       translationsHidden: true,
       activity: 'paused',
     });
@@ -106,6 +109,20 @@ describe('bilingual webpage session repository', () => {
         hidden: false,
       },
     ]);
+  });
+
+  it('retains translation-only reading mode without treating translations as hidden', async () => {
+    const behavior = bilingualPageSessionBehaviorKey('translation-layout');
+    await saveBilingualPageSession(7, {
+      ...update(),
+      displayMode: 'translation',
+      translationsHidden: false,
+    }, behavior);
+
+    await expect(getBilingualPageSession(7, descriptor(), behavior)).resolves.toMatchObject({
+      displayMode: 'translation',
+      translationsHidden: false,
+    });
   });
 
   it('invalidates stale model behavior and isolates tabs and page descriptors', async () => {

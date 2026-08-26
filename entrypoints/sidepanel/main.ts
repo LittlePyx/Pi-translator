@@ -71,9 +71,11 @@ import {
   type SupportedTargetLanguage,
 } from '../../core/language/supported-target-languages';
 import {
+  bilingualPageDisplayMode,
   bilingualPageLanguageSwitchConfirmation,
   EMPTY_BILINGUAL_PAGE_STATE,
   type BilingualPageAction,
+  type BilingualPageDisplayMode,
   type BilingualPageState,
 } from '../../core/translation/bilingual-page';
 
@@ -97,7 +99,8 @@ const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const bilingualPageControl = element<HTMLElement>('bilingual-page-control');
 const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
-const bilingualPageVisibility = element<HTMLButtonElement>('bilingual-page-visibility');
+const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
+const bilingualPageDisplay = element<HTMLSelectElement>('bilingual-page-display');
 const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
 const bilingualPageLanguage = element<HTMLSelectElement>('bilingual-page-language');
 const bilingualPageLanguageConfirmation = element<HTMLElement>(
@@ -749,13 +752,9 @@ function syncBilingualPageControl(): void {
               : '开始';
   bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
   bilingualPagePrimary.disabled = bilingualPagePending || state.pauseReason === 'interactive';
-  const visibilityActionLabel = state.translationsHidden ? '展开全部译文' : '收起全部译文';
-  bilingualPageVisibility.textContent = state.translationsHidden ? '展开译文' : '收起译文';
-  bilingualPageVisibility.title = visibilityActionLabel;
-  bilingualPageVisibility.setAttribute('aria-label', visibilityActionLabel);
-  bilingualPageVisibility.setAttribute('aria-pressed', String(state.translationsHidden));
-  bilingualPageVisibility.hidden = state.phase === 'idle' || state.translated === 0;
-  bilingualPageVisibility.disabled = bilingualPagePending;
+  bilingualPageDisplay.value = bilingualPageDisplayMode(state);
+  bilingualPageDisplayControl.hidden = state.phase === 'idle' || state.translated === 0;
+  bilingualPageDisplay.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
 }
@@ -2385,8 +2384,13 @@ continuousTranslationToggle.addEventListener('click', () => {
 bilingualPagePrimary.addEventListener('click', () => {
   void updateBilingualPage(bilingualPagePrimaryAction());
 });
-bilingualPageVisibility.addEventListener('click', () => {
-  void updateBilingualPage('toggle-translations');
+bilingualPageDisplay.addEventListener('change', () => {
+  const mode = bilingualPageDisplay.value as BilingualPageDisplayMode;
+  if (!['bilingual', 'translation', 'source'].includes(mode)) {
+    syncBilingualPageControl();
+    return;
+  }
+  void updateBilingualPage(`display-${mode}` as BilingualPageAction);
 });
 bilingualPageClear.addEventListener('click', () => {
   void updateBilingualPage('clear');

@@ -660,7 +660,10 @@ function validBilingualPageAction(value: unknown): value is BilingualPageAction 
     value === 'resume' ||
     value === 'stop' ||
     value === 'clear' ||
-    value === 'toggle-translations';
+    value === 'toggle-translations' ||
+    value === 'display-bilingual' ||
+    value === 'display-translation' ||
+    value === 'display-source';
 }
 
 function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {

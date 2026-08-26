@@ -2253,6 +2253,7 @@ export async function startSelectionTranslator(
           total: 0,
           translated: 0,
           failed: 0,
+          displayMode: 'bilingual',
           translationsHidden: false,
         } },
       });

@@ -17,6 +17,7 @@ import type {
 } from '../translation/types';
 import {
   bilingualPageLanguageSwitchConfirmation,
+  bilingualPageDisplayMode,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
@@ -24,6 +25,7 @@ import {
   isIsolatedBilingualBlockError,
   normalizeBilingualPageText,
   type BilingualPageAction,
+  type BilingualPageDisplayMode,
   type BilingualPageState,
 } from '../translation/bilingual-page';
 import {
@@ -43,6 +45,7 @@ const TRANSLATION_ACTIONS_ATTRIBUTE = 'data-pi-bilingual-actions';
 const TRANSLATION_FEEDBACK_ATTRIBUTE = 'data-pi-bilingual-feedback';
 const TRANSLATION_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-hidden';
 const TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-global-hidden';
+const SOURCE_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-source-hidden';
 const TRANSLATION_BUSY_ATTRIBUTE = 'data-pi-bilingual-busy';
 const TRANSLATION_HINT_ATTRIBUTE = 'data-pi-bilingual-hint';
 const TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE = 'data-pi-bilingual-touch-expanded';
@@ -154,8 +157,20 @@ export interface BilingualPageTranslator {
 }
 
 function elementVisible(element: HTMLElement): boolean {
+  // Translation-only mode deliberately hides completed source blocks. They must
+  // remain discoverable so dynamic rescans do not mistake our own presentation
+  // CSS for an article replacement.
+  if (element.hasAttribute(SOURCE_HIDDEN_ATTRIBUTE)) return true;
   const style = getComputedStyle(element);
   return style.display !== 'none' && style.visibility !== 'hidden' && element.getClientRects().length > 0;
+}
+
+function hasExcludedAncestor(element: HTMLElement): boolean {
+  const excluded = element.closest(EXCLUDED_ANCESTOR_SELECTOR);
+  if (!excluded) return false;
+  // applyBlockDisplayMode adds aria-hidden to the source itself. All other
+  // excluded ancestors (including an originally hidden source) still win.
+  return excluded !== element || !element.hasAttribute(SOURCE_HIDDEN_ATTRIBUTE);
 }
 
 function readableElementText(element: HTMLElement): string {
@@ -200,6 +215,25 @@ function linkTextLength(element: HTMLElement): number {
     .reduce((total, link) => total + normalizeBilingualPageText(link.textContent ?? '').length, 0);
 }
 
+function hasExcludedSourceDescendant(element: HTMLElement): boolean {
+  const selector = [
+    'button',
+    'input',
+    'select',
+    'textarea',
+    'pre',
+    '.katex-display',
+    '.MathJax_Display',
+    'math[display="block"]',
+    'mjx-container[display="true"]',
+  ].join(',');
+  return [...element.querySelectorAll(selector)].some((descendant) => !descendant.closest([
+    `[${TRANSLATION_ATTRIBUTE}]`,
+    `[${TRANSLATION_PENDING_ATTRIBUTE}]`,
+    `[${ERROR_ATTRIBUTE}]`,
+  ].join(',')));
+}
+
 function candidateElements(
   root: ParentNode,
   targetLanguage: string,
@@ -209,10 +243,10 @@ function candidateElements(
   for (const element of root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)) {
     if (
       excludedElements?.has(element) ||
-      element.closest(EXCLUDED_ANCESTOR_SELECTOR) ||
+      hasExcludedAncestor(element) ||
       !elementVisible(element) ||
-      Boolean(element.querySelector('button, input, select, textarea, pre, .katex-display, .MathJax_Display, math[display="block"], mjx-container[display="true"]')) ||
-      (element.tagName === 'LI' && Boolean(element.querySelector('p, blockquote'))) ||
+      hasExcludedSourceDescendant(element) ||
+      (element.tagName === 'LI' && Boolean(element.querySelector('p, blockquote, ul, ol, li'))) ||
       (element.tagName === 'BLOCKQUOTE' && Boolean(element.querySelector('p, blockquote')))
     ) continue;
     const text = readableElementText(element);
@@ -363,6 +397,8 @@ function applySourceTypography(
   block: BilingualBlock,
   maximumFontSize: number,
 ): void {
+  const sourceHiddenMode = block.element.getAttribute(SOURCE_HIDDEN_ATTRIBUTE);
+  if (sourceHiddenMode !== null) block.element.removeAttribute(SOURCE_HIDDEN_ATTRIBUTE);
   const sourceStyle = getComputedStyle(block.element);
   const sourceFontSize = Number.parseFloat(sourceStyle.fontSize);
   target.style.setProperty('--pi-bilingual-color', sourceStyle.color);
@@ -373,6 +409,9 @@ function applySourceTypography(
       ? `${Math.min(maximumFontSize, sourceFontSize)}px`
       : sourceStyle.fontSize,
   );
+  if (sourceHiddenMode !== null) {
+    block.element.setAttribute(SOURCE_HIDDEN_ATTRIBUTE, sourceHiddenMode);
+  }
 }
 
 function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
@@ -462,6 +501,17 @@ function installTranslationStyle(): void {
       overflow-wrap: anywhere !important;
     }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE}] {
+      display: none !important;
+    }
+    [${SOURCE_HIDDEN_ATTRIBUTE}="block"] {
+      display: none !important;
+    }
+    [${SOURCE_HIDDEN_ATTRIBUTE}="inline"] {
+      color: transparent !important;
+      font-size: 0 !important;
+      line-height: 0 !important;
+    }
+    [${SOURCE_HIDDEN_ATTRIBUTE}="inline"] > :not([${TRANSLATION_ATTRIBUTE}]) {
       display: none !important;
     }
     [${TRANSLATION_PENDING_ATTRIBUTE}] {
@@ -714,6 +764,9 @@ export function createBilingualPageTranslator(
   let sessionWriteTail: Promise<void> = Promise.resolve();
   let scheduleSessionStatePersistence: () => void = () => undefined;
   let persistSessionBlock: (block: BilingualBlock) => Promise<void> = async () => undefined;
+  let applyBlockDisplayMode: (block: BilingualBlock) => void = () => undefined;
+  let restoreBlockSource: (block: BilingualBlock) => void = () => undefined;
+  const originalSourceAriaHidden = new WeakMap<HTMLElement, string | null>();
 
   const assignSessionSignatures = (candidates: BilingualBlock[]): void => {
     const occurrences = new Map<string, number>();
@@ -755,6 +808,7 @@ export function createBilingualPageTranslator(
       documentSignatures: [...sessionDocumentSignatures],
       excludedSignatures: [...sessionExcludedSignatures]
         .filter((signature) => sessionDocumentSignatures.includes(signature)),
+      displayMode: bilingualPageDisplayMode(currentState),
       translationsHidden: currentState.translationsHidden,
       activity: sessionActivity(),
       ...(block ? { block } : {}),
@@ -862,6 +916,7 @@ export function createBilingualPageTranslator(
     mutationTimer = undefined;
     for (const block of blocks) {
       clearBlockPending(block);
+      restoreBlockSource(block);
       block.translation?.remove();
       block.errorElement?.remove();
     }
@@ -1361,6 +1416,7 @@ export function createBilingualPageTranslator(
       total: 0,
       translated: 0,
       failed: 0,
+      displayMode: 'bilingual',
       translationsHidden: false,
       ...(targetLanguage ? { targetLanguage } : {}),
       message,
@@ -1554,6 +1610,7 @@ export function createBilingualPageTranslator(
     if (copy) copy.hidden = hidden;
     if (retranslate) retranslate.hidden = hidden;
     if (visibility) visibility.textContent = hidden ? '显示译文' : '隐藏';
+    applyBlockDisplayMode(block);
     setTranslationFeedback(block, hidden ? '本段译文已隐藏' : '', 0);
     void persistSessionBlock(block);
   };
@@ -1593,13 +1650,56 @@ export function createBilingualPageTranslator(
     );
   };
 
-  const setAllTranslationsHidden = (hidden: boolean): void => {
-    currentState = { ...currentState, translationsHidden: hidden };
-    for (const block of blocks) {
-      block.translation?.toggleAttribute(TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE, hidden);
-      if (hidden && block.status === 'translating') clearBlockPending(block);
+  restoreBlockSource = (block: BilingualBlock): void => {
+    block.element.removeAttribute(SOURCE_HIDDEN_ATTRIBUTE);
+    if (!originalSourceAriaHidden.has(block.element)) return;
+    const original = originalSourceAriaHidden.get(block.element);
+    originalSourceAriaHidden.delete(block.element);
+    if (original === null || original === undefined) block.element.removeAttribute('aria-hidden');
+    else block.element.setAttribute('aria-hidden', original);
+  };
+
+  applyBlockDisplayMode = (block: BilingualBlock): void => {
+    const mode = bilingualPageDisplayMode(currentState);
+    const hideTranslation = mode === 'source';
+    block.translation?.toggleAttribute(
+      TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE,
+      hideTranslation,
+    );
+    const hideSource = mode === 'translation' &&
+      block.status === 'done' &&
+      Boolean(block.translation?.isConnected) &&
+      !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE);
+    if (!hideSource) {
+      restoreBlockSource(block);
+      return;
     }
-    if (!hidden && activeRequestId) {
+    const inlineSource = block.element.tagName === 'LI';
+    block.element.setAttribute(
+      SOURCE_HIDDEN_ATTRIBUTE,
+      inlineSource ? 'inline' : 'block',
+    );
+    // List translations live inside the <li>; aria-hidden on that container
+    // would also hide the visible translation from assistive technology.
+    if (!inlineSource) {
+      if (!originalSourceAriaHidden.has(block.element)) {
+        originalSourceAriaHidden.set(block.element, block.element.getAttribute('aria-hidden'));
+      }
+      block.element.setAttribute('aria-hidden', 'true');
+    }
+  };
+
+  const setDisplayMode = (mode: BilingualPageDisplayMode): void => {
+    currentState = {
+      ...currentState,
+      displayMode: mode,
+      translationsHidden: mode === 'source',
+    };
+    for (const block of blocks) {
+      applyBlockDisplayMode(block);
+      if (mode === 'source' && block.status === 'translating') clearBlockPending(block);
+    }
+    if (mode !== 'source' && activeRequestId) {
       const activeBlock = blocks.find((block) => (
         block.status === 'translating' && !block.translation?.isConnected
       ));
@@ -1644,7 +1744,7 @@ export function createBilingualPageTranslator(
           .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
           .mark { flex:0 0 auto;width:16px;height:14px;object-fit:contain; }
           output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
-          .language { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
+          .language,.display { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
           select { min-height:28px;box-sizing:border-box;border:1px solid rgba(99,102,241,.18);border-radius:6px;padding:3px 22px 3px 6px;color:#4f46e5;background:#f7f7ff;cursor:pointer;font:600 11px/1.2 inherit; }
           select:disabled { opacity:.62;cursor:default; }
           button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
@@ -1659,14 +1759,14 @@ export function createBilingualPageTranslator(
           .scope-panel[hidden] { display:none; }
           .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
-          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language,.display{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar" role="status" aria-live="polite">
           <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
           <output></output>
           <label class="language"><span>译为</span><select data-action="language" aria-label="正文目标语言">${SUPPORTED_TARGET_LANGUAGES.map((language) => `<option value="${language.value}">${language.shortLabel}</option>`).join('')}</select></label>
-          <button type="button" data-action="visibility"></button>
+          <label class="display"><span>显示</span><select data-action="display" aria-label="正文显示方式"><option value="bilingual">双语</option><option value="translation">译文</option><option value="source">原文</option></select></label>
           <button type="button" data-action="pause"></button>
           <button type="button" data-action="stop">停止</button>
           <button type="button" data-action="scope">范围</button>
@@ -1686,9 +1786,7 @@ export function createBilingualPageTranslator(
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
         button.addEventListener('click', () => {
           const action = button.dataset.action;
-          if (action === 'visibility') {
-            void control('toggle-translations');
-          } else if (action === 'pause') {
+          if (action === 'pause') {
             const shouldResume = currentState.phase === 'paused' ||
               currentState.phase === 'error' ||
               currentState.phase === 'stopped' ||
@@ -1735,11 +1833,21 @@ export function createBilingualPageTranslator(
             void start(requestedLanguage);
           }
         });
+      shadow.querySelector<HTMLSelectElement>('select[data-action="display"]')
+        ?.addEventListener('change', (event) => {
+          const select = event.currentTarget as HTMLSelectElement;
+          if (!['bilingual', 'translation', 'source'].includes(select.value)) {
+            select.value = bilingualPageDisplayMode(currentState);
+            return;
+          }
+          void control(`display-${select.value}` as BilingualPageAction);
+        });
       document.documentElement.append(controlHost);
     }
     const shadow = controlHost.shadowRoot;
     const output = shadow?.querySelector<HTMLOutputElement>('output');
-    const visibility = shadow?.querySelector<HTMLButtonElement>('[data-action="visibility"]');
+    const display = shadow?.querySelector<HTMLSelectElement>('[data-action="display"]');
+    const displayControl = shadow?.querySelector<HTMLElement>('.display');
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
     const scope = shadow?.querySelector<HTMLButtonElement>('[data-action="scope"]');
@@ -1755,7 +1863,7 @@ export function createBilingualPageTranslator(
         output.textContent = `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
       }
       if (languageControl) languageControl.hidden = true;
-      if (visibility) visibility.hidden = true;
+      if (displayControl) displayControl.hidden = true;
       if (pause) pause.hidden = true;
       if (stop) stop.hidden = true;
       if (scope) scope.hidden = true;
@@ -1784,6 +1892,7 @@ export function createBilingualPageTranslator(
       return;
     }
     if (languageControl) languageControl.hidden = false;
+    if (displayControl) displayControl.hidden = currentState.translated === 0;
     if (scopePanel) scopePanel.hidden = true;
     if (scope) {
       scope.hidden = currentState.total === 0;
@@ -1810,13 +1919,9 @@ export function createBilingualPageTranslator(
               ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
               : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`);
     }
-    if (visibility) {
-      const actionLabel = currentState.translationsHidden ? '展开译文' : '收起译文';
-      visibility.textContent = currentState.translationsHidden ? '展开' : '收起';
-      visibility.title = actionLabel;
-      visibility.setAttribute('aria-label', actionLabel);
-      visibility.setAttribute('aria-pressed', String(currentState.translationsHidden));
-      visibility.hidden = currentState.translated === 0;
+    if (display) {
+      display.value = bilingualPageDisplayMode(currentState);
+      display.disabled = currentState.pauseReason === 'interactive';
     }
     if (pause) {
       const retryCompleted = currentState.phase === 'complete' && currentState.failed > 0;
@@ -1940,6 +2045,7 @@ export function createBilingualPageTranslator(
         used.add(block);
         if (block.text !== candidate.text) {
           clearBlockPending(block);
+          restoreBlockSource(block);
           block.translation?.remove();
           block.errorElement?.remove();
           delete block.translation;
@@ -1989,6 +2095,7 @@ export function createBilingualPageTranslator(
     for (const block of previousBlocks) {
       if (used.has(block)) continue;
       clearBlockPending(block);
+      restoreBlockSource(block);
       block.translation?.remove();
       block.errorElement?.remove();
       structureChanged = true;
@@ -1996,6 +2103,7 @@ export function createBilingualPageTranslator(
     const retained = new Set(nextBlocks);
     queue = queue.filter((block) => retained.has(block) && block.status === 'queued');
     blocks = nextBlocks;
+    blocks.forEach(applyBlockDisplayMode);
     if (articleContainer !== nextRoot) {
       articleContainer = nextRoot;
       observeArticleMutations();
@@ -2284,6 +2392,7 @@ export function createBilingualPageTranslator(
       if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
       delete block.restoredFromSession;
+      applyBlockDisplayMode(block);
       consecutiveIsolatedFailures = 0;
       if (!replacingTranslation && !currentState.translationsHidden) {
         void revealTranslationActionsHint(block);
@@ -2468,7 +2577,8 @@ export function createBilingualPageTranslator(
       total: blocks.length,
       translated: 0,
       failed: 0,
-      translationsHidden: stored?.translationsHidden ?? false,
+      displayMode: stored?.displayMode ?? 'bilingual',
+      translationsHidden: stored?.displayMode === 'source',
       targetLanguage,
       ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
     };
@@ -2504,6 +2614,7 @@ export function createBilingualPageTranslator(
         if (restored.hidden) setTranslationHidden(block, true);
         block.status = 'done';
         block.restoredFromSession = true;
+        applyBlockDisplayMode(block);
       }
       syncCounts();
       if (stored.activity === 'paused') {
@@ -2556,7 +2667,19 @@ export function createBilingualPageTranslator(
     }
     if (action === 'toggle-translations') {
       if (currentState.phase !== 'idle' && currentState.translated > 0) {
-        setAllTranslationsHidden(!currentState.translationsHidden);
+        setDisplayMode(
+          bilingualPageDisplayMode(currentState) === 'source' ? 'bilingual' : 'source',
+        );
+      }
+      return snapshot();
+    }
+    if (
+      action === 'display-bilingual' ||
+      action === 'display-translation' ||
+      action === 'display-source'
+    ) {
+      if (currentState.phase !== 'idle' && currentState.translated > 0) {
+        setDisplayMode(action.replace('display-', '') as BilingualPageDisplayMode);
       }
       return snapshot();
     }

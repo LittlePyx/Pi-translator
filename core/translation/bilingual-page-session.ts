@@ -3,6 +3,7 @@ import {
   type SupportedTargetLanguage,
 } from '../language/supported-target-languages';
 import type { TranslationContentMode, TranslationStyle } from './types';
+import type { BilingualPageDisplayMode } from './bilingual-page';
 
 export const BILINGUAL_PAGE_SESSIONS_STORAGE_KEY = 'bilingualPageSessionsByTabV1';
 
@@ -31,6 +32,7 @@ export interface BilingualPageSessionBlock {
 export interface BilingualPageSessionSnapshot extends BilingualPageSessionDescriptor {
   documentSignatures: string[];
   excludedSignatures: string[];
+  displayMode: BilingualPageDisplayMode;
   translationsHidden: boolean;
   activity: BilingualPageSessionActivity;
   blocks: BilingualPageSessionBlock[];
@@ -41,6 +43,7 @@ export interface BilingualPageSessionUpdate {
   descriptor: BilingualPageSessionDescriptor;
   documentSignatures: string[];
   excludedSignatures: string[];
+  displayMode: BilingualPageDisplayMode;
   translationsHidden: boolean;
   activity: BilingualPageSessionActivity;
   block?: BilingualPageSessionBlock;
@@ -102,6 +105,10 @@ function validContentMode(value: unknown): value is TranslationContentMode {
   return value === 'auto' || value === 'plain' || value === 'latex';
 }
 
+function validDisplayMode(value: unknown): value is BilingualPageDisplayMode {
+  return value === 'bilingual' || value === 'translation' || value === 'source';
+}
+
 function validSignature(value: unknown): value is string {
   return typeof value === 'string' && /^block-[a-z0-9]{2,32}$/u.test(value);
 }
@@ -161,6 +168,7 @@ export function isBilingualPageSessionUpdate(
     'descriptor',
     'documentSignatures',
     'excludedSignatures',
+    'displayMode',
     'translationsHidden',
     'activity',
     'block',
@@ -169,7 +177,9 @@ export function isBilingualPageSessionUpdate(
     !isBilingualPageSessionDescriptor(update.descriptor) ||
     !uniqueSignatures(update.documentSignatures) ||
     !uniqueSignatures(update.excludedSignatures) ||
+    !validDisplayMode(update.displayMode) ||
     typeof update.translationsHidden !== 'boolean' ||
+    update.translationsHidden !== (update.displayMode === 'source') ||
     !['active', 'paused', 'stopped'].includes(String(update.activity)) ||
     (update.block !== undefined && !isBilingualPageSessionBlock(update.block))
   ) return false;
@@ -206,7 +216,9 @@ function validStoredSession(value: unknown): value is StoredBilingualPageSession
     session.excludedSignatures.every((signature) => (
       (session.documentSignatures as string[]).includes(signature)
     )) &&
+    validDisplayMode(session.displayMode) &&
     typeof session.translationsHidden === 'boolean' &&
+    session.translationsHidden === (session.displayMode === 'source') &&
     ['active', 'paused', 'stopped'].includes(String(session.activity)) &&
     Array.isArray(session.blocks) &&
     session.blocks.length <= MAX_DOCUMENT_SIGNATURES &&
@@ -324,6 +336,7 @@ export function saveBilingualPageSession(
       behaviorKey,
       documentSignatures,
       excludedSignatures: [...update.excludedSignatures],
+      displayMode: update.displayMode,
       translationsHidden: update.translationsHidden,
       activity: update.activity,
       blocks,
