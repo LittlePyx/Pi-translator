@@ -1040,6 +1040,111 @@ test('exposes the native Edge side panel API to the service worker', async () =>
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
 });
 
+test('discovers bilingual article translation and lets the reader adjust its scope', async () => {
+  const popup = await context.newPage();
+  let originalTargetLanguage = 'zh-CN';
+  try {
+    await page.goto(ARTICLE_FIXTURE_URL);
+    await page.bringToFront();
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    originalTargetLanguage = await popup.locator('#target-language').inputValue();
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.locator('#target-language').selectOption('zh-CN');
+      await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    }
+    await page.bringToFront();
+
+    const launcher = page.locator('#pi-translator-bilingual-page-launcher');
+    const pageControl = page.locator('#pi-translator-bilingual-page-control');
+    const scopeCandidates = page.locator('[data-pi-bilingual-scope-preview]');
+    const requestCountBeforePreview = textRequests.length;
+    await expect(launcher).toBeVisible();
+    await expect(launcher.locator('button[data-action="start"]')).toContainText('译全文');
+    await expect(launcher.locator('.count')).toHaveText('· 7 段');
+
+    await launcher.locator('button[data-action="scope"]').click();
+    await expect(launcher).toHaveCount(0);
+    await expect(pageControl).toBeVisible();
+    await expect(scopeCandidates).toHaveCount(7);
+    await expect(pageControl.locator('output')).toContainText('正文范围 7/7 段');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await page.locator('#article-later').evaluate((element) => (element as HTMLElement).click());
+    await expect(page.locator('#article-later')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await expect(pageControl.locator('output')).toContainText('正文范围 6/7 段');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+    await pageControl.locator('button[data-action="cancel-scope"]').click();
+    await expect(scopeCandidates).toHaveCount(0);
+    await expect(pageControl).toHaveCount(0);
+    await expect(launcher).toBeVisible();
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await launcher.locator('button[data-action="scope"]').click();
+    await page.locator('#article-later').evaluate((element) => (element as HTMLElement).click());
+    await pageControl.locator('button[data-action="apply-scope"]').click();
+    await expect(scopeCandidates).toHaveCount(0);
+    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
+    await expect(page.locator('#article-summary + [data-pi-bilingual-translation]')).toBeVisible();
+    await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(6);
+    await expect(pageControl.locator('output')).toContainText('已完成 6/6');
+
+    const requestsBeforeRestore = textRequests.length;
+    await pageControl.locator('button[data-action="scope"]').click();
+    await expect(page.locator('#article-later')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await page.locator('#article-later').evaluate((element) => (element as HTMLElement).click());
+    await expect(pageControl.locator('output')).toContainText('正文范围 7/7 段');
+    await pageControl.locator('button[data-action="apply-scope"]').click();
+    await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    await expect(pageControl.locator('output')).toContainText('已完成 7/7');
+    expect(textRequests.length).toBe(requestsBeforeRestore + 1);
+
+    const requestsBeforeCancelledExclusion = textRequests.length;
+    await pageControl.locator('button[data-action="scope"]').click();
+    await page.locator('#article-later').evaluate((element) => (element as HTMLElement).click());
+    await expect(pageControl.locator('.scope-panel span')).toContainText('将清除已译 1 段');
+    await expect(pageControl.locator('button[data-action="apply-scope"]'))
+      .toHaveText('清除 1 段并应用');
+    await pageControl.locator('button[data-action="cancel-scope"]').click();
+    await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
+    expect(textRequests.length).toBe(requestsBeforeCancelledExclusion);
+
+    await pageControl.locator('button[data-action="clear"]').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+    await expect(launcher).toBeVisible();
+    await launcher.locator('button[data-action="dismiss"]').click();
+    await expect(launcher).toHaveCount(0);
+    await page.waitForTimeout(1_100);
+    await expect(launcher).toHaveCount(0);
+    await page.evaluate(() => history.pushState({}, '', '/pi-translator-bilingual-article-e2e-next'));
+    await expect(launcher).toBeVisible();
+    await launcher.locator('button[data-action="dismiss"]').click();
+  } finally {
+    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
+      .click({ timeout: 500 }).catch(() => undefined);
+    await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.remove('translationCacheByTab');
+    }).catch(() => undefined);
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.bringToFront().catch(() => undefined);
+      await popup.reload().catch(() => undefined);
+      await popup.locator('#target-language').selectOption(originalTargetLanguage).catch(() => undefined);
+    }
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL).catch(() => undefined);
+  }
+});
+
 test('progressively adds and removes bilingual article translations without touching code or history', async ({}, testInfo) => {
   const popup = await context.newPage();
   const sidePanel = await context.newPage();

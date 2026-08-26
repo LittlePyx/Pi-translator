@@ -46,7 +46,12 @@ const TRANSLATION_PENDING_DELAY_MS = 350;
 const ARTICLE_CHANGED_MESSAGE = '页面正文已更新，请重新开始正文翻译。';
 const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
+const LAUNCHER_HOST_ID = 'pi-translator-bilingual-page-launcher';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
+const SCOPE_STYLE_ID = 'pi-translator-bilingual-page-scope-style';
+const SCOPE_PREVIEW_ATTRIBUTE = 'data-pi-bilingual-scope-preview';
+const MIN_LAUNCHER_BLOCKS = 4;
+const MIN_LAUNCHER_TEXT_LENGTH = 480;
 const BLOCK_SELECTOR = 'h1, h2, h3, h4, p, blockquote, figcaption, li';
 const RENDERED_MATH_SELECTOR = [
   '.katex',
@@ -88,6 +93,7 @@ const EXCLUDED_ANCESTOR_SELECTOR = [
   `[${TRANSLATION_PENDING_ATTRIBUTE}]`,
   `[${ERROR_ATTRIBUTE}]`,
   `#${CONTROL_HOST_ID}`,
+  `#${LAUNCHER_HOST_ID}`,
 ].join(',');
 
 type BlockStatus = 'idle' | 'queued' | 'translating' | 'done' | 'error';
@@ -117,6 +123,8 @@ export interface BilingualPageRequestConfig {
 interface BilingualPageTranslatorOptions {
   pageUrl(): string;
   requestConfig(): BilingualPageRequestConfig;
+  preferredTargetLanguage(): SupportedTargetLanguage;
+  launcherEnabled(): boolean;
   onStateChange(state: BilingualPageState): void;
 }
 
@@ -125,6 +133,7 @@ export interface BilingualPageTranslator {
   control(action: BilingualPageAction): Promise<BilingualPageState>;
   suspendForInteractiveTranslation(): string | undefined;
   resumeAfterInteractiveTranslation(token: string | undefined): void;
+  refreshDiscovery(): void;
   state(): BilingualPageState;
   dispose(): void;
 }
@@ -176,10 +185,15 @@ function linkTextLength(element: HTMLElement): number {
     .reduce((total, link) => total + normalizeBilingualPageText(link.textContent ?? '').length, 0);
 }
 
-function candidateElements(root: ParentNode, targetLanguage: string): BilingualBlock[] {
+function candidateElements(
+  root: ParentNode,
+  targetLanguage: string,
+  excludedElements?: ReadonlySet<HTMLElement>,
+): BilingualBlock[] {
   const candidates: BilingualBlock[] = [];
   for (const element of root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)) {
     if (
+      excludedElements?.has(element) ||
       element.closest(EXCLUDED_ANCESTOR_SELECTOR) ||
       !elementVisible(element) ||
       Boolean(element.querySelector('button, input, select, textarea, pre, .katex-display, .MathJax_Display, math[display="block"], mjx-container[display="true"]')) ||
@@ -198,18 +212,33 @@ function candidateElements(root: ParentNode, targetLanguage: string): BilingualB
   return candidates;
 }
 
-function articleRoot(targetLanguage: string): { root: HTMLElement; blocks: BilingualBlock[] } {
+function articleRoot(
+  targetLanguage: string,
+  excludedElements?: ReadonlySet<HTMLElement>,
+): { root: HTMLElement; blocks: BilingualBlock[] } {
   const containers = [...document.querySelectorAll<HTMLElement>('article, main, [role="main"]')]
     .filter((element) => !element.closest(EXCLUDED_ANCESTOR_SELECTOR) && elementVisible(element));
   let best: { root: HTMLElement; blocks: BilingualBlock[]; score: number } | undefined;
   for (const root of containers) {
-    const blocks = candidateElements(root, targetLanguage);
+    const blocks = candidateElements(root, targetLanguage, excludedElements);
     const score = blocks.reduce((total, block) => total + Math.min(block.text.length, 800), 0);
     if (!best || score > best.score) best = { root, blocks, score };
   }
   if (best && (best.blocks.length >= 2 || best.score >= 240)) return best;
   const root = document.body;
-  return { root, blocks: root ? candidateElements(root, targetLanguage) : [] };
+  return {
+    root,
+    blocks: root ? candidateElements(root, targetLanguage, excludedElements) : [],
+  };
+}
+
+function launcherCandidate(blocks: BilingualBlock[]): boolean {
+  if (blocks.length < MIN_LAUNCHER_BLOCKS) return false;
+  const textLength = blocks.reduce(
+    (total, block) => total + Math.min(block.text.length, 800),
+    0,
+  );
+  return textLength >= MIN_LAUNCHER_TEXT_LENGTH;
 }
 
 function blockSignature(block: Pick<BilingualBlock, 'element' | 'text'>): string {
@@ -643,12 +672,23 @@ export function createBilingualPageTranslator(
   let navigationTimer: number | undefined;
   let disposed = false;
   let controlHost: HTMLElement | undefined;
+  let launcherHost: HTMLElement | undefined;
+  let launcherRefreshTimer: number | undefined;
+  let launcherNavigationTimer: number | undefined;
+  let launcherPageIdentity = '';
+  let launcherDismissedPageIdentity = '';
+  let launcherCandidateCount = 0;
   let consecutiveIsolatedFailures = 0;
   let actionsHintClaimed = false;
   const interactiveSuspensions = new Set<string>();
   const interactionPreemptedRequestIds = new Set<string>();
   let resumeAfterInteractive = false;
   let pendingLanguageSwitch: SupportedTargetLanguage | undefined;
+  let scopePreviewActive = false;
+  let resumeAfterScopePreview = false;
+  let scopePreviewBlocks: BilingualBlock[] = [];
+  let scopeDraftExcludedElements = new Set<HTMLElement>();
+  const scopeExcludedElements = new Set<HTMLElement>();
 
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
@@ -712,7 +752,278 @@ export function createBilingualPageTranslator(
     controlHost = undefined;
   };
 
+  const destroyLauncher = (): void => {
+    launcherHost?.remove();
+    launcherHost = undefined;
+  };
+
+  const stopLauncherNavigationMonitor = (): void => {
+    if (launcherNavigationTimer !== undefined) window.clearInterval(launcherNavigationTimer);
+    launcherNavigationTimer = undefined;
+  };
+
+  const ensureLauncherNavigationMonitor = (): void => {
+    if (launcherNavigationTimer !== undefined) return;
+    launcherNavigationTimer = window.setInterval(() => {
+      if (pageIdentity(options.pageUrl()) !== launcherPageIdentity) discoverLauncher();
+    }, 1_000);
+  };
+
+  const renderLauncher = (): void => {
+    if (
+      disposed ||
+      currentState.phase !== 'idle' ||
+      scopePreviewActive ||
+      launcherCandidateCount === 0
+    ) {
+      destroyLauncher();
+      return;
+    }
+    if (!launcherHost?.isConnected) {
+      launcherHost = document.createElement('div');
+      launcherHost.id = LAUNCHER_HOST_ID;
+      launcherHost.style.cssText = 'all:initial;position:fixed;z-index:2147483644;right:14px;bottom:18px;';
+      const shadow = launcherHost.attachShadow({ mode: 'open' });
+      shadow.innerHTML = `
+        <style>
+          :host { color-scheme: light dark; }
+          .launcher { display:flex;align-items:center;box-sizing:border-box;border:1px solid rgba(99,102,241,.25);border-radius:999px;padding:3px;color:#30394c;background:rgba(255,255,255,.94);box-shadow:0 6px 22px rgba(15,23,42,.15);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
+          button { min-height:30px;box-sizing:border-box;border:0;border-radius:999px;padding:5px 8px;color:#5a50d6;background:transparent;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
+          button:hover { background:#f0efff; }
+          button[data-action="start"] { padding-left:9px;color:#fff;background:linear-gradient(135deg,#5b5ee5,#765fe7); }
+          button[data-action="start"]:hover { filter:brightness(.97); }
+          .mark { margin-right:4px;font-size:13px;font-weight:850; }
+          .count { margin-left:3px;opacity:.82;font-weight:550; }
+          button[data-action="dismiss"] { min-width:28px;padding-inline:5px;color:#8791a2;font-size:14px;font-weight:500; }
+          @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:rgba(24,32,47,.95);box-shadow:0 7px 24px rgba(0,0,0,.34)} button{color:#cbc7ff} button:hover{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="dismiss"]{color:#9ca7b8} }
+          @media (max-width:480px) { .launcher{padding:2px} button{min-height:32px}.count{display:none} }
+        </style>
+        <div class="launcher" role="group" aria-label="网页正文翻译">
+          <button type="button" data-action="start"><span class="mark" aria-hidden="true">π</span>译全文<span class="count"></span></button>
+          <button type="button" data-action="scope">范围</button>
+          <button type="button" data-action="dismiss" aria-label="暂时隐藏译全文入口" title="暂时隐藏">×</button>
+        </div>`;
+      shadow.querySelector<HTMLButtonElement>('button[data-action="start"]')
+        ?.addEventListener('click', () => {
+          destroyLauncher();
+          void start(options.preferredTargetLanguage());
+        });
+      shadow.querySelector<HTMLButtonElement>('button[data-action="scope"]')
+        ?.addEventListener('click', () => beginScopePreview());
+      shadow.querySelector<HTMLButtonElement>('button[data-action="dismiss"]')
+        ?.addEventListener('click', () => {
+          launcherDismissedPageIdentity = pageIdentity(options.pageUrl());
+          destroyLauncher();
+        });
+      document.documentElement.append(launcherHost);
+    }
+    const shadow = launcherHost.shadowRoot;
+    const count = shadow?.querySelector<HTMLElement>('.count');
+    const startButton = shadow?.querySelector<HTMLButtonElement>('button[data-action="start"]');
+    if (count) count.textContent = `· ${launcherCandidateCount} 段`;
+    startButton?.setAttribute(
+      'aria-label',
+      `翻译网页正文，已识别 ${launcherCandidateCount} 段`,
+    );
+  };
+
+  const discoverLauncher = (): void => {
+    if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
+    launcherRefreshTimer = undefined;
+    if (disposed || !options.launcherEnabled()) {
+      destroyLauncher();
+      stopLauncherNavigationMonitor();
+      return;
+    }
+    if (currentState.phase !== 'idle' || scopePreviewActive) {
+      destroyLauncher();
+      stopLauncherNavigationMonitor();
+      return;
+    }
+    ensureLauncherNavigationMonitor();
+    const identity = pageIdentity(options.pageUrl());
+    if (launcherPageIdentity && launcherPageIdentity !== identity) {
+      launcherDismissedPageIdentity = '';
+      scopeExcludedElements.clear();
+    }
+    launcherPageIdentity = identity;
+    if (launcherDismissedPageIdentity === identity) {
+      destroyLauncher();
+      return;
+    }
+    const selection = articleRoot(options.preferredTargetLanguage(), scopeExcludedElements);
+    launcherCandidateCount = launcherCandidate(selection.blocks)
+      ? selection.blocks.length
+      : 0;
+    renderLauncher();
+  };
+
+  const scheduleLauncherDiscovery = (delayMs = 650): void => {
+    if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
+    launcherRefreshTimer = window.setTimeout(discoverLauncher, delayMs);
+  };
+
+  const refreshDiscovery = (): void => scheduleLauncherDiscovery();
+
+  const removeScopePreviewPresentation = (): void => {
+    document.removeEventListener('click', handleScopePreviewClick, true);
+    document.removeEventListener('keydown', handleScopePreviewKeydown, true);
+    for (const block of scopePreviewBlocks) {
+      block.element.removeAttribute(SCOPE_PREVIEW_ATTRIBUTE);
+    }
+    document.getElementById(SCOPE_STYLE_ID)?.remove();
+  };
+
+  const scopeSelectedCount = (): number => scopePreviewBlocks.filter(
+    (block) => !scopeDraftExcludedElements.has(block.element),
+  ).length;
+
+  const scopeTranslatedRemovalCount = (): number => scopePreviewBlocks.filter(
+    (candidate) =>
+      scopeDraftExcludedElements.has(candidate.element) &&
+      blocks.some((block) => block.element === candidate.element && block.status === 'done'),
+  ).length;
+
+  const renderScopePreviewBlocks = (): void => {
+    for (const block of scopePreviewBlocks) {
+      block.element.setAttribute(
+        SCOPE_PREVIEW_ATTRIBUTE,
+        scopeDraftExcludedElements.has(block.element) ? 'excluded' : 'included',
+      );
+    }
+  };
+
+  function handleScopePreviewClick(event: MouseEvent): void {
+    if (!scopePreviewActive || !(event.target instanceof Element)) return;
+    const element = event.target.closest<HTMLElement>(`[${SCOPE_PREVIEW_ATTRIBUTE}]`);
+    if (!element) return;
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    if (scopeDraftExcludedElements.has(element)) scopeDraftExcludedElements.delete(element);
+    else scopeDraftExcludedElements.add(element);
+    renderScopePreviewBlocks();
+    renderControl();
+  }
+
+  function handleScopePreviewKeydown(event: KeyboardEvent): void {
+    if (!scopePreviewActive || event.key !== 'Escape') return;
+    event.preventDefault();
+    finishScopePreview(true);
+  }
+
+  const installScopePreviewStyle = (): void => {
+    document.getElementById(SCOPE_STYLE_ID)?.remove();
+    const style = document.createElement('style');
+    style.id = SCOPE_STYLE_ID;
+    style.textContent = `
+      [${SCOPE_PREVIEW_ATTRIBUTE}] {
+        outline: 2px solid rgba(91, 82, 214, .48) !important;
+        outline-offset: 3px !important;
+        border-radius: 3px !important;
+        cursor: pointer !important;
+        transition: outline-color .14s ease, background-color .14s ease !important;
+      }
+      [${SCOPE_PREVIEW_ATTRIBUTE}="included"]:hover {
+        outline-color: rgba(79, 70, 229, .86) !important;
+        background-color: rgba(99, 102, 241, .055) !important;
+      }
+      [${SCOPE_PREVIEW_ATTRIBUTE}="excluded"] {
+        outline-style: dashed !important;
+        outline-color: rgba(120, 128, 145, .62) !important;
+        background-color: rgba(148, 163, 184, .09) !important;
+      }
+    `;
+    document.documentElement.append(style);
+  };
+
+  const beginScopePreview = (): void => {
+    if (disposed || scopePreviewActive || currentState.pauseReason === 'interactive') return;
+    const targetLanguage = isSupportedTargetLanguage(currentState.targetLanguage)
+      ? currentState.targetLanguage
+      : options.preferredTargetLanguage();
+    const selection = articleContainer?.isConnected
+      ? {
+          root: articleContainer,
+          blocks: candidateElements(articleContainer, targetLanguage),
+        }
+      : articleRoot(targetLanguage);
+    if (!selection.blocks.length) return;
+    scopePreviewBlocks = selection.blocks;
+    scopeDraftExcludedElements = new Set(
+      selection.blocks
+        .map((block) => block.element)
+        .filter((element) => scopeExcludedElements.has(element)),
+    );
+    resumeAfterScopePreview = currentState.phase === 'running';
+    scopePreviewActive = true;
+    if (resumeAfterScopePreview) {
+      currentState = {
+        ...currentState,
+        phase: 'paused',
+        pauseReason: 'user',
+        message: '正在调整正文范围。',
+      };
+    }
+    destroyLauncher();
+    stopLauncherNavigationMonitor();
+    installScopePreviewStyle();
+    renderScopePreviewBlocks();
+    document.addEventListener('click', handleScopePreviewClick, true);
+    document.addEventListener('keydown', handleScopePreviewKeydown, true);
+    publish();
+  };
+
+  const finishScopePreview = (resumePreviousState: boolean): void => {
+    if (!scopePreviewActive) return;
+    removeScopePreviewPresentation();
+    scopePreviewActive = false;
+    scopePreviewBlocks = [];
+    scopeDraftExcludedElements = new Set();
+    const shouldResume = resumePreviousState && resumeAfterScopePreview;
+    resumeAfterScopePreview = false;
+    if (
+      shouldResume &&
+      currentState.phase === 'paused' &&
+      currentState.pauseReason === 'user'
+    ) {
+      resume(false);
+      return;
+    }
+    if (currentState.phase === 'idle') {
+      destroyControl();
+      scheduleLauncherDiscovery(0);
+    } else publish();
+  };
+
+  const applyScopePreview = (): void => {
+    if (!scopePreviewActive || scopeSelectedCount() === 0) return;
+    scopeExcludedElements.clear();
+    for (const element of scopeDraftExcludedElements) scopeExcludedElements.add(element);
+    const shouldStart = currentState.phase === 'idle';
+    if (!shouldStart && articleContainer?.isConnected && currentState.targetLanguage) {
+      const activeBlock = blocks.find((block) => block.status === 'translating');
+      if (activeBlock && scopeExcludedElements.has(activeBlock.element)) cancelActiveRequest();
+      reconcileDynamicBlocks(
+        candidateElements(
+          articleContainer,
+          currentState.targetLanguage,
+          scopeExcludedElements,
+        ),
+        articleContainer,
+      );
+    }
+    finishScopePreview(!shouldStart);
+    if (shouldStart) void start(options.preferredTargetLanguage());
+  };
+
   const clear = (notify = true): void => {
+    if (scopePreviewActive) {
+      removeScopePreviewPresentation();
+      scopePreviewActive = false;
+      resumeAfterScopePreview = false;
+      scopePreviewBlocks = [];
+      scopeDraftExcludedElements = new Set();
+    }
     taskRevision += 1;
     cancelActiveRequest();
     removeInjectedContent();
@@ -726,12 +1037,19 @@ export function createBilingualPageTranslator(
     pendingLanguageSwitch = undefined;
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
     destroyControl();
-    if (notify) options.onStateChange(snapshot());
+    destroyLauncher();
+    stopLauncherNavigationMonitor();
+    if (notify) {
+      options.onStateChange(snapshot());
+      scheduleLauncherDiscovery();
+    }
   };
 
   const resetForArticleChange = (message = ARTICLE_CHANGED_MESSAGE): void => {
     const targetLanguage = currentState.targetLanguage;
     clear(false);
+    scopeExcludedElements.clear();
+    launcherDismissedPageIdentity = '';
     currentState = {
       phase: 'error',
       total: 0,
@@ -990,10 +1308,11 @@ export function createBilingualPageTranslator(
   };
 
   const renderControl = (): void => {
-    if (currentState.phase === 'idle') {
+    if (currentState.phase === 'idle' && !scopePreviewActive) {
       destroyControl();
       return;
     }
+    destroyLauncher();
     if (!controlHost?.isConnected) {
       controlHost = document.createElement('div');
       controlHost.id = CONTROL_HOST_ID;
@@ -1016,7 +1335,11 @@ export function createBilingualPageTranslator(
           .language-confirmation[hidden] { display:none; }
           .language-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .language-confirmation button[data-action="cancel-language"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"]{color:#aab3c2;background:transparent}.language-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
+          .scope-panel { display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          .scope-panel[hidden] { display:none; }
+          .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
+          .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .language{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar" role="status" aria-live="polite">
@@ -1026,11 +1349,18 @@ export function createBilingualPageTranslator(
           <button type="button" data-action="visibility"></button>
           <button type="button" data-action="pause"></button>
           <button type="button" data-action="stop">停止</button>
+          <button type="button" data-action="scope">范围</button>
           <button type="button" data-action="clear">清除</button>
           <div class="language-confirmation" role="alert" hidden>
             <span></span>
             <button type="button" data-action="cancel-language">取消</button>
             <button type="button" data-action="confirm-language">清除并改译</button>
+          </div>
+          <div class="scope-panel" hidden>
+            <span></span>
+            <button type="button" data-action="reset-scope">全部恢复</button>
+            <button type="button" data-action="cancel-scope">取消</button>
+            <button type="button" data-action="apply-scope">应用范围</button>
           </div>
         </div>`;
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
@@ -1046,6 +1376,16 @@ export function createBilingualPageTranslator(
             void control(shouldResume ? 'resume' : 'pause');
           } else if (action === 'stop' || action === 'clear') {
             void control(action);
+          } else if (action === 'scope') {
+            beginScopePreview();
+          } else if (action === 'reset-scope') {
+            scopeDraftExcludedElements.clear();
+            renderScopePreviewBlocks();
+            renderControl();
+          } else if (action === 'cancel-scope') {
+            finishScopePreview(true);
+          } else if (action === 'apply-scope') {
+            applyScopePreview();
           } else if (action === 'cancel-language') {
             pendingLanguageSwitch = undefined;
             renderControl();
@@ -1082,8 +1422,56 @@ export function createBilingualPageTranslator(
     const visibility = shadow?.querySelector<HTMLButtonElement>('[data-action="visibility"]');
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
+    const scope = shadow?.querySelector<HTMLButtonElement>('[data-action="scope"]');
+    const clearButton = shadow?.querySelector<HTMLButtonElement>('[data-action="clear"]');
     const language = shadow?.querySelector<HTMLSelectElement>('[data-action="language"]');
+    const languageControl = shadow?.querySelector<HTMLElement>('.language');
     const languageConfirmation = shadow?.querySelector<HTMLElement>('.language-confirmation');
+    const scopePanel = shadow?.querySelector<HTMLElement>('.scope-panel');
+    if (scopePreviewActive) {
+      const selected = scopeSelectedCount();
+      const translatedRemoval = scopeTranslatedRemovalCount();
+      if (output) {
+        output.textContent = `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
+      }
+      if (languageControl) languageControl.hidden = true;
+      if (visibility) visibility.hidden = true;
+      if (pause) pause.hidden = true;
+      if (stop) stop.hidden = true;
+      if (scope) scope.hidden = true;
+      if (clearButton) clearButton.hidden = true;
+      if (languageConfirmation) languageConfirmation.hidden = true;
+      if (scopePanel) {
+        scopePanel.hidden = false;
+        const message = scopePanel.querySelector('span');
+        if (message) {
+          message.textContent = translatedRemoval
+            ? `将清除已译 ${translatedRemoval} 段；不会重译其余内容。`
+            : '紫色为保留，灰色虚线为排除；预览不会调用接口。';
+        }
+        const reset = scopePanel.querySelector<HTMLButtonElement>('[data-action="reset-scope"]');
+        const apply = scopePanel.querySelector<HTMLButtonElement>('[data-action="apply-scope"]');
+        if (reset) reset.disabled = scopeDraftExcludedElements.size === 0;
+        if (apply) {
+          apply.disabled = selected === 0;
+          apply.textContent = currentState.phase === 'idle'
+            ? '按此范围翻译'
+            : translatedRemoval
+              ? `清除 ${translatedRemoval} 段并应用`
+              : '应用范围';
+        }
+      }
+      return;
+    }
+    if (languageControl) languageControl.hidden = false;
+    if (scopePanel) scopePanel.hidden = true;
+    if (scope) {
+      scope.hidden = currentState.total === 0;
+      scope.disabled = currentState.pauseReason === 'interactive';
+      scope.textContent = currentState.total ? `范围 ${currentState.total}` : '范围';
+      scope.title = '查看并调整当前正文范围';
+    }
+    if (clearButton) clearButton.hidden = false;
     if (output) {
       output.textContent = currentState.phase === 'error'
         ? currentState.message ?? '正文翻译暂时中断'
@@ -1155,7 +1543,7 @@ export function createBilingualPageTranslator(
       ? node as Element
       : node.parentElement;
     return Boolean(element?.closest(
-      `[${TRANSLATION_ATTRIBUTE}], [${TRANSLATION_PENDING_ATTRIBUTE}], [${ERROR_ATTRIBUTE}], #${CONTROL_HOST_ID}`,
+      `[${TRANSLATION_ATTRIBUTE}], [${TRANSLATION_PENDING_ATTRIBUTE}], [${ERROR_ATTRIBUTE}], #${CONTROL_HOST_ID}, #${LAUNCHER_HOST_ID}`,
     ));
   };
 
@@ -1315,9 +1703,9 @@ export function createBilingualPageTranslator(
     const selection = articleContainer?.isConnected
       ? {
           root: articleContainer,
-          blocks: candidateElements(articleContainer, targetLanguage),
+          blocks: candidateElements(articleContainer, targetLanguage, scopeExcludedElements),
         }
-      : articleRoot(targetLanguage);
+      : articleRoot(targetLanguage, scopeExcludedElements);
     reconcileDynamicBlocks(selection.blocks, selection.root);
   };
 
@@ -1671,6 +2059,8 @@ export function createBilingualPageTranslator(
 
   const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> => {
     if (disposed) return snapshot();
+    destroyLauncher();
+    stopLauncherNavigationMonitor();
     pendingLanguageSwitch = undefined;
     if (currentState.phase !== 'idle') {
       const shouldRedetect = currentState.targetLanguage === targetLanguage &&
@@ -1684,7 +2074,7 @@ export function createBilingualPageTranslator(
       }
       clear(false);
     }
-    const selection = articleRoot(targetLanguage);
+    const selection = articleRoot(targetLanguage, scopeExcludedElements);
     blocks = selection.blocks;
     articleContainer = selection.root;
     sourcePageIdentity = pageIdentity(options.pageUrl());
@@ -1771,12 +2161,17 @@ export function createBilingualPageTranslator(
   return {
     start,
     control,
+    refreshDiscovery,
     suspendForInteractiveTranslation,
     resumeAfterInteractiveTranslation,
     state: snapshot,
     dispose: () => {
       if (disposed) return;
+      if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
+      launcherRefreshTimer = undefined;
       clear(false);
+      scopeExcludedElements.clear();
+      stopLauncherNavigationMonitor();
       disposed = true;
     },
   };

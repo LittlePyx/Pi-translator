@@ -23,6 +23,7 @@ import { captureSelectionSnapshot } from '../selection/generic-selection';
 import { shouldSuppressPassiveSelectionTranslation } from '../selection/passive-selection-intent';
 import type { SelectionSnapshot, ViewportRect } from '../selection/types';
 import { isLikelyTargetLanguage } from '../language/target-language';
+import { isSupportedTargetLanguage } from '../language/supported-target-languages';
 import { normalizePdfSelectionText } from '../pdf/text-normalizer';
 import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
 import type { SidebarSide } from '../settings/schema';
@@ -277,6 +278,10 @@ export async function startSelectionTranslator(
           style: temporaryStyle,
           contentMode: settings.contentMode,
         }),
+        preferredTargetLanguage: () => isSupportedTargetLanguage(temporaryTargetLanguage)
+          ? temporaryTargetLanguage
+          : 'zh-CN',
+        launcherEnabled: () => settings.generalPageMode !== 'off',
         onStateChange: (state) => {
           void browser.runtime.sendMessage({
             type: 'BILINGUAL_PAGE_STATE_UPDATED',
@@ -1167,6 +1172,7 @@ export async function startSelectionTranslator(
   } catch {
     // Defaults keep the content UI usable while the service worker restarts.
   }
+  bilingualPageTranslator?.refreshDiscovery();
 
   try {
     const response = await browser.runtime.sendMessage({
@@ -2380,6 +2386,7 @@ export async function startSelectionTranslator(
         sidebarWidth: settings.sidebarWidth,
         autoRenderLatex: settings.autoRenderLatex,
       });
+      bilingualPageTranslator?.refreshDiscovery();
       refreshSelection();
       return;
     }

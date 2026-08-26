@@ -3788,10 +3788,27 @@ async function startBilingualPage(
 
 async function getBilingualPageState(tabId: number): Promise<BilingualPageStateResponse> {
   try {
-    await bilingualPageTab(tabId);
-    const response = await browser.tabs.sendMessage(tabId, {
+    const tab = await bilingualPageTab(tabId);
+    const stateMessage = {
       type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB',
-    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    } satisfies RuntimeMessage;
+    const requestState = () => browser.tabs.sendMessage(
+      tabId,
+      stateMessage,
+    ) as Promise<BilingualPageStateResponse | undefined>;
+    let response: BilingualPageStateResponse | undefined;
+    try {
+      response = await requestState();
+    } catch {
+      // The current tab has not used Pi Translator yet in on-demand mode.
+    }
+    if (!response) {
+      await browser.scripting.executeScript({
+        target: { tabId: tab.id },
+        files: [GENERAL_CONTENT_SCRIPT_FILE],
+      });
+      response = await requestState();
+    }
     return response ?? {
       ok: true,
       data: {
