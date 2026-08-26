@@ -104,6 +104,10 @@ describe('runtime message guard', () => {
       payload: { tabId: 7, action: 'pause' },
     })).toBe(true);
     expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'toggle-translations' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
       type: 'BILINGUAL_PAGE_STATE_UPDATED',
       payload: {
         state: {
@@ -111,6 +115,7 @@ describe('runtime message guard', () => {
           total: 9,
           translated: 3,
           failed: 0,
+          translationsHidden: false,
           targetLanguage: 'en',
         },
       },
@@ -128,6 +133,7 @@ describe('runtime message guard', () => {
           total: 2,
           translated: 3,
           failed: 0,
+          translationsHidden: false,
         },
       },
     })).toBe(false);

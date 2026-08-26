@@ -9,13 +9,19 @@ export type BilingualPagePhase =
   | 'complete'
   | 'error';
 
-export type BilingualPageAction = 'pause' | 'resume' | 'stop' | 'clear';
+export type BilingualPageAction =
+  | 'pause'
+  | 'resume'
+  | 'stop'
+  | 'clear'
+  | 'toggle-translations';
 
 export interface BilingualPageState {
   phase: BilingualPagePhase;
   total: number;
   translated: number;
   failed: number;
+  translationsHidden: boolean;
   targetLanguage?: string;
   message?: string;
   pauseReason?: 'user' | 'interactive';
@@ -26,6 +32,7 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   total: 0,
   translated: 0,
   failed: 0,
+  translationsHidden: false,
 };
 
 export interface BilingualPageReferenceContextInput {
@@ -139,6 +146,7 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     validCount(state.translated) &&
     validCount(state.failed) &&
     (state.translated as number) + (state.failed as number) <= (state.total as number) &&
+    typeof state.translationsHidden === 'boolean' &&
     (state.targetLanguage === undefined || isSupportedTargetLanguage(state.targetLanguage)) &&
     (state.message === undefined || (
       typeof state.message === 'string' && state.message.length <= 300

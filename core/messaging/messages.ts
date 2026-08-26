@@ -634,7 +634,11 @@ function validTabId(value: unknown): value is number {
 }
 
 function validBilingualPageAction(value: unknown): value is BilingualPageAction {
-  return value === 'pause' || value === 'resume' || value === 'stop' || value === 'clear';
+  return value === 'pause' ||
+    value === 'resume' ||
+    value === 'stop' ||
+    value === 'clear' ||
+    value === 'toggle-translations';
 }
 
 function hasOnlyKeys(value: UnknownRecord, allowed: readonly string[]): boolean {

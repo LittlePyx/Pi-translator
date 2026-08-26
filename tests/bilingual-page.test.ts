@@ -31,6 +31,7 @@ describe('bilingual webpage reading', () => {
       total: 12,
       translated: 4,
       failed: 0,
+      translationsHidden: false,
       targetLanguage: 'zh-CN',
     })).toBe(true);
     expect(isBilingualPageState({
@@ -38,6 +39,7 @@ describe('bilingual webpage reading', () => {
       total: 12,
       translated: 4,
       failed: 0,
+      translationsHidden: true,
       targetLanguage: 'zh-CN',
       pauseReason: 'interactive',
       message: '正在处理划词，正文稍后继续。',
@@ -47,6 +49,7 @@ describe('bilingual webpage reading', () => {
       total: 2,
       translated: 3,
       failed: 0,
+      translationsHidden: false,
       targetLanguage: 'zh-CN',
     })).toBe(false);
     expect(isBilingualPageState({
@@ -54,6 +57,7 @@ describe('bilingual webpage reading', () => {
       total: 1,
       translated: 1,
       failed: 0,
+      translationsHidden: false,
       targetLanguage: 'xx',
     })).toBe(false);
     expect(isBilingualPageState({
@@ -61,7 +65,14 @@ describe('bilingual webpage reading', () => {
       total: 1,
       translated: 0,
       failed: 0,
+      translationsHidden: false,
       pauseReason: 'unexpected',
+    })).toBe(false);
+    expect(isBilingualPageState({
+      phase: 'idle',
+      total: 0,
+      translated: 0,
+      failed: 0,
     })).toBe(false);
   });
 

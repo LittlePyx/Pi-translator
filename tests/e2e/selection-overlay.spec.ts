@@ -1126,9 +1126,12 @@ test('progressively adds and removes bilingual article translations without touc
       scrollWidth: control.scrollWidth,
       primaryHeight: control.querySelector<HTMLButtonElement>('#bilingual-page-primary')!
         .getBoundingClientRect().height,
+      visibilityHeight: control.querySelector<HTMLButtonElement>('#bilingual-page-visibility')!
+        .getBoundingClientRect().height,
     }));
     expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
     expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(29);
+    expect(controlLayout.visibilityHeight).toBeGreaterThanOrEqual(29);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await Promise.all([
         page.screenshot({ path: testInfo.outputPath('bilingual-article-paused.png'), fullPage: false }),
@@ -1216,6 +1219,34 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(introTranslation).toHaveAttribute('data-pi-bilingual-hidden', '');
     await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeHidden();
     await expect(introActions.getByRole('button', { name: '显示译文' })).toBeVisible();
+
+    const globalVisibility = sidePanel.locator('#bilingual-page-visibility');
+    const pageVisibility = pageControl.locator('button[data-action="visibility"]');
+    await expect(globalVisibility).toBeVisible();
+    await expect(globalVisibility).toHaveText('收起译文');
+    await expect(pageVisibility).toHaveText('收起');
+    const requestsBeforeVisibilityToggle = textRequests.length;
+    await globalVisibility.click();
+    await expect(globalVisibility).toHaveText('展开译文');
+    await expect(globalVisibility).toHaveAttribute('aria-pressed', 'true');
+    await expect(pageVisibility).toHaveText('展开');
+    await expect(pageVisibility).toHaveAttribute('aria-pressed', 'true');
+    expect(await page.locator('[data-pi-bilingual-translation]').evaluateAll((translations) =>
+      translations.every((translation) => (
+        translation.hasAttribute('data-pi-bilingual-global-hidden') &&
+        getComputedStyle(translation).display === 'none'
+      )),
+    )).toBe(true);
+    expect(textRequests.length).toBe(requestsBeforeVisibilityToggle);
+    await pageVisibility.click();
+    await expect(globalVisibility).toHaveText('收起译文');
+    await expect(globalVisibility).toHaveAttribute('aria-pressed', 'false');
+    await expect(introTranslation).toHaveAttribute('data-pi-bilingual-hidden', '');
+    await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeHidden();
+    await expect(page.locator(
+      '#article-inline-code + [data-pi-bilingual-translation]',
+    )).toBeVisible();
+    expect(textRequests.length).toBe(requestsBeforeVisibilityToggle);
     await introActions.getByRole('button', { name: '显示译文' }).press('Enter');
     await expect(introTranslation).not.toHaveAttribute('data-pi-bilingual-hidden', '');
     await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeVisible();
@@ -1295,6 +1326,8 @@ test('progressively adds and removes bilingual article translations without touc
 
     const dynamicText = 'A dynamically loaded paragraph should join bilingual reading only when it approaches the reader viewport.';
     const requestsBeforeDynamicBlock = textRequests.length;
+    await globalVisibility.click();
+    await expect(globalVisibility).toHaveText('展开译文');
     await page.locator('article').evaluate((article, text) => {
       const paragraph = document.createElement('p');
       paragraph.id = 'article-dynamic';
@@ -1308,10 +1341,15 @@ test('progressively adds and removes bilingual article translations without touc
     expect(textRequests.length).toBe(requestsBeforeDynamicBlock);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('7/8');
     await page.locator('#article-dynamic').scrollIntoViewIfNeeded();
-    await expect(dynamicTranslation).toBeVisible();
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeDynamicBlock);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 8/8');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
+    await expect(dynamicTranslation).toHaveAttribute('data-pi-bilingual-global-hidden', '');
+    await expect(dynamicTranslation).toBeHidden();
+    await globalVisibility.click();
+    await expect(globalVisibility).toHaveText('收起译文');
+    await expect(dynamicTranslation).not.toHaveAttribute('data-pi-bilingual-global-hidden', '');
+    await expect(dynamicTranslation).toBeVisible();
 
     const requestsBeforeSameTextRerender = textRequests.length;
     await page.locator('#article-dynamic').evaluate((paragraph) => {
@@ -1398,6 +1436,7 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(pageControl).toHaveCount(0);
     await expect(sidePanel.locator('#bilingual-page-clear')).toBeHidden();
+    await expect(sidePanel.locator('#bilingual-page-visibility')).toBeHidden();
 
     await page.reload();
     await page.locator('#article-inline-code').evaluate((paragraph) => {

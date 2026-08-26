@@ -25,6 +25,7 @@ const TRANSLATION_TEXT_ATTRIBUTE = 'data-pi-bilingual-text';
 const TRANSLATION_ACTIONS_ATTRIBUTE = 'data-pi-bilingual-actions';
 const TRANSLATION_FEEDBACK_ATTRIBUTE = 'data-pi-bilingual-feedback';
 const TRANSLATION_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-hidden';
+const TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-global-hidden';
 const TRANSLATION_BUSY_ATTRIBUTE = 'data-pi-bilingual-busy';
 const TRANSLATION_HINT_ATTRIBUTE = 'data-pi-bilingual-hint';
 const TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE = 'data-pi-bilingual-touch-expanded';
@@ -376,6 +377,9 @@ function installTranslationStyle(): void {
       white-space: pre-wrap !important;
       overflow-wrap: anywhere !important;
     }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE}] {
+      display: none !important;
+    }
     [${TRANSLATION_TEXT_ATTRIBUTE}] {
       all: initial !important;
       display: block !important;
@@ -667,6 +671,7 @@ export function createBilingualPageTranslator(
       total: 0,
       translated: 0,
       failed: 0,
+      translationsHidden: false,
       ...(targetLanguage ? { targetLanguage } : {}),
       message,
     };
@@ -815,6 +820,14 @@ export function createBilingualPageTranslator(
     setTranslationFeedback(block, hidden ? '本段译文已隐藏' : '', 0);
   };
 
+  const setAllTranslationsHidden = (hidden: boolean): void => {
+    currentState = { ...currentState, translationsHidden: hidden };
+    for (const block of blocks) {
+      block.translation?.toggleAttribute(TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE, hidden);
+    }
+    publish();
+  };
+
   const copyBlockTranslation = async (block: BilingualBlock): Promise<void> => {
     setTouchActionsExpanded(block, false);
     const text = translationText(block);
@@ -847,9 +860,9 @@ export function createBilingualPageTranslator(
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .bar { display:flex;align-items:center;gap:8px;max-width:min(420px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
+          .bar { display:flex;align-items:center;gap:8px;max-width:min(500px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
           .mark { color:#5548d9;font-weight:800;font-size:15px; }
-          output { min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+          output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
           button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#e4e2ff; }
           button:disabled { opacity:.62;cursor:default; }
@@ -860,6 +873,7 @@ export function createBilingualPageTranslator(
         <div class="bar" role="status" aria-live="polite">
           <span class="mark" aria-hidden="true">π</span>
           <output></output>
+          <button type="button" data-action="visibility"></button>
           <button type="button" data-action="pause"></button>
           <button type="button" data-action="stop">停止</button>
           <button type="button" data-action="clear">清除</button>
@@ -867,7 +881,9 @@ export function createBilingualPageTranslator(
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
         button.addEventListener('click', () => {
           const action = button.dataset.action;
-          if (action === 'pause') {
+          if (action === 'visibility') {
+            void control('toggle-translations');
+          } else if (action === 'pause') {
             const shouldResume = currentState.phase === 'paused' ||
               currentState.phase === 'error' ||
               currentState.phase === 'stopped' ||
@@ -882,6 +898,7 @@ export function createBilingualPageTranslator(
     }
     const shadow = controlHost.shadowRoot;
     const output = shadow?.querySelector<HTMLOutputElement>('output');
+    const visibility = shadow?.querySelector<HTMLButtonElement>('[data-action="visibility"]');
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
     if (output) {
@@ -898,6 +915,14 @@ export function createBilingualPageTranslator(
             : currentState.phase === 'stopped'
               ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
               : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`;
+    }
+    if (visibility) {
+      const actionLabel = currentState.translationsHidden ? '展开译文' : '收起译文';
+      visibility.textContent = currentState.translationsHidden ? '展开' : '收起';
+      visibility.title = actionLabel;
+      visibility.setAttribute('aria-label', actionLabel);
+      visibility.setAttribute('aria-pressed', String(currentState.translationsHidden));
+      visibility.hidden = currentState.translated === 0;
     }
     if (pause) {
       const retryCompleted = currentState.phase === 'complete' && currentState.failed > 0;
@@ -1313,11 +1338,17 @@ export function createBilingualPageTranslator(
           ),
         },
       );
+      translation.toggleAttribute(
+        TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE,
+        currentState.translationsHidden,
+      );
       insertTranslation(block, translation);
       if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
       consecutiveIsolatedFailures = 0;
-      if (!replacingTranslation) void revealTranslationActionsHint(block);
+      if (!replacingTranslation && !currentState.translationsHidden) {
+        void revealTranslationActionsHint(block);
+      }
       if (restorePageStateAfterRetranslation(block)) return;
       if (!settleCompletedState()) publish();
     } catch (error) {
@@ -1447,6 +1478,7 @@ export function createBilingualPageTranslator(
       total: blocks.length,
       translated: 0,
       failed: 0,
+      translationsHidden: false,
       targetLanguage,
       ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
     };
@@ -1472,6 +1504,12 @@ export function createBilingualPageTranslator(
   const control = async (action: BilingualPageAction): Promise<BilingualPageState> => {
     if (action === 'clear') {
       clear();
+      return snapshot();
+    }
+    if (action === 'toggle-translations') {
+      if (currentState.phase !== 'idle' && currentState.translated > 0) {
+        setAllTranslationsHidden(!currentState.translationsHidden);
+      }
       return snapshot();
     }
     if (

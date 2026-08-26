@@ -3794,14 +3794,30 @@ async function getBilingualPageState(tabId: number): Promise<BilingualPageStateR
     } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
     return response ?? {
       ok: true,
-      data: { state: { phase: 'idle', total: 0, translated: 0, failed: 0 } },
+      data: {
+        state: {
+          phase: 'idle',
+          total: 0,
+          translated: 0,
+          failed: 0,
+          translationsHidden: false,
+        },
+      },
     };
   } catch (error) {
     const normalized = toTranslationError(error);
     if (normalized.code === 'UNSUPPORTED_PAGE') return errorResponse(normalized);
     return {
       ok: true,
-      data: { state: { phase: 'idle', total: 0, translated: 0, failed: 0 } },
+      data: {
+        state: {
+          phase: 'idle',
+          total: 0,
+          translated: 0,
+          failed: 0,
+          translationsHidden: false,
+        },
+      },
     };
   }
 }

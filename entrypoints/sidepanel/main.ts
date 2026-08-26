@@ -96,6 +96,7 @@ const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const bilingualPageControl = element<HTMLElement>('bilingual-page-control');
 const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
+const bilingualPageVisibility = element<HTMLButtonElement>('bilingual-page-visibility');
 const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
 const sessionSection = element<HTMLElement>('session');
 const sourceKindLabel = element<HTMLElement>('source-kind-label');
@@ -717,6 +718,13 @@ function syncBilingualPageControl(): void {
               : '开始';
   bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
   bilingualPagePrimary.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  const visibilityActionLabel = state.translationsHidden ? '展开全部译文' : '收起全部译文';
+  bilingualPageVisibility.textContent = state.translationsHidden ? '展开译文' : '收起译文';
+  bilingualPageVisibility.title = visibilityActionLabel;
+  bilingualPageVisibility.setAttribute('aria-label', visibilityActionLabel);
+  bilingualPageVisibility.setAttribute('aria-pressed', String(state.translationsHidden));
+  bilingualPageVisibility.hidden = state.phase === 'idle' || state.translated === 0;
+  bilingualPageVisibility.disabled = bilingualPagePending;
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
 }
@@ -2339,6 +2347,9 @@ continuousTranslationToggle.addEventListener('click', () => {
 });
 bilingualPagePrimary.addEventListener('click', () => {
   void updateBilingualPage(bilingualPagePrimaryAction());
+});
+bilingualPageVisibility.addEventListener('click', () => {
+  void updateBilingualPage('toggle-translations');
 });
 bilingualPageClear.addEventListener('click', () => {
   void updateBilingualPage('clear');
