@@ -11,6 +11,7 @@ import type {
   TranslationStyle,
 } from '../translation/types';
 import {
+  buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
   isBilingualPageTextCandidate,
   isIsolatedBilingualBlockError,
@@ -690,6 +691,27 @@ export function createBilingualPageTranslator(
       ?.textContent
       ?.trim() ?? '';
 
+  const articleTitleText = (): string | undefined => {
+    const heading = blocks.find((block) => block.element.tagName === 'H1')?.text;
+    if (heading) return heading;
+    return normalizeBilingualPageText(document.title) || undefined;
+  };
+
+  const referenceContextForBlock = (block: BilingualBlock): string | undefined => {
+    const index = blocks.indexOf(block);
+    const previous = index > 0 ? blocks[index - 1] : undefined;
+    const articleTitle = articleTitleText();
+    const previousTranslation = previous?.status === 'done'
+      ? translationText(previous)
+      : undefined;
+    return buildBilingualPageReferenceContext({
+      currentText: block.text,
+      ...(articleTitle ? { articleTitle } : {}),
+      ...(previous ? { previousSource: previous.text } : {}),
+      ...(previousTranslation ? { previousTranslation } : {}),
+    });
+  };
+
   const setTranslationFeedback = (
     block: BilingualBlock,
     message: string,
@@ -1211,6 +1233,7 @@ export function createBilingualPageTranslator(
     activeRequestId = requestId;
     block.status = 'translating';
     const config = options.requestConfig();
+    const contextText = referenceContextForBlock(block);
     try {
       const response = await browser.runtime.sendMessage({
         type: 'TRANSLATE_BILINGUAL_PAGE_SEGMENT',
@@ -1222,6 +1245,7 @@ export function createBilingualPageTranslator(
           sourceLanguage: config.sourceLanguage,
           style: config.style,
           contentMode: config.contentMode,
+          ...(contextText ? { contextText } : {}),
           ...(block.bypassCacheNext ? { bypassCache: true } : {}),
         },
       } satisfies RuntimeMessage) as TranslateRuntimeResponse;

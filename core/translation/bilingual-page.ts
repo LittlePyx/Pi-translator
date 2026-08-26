@@ -28,6 +28,18 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   failed: 0,
 };
 
+export interface BilingualPageReferenceContextInput {
+  currentText: string;
+  articleTitle?: string;
+  previousSource?: string;
+  previousTranslation?: string;
+}
+
+const MAX_BILINGUAL_REFERENCE_CONTEXT = 800;
+const MAX_BILINGUAL_TITLE_CONTEXT = 160;
+const MAX_BILINGUAL_PREVIOUS_SOURCE_CONTEXT = 220;
+const MAX_BILINGUAL_PREVIOUS_TRANSLATION_CONTEXT = 260;
+
 const ISOLATED_BLOCK_ERROR_CODES = new Set<TranslationErrorCode>([
   'EMPTY_SELECTION',
   'SELECTION_TOO_LONG',
@@ -43,6 +55,57 @@ export function isIsolatedBilingualBlockError(code: TranslationErrorCode): boole
 
 export function normalizeBilingualPageText(value: string): string {
   return value.replace(/\s+/gu, ' ').trim();
+}
+
+export function buildBilingualPageReferenceContext(
+  input: BilingualPageReferenceContextInput,
+  maximum = MAX_BILINGUAL_REFERENCE_CONTEXT,
+): string | undefined {
+  const limit = Math.max(0, Math.min(MAX_BILINGUAL_REFERENCE_CONTEXT, Math.floor(maximum)));
+  if (!limit) return undefined;
+  const currentText = normalizeBilingualPageText(input.currentText);
+  const articleTitle = normalizeBilingualPageText(input.articleTitle ?? '');
+  const previousSource = normalizeBilingualPageText(input.previousSource ?? '');
+  const previousTranslation = normalizeBilingualPageText(input.previousTranslation ?? '');
+  const sections: Array<{ label: string; value: string; maximum: number }> = [];
+  if (articleTitle && articleTitle !== currentText) {
+    sections.push({
+      label: 'Article title',
+      value: articleTitle,
+      maximum: MAX_BILINGUAL_TITLE_CONTEXT,
+    });
+  }
+  if (
+    previousSource &&
+    previousSource !== currentText &&
+    previousSource !== articleTitle
+  ) {
+    sections.push({
+      label: 'Immediately preceding source paragraph',
+      value: previousSource,
+      maximum: MAX_BILINGUAL_PREVIOUS_SOURCE_CONTEXT,
+    });
+  }
+  if (previousSource && previousTranslation) {
+    sections.push({
+      label: previousSource === articleTitle
+        ? 'Translation of the article title'
+        : 'Translation of the immediately preceding paragraph',
+      value: previousTranslation,
+      maximum: MAX_BILINGUAL_PREVIOUS_TRANSLATION_CONTEXT,
+    });
+  }
+
+  let result = '';
+  for (const section of sections) {
+    const prefix = `${result ? '\n\n' : ''}${section.label}:\n`;
+    const available = limit - result.length - prefix.length;
+    if (available <= 0) break;
+    const value = section.value.slice(0, Math.min(section.maximum, available)).trim();
+    if (!value) continue;
+    result += `${prefix}${value}`;
+  }
+  return result || undefined;
 }
 
 export function isBilingualPageTextCandidate(

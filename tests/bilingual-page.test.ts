@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildBilingualPageReferenceContext,
   isBilingualPageState,
   isBilingualPageTextCandidate,
   isIsolatedBilingualBlockError,
@@ -71,5 +72,43 @@ describe('bilingual webpage reading', () => {
     expect(isIsolatedBilingualBlockError('RATE_LIMITED')).toBe(false);
     expect(isIsolatedBilingualBlockError('NETWORK_ERROR')).toBe(false);
     expect(isIsolatedBilingualBlockError('AUTH_FAILED')).toBe(false);
+  });
+
+  it('builds bounded article context without repeating the paragraph being translated', () => {
+    const context = buildBilingualPageReferenceContext({
+      currentText: 'It remains stable under the perturbation considered below.',
+      articleTitle: 'A Practical Guide to Robust Estimation',
+      previousSource: 'The estimator converges under the stated assumptions.',
+      previousTranslation: '在给定假设下，该估计量收敛。',
+    });
+    expect(context).toContain('Article title:\nA Practical Guide to Robust Estimation');
+    expect(context).toContain(
+      'Immediately preceding source paragraph:\nThe estimator converges under the stated assumptions.',
+    );
+    expect(context).toContain('Translation of the immediately preceding paragraph');
+    expect(context).not.toContain('It remains stable under the perturbation');
+    expect(context!.length).toBeLessThanOrEqual(800);
+  });
+
+  it('uses a translated heading as context without duplicating its source', () => {
+    const context = buildBilingualPageReferenceContext({
+      currentText: 'This section introduces the experimental setup.',
+      articleTitle: 'Experimental Setup for Adaptive Sensing',
+      previousSource: 'Experimental Setup for Adaptive Sensing',
+      previousTranslation: '自适应感知的实验设置',
+    });
+    expect(context?.match(/Experimental Setup for Adaptive Sensing/gu)).toHaveLength(1);
+    expect(context).toContain('Translation of the article title:\n自适应感知的实验设置');
+  });
+
+  it('enforces the context budget even when every reference is very long', () => {
+    const context = buildBilingualPageReferenceContext({
+      currentText: 'Current paragraph remains separate.',
+      articleTitle: `Title ${'T'.repeat(500)}`,
+      previousSource: `Source ${'S'.repeat(1_000)}`,
+      previousTranslation: `Translation ${'译'.repeat(1_000)}`,
+    }, 320);
+    expect(context!.length).toBeLessThanOrEqual(320);
+    expect(context).not.toContain('Current paragraph remains separate.');
   });
 });

@@ -1164,6 +1164,28 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(page.locator('#article-intro-repeat + [data-pi-bilingual-translation]'))
       .toBeVisible();
+    const articleRequests = textRequests.slice(requestsBefore);
+    const introRequest = articleRequests.find((body) => JSON.stringify(body).includes(
+      'Bilingual reading should preserve the original article',
+    ));
+    const introUserContent = (introRequest?.messages as Array<{
+      role?: string;
+      content?: unknown;
+    }> | undefined)?.find((message) => message.role === 'user')?.content;
+    expect(typeof introUserContent).toBe('string');
+    const introPayload = JSON.parse(introUserContent as string) as {
+      text?: string;
+      referenceContext?: string;
+    };
+    expect(introPayload.text).toBe(
+      'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.',
+    );
+    expect(introPayload.referenceContext).toContain(
+      'Article title:\nA practical guide to reliable bilingual reading',
+    );
+    expect(introPayload.referenceContext).toContain('Translation of the article title');
+    expect(introPayload.referenceContext).not.toContain(introPayload.text);
+    expect(introPayload.referenceContext!.length).toBeLessThanOrEqual(800);
     const completedRequests = JSON.stringify(textRequests.slice(requestsBefore));
     expect(completedRequests).toContain('`npm run build:edge`');
     expect(completedRequests).toContain('⟦FULL1_0001⟧');
@@ -7228,7 +7250,14 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     );
     expect(alignedLayout.sourceClientHeight).toBeLessThanOrEqual(80);
     expect(alignedLayout.sourceScrollHeight).toBeGreaterThan(alignedLayout.sourceClientHeight);
-    expect(alignedLayout.formulaScrollWidth).toBeGreaterThan(alignedLayout.formulaClientWidth);
+    expect(alignedLayout.formulaScrollWidth).toBeGreaterThanOrEqual(
+      alignedLayout.formulaClientWidth,
+    );
+    await expect.poll(() => firstSegment.evaluate((segment) => {
+      const formula = segment.querySelector<HTMLElement>('.pi-math-scroll')
+        ?? segment.querySelector<HTMLElement>('.pi-math-display')!;
+      return formula.scrollWidth > formula.clientWidth;
+    })).toBe(true);
     expect(alignedLayout.actionScrollWidth).toBeLessThanOrEqual(alignedLayout.actionClientWidth + 1);
     expect(alignedLayout.actionHeights.every((height) => height >= 32)).toBe(true);
     expect(new Set(alignedLayout.actionTops).size).toBe(1);
@@ -10010,20 +10039,22 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
     await api.storage.local.remove(storageKey);
   }, obstructionHintStorageKey);
   await page.reload();
-  await worker!.evaluate(async (targetUrl) => {
-    const api = (globalThis as typeof globalThis & {
-      chrome: {
-        tabs: {
-          query(query: object): Promise<Array<{ id?: number; url?: string }>>;
-          sendMessage(tabId: number, message: object): Promise<unknown>;
+  await expect.poll(async () => {
+    await worker!.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: {
+            query(query: object): Promise<Array<{ id?: number; url?: string }>>;
+            sendMessage(tabId: number, message: object): Promise<unknown>;
+          };
         };
-      };
-    }).chrome;
-    const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
-    if (target?.id === undefined) throw new Error('Missing active web test tab.');
-    await api.tabs.sendMessage(target.id, { type: 'OPEN_SIDEBAR' });
-  }, page.url());
-  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+      }).chrome;
+      const target = (await api.tabs.query({})).find((tab) => tab.url === targetUrl);
+      if (target?.id === undefined) throw new Error('Missing active web test tab.');
+      await api.tabs.sendMessage(target.id, { type: 'OPEN_SIDEBAR' });
+    }, page.url()).catch(() => undefined);
+    return overlay.getAttribute('data-pi-view');
+  }).toBe('sidebar');
   const idleObstructionHint = overlay.locator('.sidebar-obstruction-hint');
   await expect(idleObstructionHint).toContainText('浏览器侧栏不会覆盖页面');
   await worker!.evaluate(() => {
