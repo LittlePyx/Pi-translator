@@ -5156,6 +5156,96 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
   }
 });
 
+test('restores PDF full-document progress and translates only newly added paragraphs', async () => {
+  const sourceUrl = 'https://www.overleaf.com/pdf-document-resume.pdf';
+  let expandedDocument = false;
+  const firstText = 'The resumable PDF begins with a stable first paragraph.';
+  const secondText = 'The resumable PDF keeps a stable second paragraph.';
+  const thirdText = 'A newly added PDF paragraph should be the only resumed request.';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createMultiPageTextPdf([
+        { text: firstText },
+        { text: secondText },
+        ...(expandedDocument ? [{ text: thirdText }] : []),
+      ]),
+    });
+  });
+  const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  readerUrl.searchParams.set('url', sourceUrl);
+  const firstReader = await context.newPage();
+  const requestStart = textRequests.length;
+  try {
+    await firstReader.goto(readerUrl.href);
+    await expect(firstReader.locator('#page-count')).toHaveText('2');
+    await firstReader.locator('#translate-document').click();
+    await expect(firstReader.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 2 段，等待确认');
+    await firstReader.locator('#pdf-document-translation-primary').click();
+    await expect(firstReader.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 2/2');
+    expect(textRequests).toHaveLength(requestStart + 1);
+    const serializedSession = await firstReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      return JSON.stringify(await api.storage.session.get(
+        'pdfDocumentTranslationSessionsV1',
+      ));
+    });
+    expect(serializedSession).not.toContain(sourceUrl);
+    expect(serializedSession).not.toContain(firstText);
+    expect(serializedSession).not.toContain(secondText);
+  } finally {
+    await firstReader.close();
+  }
+
+  expandedDocument = true;
+  const restoredReader = await context.newPage();
+  try {
+    await restoredReader.goto(readerUrl.href);
+    await expect(restoredReader.locator('#page-count')).toHaveText('3');
+    await restoredReader.locator('#translate-document').click();
+    const panel = restoredReader.locator('#pdf-document-translation');
+    await expect(restoredReader.locator('#pdf-document-translation-status'))
+      .toContainText('已恢复 2/3 段，可继续翻译');
+    await expect(panel.locator('[data-status="done"]')).toHaveCount(2);
+    expect(textRequests).toHaveLength(requestStart + 1);
+
+    await restoredReader.locator('#pdf-document-translation-primary').click();
+    await expect(restoredReader.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 3/3');
+    expect(textRequests).toHaveLength(requestStart + 2);
+    const resumedRequest = textRequests.at(-1)!;
+    const resumedMessages = resumedRequest.messages as Array<{ role?: string; content?: string }>;
+    const resumedContent = resumedMessages.find((message) => message.role === 'user')?.content;
+    const resumedPayload = JSON.parse(resumedContent!) as {
+      segments: Array<{ id: string; text: string }>;
+    };
+    expect(resumedPayload.segments.map((segment) => segment.text)).toEqual([thirdText]);
+
+    const restart = restoredReader.locator('#pdf-document-translation-clear');
+    await expect(restart).toHaveText('重新翻译');
+    await restart.click();
+    await expect(restoredReader.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 3/3');
+    expect(textRequests).toHaveLength(requestStart + 3);
+    const restartedRequest = textRequests.at(-1)!;
+    const restartedMessages = restartedRequest.messages as Array<{ role?: string; content?: string }>;
+    const restartedContent = restartedMessages.find((message) => message.role === 'user')?.content;
+    const restartedPayload = JSON.parse(restartedContent!) as {
+      segments: Array<{ id: string; text: string }>;
+    };
+    expect(restartedPayload.segments.map((segment) => segment.text))
+      .toEqual([firstText, secondText, thirdText]);
+  } finally {
+    await restoredReader.close();
+    await context.unroute(sourceUrl);
+  }
+});
+
 test('orders a two-column PDF by reading column before full-document translation', async () => {
   const pdfPage = await context.newPage();
   try {
