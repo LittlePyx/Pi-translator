@@ -18,6 +18,8 @@ export type BilingualPageAction =
   | 'resume'
   | 'stop'
   | 'clear'
+  | 'enable-retention'
+  | 'disable-retention'
   | 'toggle-translations'
   | 'display-bilingual'
   | 'display-translation'
@@ -30,8 +32,12 @@ export interface BilingualPageState {
   total: number;
   translated: number;
   failed: number;
-  /** Completed paragraphs restored from the current browser session. */
+  /** Completed paragraphs restored from the current browser session or explicit local retention. */
   restored?: number;
+  restoredFrom?: 'session' | 'local';
+  retainedLocally?: boolean;
+  retentionMessage?: string;
+  retentionError?: boolean;
   /** Explicit reading layout; omitted states from older content scripts remain bilingual/source. */
   displayMode?: BilingualPageDisplayMode;
   translationsHidden: boolean;
@@ -207,6 +213,14 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     validCount(state.translated) &&
     validCount(state.failed) &&
     (state.restored === undefined || validCount(state.restored)) &&
+    (state.restoredFrom === undefined || ['session', 'local'].includes(
+      typeof state.restoredFrom === 'string' ? state.restoredFrom : '',
+    )) &&
+    (state.retainedLocally === undefined || typeof state.retainedLocally === 'boolean') &&
+    (state.retentionMessage === undefined || (
+      typeof state.retentionMessage === 'string' && state.retentionMessage.length <= 180
+    )) &&
+    (state.retentionError === undefined || typeof state.retentionError === 'boolean') &&
     (state.translated as number) + (state.failed as number) <= (state.total as number) &&
     (state.restored === undefined || (state.restored as number) <= (state.translated as number)) &&
     (state.displayMode === undefined || ['bilingual', 'translation', 'source'].includes(

@@ -214,6 +214,56 @@ main {
 .bilingual-page-control[data-phase="warning"] .bilingual-page-progress i {
   background: #cf922d;
 }
+.bilingual-page-retention {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  border-top: 1px solid #eceef4;
+  padding-top: 7px;
+}
+.bilingual-page-retention[hidden] { display: none; }
+.bilingual-page-retention > span { display: grid; min-width: 0; gap: 1px; }
+.bilingual-page-retention strong { color: #4b5568; font-size: 9.5px; }
+.bilingual-page-retention small {
+  overflow: hidden;
+  color: #8a93a3;
+  font-size: 9px;
+  line-height: 1.35;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.bilingual-page-retention[data-tone="error"] small { color: #b42336; }
+.bilingual-page-retention input {
+  position: relative;
+  width: 28px;
+  height: 16px;
+  flex: 0 0 auto;
+  appearance: none;
+  border: 1px solid #cbd1dd;
+  border-radius: 999px;
+  margin: 0;
+  background: #e5e8ee;
+  cursor: pointer;
+  transition: border-color .16s ease, background-color .16s ease;
+}
+.bilingual-page-retention input::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 3px rgba(15, 23, 42, .18);
+  content: "";
+  transition: transform .16s ease;
+}
+.bilingual-page-retention input:checked { border-color: #5b57dc; background: #5b57dc; }
+.bilingual-page-retention input:checked::before { transform: translateX(12px); }
+.bilingual-page-retention input:disabled { opacity: .55; cursor: wait; }
+.bilingual-page-retention input:focus-visible { outline: 3px solid rgba(79, 70, 229, .2); outline-offset: 2px; }
 .bilingual-page-actions { display: flex; min-width: 0; align-items: center; gap: 3px; }
 .bilingual-page-copy-menu { position: relative; }
 .bilingual-page-copy-menu > summary {
@@ -849,6 +899,12 @@ button:focus-visible {
   .bilingual-page-language select { color: #c1bcff; background: transparent; }
   .bilingual-page-language select:hover:not(:disabled) { background: #252d3b; }
   .bilingual-page-progress { background: #303848; }
+  .bilingual-page-retention { border-top-color: #303a49; }
+  .bilingual-page-retention strong { color: #cbd5e1; }
+  .bilingual-page-retention small { color: #8f9aab; }
+  .bilingual-page-retention[data-tone="error"] small { color: #ff9cab; }
+  .bilingual-page-retention input { border-color: #4a5567; background: #303947; }
+  .bilingual-page-retention input:checked { border-color: #7169e9; background: #655fdf; }
   .bilingual-page-display { color: #9ba5b5; background: transparent; }
   .bilingual-page-display:hover { background: #252d3b; }
   .bilingual-page-display select { color: #c7c3ff; }

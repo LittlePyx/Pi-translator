@@ -1430,7 +1430,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
   }
 });
 
-test('restores unchanged bilingual paragraphs after refresh and translates only changed content', async () => {
+test('restores explicitly retained webpage progress after session loss and translates only changed content', async () => {
   const popup = await context.newPage();
   let originalTargetLanguage = 'zh-CN';
   try {
@@ -1463,6 +1463,32 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     await expect(page.locator('#pi-translator-bilingual-page-control .bar'))
       .toHaveAttribute('data-collapsed', 'true');
 
+    const initialPageControl = page.locator('#pi-translator-bilingual-page-control');
+    await initialPageControl.locator('button[data-action="compact"]').click();
+    await initialPageControl.locator('details.more > summary').click();
+    await initialPageControl.locator('button[data-action="retention"]').click();
+    await expect(initialPageControl.locator('button[data-action="retention"]'))
+      .toHaveText('不再本机保留');
+    await initialPageControl.locator('button[data-action="compact"]').click();
+    await expect.poll(() => popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.local.get('bilingualPageRetainedV1');
+      return JSON.stringify(result.bilingualPageRetainedV1 ?? []);
+    })).toContain('page-');
+    const retainedSerialization = await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.local.get('bilingualPageRetainedV1');
+      return JSON.stringify(result.bilingualPageRetainedV1 ?? []);
+    });
+    expect(retainedSerialization).not.toContain(ARTICLE_FIXTURE_URL);
+    expect(retainedSerialization).not.toContain(
+      'Bilingual reading should preserve the original article',
+    );
+
     const introTranslation = page.locator(
       '#article-intro + [data-pi-bilingual-translation]',
     );
@@ -1485,9 +1511,12 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     await page.waitForTimeout(250);
     await popup.evaluate(async () => {
       const api = (globalThis as typeof globalThis & {
-        chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+        chrome: { storage: { session: { remove(key: string | string[]): Promise<void> } } };
       }).chrome;
-      await api.storage.session.remove('translationCacheByTab');
+      await api.storage.session.remove([
+        'translationCacheByTab',
+        'bilingualPageSessionsByTabV1',
+      ]);
     });
 
     const requestsBeforeRefresh = textRequests.length;
@@ -1512,7 +1541,7 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl).toBeVisible();
-    await expect(pageControl.locator('output')).toContainText('已恢复 6 段');
+    await expect(pageControl.locator('output')).toContainText('已从本机恢复 6 段');
     await expect(pageControl.locator('select[data-action="display"]'))
       .toHaveValue('translation');
     await expect(page.locator('#article-intro + [data-pi-bilingual-translation]'))
@@ -1536,6 +1565,8 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
 
     await pageControl.locator('button[data-action="compact"]').click();
     await pageControl.locator('details.more > summary').click();
+    await expect(pageControl.locator('button[data-action="retention"]'))
+      .toHaveText('不再本机保留');
     await pageControl.locator('button[data-action="clear"]').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect.poll(() => popup.evaluate(async () => {
@@ -1545,6 +1576,13 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
       const result = await api.storage.session.get('bilingualPageSessionsByTabV1');
       return JSON.stringify(result.bilingualPageSessionsByTabV1 ?? {}).includes('page-');
     })).toBe(false);
+    await expect.poll(() => popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.local.get('bilingualPageRetainedV1');
+      return JSON.stringify(result.bilingualPageRetainedV1 ?? []).includes('page-');
+    })).toBe(false);
   } finally {
     bilingualArticleRevision = 0;
     await page.evaluate(() => {
@@ -1553,12 +1591,18 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     }).catch(() => undefined);
     await popup.evaluate(async () => {
       const api = (globalThis as typeof globalThis & {
-        chrome: { storage: { session: { remove(keys: string | string[]): Promise<void> } } };
+        chrome: {
+          storage: {
+            session: { remove(keys: string | string[]): Promise<void> };
+            local: { remove(key: string): Promise<void> };
+          };
+        };
       }).chrome;
       await api.storage.session.remove([
         'translationCacheByTab',
         'bilingualPageSessionsByTabV1',
       ]);
+      await api.storage.local.remove('bilingualPageRetainedV1');
     }).catch(() => undefined);
     if (originalTargetLanguage !== 'zh-CN') {
       await popup.bringToFront().catch(() => undefined);
@@ -1670,6 +1714,10 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(sidePanel.locator('#bilingual-page-progress')).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-progress'))
       .toHaveAttribute('aria-valuenow', /^\d+$/);
+    await expect(sidePanel.locator('#bilingual-page-retention')).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-retention-status'))
+      .toHaveText('默认只保留在当前 Edge 会话');
+    await expect(sidePanel.locator('#bilingual-page-retention-toggle')).not.toBeChecked();
     await sidePanel.setViewportSize({ width: 300, height: 720 });
     const controlLayout = await sidePanelControl.evaluate((control) => ({
       clientWidth: control.clientWidth,
@@ -1685,6 +1733,9 @@ test('completes bilingual article translation without scrolling and keeps contro
         .getBoundingClientRect().height,
       languageHeight: control.querySelector<HTMLSelectElement>('#bilingual-page-language')!
         .getBoundingClientRect().height,
+      retentionSwitchHeight: control.querySelector<HTMLInputElement>(
+        '#bilingual-page-retention-toggle',
+      )!.getBoundingClientRect().height,
     }));
     expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
     expect(controlLayout.borderRadius).toBe('0px');
@@ -1693,6 +1744,30 @@ test('completes bilingual article translation without scrolling and keeps contro
     expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(33);
     expect(controlLayout.displayHeight).toBeGreaterThanOrEqual(31);
     expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(31);
+    expect(controlLayout.retentionSwitchHeight).toBeGreaterThanOrEqual(16);
+    const retentionToggle = sidePanel.locator('#bilingual-page-retention-toggle');
+    await retentionToggle.check();
+    await expect(retentionToggle).toBeChecked();
+    await expect(sidePanel.locator('#bilingual-page-retention-status'))
+      .toContainText('不保存原文与网址');
+    await expect.poll(() => sidePanel.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.local.get('bilingualPageRetainedV1');
+      return JSON.stringify(result.bilingualPageRetainedV1 ?? []).includes('page-');
+    })).toBe(true);
+    await retentionToggle.uncheck();
+    await expect(retentionToggle).not.toBeChecked();
+    await expect(sidePanel.locator('#bilingual-page-retention-status'))
+      .toHaveText('默认只保留在当前 Edge 会话');
+    await expect.poll(() => sidePanel.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      const result = await api.storage.local.get('bilingualPageRetainedV1');
+      return JSON.stringify(result.bilingualPageRetainedV1 ?? []).includes('page-');
+    })).toBe(false);
     const exportBeforeCopy = await sidePanel.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
@@ -2338,6 +2413,12 @@ test('completes bilingual article translation without scrolling and keeps contro
       await expect(settingsPage.locator('#status')).toContainText('目标语言已更新');
       await settingsPage.close();
     }
+    await sidePanel.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { remove(key: string): Promise<void> } } };
+      }).chrome;
+      await api.storage.local.remove('bilingualPageRetainedV1');
+    }).catch(() => undefined);
     await sidePanel.close().catch(() => undefined);
     await popup.close().catch(() => undefined);
     await page.goto(OVERLEAF_FIXTURE_URL);

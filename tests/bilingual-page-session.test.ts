@@ -1,18 +1,29 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  BILINGUAL_PAGE_RETAINED_STORAGE_KEY,
   BILINGUAL_PAGE_SESSIONS_STORAGE_KEY,
   bilingualPageSessionBehaviorKey,
   bilingualPageSessionBlockSignature,
   bilingualPageSessionMatchesDocument,
   bilingualPageSessionPageKey,
   clearBilingualPageSession,
+  clearRetainedBilingualPageSession,
   getBilingualPageSession,
+  getRetainedBilingualPageSession,
   saveBilingualPageSession,
+  saveRetainedBilingualPageSession,
   type BilingualPageSessionDescriptor,
   type BilingualPageSessionUpdate,
 } from '../core/translation/bilingual-page-session';
 
-const storage: Record<string, unknown> = {};
+const sessionStorage: Record<string, unknown> = {};
+const localStorage: Record<string, unknown> = {};
+
+const area = (storage: Record<string, unknown>) => ({
+  get: vi.fn(async (key: string) => ({ [key]: storage[key] })),
+  set: vi.fn(async (values: Record<string, unknown>) => Object.assign(storage, values)),
+  remove: vi.fn(async (key: string) => { delete storage[key]; }),
+});
 
 const descriptor = (page = 'https://example.com/article'): BilingualPageSessionDescriptor => ({
   pageKey: bilingualPageSessionPageKey(page),
@@ -47,14 +58,12 @@ const update = (
 });
 
 beforeEach(() => {
-  for (const key of Object.keys(storage)) delete storage[key];
+  for (const key of Object.keys(sessionStorage)) delete sessionStorage[key];
+  for (const key of Object.keys(localStorage)) delete localStorage[key];
   vi.stubGlobal('browser', {
     storage: {
-      session: {
-        get: vi.fn(async (key: string) => ({ [key]: storage[key] })),
-        set: vi.fn(async (values: Record<string, unknown>) => Object.assign(storage, values)),
-        remove: vi.fn(async (key: string) => { delete storage[key]; }),
-      },
+      session: area(sessionStorage),
+      local: area(localStorage),
     },
   });
 });
@@ -74,7 +83,7 @@ describe('bilingual webpage session repository', () => {
       blocks: [{ translatedText: '可恢复的文章标题', hidden: false }],
     });
 
-    const serialized = JSON.stringify(storage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]);
+    const serialized = JSON.stringify(sessionStorage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]);
     expect(serialized).not.toContain('https://example.com/article');
     expect(serialized).not.toContain('The first durable article paragraph.');
   });
@@ -170,7 +179,59 @@ describe('bilingual webpage session repository', () => {
     await expect(getBilingualPageSession(7, anotherDescriptor, behavior)).resolves.toBeUndefined();
     await expect(getBilingualPageSession(8, descriptor(), behavior)).resolves.toBeDefined();
     await clearBilingualPageSession();
-    expect(storage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]).toBeUndefined();
+    expect(sessionStorage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]).toBeUndefined();
+  });
+
+  it('retains translations locally only after explicit opt-in without storing source or URL', async () => {
+    const behavior = bilingualPageSessionBehaviorKey('retained-model');
+    const initial = update();
+    const { block: initialBlock, ...initialState } = initial;
+    await saveRetainedBilingualPageSession({
+      ...initialState,
+      blocks: [
+        initialBlock!,
+        {
+          signature: signatures[1]!,
+          translatedText: '可恢复的第一段正文。',
+          hidden: false,
+        },
+      ],
+      replaceBlocks: true,
+    }, behavior);
+
+    await expect(getRetainedBilingualPageSession(descriptor(), behavior)).resolves.toMatchObject({
+      blocks: expect.arrayContaining([
+        expect.objectContaining({ translatedText: '可恢复的文章标题' }),
+        expect.objectContaining({ translatedText: '可恢复的第一段正文。' }),
+      ]),
+    });
+    expect(sessionStorage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]).toBeUndefined();
+    const serialized = JSON.stringify(localStorage[BILINGUAL_PAGE_RETAINED_STORAGE_KEY]);
+    expect(serialized).not.toContain('https://example.com/article');
+    expect(serialized).not.toContain('The first durable article paragraph.');
+  });
+
+  it('keeps an older retained result on behavior changes and bounds local documents', async () => {
+    const firstBehavior = bilingualPageSessionBehaviorKey('retained-a');
+    const secondBehavior = bilingualPageSessionBehaviorKey('retained-b');
+    await saveRetainedBilingualPageSession(update(), firstBehavior);
+    await expect(getRetainedBilingualPageSession(descriptor(), secondBehavior)).resolves
+      .toBeUndefined();
+    await expect(getRetainedBilingualPageSession(descriptor(), firstBehavior)).resolves
+      .toBeDefined();
+
+    for (let index = 0; index < 8; index += 1) {
+      const current = descriptor(`https://example.com/retained-${index}`);
+      await saveRetainedBilingualPageSession(update(current), firstBehavior);
+    }
+    const retained = localStorage[BILINGUAL_PAGE_RETAINED_STORAGE_KEY];
+    expect(Array.isArray(retained) ? retained : []).toHaveLength(6);
+
+    const newest = descriptor('https://example.com/retained-7');
+    await clearRetainedBilingualPageSession(newest);
+    await expect(getRetainedBilingualPageSession(newest, firstBehavior)).resolves.toBeUndefined();
+    await clearRetainedBilingualPageSession();
+    expect(localStorage[BILINGUAL_PAGE_RETAINED_STORAGE_KEY]).toBeUndefined();
   });
 });
 

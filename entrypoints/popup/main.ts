@@ -488,7 +488,9 @@ function renderBilingualPageAction(): void {
               ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
               : '翻译网页正文';
   const restoredHint = bilingualPageState.restored
-    ? `已从当前浏览器会话恢复 ${bilingualPageState.restored} 段译文。`
+    ? bilingualPageState.restoredFrom === 'local'
+      ? `已从本机恢复 ${bilingualPageState.restored} 段译文。`
+      : `已从当前浏览器会话恢复 ${bilingualPageState.restored} 段译文。`
     : '';
   translatePage.title = restoredHint || bilingualPageState.message || (
     bilingualPageState.phase === 'idle'

@@ -100,6 +100,9 @@ const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const bilingualPageControl = element<HTMLElement>('bilingual-page-control');
 const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
 const bilingualPageProgress = element<HTMLElement>('bilingual-page-progress');
+const bilingualPageRetention = element<HTMLElement>('bilingual-page-retention');
+const bilingualPageRetentionStatus = element<HTMLElement>('bilingual-page-retention-status');
+const bilingualPageRetentionToggle = element<HTMLInputElement>('bilingual-page-retention-toggle');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
 const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
 const bilingualPageDisplay = element<HTMLSelectElement>('bilingual-page-display');
@@ -748,7 +751,9 @@ function syncBilingualPageControl(): void {
   bilingualPageLanguageCancel.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageLanguageConfirm.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   if (!languageConfirmation) pendingBilingualPageLanguageSwitch = undefined;
-  const restoredPrefix = state.restored ? `已恢复 ${state.restored} 段 · ` : '';
+  const restoredPrefix = state.restored
+    ? `${state.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${state.restored} 段 · `
+    : '';
   bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'running'
     ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
     : state.phase === 'paused'
@@ -785,6 +790,17 @@ function syncBilingualPageControl(): void {
   bilingualPageCopyMenu.hidden = state.translated === 0;
   bilingualPageCopyTranslation.disabled = bilingualPageCopyPending;
   bilingualPageCopyBilingual.disabled = bilingualPageCopyPending;
+  bilingualPageRetention.hidden = state.phase === 'idle';
+  bilingualPageRetention.dataset.tone = state.retentionError ? 'error' : 'normal';
+  if (!bilingualPagePending) {
+    bilingualPageRetentionToggle.checked = state.retainedLocally === true;
+  }
+  bilingualPageRetentionToggle.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  bilingualPageRetentionStatus.textContent = state.retentionError && state.retentionMessage
+    ? state.retentionMessage
+    : state.retainedLocally
+      ? '仅保存匿名页面指纹和译文，不保存原文与网址'
+      : '默认只保留在当前 Edge 会话';
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
 }
@@ -2481,6 +2497,11 @@ bilingualPageDisplay.addEventListener('change', () => {
 });
 bilingualPageClear.addEventListener('click', () => {
   void updateBilingualPage('clear');
+});
+bilingualPageRetentionToggle.addEventListener('change', () => {
+  void updateBilingualPage(
+    bilingualPageRetentionToggle.checked ? 'enable-retention' : 'disable-retention',
+  );
 });
 bilingualPageCopyTranslation.addEventListener('click', () => {
   void copyBilingualPageResult('translation');

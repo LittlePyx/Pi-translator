@@ -6,12 +6,15 @@ import type { TranslationContentMode, TranslationStyle } from './types';
 import type { BilingualPageDisplayMode } from './bilingual-page';
 
 export const BILINGUAL_PAGE_SESSIONS_STORAGE_KEY = 'bilingualPageSessionsByTabV1';
+export const BILINGUAL_PAGE_RETAINED_STORAGE_KEY = 'bilingualPageRetainedV1';
 
 const MAX_DOCUMENT_SIGNATURES = 240;
 const MAX_TRANSLATION_LENGTH = 20_000;
 const MAX_SESSIONS_PER_TAB = 8;
 const MAX_STORED_SESSIONS = 20;
 const MAX_TOTAL_TRANSLATION_CHARACTERS = 1_500_000;
+const MAX_RETAINED_SESSIONS = 6;
+const MAX_RETAINED_TRANSLATION_CHARACTERS = 1_000_000;
 
 export type BilingualPageSessionActivity = 'active' | 'paused' | 'stopped';
 
@@ -49,6 +52,8 @@ export interface BilingualPageSessionUpdate {
   controlCollapsed: boolean;
   activity: BilingualPageSessionActivity;
   block?: BilingualPageSessionBlock;
+  blocks?: BilingualPageSessionBlock[];
+  replaceBlocks?: boolean;
 }
 
 interface StoredBilingualPageSession extends BilingualPageSessionSnapshot {
@@ -175,7 +180,10 @@ export function isBilingualPageSessionUpdate(
     'controlCollapsed',
     'activity',
     'block',
+    'blocks',
+    'replaceBlocks',
   ].includes(key))) return false;
+  const blocks = update.blocks;
   if (
     !isBilingualPageSessionDescriptor(update.descriptor) ||
     !uniqueSignatures(update.documentSignatures) ||
@@ -185,11 +193,19 @@ export function isBilingualPageSessionUpdate(
     update.translationsHidden !== (update.displayMode === 'source') ||
     typeof update.controlCollapsed !== 'boolean' ||
     !['active', 'paused', 'stopped'].includes(String(update.activity)) ||
-    (update.block !== undefined && !isBilingualPageSessionBlock(update.block))
+    (update.block !== undefined && !isBilingualPageSessionBlock(update.block)) ||
+    (blocks !== undefined && (
+      !Array.isArray(blocks) ||
+      blocks.length > MAX_DOCUMENT_SIGNATURES ||
+      !blocks.every(isBilingualPageSessionBlock)
+    )) ||
+    (update.block !== undefined && blocks !== undefined) ||
+    (update.replaceBlocks !== undefined && typeof update.replaceBlocks !== 'boolean')
   ) return false;
   const documentSignatures = new Set(update.documentSignatures);
   return update.excludedSignatures.every((signature) => documentSignatures.has(signature)) &&
-    (update.block === undefined || documentSignatures.has(update.block.signature));
+    (update.block === undefined || documentSignatures.has(update.block.signature)) &&
+    (blocks === undefined || blocks.every((block) => documentSignatures.has(block.signature)));
 }
 
 function descriptorMatches(
@@ -228,6 +244,11 @@ function validStoredSession(value: unknown): value is StoredBilingualPageSession
     Array.isArray(session.blocks) &&
     session.blocks.length <= MAX_DOCUMENT_SIGNATURES &&
     session.blocks.every(isBilingualPageSessionBlock) &&
+    session.blocks.every((block) => (
+      (session.documentSignatures as string[]).includes(
+        (block as BilingualPageSessionBlock).signature,
+      )
+    )) &&
     typeof session.updatedAt === 'number' &&
     Number.isFinite(session.updatedAt) &&
     typeof session.behaviorKey === 'string' &&
@@ -254,6 +275,39 @@ function cloneSession(session: StoredBilingualPageSession): BilingualPageSession
     documentSignatures: [...snapshot.documentSignatures],
     excludedSignatures: [...snapshot.excludedSignatures],
     blocks: snapshot.blocks.map((block) => ({ ...block })),
+  };
+}
+
+function nextStoredSession(
+  previous: StoredBilingualPageSession | undefined,
+  update: BilingualPageSessionUpdate,
+  behaviorKey: string,
+): StoredBilingualPageSession {
+  const documentSignatures = [...update.documentSignatures];
+  const documentSet = new Set(documentSignatures);
+  let blocks = update.replaceBlocks
+    ? []
+    : previous?.blocks
+      .filter((block) => documentSet.has(block.signature))
+      .map((block) => ({ ...block })) ?? [];
+  const incoming = update.blocks ?? (update.block ? [update.block] : []);
+  for (const block of incoming) {
+    blocks = [
+      { ...block, translatedText: block.translatedText.trim() },
+      ...blocks.filter((candidate) => candidate.signature !== block.signature),
+    ];
+  }
+  return {
+    ...update.descriptor,
+    behaviorKey,
+    documentSignatures,
+    excludedSignatures: [...update.excludedSignatures],
+    displayMode: update.displayMode,
+    translationsHidden: update.translationsHidden,
+    controlCollapsed: update.controlCollapsed,
+    activity: update.activity,
+    blocks: blocks.slice(0, MAX_DOCUMENT_SIGNATURES),
+    updatedAt: Date.now(),
   };
 }
 
@@ -325,29 +379,7 @@ export function saveBilingualPageSession(
     const previous = sessions.find((candidate) => (
       descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
     ));
-    const documentSignatures = [...update.documentSignatures];
-    const documentSet = new Set(documentSignatures);
-    let blocks = previous?.blocks
-      .filter((block) => documentSet.has(block.signature))
-      .map((block) => ({ ...block })) ?? [];
-    if (update.block) {
-      blocks = [
-        { ...update.block },
-        ...blocks.filter((block) => block.signature !== update.block!.signature),
-      ].slice(0, MAX_DOCUMENT_SIGNATURES);
-    }
-    const next: StoredBilingualPageSession = {
-      ...update.descriptor,
-      behaviorKey,
-      documentSignatures,
-      excludedSignatures: [...update.excludedSignatures],
-      displayMode: update.displayMode,
-      translationsHidden: update.translationsHidden,
-      controlCollapsed: update.controlCollapsed,
-      activity: update.activity,
-      blocks,
-      updatedAt: Date.now(),
-    };
+    const next = nextStoredSession(previous, update, behaviorKey);
     all[key] = [
       next,
       ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
@@ -355,6 +387,99 @@ export function saveBilingualPageSession(
     const pruned = pruneSessions(all);
     await browser.storage.session.set({ [BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]: pruned });
     return cloneSession(next);
+  });
+}
+
+async function readRetained(): Promise<StoredBilingualPageSession[]> {
+  const stored = await browser.storage.local.get(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
+  const value = stored[BILINGUAL_PAGE_RETAINED_STORAGE_KEY];
+  return Array.isArray(value) ? value.filter(validStoredSession) : [];
+}
+
+function pruneRetained(
+  sessions: StoredBilingualPageSession[],
+): StoredBilingualPageSession[] {
+  const ordered = [...sessions].sort((left, right) => right.updatedAt - left.updatedAt);
+  const retained: StoredBilingualPageSession[] = [];
+  let retainedCharacters = 0;
+  for (const session of ordered) {
+    const characters = session.blocks.reduce(
+      (total, block) => total + block.translatedText.length,
+      0,
+    );
+    if (
+      retained.length >= MAX_RETAINED_SESSIONS ||
+      retainedCharacters + characters > MAX_RETAINED_TRANSLATION_CHARACTERS
+    ) continue;
+    retained.push(session);
+    retainedCharacters += characters;
+  }
+  return retained;
+}
+
+/**
+ * Reads an explicitly retained webpage translation. A model change does not
+ * delete an older retained result; it simply remains unavailable to the new
+ * translation behavior until the user enables retention again.
+ */
+export function getRetainedBilingualPageSession(
+  descriptor: BilingualPageSessionDescriptor,
+  behaviorKey: string,
+): Promise<BilingualPageSessionSnapshot | undefined> {
+  return serializeSessionOperation(async () => {
+    const sessions = await readRetained();
+    const session = sessions.find((candidate) => (
+      descriptorMatches(candidate, descriptor) && candidate.behaviorKey === behaviorKey
+    ));
+    return session ? cloneSession(session) : undefined;
+  });
+}
+
+export function saveRetainedBilingualPageSession(
+  update: BilingualPageSessionUpdate,
+  behaviorKey: string,
+): Promise<BilingualPageSessionSnapshot> {
+  if (!isBilingualPageSessionUpdate(update)) {
+    return Promise.reject(new Error('Invalid retained webpage translation update.'));
+  }
+  return serializeSessionOperation(async () => {
+    const sessions = await readRetained();
+    const previous = sessions.find((candidate) => (
+      descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
+    ));
+    const next = nextStoredSession(previous, update, behaviorKey);
+    const retained = pruneRetained([
+      next,
+      ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
+    ]);
+    if (!retained.includes(next)) {
+      throw new Error('This webpage translation is too large to retain locally.');
+    }
+    await browser.storage.local.set({
+      [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained,
+    });
+    return cloneSession(next);
+  });
+}
+
+export function clearRetainedBilingualPageSession(
+  descriptor?: BilingualPageSessionDescriptor,
+): Promise<void> {
+  return serializeSessionOperation(async () => {
+    if (!descriptor) {
+      await browser.storage.local.remove(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
+      return;
+    }
+    const sessions = await readRetained();
+    const retained = sessions.filter((candidate) => !descriptorMatches(candidate, descriptor));
+    if (retained.length === sessions.length) return;
+    if (retained.length) {
+      await browser.storage.local.set({
+        [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained,
+      });
+    } else {
+      await browser.storage.local.remove(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
+    }
   });
 }
 

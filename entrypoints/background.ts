@@ -108,8 +108,11 @@ import type { BilingualPageAction } from '../core/translation/bilingual-page';
 import {
   bilingualPageSessionBehaviorKey,
   clearBilingualPageSession,
+  clearRetainedBilingualPageSession,
   getBilingualPageSession,
+  getRetainedBilingualPageSession,
   saveBilingualPageSession,
+  saveRetainedBilingualPageSession,
 } from '../core/translation/bilingual-page-session';
 import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
@@ -4485,7 +4488,10 @@ export default defineBackground(() => {
       if (
         message.type === 'GET_BILINGUAL_PAGE_SESSION' ||
         message.type === 'SAVE_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'CLEAR_BILINGUAL_PAGE_SESSION'
+        message.type === 'CLEAR_BILINGUAL_PAGE_SESSION' ||
+        message.type === 'GET_RETAINED_BILINGUAL_PAGE_SESSION' ||
+        message.type === 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION' ||
+        message.type === 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION'
       ) {
         const tabId = sender.tab?.id;
         const sourceUrl = sender.url ?? sender.tab?.url;
@@ -4516,12 +4522,30 @@ export default defineBackground(() => {
                 data: { ...(session ? { session } : {}) },
               };
             }
+            if (message.type === 'GET_RETAINED_BILINGUAL_PAGE_SESSION') {
+              const session = await getRetainedBilingualPageSession(
+                message.payload.descriptor,
+                behaviorKey,
+              );
+              return {
+                ok: true as const,
+                data: { ...(session ? { session } : {}) },
+              };
+            }
             if (message.type === 'SAVE_BILINGUAL_PAGE_SESSION') {
               await saveBilingualPageSession(
                 tabId,
                 message.payload,
                 behaviorKey,
               );
+              return { ok: true as const, data: {} };
+            }
+            if (message.type === 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION') {
+              await saveRetainedBilingualPageSession(message.payload, behaviorKey);
+              return { ok: true as const, data: {} };
+            }
+            if (message.type === 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION') {
+              await clearRetainedBilingualPageSession(message.payload.descriptor);
               return { ok: true as const, data: {} };
             }
             await clearBilingualPageSession(tabId, message.payload.descriptor);

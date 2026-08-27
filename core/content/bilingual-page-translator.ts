@@ -124,6 +124,7 @@ interface BilingualBlock {
   status: BlockStatus;
   sessionSignature?: string;
   restoredFromSession?: boolean;
+  restoredFromLocal?: boolean;
   translatedText?: string;
   hasUnextractableFormula?: boolean;
   translation?: HTMLElement;
@@ -980,16 +981,74 @@ export function createBilingualPageTranslator(
     };
   };
 
+  const fullSessionUpdate = (): BilingualPageSessionUpdate | undefined => {
+    const update = sessionUpdate();
+    if (!update) return undefined;
+    return {
+      ...update,
+      blocks: blocks.flatMap((block) => {
+        const translatedText = block.translatedText?.trim();
+        return block.status === 'done' && block.sessionSignature && translatedText
+          ? [{
+              signature: block.sessionSignature,
+              translatedText,
+              hidden: block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE) ?? false,
+            }]
+          : [];
+      }),
+      replaceBlocks: true,
+    };
+  };
+
   const enqueueSessionWrite = (update: BilingualPageSessionUpdate): Promise<void> => {
+    const retainLocally = currentState.retainedLocally === true;
     const write = sessionWriteTail.catch(() => undefined).then(async () => {
       const response = await browser.runtime.sendMessage({
         type: 'SAVE_BILINGUAL_PAGE_SESSION',
         payload: update,
       } satisfies RuntimeMessage) as BilingualPageSessionResponse;
       if (!response.ok) throw new Error(response.error.message);
+      if (retainLocally) {
+        try {
+          const retainedResponse = await browser.runtime.sendMessage({
+            type: 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION',
+            payload: update,
+          } satisfies RuntimeMessage) as BilingualPageSessionResponse;
+          if (!retainedResponse.ok) throw new Error(retainedResponse.error.message);
+          if (currentState.retentionError) {
+            delete currentState.retentionError;
+            delete currentState.retentionMessage;
+            publishState();
+          }
+        } catch (error) {
+          currentState = {
+            ...currentState,
+            retentionMessage: error instanceof Error
+              ? error.message
+              : '无法更新本机保留的网页译文。',
+            retentionError: true,
+          };
+          publishState();
+          throw error;
+        }
+      }
     });
     sessionWriteTail = write.catch(() => undefined);
     return sessionWriteTail;
+  };
+
+  const enqueueRetainedSessionWrite = (
+    update: BilingualPageSessionUpdate,
+  ): Promise<void> => {
+    const write = sessionWriteTail.catch(() => undefined).then(async () => {
+      const response = await browser.runtime.sendMessage({
+        type: 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION',
+        payload: update,
+      } satisfies RuntimeMessage) as BilingualPageSessionResponse;
+      if (!response.ok) throw new Error(response.error.message);
+    });
+    sessionWriteTail = write.catch(() => undefined);
+    return write;
   };
 
   const persistSessionState = async (): Promise<void> => {
@@ -1019,6 +1078,19 @@ export function createBilingualPageTranslator(
     } satisfies RuntimeMessage).catch(() => undefined);
   };
 
+  const discardRetainedSession = async (
+    descriptor = activeSessionDescriptor,
+  ): Promise<void> => {
+    if (!descriptor) return;
+    await sessionWriteTail.catch(() => undefined);
+    await browser.runtime.sendMessage({
+      type: 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION',
+      payload: { descriptor },
+    } satisfies RuntimeMessage).then((response: BilingualPageSessionResponse) => {
+      if (!response.ok) throw new Error(response.error.message);
+    });
+  };
+
   const readSession = async (
     descriptor: BilingualPageSessionDescriptor,
   ): Promise<BilingualPageSessionSnapshot | undefined> => {
@@ -1033,13 +1105,66 @@ export function createBilingualPageTranslator(
     }
   };
 
+  const readRetainedSession = async (
+    descriptor: BilingualPageSessionDescriptor,
+  ): Promise<BilingualPageSessionSnapshot | undefined> => {
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'GET_RETAINED_BILINGUAL_PAGE_SESSION',
+        payload: { descriptor },
+      } satisfies RuntimeMessage) as BilingualPageSessionResponse;
+      return response.ok ? response.data.session : undefined;
+    } catch {
+      return undefined;
+    }
+  };
+
   const snapshot = (): BilingualPageState => ({ ...currentState });
 
-  const publish = (): void => {
+  const publishState = (): void => {
     if (disposed) return;
     renderControl();
     options.onStateChange(snapshot());
+  };
+
+  const publish = (): void => {
+    publishState();
     scheduleSessionStatePersistence();
+  };
+
+  const setRetention = async (enabled: boolean): Promise<BilingualPageState> => {
+    const descriptor = activeSessionDescriptor;
+    if (!descriptor || currentState.phase === 'idle') return snapshot();
+    if (enabled === (currentState.retainedLocally === true) && !currentState.retentionError) {
+      return snapshot();
+    }
+    delete currentState.retentionMessage;
+    delete currentState.retentionError;
+    currentState = { ...currentState, retainedLocally: enabled };
+    publishState();
+    try {
+      if (enabled) {
+        const update = fullSessionUpdate();
+        if (!update) throw new Error('当前网页译文尚未准备好。');
+        await enqueueRetainedSessionWrite(update);
+      } else {
+        await discardRetainedSession(descriptor);
+      }
+      publish();
+    } catch (error) {
+      currentState = {
+        ...currentState,
+        retainedLocally: !enabled,
+        retentionMessage: error instanceof Error
+          ? error.message
+          : enabled
+            ? '无法在本机保留当前网页译文。'
+            : '无法清除本机保留的网页译文。',
+        retentionError: true,
+      };
+      publishState();
+    }
+    return snapshot();
   };
 
   const setState = (next: Partial<BilingualPageState>): void => {
@@ -1051,17 +1176,26 @@ export function createBilingualPageTranslator(
   const failedCount = (): number => blocks.filter((block) => block.status === 'error').length;
 
   const syncCounts = (): void => {
-    const restored = blocks.filter(
+    const restoredBlocks = blocks.filter(
       (block) => block.status === 'done' && block.restoredFromSession,
-    ).length;
+    );
+    const restored = restoredBlocks.length;
     currentState = {
       ...currentState,
       total: blocks.length,
       translated: translatedCount(),
       failed: failedCount(),
       ...(restored ? { restored } : {}),
+      ...(restored ? {
+        restoredFrom: restoredBlocks.some((block) => block.restoredFromLocal)
+          ? 'local' as const
+          : 'session' as const,
+      } : {}),
     };
-    if (!restored) delete currentState.restored;
+    if (!restored) {
+      delete currentState.restored;
+      delete currentState.restoredFrom;
+    }
   };
 
   const cancelActiveRequest = (): void => {
@@ -2004,6 +2138,7 @@ export function createBilingualPageTranslator(
               <button type="button" data-action="copy-bilingual">复制双语 Markdown</button>
               <button type="button" data-action="stop">停止翻译</button>
               <button type="button" data-action="scope">调整范围</button>
+              <button type="button" data-action="retention" title="只保存匿名页面指纹和译文，不保存网页原文或网址">关闭后保留译文</button>
               <button type="button" data-action="clear">清除译文</button>
             </div>
           </details>
@@ -2044,6 +2179,8 @@ export function createBilingualPageTranslator(
             );
           } else if (action === 'scope') {
             beginScopePreview();
+          } else if (action === 'retention') {
+            void setRetention(currentState.retainedLocally !== true);
           } else if (action === 'reset-scope') {
             scopeDraftExcludedElements.clear();
             renderScopePreviewBlocks();
@@ -2102,6 +2239,7 @@ export function createBilingualPageTranslator(
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
     const scope = shadow?.querySelector<HTMLButtonElement>('[data-action="scope"]');
+    const retention = shadow?.querySelector<HTMLButtonElement>('[data-action="retention"]');
     const clearButton = shadow?.querySelector<HTMLButtonElement>('[data-action="clear"]');
     const copyTranslation = shadow?.querySelector<HTMLButtonElement>(
       '[data-action="copy-translation"]',
@@ -2148,6 +2286,7 @@ export function createBilingualPageTranslator(
       if (pause) pause.hidden = true;
       if (stop) stop.hidden = true;
       if (scope) scope.hidden = true;
+      if (retention) retention.hidden = true;
       if (clearButton) clearButton.hidden = true;
       if (copyTranslation) copyTranslation.hidden = true;
       if (copyBilingual) copyBilingual.hidden = true;
@@ -2194,6 +2333,17 @@ export function createBilingualPageTranslator(
       scope.textContent = currentState.total ? `范围 ${currentState.total}` : '范围';
       scope.title = '查看并调整当前正文范围';
     }
+    if (retention) {
+      retention.hidden = false;
+      retention.textContent = currentState.retainedLocally
+        ? '不再本机保留'
+        : '关闭后保留译文';
+      retention.title = currentState.retentionError && currentState.retentionMessage
+        ? currentState.retentionMessage
+        : currentState.retainedLocally
+          ? '已保存匿名页面指纹和译文；点击后清除本机副本'
+          : '只保存匿名页面指纹和译文，不保存网页原文或网址';
+    }
     if (clearButton) clearButton.hidden = false;
     if (copyTranslation) copyTranslation.hidden = currentState.translated === 0;
     if (copyBilingual) copyBilingual.hidden = currentState.translated === 0;
@@ -2201,7 +2351,7 @@ export function createBilingualPageTranslator(
       output.textContent = resultCopyFeedback;
     } else if (output) {
       const restoredPrefix = currentState.restored
-        ? `已恢复 ${currentState.restored} 段 · `
+        ? `${currentState.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${currentState.restored} 段 · `
         : '';
       output.textContent = restoredPrefix + (currentState.phase === 'error'
         ? currentState.message ?? '正文翻译暂时中断'
@@ -2354,6 +2504,7 @@ export function createBilingualPageTranslator(
           delete block.bypassCacheNext;
           delete block.restoreStateAfterRetranslation;
           delete block.restoredFromSession;
+          delete block.restoredFromLocal;
           block.text = candidate.text;
           block.status = 'idle';
           newWork = true;
@@ -2637,6 +2788,7 @@ export function createBilingualPageTranslator(
     if (options.preserveHidden) setTranslationHidden(block, true);
     block.status = 'done';
     delete block.restoredFromSession;
+    delete block.restoredFromLocal;
     delete block.batchFallbackNext;
     applyBlockDisplayMode(block);
     consecutiveIsolatedFailures = 0;
@@ -3011,12 +3163,16 @@ export function createBilingualPageTranslator(
         return snapshot();
       }
       await discardSession();
+      await discardRetainedSession();
       clear(false);
     }
     const selection = articleRoot(targetLanguage);
     assignSessionSignatures(selection.blocks);
     const descriptor = sessionDescriptor(targetLanguage);
-    let stored = await readSession(descriptor);
+    let [stored, retained] = await Promise.all([
+      readSession(descriptor),
+      readRetainedSession(descriptor),
+    ]);
     if (disposed) return snapshot();
     const documentSignatures = selection.blocks
       .map((block) => block.sessionSignature)
@@ -3028,7 +3184,13 @@ export function createBilingualPageTranslator(
       await discardSession(descriptor);
       stored = undefined;
     }
-    if (requireStoredSession && !stored) return undefined;
+    const retainedMatchesDocument = Boolean(retained && bilingualPageSessionMatchesDocument(
+      retained.documentSignatures,
+      documentSignatures,
+    ));
+    const retainedForRestore = retainedMatchesDocument ? retained : undefined;
+    if (requireStoredSession && !stored && !retainedForRestore) return undefined;
+    const presentation = stored ?? retainedForRestore;
 
     const selectedScopeSignatures = new Set(
       selection.blocks
@@ -3039,7 +3201,7 @@ export function createBilingualPageTranslator(
     activeSessionDescriptor = descriptor;
     sessionDocumentSignatures = documentSignatures;
     sessionExcludedSignatures = new Set(
-      stored?.excludedSignatures ?? selectedScopeSignatures,
+      presentation?.excludedSignatures ?? selectedScopeSignatures,
     );
     scopeExcludedElements.clear();
     for (const block of selection.blocks) {
@@ -3056,15 +3218,25 @@ export function createBilingualPageTranslator(
       total: blocks.length,
       translated: 0,
       failed: 0,
-      displayMode: stored?.displayMode ?? 'bilingual',
-      translationsHidden: stored?.displayMode === 'source',
+      displayMode: presentation?.displayMode ?? 'bilingual',
+      translationsHidden: presentation?.displayMode === 'source',
       targetLanguage,
+      retainedLocally: Boolean(retained),
       ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
     };
-    controlCollapsed = stored?.controlCollapsed ?? false;
-    controlCollapseUserSet = Boolean(stored);
-    if (stored) {
-      const storedBlocks = new Map(stored.blocks.map((block) => [block.signature, block]));
+    controlCollapsed = presentation?.controlCollapsed ?? false;
+    controlCollapseUserSet = Boolean(presentation);
+    if (stored || retainedForRestore) {
+      const storedBlocks = new Map<
+        string,
+        { block: BilingualPageSessionBlock; source: 'session' | 'local' }
+      >();
+      for (const block of retainedForRestore?.blocks ?? []) {
+        storedBlocks.set(block.signature, { block, source: 'local' });
+      }
+      for (const block of stored?.blocks ?? []) {
+        storedBlocks.set(block.signature, { block, source: 'session' });
+      }
       for (const block of blocks) {
         const restored = block.sessionSignature
           ? storedBlocks.get(block.sessionSignature)
@@ -3072,7 +3244,7 @@ export function createBilingualPageTranslator(
         if (!restored) continue;
         const translation = translationElement(
           block,
-          restored.translatedText,
+          restored.block.translatedText,
           targetLanguage,
           {
             copy: () => void copyBlockTranslation(block),
@@ -3095,21 +3267,26 @@ export function createBilingualPageTranslator(
           currentState.translationsHidden,
         );
         insertTranslation(block, translation);
-        block.translatedText = restored.translatedText;
+        block.translatedText = restored.block.translatedText;
         renderBilingualTranslation(translation, block.translatedText);
-        if (restored.hidden) setTranslationHidden(block, true);
+        if (restored.block.hidden) setTranslationHidden(block, true);
         block.status = 'done';
         block.restoredFromSession = true;
+        if (restored.source === 'local') block.restoredFromLocal = true;
         applyBlockDisplayMode(block);
       }
       syncCounts();
-      if (stored.activity === 'paused') {
+      if (presentation?.activity === 'paused') {
         currentState.phase = 'paused';
         currentState.pauseReason = 'user';
-        currentState.message = '已恢复上次暂停的正文翻译。';
-      } else if (stored.activity === 'stopped') {
+        currentState.message = retainedForRestore && !stored
+          ? '已从本机恢复上次暂停的正文翻译。'
+          : '已恢复上次暂停的正文翻译。';
+      } else if (presentation?.activity === 'stopped') {
         currentState.phase = 'stopped';
-        currentState.message = '已恢复上次停止时的正文译文。';
+        currentState.message = retainedForRestore && !stored
+          ? '已从本机恢复上次停止时的正文译文。'
+          : '已恢复上次停止时的正文译文。';
       } else if (currentState.translated === currentState.total) {
         currentState.phase = 'complete';
       }
@@ -3148,8 +3325,12 @@ export function createBilingualPageTranslator(
   const control = async (action: BilingualPageAction): Promise<BilingualPageState> => {
     if (action === 'clear') {
       await discardSession();
+      await discardRetainedSession();
       clear();
       return snapshot();
+    }
+    if (action === 'enable-retention' || action === 'disable-retention') {
+      return setRetention(action === 'enable-retention');
     }
     if (action === 'toggle-translations') {
       if (currentState.phase !== 'idle' && currentState.translated > 0) {

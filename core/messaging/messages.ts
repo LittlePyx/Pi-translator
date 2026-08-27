@@ -224,6 +224,18 @@ export type RuntimeMessage =
       payload: { descriptor: BilingualPageSessionDescriptor };
     }
   | {
+      type: 'GET_RETAINED_BILINGUAL_PAGE_SESSION';
+      payload: { descriptor: BilingualPageSessionDescriptor };
+    }
+  | {
+      type: 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION';
+      payload: BilingualPageSessionUpdate;
+    }
+  | {
+      type: 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION';
+      payload: { descriptor: BilingualPageSessionDescriptor };
+    }
+  | {
       type: 'START_WEB_REGION_SELECTION';
       payload?: { restorePreviousRegion?: boolean };
     }
@@ -672,6 +684,8 @@ function validBilingualPageAction(value: unknown): value is BilingualPageAction 
     value === 'resume' ||
     value === 'stop' ||
     value === 'clear' ||
+    value === 'enable-retention' ||
+    value === 'disable-retention' ||
     value === 'toggle-translations' ||
     value === 'display-bilingual' ||
     value === 'display-translation' ||
@@ -813,7 +827,12 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       isBilingualPageState(payload.state),
     );
   }
-  if (type === 'GET_BILINGUAL_PAGE_SESSION' || type === 'CLEAR_BILINGUAL_PAGE_SESSION') {
+  if (
+    type === 'GET_BILINGUAL_PAGE_SESSION' ||
+    type === 'CLEAR_BILINGUAL_PAGE_SESSION' ||
+    type === 'GET_RETAINED_BILINGUAL_PAGE_SESSION' ||
+    type === 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION'
+  ) {
     const payload = record(message.payload);
     return Boolean(
       payload &&
@@ -821,7 +840,10 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       isBilingualPageSessionDescriptor(payload.descriptor)
     );
   }
-  if (type === 'SAVE_BILINGUAL_PAGE_SESSION') {
+  if (
+    type === 'SAVE_BILINGUAL_PAGE_SESSION' ||
+    type === 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION'
+  ) {
     return isBilingualPageSessionUpdate(message.payload);
   }
   if (type === 'GET_CONTINUOUS_TRANSLATION_STATE') {
