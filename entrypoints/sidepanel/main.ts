@@ -102,6 +102,7 @@ const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
 const bilingualPageProgress = element<HTMLElement>('bilingual-page-progress');
 const bilingualPageRetention = element<HTMLElement>('bilingual-page-retention');
 const bilingualPageRetentionStatus = element<HTMLElement>('bilingual-page-retention-status');
+const bilingualPageRetentionManage = element<HTMLButtonElement>('bilingual-page-retention-manage');
 const bilingualPageRetentionToggle = element<HTMLInputElement>('bilingual-page-retention-toggle');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
 const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
@@ -2503,6 +2504,7 @@ bilingualPageRetentionToggle.addEventListener('change', () => {
     bilingualPageRetentionToggle.checked ? 'enable-retention' : 'disable-retention',
   );
 });
+bilingualPageRetentionManage.addEventListener('click', () => openFullSettings('storage'));
 bilingualPageCopyTranslation.addEventListener('click', () => {
   void copyBilingualPageResult('translation');
 });

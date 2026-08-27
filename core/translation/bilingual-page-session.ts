@@ -4,6 +4,10 @@ import {
 } from '../language/supported-target-languages';
 import type { TranslationContentMode, TranslationStyle } from './types';
 import type { BilingualPageDisplayMode } from './bilingual-page';
+import {
+  summarizeRetainedTranslationStorage,
+  type RetainedTranslationStorageSummary,
+} from './retained-storage-summary';
 
 export const BILINGUAL_PAGE_SESSIONS_STORAGE_KEY = 'bilingualPageSessionsByTabV1';
 export const BILINGUAL_PAGE_RETAINED_STORAGE_KEY = 'bilingualPageRetainedV1';
@@ -433,6 +437,17 @@ export function getRetainedBilingualPageSession(
     ));
     return session ? cloneSession(session) : undefined;
   });
+}
+
+export function getRetainedBilingualPageStorageSummary(): Promise<
+  RetainedTranslationStorageSummary
+> {
+  return serializeSessionOperation(async () => summarizeRetainedTranslationStorage(
+    await readRetained(),
+    BILINGUAL_PAGE_RETAINED_STORAGE_KEY,
+    MAX_RETAINED_SESSIONS,
+    MAX_RETAINED_TRANSLATION_CHARACTERS,
+  ));
 }
 
 export function saveRetainedBilingualPageSession(

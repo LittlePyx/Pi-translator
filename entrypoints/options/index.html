@@ -104,7 +104,7 @@
 
       <section class="privacy-strip" aria-label="数据说明">
         <span class="privacy-icon">i</span>
-        <p>只发送你主动触发的选区；API Key 不会暴露给网页，历史与缓存默认仅保留在当前会话。</p>
+        <p>只发送你主动触发的内容；API Key 不会暴露给网页。译文默认仅保留在当前会话，只有你主动开启保留时才写入本机。</p>
       </section>
 
       <div class="settings-workspace">
@@ -119,7 +119,8 @@
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="translation"><span>02</span>翻译偏好</button>
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="results"><span>03</span>结果与侧栏</button>
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="pages"><span>04</span>页面范围</button>
-            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="support"><span>05</span>支持与迁移</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="storage"><span>05</span>本机数据</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="support"><span>06</span>支持与迁移</button>
           </div>
         </aside>
 
@@ -277,6 +278,38 @@
               <label class="check-row preference-row"><input id="context-menu" type="checkbox" /><span><strong>右键翻译菜单</strong><small>仅在存在文本选区时显示。</small></span></label>
             </div>
             <div class="inline-guide"><strong>快捷方式</strong><p id="translation-shortcut-help">正在读取浏览器实际分配的快捷键…</p><button id="open-shortcuts" type="button">管理快捷键</button></div>
+          </section>
+
+          <section id="settings-storage" class="card settings-section" role="tabpanel" data-settings-section="storage" hidden aria-labelledby="retained-storage-title">
+            <div class="section-heading">
+              <div><span class="section-kicker">本机</span><h2 id="retained-storage-title" tabindex="-1">保留的全文译文</h2></div>
+              <button id="refresh-retained-storage" class="text-button storage-refresh" type="button">刷新</button>
+            </div>
+            <p class="section-intro">汇总你主动选择“关闭后保留”的网页和 PDF 全文译文；不展示或保存网址、网页标题、PDF 文件名和原文。</p>
+
+            <div id="retained-storage-summary" class="retained-storage-summary" aria-live="polite" aria-busy="true">
+              <div><span>保留文档</span><strong id="retained-storage-documents">—</strong></div>
+              <div><span>译文字数</span><strong id="retained-storage-characters">—</strong></div>
+              <div><span>占用空间</span><strong id="retained-storage-bytes">—</strong></div>
+            </div>
+
+            <div class="retained-storage-list">
+              <article class="retained-storage-row">
+                <div class="retained-storage-kind"><span class="retained-storage-kind-mark" aria-hidden="true">WEB</span><div><strong>网页全文译文</strong><small id="retained-web-storage-status">正在读取…</small></div></div>
+                <button id="clear-retained-web" class="danger-text retained-storage-clear" type="button" disabled>清除网页译文</button>
+              </article>
+              <article class="retained-storage-row">
+                <div class="retained-storage-kind"><span class="retained-storage-kind-mark" aria-hidden="true">PDF</span><div><strong>PDF 全文译文</strong><small id="retained-pdf-storage-status">正在读取…</small></div></div>
+                <button id="clear-retained-pdf" class="danger-text retained-storage-clear" type="button" disabled>清除 PDF 译文</button>
+              </article>
+            </div>
+
+            <p id="retained-storage-capacity" class="retained-storage-capacity" hidden>已接近本机保留上限；继续保留时会优先移除较早的匿名译文记录。</p>
+            <div class="retained-storage-privacy"><strong>这里保存什么</strong><p>只保存用于恢复全文翻译的匿名文档指纹、译文和显示状态。网页与 PDF 各最多保留 6 份、100 万译文字符，超出时自动移除较早的记录。</p></div>
+            <div class="retained-storage-actions">
+              <button id="clear-all-retained-storage" class="danger subtle-danger" type="button" disabled>清除全部本机译文</button>
+              <span id="retained-storage-action-status" role="status" aria-live="polite"></span>
+            </div>
           </section>
 
           <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>

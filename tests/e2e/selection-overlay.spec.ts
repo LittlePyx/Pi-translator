@@ -1717,6 +1717,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(sidePanel.locator('#bilingual-page-retention')).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-retention-status'))
       .toHaveText('默认只保留在当前 Edge 会话');
+    await expect(sidePanel.locator('#bilingual-page-retention-manage')).toHaveText('管理');
     await expect(sidePanel.locator('#bilingual-page-retention-toggle')).not.toBeChecked();
     await sidePanel.setViewportSize({ width: 300, height: 720 });
     const controlLayout = await sidePanelControl.evaluate((control) => ({
@@ -5612,6 +5613,8 @@ test('restores explicitly retained PDF progress after session loss and translate
       .toContainText('已识别 2 段，等待确认');
     const retention = firstReader.locator('#pdf-document-translation-retention-toggle');
     await expect(retention).toBeVisible();
+    await expect(firstReader.locator('#pdf-document-translation-retention-manage'))
+      .toHaveText('管理');
     await expect(retention).not.toBeChecked();
     await retention.check();
     await expect(firstReader.locator('#pdf-document-translation-retention-status'))

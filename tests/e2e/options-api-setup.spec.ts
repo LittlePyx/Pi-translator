@@ -221,6 +221,93 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
   }
 });
 
+test('summarizes and clears explicitly retained translations without identifying documents', async () => {
+  await options.evaluate(async () => {
+    const extensionChrome = (
+      globalThis as typeof globalThis & { chrome: TestChromeApi }
+    ).chrome;
+    await extensionChrome.storage.local.set({
+      bilingualPageRetainedV1: [{
+        pageKey: 'page-web1',
+        targetLanguage: 'zh-CN',
+        sourceLanguage: 'auto',
+        style: 'general',
+        contentMode: 'auto',
+        documentSignatures: ['block-web1'],
+        excludedSignatures: [],
+        displayMode: 'bilingual',
+        translationsHidden: false,
+        controlCollapsed: false,
+        activity: 'stopped',
+        blocks: [{ signature: 'block-web1', translatedText: '网页保留译文', hidden: false }],
+        updatedAt: 100,
+        behaviorKey: 'behavior-web1',
+      }],
+      pdfDocumentTranslationRetainedV1: [{
+        documentKey: 'pdf-file1',
+        targetLanguage: 'zh-CN',
+        sourceLanguage: 'auto',
+        style: 'academic',
+        contentMode: 'auto',
+        documentSignatures: ['block-pdf1'],
+        activity: 'complete',
+        blocks: [{ signature: 'block-pdf1', translatedText: 'PDF 保留译文' }],
+        updatedAt: 200,
+        behaviorKey: 'behavior-pdf1',
+      }],
+    });
+  });
+  await options.setViewportSize({ width: 390, height: 760 });
+  await openExtensionPage(
+    options,
+    `chrome-extension://${extensionId}/options.html?focus=storage#storage`,
+  );
+
+  await expect(options.locator('#settings-storage')).toBeVisible();
+  await expect(options.locator('#refresh-retained-storage')).toBeFocused();
+  await expect(options.locator('#retained-storage-documents')).toHaveText('2 份');
+  await expect(options.locator('#retained-web-storage-status')).toContainText('1 份');
+  await expect(options.locator('#retained-pdf-storage-status')).toContainText('1 份');
+  await expect(options.locator('#retained-storage-bytes')).not.toHaveText('0 B');
+  await expect(options.locator('#settings-storage')).not.toContainText('page-web1');
+  await expect(options.locator('#settings-storage')).not.toContainText('pdf-file1');
+  const overflow = await options.locator('#settings-storage').evaluate((section) => ({
+    scrollWidth: section.scrollWidth,
+    clientWidth: section.clientWidth,
+  }));
+  expect(overflow.scrollWidth).toBeLessThanOrEqual(overflow.clientWidth + 1);
+
+  await options.locator('#clear-retained-web').click();
+  await expect(options.locator('#retained-web-storage-status')).toHaveText('未保留任何译文');
+  await expect(options.locator('#retained-storage-documents')).toHaveText('1 份');
+  const afterWebClear = await options.evaluate(async () => {
+    const extensionChrome = (
+      globalThis as typeof globalThis & { chrome: TestChromeApi }
+    ).chrome;
+    return Promise.all([
+      extensionChrome.storage.local.get('bilingualPageRetainedV1'),
+      extensionChrome.storage.local.get('pdfDocumentTranslationRetainedV1'),
+    ]);
+  });
+  expect(afterWebClear[0].bilingualPageRetainedV1).toBeUndefined();
+  expect(afterWebClear[1].pdfDocumentTranslationRetainedV1).toBeDefined();
+
+  const clearAll = options.locator('#clear-all-retained-storage');
+  await clearAll.click();
+  await expect(clearAll).toHaveText('再次点击，确认清除全部');
+  await expect(options.locator('#retained-storage-action-status')).toContainText(
+    '不会删除设置、API Key 或术语表',
+  );
+  await clearAll.click();
+  await expect(options.locator('#retained-storage-documents')).toHaveText('0 份');
+  await expect(options.locator('#retained-storage-action-status')).toContainText(
+    '所有保留的全文译文已从本机清除',
+  );
+
+  await options.setViewportSize({ width: 1280, height: 800 });
+  await openExtensionPage(options, `chrome-extension://${extensionId}/options.html#connection`);
+});
+
 test('keeps settings interaction surfaces dark on hover and keyboard focus', async () => {
   await options.emulateMedia({ colorScheme: 'dark' });
   await options.reload();

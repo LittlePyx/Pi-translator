@@ -4664,8 +4664,8 @@ export default defineBackground(() => {
           const optionsUrl = new URL(browser.runtime.getURL('/options.html'));
           if (focus) optionsUrl.searchParams.set('focus', focus);
           if (ticket) optionsUrl.searchParams.set('recovery', ticket.token);
-          optionsUrl.hash = focus === 'support'
-            ? 'support'
+          optionsUrl.hash = focus === 'support' || focus === 'storage'
+            ? focus
             : focus === 'glossary'
               ? 'translation'
               : focus

@@ -68,18 +68,23 @@
         >
           <i></i>
         </div>
-        <label id="bilingual-page-retention" class="bilingual-page-retention" hidden>
+        <div id="bilingual-page-retention" class="bilingual-page-retention" hidden>
           <span>
             <strong>关闭后保留译文</strong>
             <small id="bilingual-page-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
           </span>
-          <input
-            id="bilingual-page-retention-toggle"
-            type="checkbox"
-            role="switch"
-            aria-label="关闭 Edge 后仍在本机保留当前网页译文"
-          />
-        </label>
+          <span class="bilingual-page-retention-actions">
+            <button id="bilingual-page-retention-manage" type="button">管理</button>
+            <label class="bilingual-page-retention-switch">
+              <input
+                id="bilingual-page-retention-toggle"
+                type="checkbox"
+                role="switch"
+                aria-label="关闭 Edge 后仍在本机保留当前网页译文"
+              />
+            </label>
+          </span>
+        </div>
         <div class="bilingual-page-actions">
           <button id="bilingual-page-primary" class="primary" type="button">开始</button>
           <label id="bilingual-page-display-control" class="bilingual-page-display" hidden>

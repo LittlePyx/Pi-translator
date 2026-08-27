@@ -224,7 +224,7 @@ main {
   padding-top: 7px;
 }
 .bilingual-page-retention[hidden] { display: none; }
-.bilingual-page-retention > span { display: grid; min-width: 0; gap: 1px; }
+.bilingual-page-retention > span:first-child { display: grid; min-width: 0; gap: 1px; }
 .bilingual-page-retention strong { color: #4b5568; font-size: 9.5px; }
 .bilingual-page-retention small {
   overflow: hidden;
@@ -235,6 +235,19 @@ main {
   white-space: nowrap;
 }
 .bilingual-page-retention[data-tone="error"] small { color: #b42336; }
+.bilingual-page-retention-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
+.bilingual-page-retention-actions button {
+  min-height: 26px;
+  border: 0;
+  padding: 3px 4px;
+  color: #6866cf;
+  background: transparent;
+  box-shadow: none;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.bilingual-page-retention-actions button:hover { color: #4542b8; background: #f2f2ff; }
+.bilingual-page-retention-switch { display: flex; margin: 0; line-height: 0; }
 .bilingual-page-retention input {
   position: relative;
   width: 28px;
@@ -905,6 +918,8 @@ button:focus-visible {
   .bilingual-page-retention[data-tone="error"] small { color: #ff9cab; }
   .bilingual-page-retention input { border-color: #4a5567; background: #303947; }
   .bilingual-page-retention input:checked { border-color: #7169e9; background: #655fdf; }
+  .bilingual-page-retention-actions button { color: #aaa7ff; }
+  .bilingual-page-retention-actions button:hover { color: #d0ceff; background: #282943; }
   .bilingual-page-display { color: #9ba5b5; background: transparent; }
   .bilingual-page-display:hover { background: #252d3b; }
   .bilingual-page-display select { color: #c7c3ff; }

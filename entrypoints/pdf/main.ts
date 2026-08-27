@@ -226,6 +226,9 @@ const documentTranslationRetention = element<HTMLElement>(
 const documentTranslationRetentionStatus = element<HTMLElement>(
   'pdf-document-translation-retention-status',
 );
+const documentTranslationRetentionManage = element<HTMLButtonElement>(
+  'pdf-document-translation-retention-manage',
+);
 const documentTranslationRetentionToggle = element<HTMLInputElement>(
   'pdf-document-translation-retention-toggle',
 );
@@ -5718,6 +5721,9 @@ documentTranslationCopyBilingual.addEventListener('click', () => {
 });
 documentTranslationRetentionToggle.addEventListener('change', () => {
   void setPdfDocumentTranslationRetention(documentTranslationRetentionToggle.checked);
+});
+documentTranslationRetentionManage.addEventListener('click', () => {
+  void openPdfSettings('storage');
 });
 documentTranslationOcrAction.addEventListener('click', () => {
   void recognizePdfDocumentTranslationPages();

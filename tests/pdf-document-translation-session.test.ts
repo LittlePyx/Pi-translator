@@ -5,6 +5,7 @@ import {
   clearRetainedPdfDocumentTranslationSession,
   clearPdfDocumentTranslationSession,
   getRetainedPdfDocumentTranslationSession,
+  getRetainedPdfDocumentTranslationStorageSummary,
   getPdfDocumentTranslationSession,
   pdfDocumentTranslationSessionBehaviorKey,
   pdfDocumentTranslationSessionBlockSignature,
@@ -200,6 +201,12 @@ describe('PDF document translation session repository', () => {
     );
     expect(serialized).not.toContain('https://example.com/private-paper.pdf');
     sourceTexts.forEach((text) => expect(serialized).not.toContain(text));
+    await expect(getRetainedPdfDocumentTranslationStorageSummary()).resolves.toMatchObject({
+      documentCount: 1,
+      translationCharacters: 15,
+      maximumDocuments: 6,
+      nearingCapacity: false,
+    });
   });
 
   it('keeps an older retained result intact when the active model changes', async () => {
@@ -238,6 +245,11 @@ describe('PDF document translation session repository', () => {
     expect(localStorage[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]).toBeDefined();
     await clearRetainedPdfDocumentTranslationSession();
     expect(localStorage[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]).toBeUndefined();
+    await expect(getRetainedPdfDocumentTranslationStorageSummary()).resolves.toMatchObject({
+      documentCount: 0,
+      translationCharacters: 0,
+      estimatedBytes: 0,
+    });
   });
 
   it('rejects translations that are not part of the current paragraph plan', async () => {

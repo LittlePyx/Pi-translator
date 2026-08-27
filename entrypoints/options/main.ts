@@ -44,9 +44,20 @@ import { getAutoInjectionPatterns, normalizeSiteAllowlist } from '../../core/set
 import { normalizePdfRegionShortcutKey } from '../../core/pdf/region-shortcuts';
 import { supportsQwenCoordinateOcr } from '../../core/pdf/qwen-endpoint';
 import {
+  clearRetainedPdfDocumentTranslationSession,
+  getRetainedPdfDocumentTranslationStorageSummary,
+  PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,
+} from '../../core/pdf/document-translation-session';
+import {
   formatGlossaryEntries,
   parseGlossaryText,
 } from '../../core/translation/glossary';
+import {
+  clearRetainedBilingualPageSession,
+  getRetainedBilingualPageStorageSummary,
+  BILINGUAL_PAGE_RETAINED_STORAGE_KEY,
+} from '../../core/translation/bilingual-page-session';
+import type { RetainedTranslationStorageSummary } from '../../core/translation/retained-storage-summary';
 import type { TranslationStyle } from '../../core/translation/types';
 import {
   assignedTranslationShortcut,
@@ -149,6 +160,19 @@ const importSettingsButton=element<HTMLButtonElement>('import-settings');
 const importSettingsFile=element<HTMLInputElement>('import-settings-file');
 const copyDiagnosticReportButton=element<HTMLButtonElement>('copy-diagnostic-report');
 const supportStatus=element<HTMLElement>('support-status');
+const retainedStorageTitle=element<HTMLElement>('retained-storage-title');
+const refreshRetainedStorageButton=element<HTMLButtonElement>('refresh-retained-storage');
+const retainedStorageSummary=element<HTMLElement>('retained-storage-summary');
+const retainedStorageDocuments=element<HTMLElement>('retained-storage-documents');
+const retainedStorageCharacters=element<HTMLElement>('retained-storage-characters');
+const retainedStorageBytes=element<HTMLElement>('retained-storage-bytes');
+const retainedWebStorageStatus=element<HTMLElement>('retained-web-storage-status');
+const retainedPdfStorageStatus=element<HTMLElement>('retained-pdf-storage-status');
+const retainedStorageCapacity=element<HTMLElement>('retained-storage-capacity');
+const clearRetainedWebButton=element<HTMLButtonElement>('clear-retained-web');
+const clearRetainedPdfButton=element<HTMLButtonElement>('clear-retained-pdf');
+const clearAllRetainedStorageButton=element<HTMLButtonElement>('clear-all-retained-storage');
+const retainedStorageActionStatus=element<HTMLElement>('retained-storage-action-status');
 const navProfileName=element<HTMLElement>('nav-profile-name');
 const navKeyStatus=element<HTMLElement>('nav-key-status');
 const saveState=element<HTMLElement>('save-state');
@@ -168,6 +192,9 @@ let visionSetupIntentProfileId='';
 let onboardingStep=1;
 let onboardingAvailableModels:string[]=[];
 let onboardingComplete=false;
+let retainedStoragePending=false;
+let retainedStorageRevision=0;
+let retainedStorageConfirmationTimer:ReturnType<typeof setTimeout>|undefined;
 
 function shortcutKeys(shortcut:string):DocumentFragment{
   const fragment=document.createDocumentFragment();
@@ -338,7 +365,103 @@ function setApiConnectionSaved():void{
   if(nonConnectionDirty){formDirty=true;saveState.textContent='API 已保存，其他更改未保存';saveState.classList.add('unsaved');saveButton.disabled=false;saveButton.textContent='保存其他更改';return}
   setSaved();
 }
-function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`)}
+function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`);if(target==='storage')void refreshRetainedStorageSummary()}
+
+const retainedStorageNumberFormat=new Intl.NumberFormat('zh-CN');
+function formatRetainedStorageBytes(bytes:number):string{
+  if(bytes<1024)return `${bytes} B`;
+  if(bytes<1024*1024)return `${(bytes/1024).toFixed(bytes<10*1024?1:0)} KB`;
+  return `${(bytes/(1024*1024)).toFixed(1)} MB`;
+}
+function retainedStorageKindStatus(summary:RetainedTranslationStorageSummary):string{
+  if(!summary.documentCount)return '未保留任何译文';
+  return `${retainedStorageNumberFormat.format(summary.documentCount)} 份 · ${retainedStorageNumberFormat.format(summary.translationCharacters)} 字 · ${formatRetainedStorageBytes(summary.estimatedBytes)}`;
+}
+function setRetainedStorageActionStatus(message:string,error=false):void{
+  retainedStorageActionStatus.textContent=message;
+  retainedStorageActionStatus.classList.toggle('error',error);
+}
+function resetRetainedStorageConfirmation():void{
+  if(retainedStorageConfirmationTimer)clearTimeout(retainedStorageConfirmationTimer);
+  retainedStorageConfirmationTimer=undefined;
+  clearAllRetainedStorageButton.classList.remove('confirming');
+  clearAllRetainedStorageButton.textContent='清除全部本机译文';
+}
+function setRetainedStorageControls(
+  web:RetainedTranslationStorageSummary|undefined,
+  pdf:RetainedTranslationStorageSummary|undefined,
+):void{
+  refreshRetainedStorageButton.disabled=retainedStoragePending;
+  clearRetainedWebButton.disabled=retainedStoragePending||!web?.documentCount;
+  clearRetainedPdfButton.disabled=retainedStoragePending||!pdf?.documentCount;
+  clearAllRetainedStorageButton.disabled=retainedStoragePending||!(
+    (web?.documentCount??0)+(pdf?.documentCount??0)
+  );
+}
+async function refreshRetainedStorageSummary():Promise<void>{
+  const revision=++retainedStorageRevision;
+  retainedStorageSummary.setAttribute('aria-busy','true');
+  refreshRetainedStorageButton.disabled=true;
+  try{
+    const [web,pdf]=await Promise.all([
+      getRetainedBilingualPageStorageSummary(),
+      getRetainedPdfDocumentTranslationStorageSummary(),
+    ]);
+    if(revision!==retainedStorageRevision)return;
+    const documentCount=web.documentCount+pdf.documentCount;
+    const characters=web.translationCharacters+pdf.translationCharacters;
+    const bytes=web.estimatedBytes+pdf.estimatedBytes;
+    retainedStorageDocuments.textContent=`${retainedStorageNumberFormat.format(documentCount)} 份`;
+    retainedStorageCharacters.textContent=retainedStorageNumberFormat.format(characters);
+    retainedStorageBytes.textContent=formatRetainedStorageBytes(bytes);
+    retainedWebStorageStatus.textContent=retainedStorageKindStatus(web);
+    retainedPdfStorageStatus.textContent=retainedStorageKindStatus(pdf);
+    retainedStorageCapacity.hidden=!(web.nearingCapacity||pdf.nearingCapacity);
+    setRetainedStorageControls(web,pdf);
+  }catch{
+    if(revision!==retainedStorageRevision)return;
+    retainedStorageDocuments.textContent='—';
+    retainedStorageCharacters.textContent='—';
+    retainedStorageBytes.textContent='—';
+    retainedWebStorageStatus.textContent='读取失败';
+    retainedPdfStorageStatus.textContent='读取失败';
+    retainedStorageCapacity.hidden=true;
+    setRetainedStorageControls(undefined,undefined);
+    setRetainedStorageActionStatus('无法读取本机译文，请刷新后重试。',true);
+  }finally{
+    if(revision===retainedStorageRevision){
+      retainedStorageSummary.setAttribute('aria-busy','false');
+      if(!retainedStoragePending)refreshRetainedStorageButton.disabled=false;
+    }
+  }
+}
+async function clearRetainedStorage(kind:'web'|'pdf'|'all'):Promise<void>{
+  retainedStoragePending=true;
+  setRetainedStorageControls(undefined,undefined);
+  refreshRetainedStorageButton.disabled=true;
+  setRetainedStorageActionStatus(kind==='all'?'正在清除全部本机译文…':'正在清除本机译文…');
+  try{
+    if(kind==='web')await clearRetainedBilingualPageSession();
+    else if(kind==='pdf')await clearRetainedPdfDocumentTranslationSession();
+    else await Promise.all([
+      clearRetainedBilingualPageSession(),
+      clearRetainedPdfDocumentTranslationSession(),
+    ]);
+    resetRetainedStorageConfirmation();
+    setRetainedStorageActionStatus(
+      kind==='web'
+        ? '网页全文译文已从本机清除。'
+        : kind==='pdf'
+          ? 'PDF 全文译文已从本机清除。'
+          : '所有保留的全文译文已从本机清除。',
+    );
+  }catch{
+    setRetainedStorageActionStatus('清除失败，现有译文未被完整更改，请重试。',true);
+  }finally{
+    retainedStoragePending=false;
+    await refreshRetainedStorageSummary();
+  }
+}
 
 function activeOnboardingPreset(){return API_PRESETS.find(preset=>preset.id===onboardingPreset.value)}
 function providerHint(presetId:string):string {
@@ -631,6 +754,39 @@ for(const [index,button] of settingsNavButtons.entries()){
   button.addEventListener('keydown',event=>{if(!['ArrowDown','ArrowRight','ArrowUp','ArrowLeft'].includes(event.key))return;event.preventDefault();const delta=event.key==='ArrowDown'||event.key==='ArrowRight'?1:-1;const next=settingsNavButtons[(index+delta+settingsNavButtons.length)%settingsNavButtons.length];if(!next)return;showSettingsSection(next.dataset.settingsTarget??'connection');next.focus()});
 }
 const requestedSection=location.hash.slice(1);showSettingsSection(settingsSections.some(section=>section.dataset.settingsSection===requestedSection)?requestedSection:'connection');
+refreshRetainedStorageButton.addEventListener('click',()=>{
+  setRetainedStorageActionStatus('');
+  void refreshRetainedStorageSummary();
+});
+clearRetainedWebButton.addEventListener('click',()=>{
+  resetRetainedStorageConfirmation();
+  void clearRetainedStorage('web');
+});
+clearRetainedPdfButton.addEventListener('click',()=>{
+  resetRetainedStorageConfirmation();
+  void clearRetainedStorage('pdf');
+});
+clearAllRetainedStorageButton.addEventListener('click',()=>{
+  if(clearAllRetainedStorageButton.classList.contains('confirming')){
+    void clearRetainedStorage('all');
+    return;
+  }
+  resetRetainedStorageConfirmation();
+  clearAllRetainedStorageButton.classList.add('confirming');
+  clearAllRetainedStorageButton.textContent='再次点击，确认清除全部';
+  setRetainedStorageActionStatus('此操作只清除主动保留的全文译文，不会删除设置、API Key 或术语表。');
+  retainedStorageConfirmationTimer=setTimeout(()=>{
+    resetRetainedStorageConfirmation();
+    setRetainedStorageActionStatus('未执行清除。');
+  },6000);
+});
+browser.storage.onChanged.addListener((changes,areaName)=>{
+  if(areaName!=='local'||!(
+    BILINGUAL_PAGE_RETAINED_STORAGE_KEY in changes||
+    PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY in changes
+  ))return;
+  void refreshRetainedStorageSummary();
+});
 function markFormDirty(event:Event):void{
   const target=event.target;
   if(target instanceof Element&&!target.closest('#settings-connection'))nonConnectionDirty=true;
@@ -984,6 +1140,13 @@ async function applyRequestedSettingsFocus():Promise<void>{
   }
   if(focus==='glossary'){
     showSettingsSection('translation');const disclosure=academicGlossary.closest<HTMLDetailsElement>('details');if(disclosure)disclosure.open=true;academicGlossary.scrollIntoView({block:'center'});queueMicrotask(()=>academicGlossary.focus());return;
+  }
+  if(focus==='storage'){
+    showSettingsSection('storage');
+    await refreshRetainedStorageSummary();
+    retainedStorageTitle.scrollIntoView({block:'start'});
+    queueMicrotask(()=>refreshRetainedStorageButton.focus());
+    return;
   }
   if(focus==='pages'){
     showSettingsSection('pages');queueMicrotask(()=>{generalPageMode.scrollIntoView({block:'center'});generalPageMode.focus()});return;

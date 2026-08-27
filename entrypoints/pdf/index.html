@@ -132,18 +132,23 @@
           <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
         </div>
         <small id="pdf-document-translation-copy-feedback" class="pdf-document-translation-copy-feedback" aria-live="polite"></small>
-        <label id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
+        <div id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
           <span>
             <strong>关闭后保留译文</strong>
             <small id="pdf-document-translation-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
           </span>
-          <input
-            id="pdf-document-translation-retention-toggle"
-            type="checkbox"
-            role="switch"
-            aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
-          />
-        </label>
+          <span class="pdf-document-translation-retention-actions">
+            <button id="pdf-document-translation-retention-manage" type="button">管理</button>
+            <label class="pdf-document-translation-retention-switch">
+              <input
+                id="pdf-document-translation-retention-toggle"
+                type="checkbox"
+                role="switch"
+                aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
+              />
+            </label>
+          </span>
+        </div>
       </section>
       <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
         <div class="pdf-document-translation-scope-heading">

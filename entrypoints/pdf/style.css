@@ -269,10 +269,9 @@ button { color: inherit; font: inherit; cursor: pointer; }
   gap: 10px;
   padding-top: 7px;
   border-top: 1px solid #eef0f4;
-  cursor: pointer;
 }
 .pdf-document-translation-retention[hidden] { display: none; }
-.pdf-document-translation-retention > span { display: grid; min-width: 0; gap: 1px; }
+.pdf-document-translation-retention > span:first-child { display: grid; min-width: 0; gap: 1px; }
 .pdf-document-translation-retention strong { color: #4b5568; font-size: 9.5px; }
 .pdf-document-translation-retention small {
   overflow: hidden;
@@ -283,6 +282,18 @@ button { color: inherit; font: inherit; cursor: pointer; }
   white-space: nowrap;
 }
 .pdf-document-translation-retention[data-tone="error"] small { color: #b42336; }
+.pdf-document-translation-retention-actions { display: flex; flex: 0 0 auto; align-items: center; gap: 5px; }
+.pdf-document-translation-retention-actions button {
+  min-height: 26px;
+  border: 0;
+  padding: 3px 4px;
+  color: #6866cf;
+  background: transparent;
+  font-size: 9.5px;
+  font-weight: 700;
+}
+.pdf-document-translation-retention-actions button:hover { color: #4542b8; background: #f2f2ff; }
+.pdf-document-translation-retention-switch { display: flex; margin: 0; line-height: 0; cursor: pointer; }
 .pdf-document-translation-retention input {
   position: relative;
   width: 30px;
@@ -1306,6 +1317,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-document-translation-retention[data-tone="error"] small { color: #ff9cab; }
   .pdf-document-translation-retention input { border-color: #4a5567; background: #303947; }
   .pdf-document-translation-retention input:checked { border-color: #7169e9; background: #655fdf; }
+  .pdf-document-translation-retention-actions button { color: #aaa7ff; }
+  .pdf-document-translation-retention-actions button:hover { color: #d0ceff; background: #292943; }
   .pdf-document-translation-actions button:hover:not(:disabled) { border-color: #646b8e; background: #292943; }
   .pdf-document-translation-actions .primary {
     color: #fff;

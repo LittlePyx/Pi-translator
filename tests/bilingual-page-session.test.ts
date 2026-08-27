@@ -10,6 +10,7 @@ import {
   clearRetainedBilingualPageSession,
   getBilingualPageSession,
   getRetainedBilingualPageSession,
+  getRetainedBilingualPageStorageSummary,
   saveBilingualPageSession,
   saveRetainedBilingualPageSession,
   type BilingualPageSessionDescriptor,
@@ -209,6 +210,12 @@ describe('bilingual webpage session repository', () => {
     const serialized = JSON.stringify(localStorage[BILINGUAL_PAGE_RETAINED_STORAGE_KEY]);
     expect(serialized).not.toContain('https://example.com/article');
     expect(serialized).not.toContain('The first durable article paragraph.');
+    await expect(getRetainedBilingualPageStorageSummary()).resolves.toMatchObject({
+      documentCount: 1,
+      translationCharacters: 18,
+      maximumDocuments: 6,
+      nearingCapacity: false,
+    });
   });
 
   it('keeps an older retained result on behavior changes and bounds local documents', async () => {
@@ -232,6 +239,11 @@ describe('bilingual webpage session repository', () => {
     await expect(getRetainedBilingualPageSession(newest, firstBehavior)).resolves.toBeUndefined();
     await clearRetainedBilingualPageSession();
     expect(localStorage[BILINGUAL_PAGE_RETAINED_STORAGE_KEY]).toBeUndefined();
+    await expect(getRetainedBilingualPageStorageSummary()).resolves.toMatchObject({
+      documentCount: 0,
+      translationCharacters: 0,
+      estimatedBytes: 0,
+    });
   });
 });
 

@@ -10,6 +10,7 @@ export type SettingsFocus =
   | 'vision-ocr'
   | 'glossary'
   | 'pages'
+  | 'storage'
   | 'support';
 export type TranslationProviderRole = 'text' | 'vision';
 

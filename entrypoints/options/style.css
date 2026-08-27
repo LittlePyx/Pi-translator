@@ -1923,3 +1923,138 @@ button:focus-visible {
   .onboarding-paths span { color: #a5b4fc; }
   .onboarding-paths strong { color: #e5e7eb; }
 }
+
+/* Local retained-translation management. */
+.storage-refresh { align-self: flex-start; }
+.retained-storage-summary {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-top: 24px;
+  border-block: 1px solid #e2e7ef;
+}
+.retained-storage-summary > div {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  padding: 16px 18px;
+}
+.retained-storage-summary > div + div { border-left: 1px solid #e2e7ef; }
+.retained-storage-summary span {
+  color: #7b8798;
+  font-size: 10px;
+  font-weight: 700;
+}
+.retained-storage-summary strong {
+  overflow: hidden;
+  color: #263449;
+  font-size: 20px;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.retained-storage-summary[aria-busy="true"] strong { color: #9aa5b5; }
+.retained-storage-list { margin-top: 18px; border-top: 1px solid #e5e9f0; }
+.retained-storage-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  min-width: 0;
+  padding: 15px 2px;
+  border-bottom: 1px solid #e5e9f0;
+}
+.retained-storage-kind { display: flex; align-items: center; gap: 11px; min-width: 0; }
+.retained-storage-kind > div { display: grid; min-width: 0; gap: 3px; }
+.retained-storage-kind strong { color: #334155; font-size: 12px; }
+.retained-storage-kind small {
+  overflow: hidden;
+  color: #778397;
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.retained-storage-kind-mark {
+  width: 36px;
+  flex: 0 0 auto;
+  color: #6462ce;
+  font-size: 9px;
+  font-weight: 850;
+  letter-spacing: .04em;
+}
+.retained-storage-clear {
+  flex: 0 0 auto;
+  border-color: transparent;
+  padding: 7px 9px;
+  background: transparent;
+  box-shadow: none;
+  font-size: 10.5px;
+}
+.retained-storage-clear:hover:not(:disabled) { border-color: #f2cbd2; background: #fff7f8; }
+.retained-storage-capacity {
+  margin: 14px 0 0;
+  padding: 9px 11px;
+  border-left: 2px solid #d4932e;
+  color: #8b5a12;
+  background: #fffaf1;
+  font-size: 11px;
+}
+.retained-storage-privacy {
+  display: grid;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 12px;
+  margin-top: 19px;
+  padding-top: 15px;
+  border-top: 1px solid #e5e9f0;
+}
+.retained-storage-privacy strong { color: #3d4b60; font-size: 11px; }
+.retained-storage-privacy p { margin: 0; color: #748095; font-size: 10.5px; line-height: 1.55; }
+.retained-storage-actions {
+  display: flex;
+  align-items: center;
+  gap: 13px;
+  margin-top: 18px;
+}
+.retained-storage-actions .subtle-danger { margin: 0; }
+.retained-storage-actions .confirming {
+  border-color: #cf5367;
+  color: #fff;
+  background: #bd3e54;
+}
+.retained-storage-action-status,
+#retained-storage-action-status {
+  color: #68758a;
+  font-size: 10.5px;
+  line-height: 1.45;
+}
+#retained-storage-action-status.error { color: #b4233b; }
+
+@media (max-width: 640px) {
+  .retained-storage-summary > div { padding: 13px 10px; }
+  .retained-storage-summary strong { font-size: 16px; }
+  .retained-storage-row { align-items: flex-start; gap: 8px; }
+  .retained-storage-kind-mark { width: 30px; }
+  .retained-storage-clear { padding-inline: 5px; }
+  .retained-storage-privacy { grid-template-columns: 1fr; gap: 5px; }
+  .retained-storage-actions { align-items: flex-start; flex-direction: column; }
+}
+
+@media (prefers-color-scheme: dark) {
+  .retained-storage-summary,
+  .retained-storage-summary > div + div,
+  .retained-storage-list,
+  .retained-storage-row,
+  .retained-storage-privacy { border-color: #303a49; }
+  .retained-storage-summary span,
+  .retained-storage-kind small,
+  .retained-storage-privacy p,
+  #retained-storage-action-status { color: #96a2b4; }
+  .retained-storage-summary strong,
+  .retained-storage-kind strong,
+  .retained-storage-privacy strong { color: #e1e7ef; }
+  .retained-storage-summary[aria-busy="true"] strong { color: #677386; }
+  .retained-storage-kind-mark { color: #a7a5ff; }
+  .retained-storage-clear:hover:not(:disabled) { border-color: #633643; background: #301d24; }
+  .retained-storage-capacity { border-color: #b47d2a; color: #e6bd79; background: #272216; }
+  .retained-storage-actions .confirming { border-color: #dc6478; background: #a93046; }
+  #retained-storage-action-status.error { color: #ff9cab; }
+}

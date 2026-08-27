@@ -1,4 +1,8 @@
 import { isSupportedTargetLanguage, type SupportedTargetLanguage } from '../language/supported-target-languages';
+import {
+  summarizeRetainedTranslationStorage,
+  type RetainedTranslationStorageSummary,
+} from '../translation/retained-storage-summary';
 import type { TranslationContentMode, TranslationStyle } from '../translation/types';
 
 export const PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY =
@@ -371,6 +375,17 @@ export function getRetainedPdfDocumentTranslationSession(
     ));
     return session ? cloneSession(session) : undefined;
   });
+}
+
+export function getRetainedPdfDocumentTranslationStorageSummary(): Promise<
+  RetainedTranslationStorageSummary
+> {
+  return serializeSessionOperation(async () => summarizeRetainedTranslationStorage(
+    await readRetained(),
+    PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,
+    MAX_RETAINED_SESSIONS,
+    MAX_RETAINED_TRANSLATION_CHARACTERS,
+  ));
 }
 
 export function saveRetainedPdfDocumentTranslationSession(
