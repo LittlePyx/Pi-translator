@@ -49,6 +49,7 @@ let holdNextInteractiveRequest = false;
 let interactiveRequestStarted: (() => void) | undefined;
 let releaseHeldInteractiveRequest: (() => void) | undefined;
 let heldInteractiveRequestGate: Promise<void> = Promise.resolve();
+let omitNextDocumentBatchItem = false;
 
 interface TestChromeStorageArea {
   get(key: string): Promise<Record<string, Record<string, unknown>>>;
@@ -642,17 +643,28 @@ test.beforeAll(async () => {
       typeof message.content === 'string')?.content;
     let requestedText = '';
     let requiredPlaceholderTokens: string[] = [];
+    let requestedSegments: Array<{ id: string; text: string }> = [];
     if (typeof userMessageContent === 'string') {
       try {
         const payload = JSON.parse(userMessageContent) as {
           text?: unknown;
           requiredPlaceholderTokens?: unknown;
+          segments?: unknown;
         };
         if (typeof payload.text === 'string') requestedText = payload.text;
         if (
           Array.isArray(payload.requiredPlaceholderTokens) &&
           payload.requiredPlaceholderTokens.every((token) => typeof token === 'string')
         ) requiredPlaceholderTokens = payload.requiredPlaceholderTokens;
+        if (
+          Array.isArray(payload.segments) &&
+          payload.segments.every((segment) => (
+            segment &&
+            typeof segment === 'object' &&
+            typeof (segment as { id?: unknown }).id === 'string' &&
+            typeof (segment as { text?: unknown }).text === 'string'
+          ))
+        ) requestedSegments = payload.segments as Array<{ id: string; text: string }>;
       } catch {
         requestedText = userMessageContent;
       }
@@ -758,6 +770,31 @@ test.beforeAll(async () => {
       });
       return;
     }
+    const returnedDocumentSegments = requestedSegments.map((segment) => ({
+      id: segment.id,
+      translation: segment.text.includes('npm run build:edge')
+        ? failBilingualFormulaPreservation
+          ? '修改扩展后请重新构建，并核对评分函数。'
+          : `修改扩展后请运行 \`npm run build:edge\`，并保留公式 ${segment.text.match(/⟦[^⟧]+⟧/gu)?.join(' ') ?? ''}。`
+        : segment.text.includes('MediaWiki keeps accessible MathML')
+          ? `MediaWiki 会保留公式 ${segment.text.match(/⟦[^⟧]+⟧/gu)?.join(' ') ?? ''}。`
+          : '批量生成的学术译文。',
+    }));
+    if (omitNextDocumentBatchItem && returnedDocumentSegments.length > 1) {
+      omitNextDocumentBatchItem = false;
+      returnedDocumentSegments.pop();
+    }
+    const isDocumentBatchRequest = requestedSegments.length > 0 && requestedSegments.every(
+      (segment) => /^(?:B\d+|P\d+B\d+)$/u.test(segment.id),
+    );
+    const documentBatchResponse = isDocumentBatchRequest
+      ? {
+          translation: `批量译文 ${requestedText.match(/⟦[^⟧]+⟧/gu)?.join(' ') ?? ''}`.trim(),
+          detectedLanguage: 'en',
+          warnings: [],
+          segments: returnedDocumentSegments,
+        }
+      : undefined;
     await route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify({
@@ -767,7 +804,8 @@ test.beforeAll(async () => {
               translation: '自动识别并翻译的图像区域。',
               recognizedText: 'Automatically recognized image text.',
               uncertainSpans: [],
-            } : isTranslationRevision ? {
+            } : documentBatchResponse ? documentBatchResponse
+            : isTranslationRevision ? {
               translation: '经用户调整后，更忠实地保留原文限定条件。',
               detectedLanguage: 'en',
               warnings: [],
@@ -1059,7 +1097,7 @@ test.afterEach(() => {
   partialRecoveryFailureGate = Promise.resolve();
   holdNextBilingualRequest = false;
   bilingualRequestStarted = undefined;
-  releaseHeldBilingualRequest?.();
+  (releaseHeldBilingualRequest as (() => void) | undefined)?.();
   releaseHeldBilingualRequest = undefined;
   heldBilingualRequestGate = Promise.resolve();
   holdNextInteractiveRequest = false;
@@ -1067,6 +1105,7 @@ test.afterEach(() => {
   releaseHeldInteractiveRequest?.();
   releaseHeldInteractiveRequest = undefined;
   heldInteractiveRequestGate = Promise.resolve();
+  omitNextDocumentBatchItem = false;
 });
 
 test('exposes the native Edge side panel API to the service worker', async () => {
@@ -1458,7 +1497,7 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
     await expect(pageControl.locator('output')).toContainText('已完成 8/8');
     await expect(pageControl.locator('.bar')).toHaveAttribute('data-collapsed', 'true');
-    expect(textRequests.length - requestsBeforeRefresh).toBe(2);
+    expect(textRequests.length - requestsBeforeRefresh).toBe(1);
 
     await pageControl.locator('button[data-action="compact"]').click();
     await pageControl.locator('details.more > summary').click();
@@ -1554,7 +1593,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await initialBilingualRequestStarted;
     await pageControl.locator('button[data-action="pause"]').click();
     await expect(pageControl.locator('output')).toContainText('已暂停');
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     const hintedTranslation = page.locator('[data-pi-bilingual-translation]').first();
     await expect(hintedTranslation).toBeVisible();
@@ -1624,7 +1663,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('全文翻译中');
     await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="stop"]').click();
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     await expect(pageControl.locator('output')).toContainText('已停止');
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已停止');
@@ -1665,16 +1704,21 @@ test('completes bilingual article translation without scrolling and keeps contro
     const introPayload = JSON.parse(introUserContent as string) as {
       text?: string;
       referenceContext?: string;
+      segments?: Array<{ id?: string; text?: string }>;
     };
-    expect(introPayload.text).toBe(
+    expect(introPayload.segments?.some((segment) => segment.text ===
+      'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.'
+    )).toBe(true);
+    expect(introPayload.text).toContain('A practical guide to reliable bilingual reading');
+    expect(introPayload.text).toContain(
       'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.',
     );
-    expect(introPayload.referenceContext).toContain(
-      'Article title:\nA practical guide to reliable bilingual reading',
-    );
-    expect(introPayload.referenceContext).toContain('Translation of the article title');
-    expect(introPayload.referenceContext).not.toContain(introPayload.text);
-    expect(introPayload.referenceContext!.length).toBeLessThanOrEqual(800);
+    if (introPayload.referenceContext) {
+      expect(introPayload.referenceContext).not.toContain(
+        'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.',
+      );
+      expect(introPayload.referenceContext.length).toBeLessThanOrEqual(800);
+    }
     const completedRequests = JSON.stringify(textRequests.slice(requestsBefore));
     expect(completedRequests).toContain('`npm run build:edge`');
     expect(completedRequests).toContain('⟦FULL1_0001⟧');
@@ -1933,7 +1977,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     }, pausedDynamicText);
     await page.waitForTimeout(650);
     expect(JSON.stringify(textRequests.slice(requestsWhilePaused))).not.toContain(pausedDynamicText);
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     await expect(page.locator(
       '#article-dynamic-held + [data-pi-bilingual-translation]',
@@ -2138,7 +2182,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await sidePanel.locator('#bilingual-page-clear').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
   } finally {
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     if (originalTargetLanguage !== 'zh-CN' && !popup.isClosed()) {
       await popup.locator('#target-language').selectOption(originalTargetLanguage).catch(() => undefined);
@@ -2160,6 +2204,7 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
   const popup = await context.newPage();
   const titleText = 'A practical guide to reliable bilingual reading. Viewport queue priority fixture.';
   const oldQueuedText = 'This initially nearby paragraph should wait after the reader jumps to a distant section.';
+  const laterOldQueuedText = 'This second old paragraph must remain pending when the next batch is reprioritized.';
   const currentViewportText = 'This paragraph at the current reading position should be translated before the old queue.';
   try {
     await page.goto(ARTICLE_FIXTURE_URL);
@@ -2170,14 +2215,17 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
       const oldQueued = document.createElement('p');
       oldQueued.id = 'priority-old-queued';
       oldQueued.textContent = fixture.oldQueuedText;
+      const laterOldQueued = document.createElement('p');
+      laterOldQueued.id = 'priority-later-old-queued';
+      laterOldQueued.textContent = fixture.laterOldQueuedText;
       const spacer = document.createElement('div');
       spacer.style.height = '2800px';
       spacer.setAttribute('aria-hidden', 'true');
       const currentViewport = document.createElement('p');
       currentViewport.id = 'priority-current-viewport';
       currentViewport.textContent = fixture.currentViewportText;
-      article.replaceChildren(title, oldQueued, spacer, currentViewport);
-    }, { titleText, oldQueuedText, currentViewportText });
+      article.replaceChildren(title, oldQueued, laterOldQueued, spacer, currentViewport);
+    }, { titleText, oldQueuedText, laterOldQueuedText, currentViewportText });
     await page.evaluate(() => window.scrollTo(0, 0));
     await popup.goto(`chrome-extension://${extensionId}/popup.html`);
     await page.bringToFront();
@@ -2234,7 +2282,7 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
 
     await expect(page.locator(
@@ -2244,28 +2292,36 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
       '#priority-current-viewport + [data-pi-bilingual-translation]',
     )).toBeVisible();
     await expect(page.locator('[data-pi-bilingual-pending]')).toHaveCount(0);
-    await expect.poll(() => textRequests.length).toBeGreaterThanOrEqual(requestsBefore + 3);
-    const requestedSources = textRequests.slice(requestsBefore).map((body) => {
+    await expect.poll(() => textRequests.length).toBeGreaterThanOrEqual(requestsBefore + 2);
+    const requestedSources = textRequests.slice(requestsBefore).flatMap((body) => {
       const messages = body.messages as Array<{ role?: string; content?: unknown }> | undefined;
       const content = messages?.find((message) => message.role === 'user')?.content;
-      if (typeof content !== 'string') return '';
+      if (typeof content !== 'string') return [];
       try {
-        const payload = JSON.parse(content) as { text?: unknown };
-        return typeof payload.text === 'string' ? payload.text : content;
+        const payload = JSON.parse(content) as {
+          text?: unknown;
+          segments?: Array<{ text?: unknown }>;
+        };
+        if (Array.isArray(payload.segments)) {
+          return payload.segments.flatMap((segment) => (
+            typeof segment.text === 'string' ? [segment.text] : []
+          ));
+        }
+        return typeof payload.text === 'string' ? [payload.text] : [content];
       } catch {
-        return content;
+        return [content];
       }
     });
     expect(requestedSources[0]).toBe(titleText);
     expect(requestedSources.indexOf(currentViewportText)).toBeGreaterThan(0);
     expect(requestedSources.indexOf(currentViewportText))
-      .toBeLessThan(requestedSources.indexOf(oldQueuedText));
+      .toBeLessThan(requestedSources.indexOf(laterOldQueuedText));
     await page.evaluate(() => {
       document.querySelector<HTMLElement>('#pi-translator-bilingual-page-control')?.shadowRoot
         ?.querySelector<HTMLButtonElement>('button[data-action="clear"]')?.click();
     });
   } finally {
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     await popup.close().catch(() => undefined);
     await page.goto(OVERLEAF_FIXTURE_URL);
@@ -2382,7 +2438,7 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
     await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('稍后继续');
     await expect(sidePanel.locator('#bilingual-page-primary')).toBeDisabled();
 
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldBilingualRequest = undefined;
     releaseHeldInteractiveRequest?.();
     releaseHeldInteractiveRequest = undefined;
@@ -2408,7 +2464,7 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
     await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
     await sidePanel.locator('#bilingual-page-clear').click();
   } finally {
-    releaseHeldBilingualRequest?.();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
     releaseHeldInteractiveRequest?.();
     await sidePanel.close().catch(() => undefined);
     if (!popup.isClosed()) {
@@ -5020,6 +5076,52 @@ test('loads the PDF runtime only after a document is opened', async () => {
   expect(coreRuntimeRequests).toHaveLength(1);
   expect(runtimeRequests).toHaveLength(1);
   await pdfPage.close();
+});
+
+test('previews and batch-translates a complete PDF in the reader panel', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 980, height: 720 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'full-document-translation.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoPageTextPdf(
+        'The first PDF page explains a reliable translation workflow.',
+        'The second PDF page preserves the original document for comparison.',
+      ),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    const requestsBeforePreview = textRequests.length;
+    await pdfPage.locator('#translate-document').click();
+    const panel = pdfPage.locator('#pdf-document-translation');
+    await expect(panel).toBeVisible();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 2 段，等待确认');
+    expect(textRequests).toHaveLength(requestsBeforePreview);
+
+    omitNextDocumentBatchItem = true;
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+    await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
+    await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
+    await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
+    expect(textRequests).toHaveLength(requestsBeforePreview + 2);
+    expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
+      getComputedStyle(stage).marginRight
+    ))).not.toBe('0px');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-translation.png'),
+        fullPage: false,
+      });
+    }
+
+    await pdfPage.locator('#pdf-document-translation-close').click();
+    await expect(panel).toBeHidden();
+  } finally {
+    await pdfPage.close();
+  }
 });
 
 test('uses the native PDF outline for compact chapter navigation', async ({}, testInfo) => {

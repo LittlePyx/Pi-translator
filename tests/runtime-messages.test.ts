@@ -111,6 +111,32 @@ describe('runtime message guard', () => {
       type: 'CONTROL_BILINGUAL_PAGE',
       payload: { tabId: 7, action: 'display-translation' },
     })).toBe(true);
+    const documentBatch = {
+      type: 'TRANSLATE_DOCUMENT_BATCH',
+      payload: {
+        requestId: 'batch-1',
+        items: [
+          { id: 'P1B1', text: 'First document block.' },
+          { id: 'P1B2', text: 'Second document block.' },
+        ],
+        pageUrl: 'https://example.com/paper',
+        targetLanguage: 'zh-CN',
+        sourceLanguage: 'auto',
+        style: 'academic',
+        contentMode: 'auto',
+      },
+    };
+    expect(isRuntimeMessage(documentBatch)).toBe(true);
+    expect(isRuntimeMessage({
+      ...documentBatch,
+      payload: {
+        ...documentBatch.payload,
+        items: [
+          { id: 'duplicate', text: 'First.' },
+          { id: 'duplicate', text: 'Second.' },
+        ],
+      },
+    })).toBe(false);
     expect(isRuntimeMessage({
       type: 'BILINGUAL_PAGE_STATE_UPDATED',
       payload: {

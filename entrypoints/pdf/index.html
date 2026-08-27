@@ -32,6 +32,16 @@
           hidden
         >导航</button>
         <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
+        <button
+          id="translate-document"
+          class="document-translate"
+          type="button"
+          title="翻译整篇 PDF"
+          aria-label="翻译整篇 PDF"
+          aria-controls="pdf-document-translation"
+          aria-expanded="false"
+          disabled
+        >译全文</button>
       </div>
       <div class="region-tools">
         <button
@@ -74,6 +84,39 @@
       </div>
       <button id="open-settings" class="quiet" type="button">设置</button>
     </header>
+
+    <aside
+      id="pdf-document-translation"
+      class="pdf-document-translation"
+      aria-label="PDF 全文翻译"
+      hidden
+    >
+      <header>
+        <span>
+          <strong>PDF 全文翻译</strong>
+          <small id="pdf-document-translation-status" aria-live="polite">准备文档内容…</small>
+        </span>
+        <button
+          id="pdf-document-translation-close"
+          type="button"
+          title="关闭全文翻译面板"
+          aria-label="关闭全文翻译面板"
+        >×</button>
+      </header>
+      <div class="pdf-document-translation-actions">
+        <button id="pdf-document-translation-primary" class="primary" type="button">开始翻译</button>
+        <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
+        <button id="pdf-document-translation-clear" type="button" hidden>清除</button>
+      </div>
+      <p id="pdf-document-translation-note" class="pdf-document-translation-note">
+        先在本地读取文字层；确认开始后才会批量发送正文。扫描页会保留原页并标记为未识别。
+      </p>
+      <div
+        id="pdf-document-translation-pages"
+        class="pdf-document-translation-pages"
+        aria-label="按页排列的 PDF 译文"
+      ></div>
+    </aside>
 
     <aside id="pdf-outline" class="pdf-outline" aria-label="当前 PDF 文档导航" hidden>
       <header>

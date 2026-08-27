@@ -12,16 +12,19 @@ import type {
 } from '../translation/types';
 import type {
   GlossaryEntry,
+  TranslateBatchRequest,
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
   TranslationCorrectionReceipt,
   TranslationCorrectionTermInput,
   TranslationHistoryEntry,
+  TranslationBatchItemResult,
   TranslationMemoryScope,
   TranslationRevisionScope,
 } from '../translation/types';
 import type { TranslationErrorCode } from './errors';
+import { validTranslationBatchItems } from '../translation/document-batch';
 import type { SettingsFocus, TranslationProviderRole } from './user-facing-error';
 import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
 import type { PdfSourceLocation } from '../translation/types';
@@ -176,6 +179,7 @@ export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR'; payload: TranslateRequest }
   | { type: 'TRANSLATE_BILINGUAL_PAGE_SEGMENT'; payload: TranslateRequest }
+  | { type: 'TRANSLATE_DOCUMENT_BATCH'; payload: TranslateBatchRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
   | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
@@ -407,6 +411,10 @@ export interface TranslationSessionResult {
 }
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
+export type TranslationBatchRuntimeResponse = RuntimeResponse<{
+  items: TranslationBatchItemResult[];
+  missingItemIds: string[];
+}>;
 export type BilingualPageStateResponse = RuntimeResponse<{ state: BilingualPageState }>;
 export type BilingualPageSessionResponse = RuntimeResponse<{
   session?: BilingualPageSessionSnapshot;
@@ -876,6 +884,38 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
   }
   if (type === 'TRANSLATION_PROGRESS') {
     return validTranslationProgressPayload(message.payload);
+  }
+  if (type === 'TRANSLATE_DOCUMENT_BATCH') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, [
+        'requestId',
+        'items',
+        'documentId',
+        'pageUrl',
+        'sourceLabel',
+        'targetLanguage',
+        'sourceLanguage',
+        'style',
+        'contentMode',
+        'contextText',
+        'bypassCache',
+      ]) &&
+      nonEmptyString(payload.requestId, 256) &&
+      validTranslationBatchItems(payload.items) &&
+      nonEmptyString(payload.pageUrl, 8_192) &&
+      nonEmptyString(payload.targetLanguage, 64) &&
+      nonEmptyString(payload.sourceLanguage, 64) &&
+      ['academic', 'general', 'literal'].includes(String(payload.style)) &&
+      ['auto', 'plain', 'latex'].includes(String(payload.contentMode)) &&
+      (payload.documentId === undefined || nonEmptyString(payload.documentId, 512)) &&
+      (payload.sourceLabel === undefined || nonEmptyString(payload.sourceLabel, 512)) &&
+      (payload.contextText === undefined || (
+        typeof payload.contextText === 'string' && payload.contextText.length <= 4_000
+      )) &&
+      (payload.bypassCache === undefined || typeof payload.bypassCache === 'boolean')
+    );
   }
   return (
     type === 'TRANSLATE_SELECTION' ||

@@ -39,15 +39,25 @@ import {
   type RegionResizeHandle,
 } from '../../core/pdf/region-capture';
 import type {
+  PublicSettings,
   RecognizePdfPageResponse,
   RuntimeMessage,
   RuntimeResponse,
+  TranslationBatchRuntimeResponse,
 } from '../../core/messaging/messages';
 import {
   translationErrorRecovery,
   translationErrorMessage,
   type SettingsFocus,
 } from '../../core/messaging/user-facing-error';
+import { isIsolatedBilingualBlockError } from '../../core/translation/bilingual-page';
+import { takeDocumentTranslationBatch } from '../../core/translation/document-batch';
+import {
+  comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationBlocks,
+  type PdfDocumentTranslationBlock,
+} from '../../core/pdf/document-translation';
+import { renderTranslationContent } from '../../ui/translation-content';
 import {
   mapCoordinateOcrPageToRegion,
   selectableOcrBlocks,
@@ -167,6 +177,15 @@ const bookmarkStatus = element<HTMLElement>('pdf-bookmark-status');
 const bookmarkList = element<HTMLElement>('pdf-bookmark-list');
 const bookmarkEmpty = element<HTMLElement>('pdf-bookmark-empty');
 const openSearch = element<HTMLButtonElement>('open-search');
+const translateDocument = element<HTMLButtonElement>('translate-document');
+const documentTranslationPanel = element<HTMLElement>('pdf-document-translation');
+const documentTranslationStatus = element<HTMLElement>('pdf-document-translation-status');
+const documentTranslationClose = element<HTMLButtonElement>('pdf-document-translation-close');
+const documentTranslationPrimary = element<HTMLButtonElement>('pdf-document-translation-primary');
+const documentTranslationStop = element<HTMLButtonElement>('pdf-document-translation-stop');
+const documentTranslationClear = element<HTMLButtonElement>('pdf-document-translation-clear');
+const documentTranslationNote = element<HTMLElement>('pdf-document-translation-note');
+const documentTranslationPages = element<HTMLElement>('pdf-document-translation-pages');
 const searchPanel = element<HTMLElement>('pdf-search');
 const searchQuery = element<HTMLInputElement>('pdf-search-query');
 const searchStatus = element<HTMLOutputElement>('pdf-search-status');
@@ -260,6 +279,45 @@ let pdfReadingBookmarks: PdfReadingBookmark[] = [];
 let editingPdfBookmarkId: string | undefined;
 let bookmarkSaveRevision = 0;
 let bookmarkSaveQueue: Promise<void> = Promise.resolve();
+
+type PdfDocumentTranslationPhase =
+  | 'idle'
+  | 'preparing'
+  | 'ready'
+  | 'running'
+  | 'paused'
+  | 'stopped'
+  | 'complete'
+  | 'error';
+
+interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock {
+  status: 'idle' | 'translating' | 'done' | 'error';
+  translatedText?: string;
+  errorMessage?: string;
+  singleRetry?: boolean;
+}
+
+let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
+let pdfDocumentTranslationBlocksState: PdfDocumentTranslationRuntimeBlock[] = [];
+let pdfDocumentTranslationUnreadablePages = 0;
+let pdfDocumentTranslationRequestId: string | undefined;
+let pdfDocumentTranslationTask: Promise<void> | undefined;
+let pdfDocumentTranslationRevision = 0;
+let pdfDocumentTranslationMessage: string | undefined;
+let pdfDocumentTranslationSettings: Pick<
+  PublicSettings,
+  | 'sourceLanguage'
+  | 'targetLanguage'
+  | 'style'
+  | 'contentMode'
+  | 'autoRenderLatex'
+> = {
+  sourceLanguage: 'auto',
+  targetLanguage: 'zh-CN',
+  style: 'academic',
+  contentMode: 'auto',
+  autoRenderLatex: true,
+};
 
 interface TextSelectionGesture {
   pointerId: number;
@@ -457,11 +515,472 @@ function setDocumentControls(enabled: boolean): void {
   openOutline.disabled = !enabled;
   openOutline.hidden = !enabled;
   openSearch.disabled = !enabled;
+  translateDocument.disabled = !enabled;
   zoomValue.value = `${Math.round(currentZoom() * 100)}%`;
   recognizePage.hidden = !enabled;
   recognizePage.disabled = !enabled;
   regionTranslate.disabled = !enabled;
   updateRegionAction();
+}
+
+function pdfDocumentTranslationCounts(): {
+  translated: number;
+  failed: number;
+  total: number;
+} {
+  return {
+    translated: pdfDocumentTranslationBlocksState.filter((block) => block.status === 'done').length,
+    failed: pdfDocumentTranslationBlocksState.filter((block) => block.status === 'error').length,
+    total: pdfDocumentTranslationBlocksState.length,
+  };
+}
+
+function updatePdfDocumentTranslationInset(): void {
+  const width = !documentTranslationPanel.hidden && !matchMedia('(max-width: 620px)').matches
+    ? Math.min(390, innerWidth)
+    : 0;
+  stage.style.setProperty('--pdf-document-sidebar-right', `${width}px`);
+  scheduleFitWidthRefresh();
+}
+
+function syncPdfDocumentTranslationCurrentPage(pageNumber = visiblePageAnchor().pageNumber): void {
+  for (const section of documentTranslationPages.querySelectorAll<HTMLElement>(
+    '.pdf-document-translation-page[data-page-number]',
+  )) {
+    section.toggleAttribute('data-current', Number(section.dataset.pageNumber) === pageNumber);
+  }
+}
+
+function syncPdfDocumentTranslationUi(): void {
+  const { translated, failed, total } = pdfDocumentTranslationCounts();
+  const pending = Math.max(0, total - translated - failed);
+  const defaultStatus = pdfDocumentTranslationPhase === 'idle'
+    ? '尚未读取正文'
+    : pdfDocumentTranslationPhase === 'preparing'
+      ? '正在本地读取文字层…'
+      : pdfDocumentTranslationPhase === 'ready'
+        ? `已识别 ${total} 段，等待确认`
+        : pdfDocumentTranslationPhase === 'running'
+          ? `全文翻译中 · ${translated}/${total}`
+          : pdfDocumentTranslationPhase === 'paused'
+            ? `已暂停 · ${translated}/${total}`
+            : pdfDocumentTranslationPhase === 'stopped'
+              ? `已停止 · ${translated}/${total}`
+              : pdfDocumentTranslationPhase === 'complete'
+                ? failed
+                  ? `已完成 ${translated}/${total} · ${failed} 段待重试`
+                  : `已完成 ${translated}/${total}`
+                : `翻译中断 · ${translated}/${total}`;
+  documentTranslationStatus.textContent = pdfDocumentTranslationMessage ?? defaultStatus;
+  documentTranslationPrimary.disabled = pdfDocumentTranslationPhase === 'preparing' || total === 0;
+  documentTranslationPrimary.hidden = pdfDocumentTranslationPhase === 'complete' && failed === 0;
+  documentTranslationPrimary.textContent = pdfDocumentTranslationPhase === 'running'
+    ? '暂停'
+    : pdfDocumentTranslationPhase === 'paused'
+      ? '继续'
+      : pdfDocumentTranslationPhase === 'complete' && failed > 0
+        ? `重试 ${failed} 段`
+        : pdfDocumentTranslationPhase === 'error'
+          ? '继续'
+          : translated > 0 && pending > 0
+            ? '继续翻译'
+            : '开始翻译';
+  documentTranslationStop.hidden = ![
+    'running',
+    'paused',
+  ].includes(pdfDocumentTranslationPhase);
+  documentTranslationClear.hidden = !total || (
+    translated === 0 && failed === 0 && pdfDocumentTranslationPhase === 'ready'
+  );
+  translateDocument.setAttribute('aria-expanded', String(!documentTranslationPanel.hidden));
+  translateDocument.title = total
+    ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
+    : '翻译整篇 PDF';
+  documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
+    ? `正文只在确认后批量发送；${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。`
+    : '正文只在确认后批量发送；译文按页排列，原始 PDF、公式和图表始终保留。';
+}
+
+function ensurePdfDocumentTranslationPage(pageNumber: number): HTMLElement {
+  const existing = documentTranslationPages.querySelector<HTMLElement>(
+    `.pdf-document-translation-page[data-page-number="${pageNumber}"]`,
+  );
+  if (existing) return existing;
+  const section = document.createElement('section');
+  section.className = 'pdf-document-translation-page';
+  section.dataset.pageNumber = String(pageNumber);
+  const header = document.createElement('header');
+  const jump = document.createElement('button');
+  jump.type = 'button';
+  jump.textContent = `第 ${pageNumber} 页`;
+  jump.title = `回到 PDF 第 ${pageNumber} 页`;
+  jump.addEventListener('click', () => {
+    scrollToPageAnchor({ pageNumber, ratio: 0 });
+    updatePageControl({ pageNumber, ratio: 0 });
+  });
+  const progress = document.createElement('small');
+  progress.dataset.pageProgress = '';
+  header.append(jump, progress);
+  section.append(header);
+  const next = [...documentTranslationPages.querySelectorAll<HTMLElement>(
+    '.pdf-document-translation-page[data-page-number]',
+  )].find((candidate) => Number(candidate.dataset.pageNumber) > pageNumber);
+  documentTranslationPages.insertBefore(section, next ?? null);
+  syncPdfDocumentTranslationCurrentPage();
+  return section;
+}
+
+function updatePdfDocumentTranslationPageProgress(pageNumber: number): void {
+  const section = documentTranslationPages.querySelector<HTMLElement>(
+    `.pdf-document-translation-page[data-page-number="${pageNumber}"]`,
+  );
+  if (!section) return;
+  const pageBlocks = pdfDocumentTranslationBlocksState.filter(
+    (block) => block.pageNumber === pageNumber,
+  );
+  const done = pageBlocks.filter((block) => block.status === 'done').length;
+  const failed = pageBlocks.filter((block) => block.status === 'error').length;
+  const progress = section.querySelector<HTMLElement>('[data-page-progress]');
+  if (progress) progress.textContent = `${done}/${pageBlocks.length}${failed ? ` · ${failed} 待重试` : ''}`;
+}
+
+function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeBlock): void {
+  if (block.status === 'idle') {
+    documentTranslationPages.querySelector(`[data-translation-block="${block.id}"]`)?.remove();
+    updatePdfDocumentTranslationPageProgress(block.pageNumber);
+    return;
+  }
+  const section = ensurePdfDocumentTranslationPage(block.pageNumber);
+  let container = section.querySelector<HTMLElement>(
+    `[data-translation-block="${block.id}"]`,
+  );
+  if (!container) {
+    container = document.createElement('article');
+    container.className = 'pdf-document-translation-block';
+    container.dataset.translationBlock = block.id;
+    const next = [...section.querySelectorAll<HTMLElement>('[data-translation-block]')]
+      .find((candidate) => {
+        const other = pdfDocumentTranslationBlocksState.find(
+          (item) => item.id === candidate.dataset.translationBlock,
+        );
+        return other ? other.blockIndex > block.blockIndex : false;
+      });
+    section.insertBefore(container, next ?? null);
+  }
+  container.dataset.status = block.status;
+  if (block.status === 'done' && block.translatedText) {
+    void renderTranslationContent(
+      container,
+      block.translatedText,
+      pdfDocumentTranslationSettings.autoRenderLatex,
+    );
+  } else if (block.status === 'error') {
+    container.replaceChildren(document.createTextNode(block.errorMessage ?? '本段翻译失败。'));
+    const retry = document.createElement('button');
+    retry.type = 'button';
+    retry.textContent = '重试本段';
+    retry.addEventListener('click', () => {
+      block.status = 'idle';
+      block.singleRetry = true;
+      delete block.errorMessage;
+      pdfDocumentTranslationPhase = 'running';
+      pdfDocumentTranslationMessage = undefined;
+      renderPdfDocumentTranslationBlock(block);
+      syncPdfDocumentTranslationUi();
+      void processPdfDocumentTranslationQueue();
+    });
+    container.append(retry);
+  } else {
+    container.textContent = '正在翻译本页内容…';
+  }
+  updatePdfDocumentTranslationPageProgress(block.pageNumber);
+}
+
+function cancelPdfDocumentTranslationRequest(): void {
+  if (!pdfDocumentTranslationRequestId) return;
+  const requestId = pdfDocumentTranslationRequestId;
+  pdfDocumentTranslationRequestId = undefined;
+  void browser.runtime.sendMessage({
+    type: 'CANCEL_TRANSLATION',
+    payload: { requestId },
+  } satisfies RuntimeMessage).catch(() => undefined);
+}
+
+function resetPdfDocumentTranslation(closePanel = false): void {
+  pdfDocumentTranslationRevision += 1;
+  cancelPdfDocumentTranslationRequest();
+  pdfDocumentTranslationBlocksState = [];
+  pdfDocumentTranslationUnreadablePages = 0;
+  pdfDocumentTranslationPhase = 'idle';
+  pdfDocumentTranslationMessage = undefined;
+  pdfDocumentTranslationTask = undefined;
+  documentTranslationPages.replaceChildren();
+  if (closePanel) documentTranslationPanel.hidden = true;
+  updatePdfDocumentTranslationInset();
+  syncPdfDocumentTranslationUi();
+}
+
+async function preparePdfDocumentTranslation(): Promise<void> {
+  const pdf = pdfDocument;
+  if (!pdf || pdfDocumentTranslationPhase === 'preparing') return;
+  const revision = ++pdfDocumentTranslationRevision;
+  const epoch = documentEpoch;
+  pdfDocumentTranslationPhase = 'preparing';
+  pdfDocumentTranslationMessage = '正在本地读取文字层…';
+  pdfDocumentTranslationBlocksState = [];
+  pdfDocumentTranslationUnreadablePages = 0;
+  documentTranslationPages.replaceChildren();
+  syncPdfDocumentTranslationUi();
+  const discovered: PdfDocumentTranslationRuntimeBlock[] = [];
+  for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
+    if (
+      revision !== pdfDocumentTranslationRevision ||
+      epoch !== documentEpoch ||
+      pdfDocument !== pdf
+    ) return;
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      const items = content.items.flatMap((item) => (
+        'str' in item && typeof item.str === 'string'
+          ? [{ str: item.str, hasEOL: item.hasEOL }]
+          : []
+      ));
+      const pageBlocks = pdfDocumentTranslationBlocks(pageNumber, items);
+      if (!pageBlocks.length) pdfDocumentTranslationUnreadablePages += 1;
+      discovered.push(...pageBlocks.map((block) => ({ ...block, status: 'idle' as const })));
+    } catch {
+      pdfDocumentTranslationUnreadablePages += 1;
+    }
+    if (pageNumber % 4 === 0 || pageNumber === pdf.numPages) {
+      pdfDocumentTranslationMessage = `正在本地读取文字层 · ${pageNumber}/${pdf.numPages} 页`;
+      syncPdfDocumentTranslationUi();
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+  }
+  if (revision !== pdfDocumentTranslationRevision || epoch !== documentEpoch) return;
+  pdfDocumentTranslationBlocksState = discovered;
+  pdfDocumentTranslationMessage = undefined;
+  pdfDocumentTranslationPhase = discovered.length ? 'ready' : 'error';
+  if (!discovered.length) {
+    pdfDocumentTranslationMessage = '没有读取到可翻译文字；扫描版请先使用“识别本页”。';
+  }
+  syncPdfDocumentTranslationUi();
+}
+
+function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock): string | undefined {
+  const index = pdfDocumentTranslationBlocksState.indexOf(block);
+  const previous = index > 0 ? pdfDocumentTranslationBlocksState[index - 1] : undefined;
+  const parts = [
+    documentName.textContent ? `文档：${documentName.textContent}` : '',
+    previous?.text ? `上一段：${previous.text}` : '',
+    previous?.translatedText ? `上一段译文：${previous.translatedText}` : '',
+  ].filter(Boolean);
+  const context = parts.join('\n').slice(-800).trim();
+  return context || undefined;
+}
+
+async function processPdfDocumentTranslationQueue(): Promise<void> {
+  if (pdfDocumentTranslationTask || pdfDocumentTranslationPhase !== 'running') return;
+  const revision = pdfDocumentTranslationRevision;
+  pdfDocumentTranslationTask = (async () => {
+    while (
+      pdfDocumentTranslationPhase === 'running' &&
+      revision === pdfDocumentTranslationRevision
+    ) {
+      const currentPage = visiblePageAnchor().pageNumber;
+      const pending = pdfDocumentTranslationBlocksState
+        .filter((block) => block.status === 'idle')
+        .sort((left, right) => comparePdfDocumentTranslationPriority(left, right, currentPage));
+      const first = pending[0];
+      if (!first) break;
+      const selected = takeDocumentTranslationBatch(
+        pending.map((block) => ({
+          value: block,
+          text: block.text,
+          urgent: Boolean(block.singleRetry),
+        })),
+        { maximumItems: first.pageNumber === currentPage ? 3 : 6 },
+      ).map((candidate) => candidate.value);
+      const requestId = crypto.randomUUID();
+      pdfDocumentTranslationRequestId = requestId;
+      for (const block of selected) {
+        block.status = 'translating';
+        renderPdfDocumentTranslationBlock(block);
+      }
+      syncPdfDocumentTranslationUi();
+      const contextText = pdfDocumentTranslationContext(first);
+      let response: TranslationBatchRuntimeResponse;
+      try {
+        response = await browser.runtime.sendMessage({
+          type: 'TRANSLATE_DOCUMENT_BATCH',
+          payload: {
+            requestId,
+            items: selected.map((block) => ({ id: block.id, text: block.text })),
+            documentId: currentReadingIdentity ?? currentDocumentSessionId,
+            pageUrl: currentSourceUrl,
+            ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
+            targetLanguage: pdfDocumentTranslationSettings.targetLanguage,
+            sourceLanguage: pdfDocumentTranslationSettings.sourceLanguage,
+            style: pdfDocumentTranslationSettings.style,
+            contentMode: pdfDocumentTranslationSettings.contentMode,
+            ...(contextText ? { contextText } : {}),
+          },
+        } satisfies RuntimeMessage) as TranslationBatchRuntimeResponse;
+      } catch (error) {
+        response = {
+          ok: false,
+          error: {
+            code: 'NETWORK_ERROR',
+            message: error instanceof Error ? error.message : 'PDF 全文翻译请求失败。',
+            retryable: true,
+          },
+        };
+      }
+      if (
+        revision !== pdfDocumentTranslationRevision ||
+        pdfDocumentTranslationRequestId !== requestId
+      ) return;
+      pdfDocumentTranslationRequestId = undefined;
+      if (!response.ok) {
+        if (response.error.code === 'REQUEST_ABORTED') {
+          selected.forEach((block) => {
+            block.status = 'idle';
+            renderPdfDocumentTranslationBlock(block);
+          });
+          pdfDocumentTranslationPhase = 'paused';
+          pdfDocumentTranslationMessage = '其他划词或框选翻译已优先处理，全文翻译可继续。';
+          syncPdfDocumentTranslationUi();
+          return;
+        }
+        if (isIsolatedBilingualBlockError(response.error.code)) {
+          if (selected.length > 1) {
+            selected.forEach((block) => {
+              block.status = 'idle';
+              block.singleRetry = true;
+              renderPdfDocumentTranslationBlock(block);
+            });
+            continue;
+          }
+          first.status = 'error';
+          first.errorMessage = translationErrorMessage(response.error.code, response.error.message);
+          renderPdfDocumentTranslationBlock(first);
+          continue;
+        }
+        selected.forEach((block) => {
+          block.status = 'idle';
+          renderPdfDocumentTranslationBlock(block);
+        });
+        pdfDocumentTranslationPhase = 'error';
+        pdfDocumentTranslationMessage = translationErrorMessage(
+          response.error.code,
+          response.error.message,
+        );
+        syncPdfDocumentTranslationUi();
+        return;
+      }
+      const translated = new Map(response.data.items.map((item) => [item.id, item.translatedText]));
+      for (const block of selected) {
+        const translatedText = translated.get(block.id)?.trim();
+        if (translatedText) {
+          block.status = 'done';
+          block.translatedText = translatedText;
+          delete block.errorMessage;
+          delete block.singleRetry;
+        } else if (block.singleRetry) {
+          block.status = 'error';
+          block.errorMessage = '模型没有返回这一段的译文。';
+        } else {
+          block.status = 'idle';
+          block.singleRetry = true;
+        }
+        renderPdfDocumentTranslationBlock(block);
+      }
+      pdfDocumentTranslationMessage = undefined;
+      syncPdfDocumentTranslationUi();
+    }
+    if (
+      revision === pdfDocumentTranslationRevision &&
+      pdfDocumentTranslationPhase === 'running'
+    ) {
+      pdfDocumentTranslationPhase = 'complete';
+      syncPdfDocumentTranslationUi();
+    }
+  })().finally(() => {
+    pdfDocumentTranslationTask = undefined;
+    if (
+      pdfDocumentTranslationPhase === 'running' &&
+      pdfDocumentTranslationBlocksState.some((block) => block.status === 'idle')
+    ) void processPdfDocumentTranslationQueue();
+  });
+  await pdfDocumentTranslationTask;
+}
+
+async function openPdfDocumentTranslation(): Promise<void> {
+  if (!pdfDocument) return;
+  documentTranslationPanel.hidden = false;
+  updatePdfDocumentTranslationInset();
+  syncPdfDocumentTranslationUi();
+  if (pdfDocumentTranslationPhase === 'idle') await preparePdfDocumentTranslation();
+}
+
+function closePdfDocumentTranslation(): void {
+  documentTranslationPanel.hidden = true;
+  updatePdfDocumentTranslationInset();
+  syncPdfDocumentTranslationUi();
+  translateDocument.focus({ preventScroll: true });
+}
+
+function startOrTogglePdfDocumentTranslation(): void {
+  if (pdfDocumentTranslationPhase === 'running') {
+    pdfDocumentTranslationPhase = 'paused';
+    pdfDocumentTranslationMessage = undefined;
+    syncPdfDocumentTranslationUi();
+    return;
+  }
+  if (pdfDocumentTranslationPhase === 'complete') {
+    for (const block of pdfDocumentTranslationBlocksState) {
+      if (block.status !== 'error') continue;
+      block.status = 'idle';
+      block.singleRetry = true;
+      delete block.errorMessage;
+      renderPdfDocumentTranslationBlock(block);
+    }
+  }
+  pdfDocumentTranslationPhase = 'running';
+  pdfDocumentTranslationMessage = undefined;
+  syncPdfDocumentTranslationUi();
+  void processPdfDocumentTranslationQueue();
+}
+
+function stopPdfDocumentTranslation(): void {
+  pdfDocumentTranslationRevision += 1;
+  cancelPdfDocumentTranslationRequest();
+  for (const block of pdfDocumentTranslationBlocksState) {
+    if (block.status !== 'translating') continue;
+    block.status = 'idle';
+    renderPdfDocumentTranslationBlock(block);
+  }
+  pdfDocumentTranslationPhase = 'stopped';
+  pdfDocumentTranslationMessage = undefined;
+  pdfDocumentTranslationTask = undefined;
+  syncPdfDocumentTranslationUi();
+}
+
+function clearPdfDocumentTranslation(): void {
+  pdfDocumentTranslationRevision += 1;
+  cancelPdfDocumentTranslationRequest();
+  for (const block of pdfDocumentTranslationBlocksState) {
+    block.status = 'idle';
+    delete block.translatedText;
+    delete block.errorMessage;
+    delete block.singleRetry;
+  }
+  pdfDocumentTranslationTask = undefined;
+  pdfDocumentTranslationPhase = pdfDocumentTranslationBlocksState.length ? 'ready' : 'idle';
+  pdfDocumentTranslationMessage = undefined;
+  documentTranslationPages.replaceChildren();
+  syncPdfDocumentTranslationUi();
 }
 
 function isRegionModeActive(): boolean {
@@ -901,6 +1420,7 @@ function beginDocumentOpen(
   message: string,
   loadingStage: Extract<PdfLoadingStage, 'reading-local' | 'reading-online'>,
 ): DocumentOpenOperation {
+  resetPdfDocumentTranslation(true);
   void persistReadingState();
   currentReadingIdentity = undefined;
   restoringReadingState = false;
@@ -1197,6 +1717,7 @@ function updatePageControl(anchor = visiblePageAnchor()): void {
   }
   syncPdfOutlineCurrent(anchor.pageNumber);
   syncPdfBookmarkCurrent(anchor.pageNumber);
+  syncPdfDocumentTranslationCurrentPage(anchor.pageNumber);
 }
 
 function currentPdfBookmark(pageNumber = visiblePageAnchor().pageNumber): PdfReadingBookmark | undefined {
@@ -4124,6 +4645,14 @@ document.addEventListener('pointercancel', cancelSmartTextSelection, true);
 openSettings.addEventListener('click', () => {
   void openPdfSettings();
 });
+translateDocument.addEventListener('click', () => {
+  if (documentTranslationPanel.hidden) void openPdfDocumentTranslation();
+  else closePdfDocumentTranslation();
+});
+documentTranslationClose.addEventListener('click', closePdfDocumentTranslation);
+documentTranslationPrimary.addEventListener('click', startOrTogglePdfDocumentTranslation);
+documentTranslationStop.addEventListener('click', stopPdfDocumentTranslation);
+documentTranslationClear.addEventListener('click', clearPdfDocumentTranslation);
 
 const selectionTranslator = startSelectionTranslator(
   { onInvalidated: (callback) => invalidationCallbacks.push(callback) },
@@ -4165,6 +4694,13 @@ const selectionTranslator = startSelectionTranslator(
       },
     },
     onPublicSettingsChange: (settings) => {
+      pdfDocumentTranslationSettings = {
+        sourceLanguage: settings.sourceLanguage,
+        targetLanguage: settings.targetLanguage,
+        style: settings.style,
+        contentMode: settings.contentMode,
+        autoRenderLatex: settings.autoRenderLatex,
+      };
       pdfKeyboardShortcutsEnabled = settings.pdfKeyboardShortcutsEnabled;
       pdfRegionShortcutKey = settings.pdfRegionShortcutKey;
       updateRegionAction();
@@ -4172,7 +4708,10 @@ const selectionTranslator = startSelectionTranslator(
   },
 );
 
-const onPdfViewportResize = (): void => applyPdfSidebarLayout(pdfSidebarLayout);
+const onPdfViewportResize = (): void => {
+  applyPdfSidebarLayout(pdfSidebarLayout);
+  updatePdfDocumentTranslationInset();
+};
 window.addEventListener('resize', onPdfViewportResize, { passive: true });
 
 window.addEventListener('beforeunload', () => {
@@ -4186,6 +4725,7 @@ window.addEventListener('beforeunload', () => {
   document.removeEventListener('pointerup', finishSmartTextSelection, true);
   document.removeEventListener('pointercancel', cancelSmartTextSelection, true);
   openAbortController?.abort();
+  resetPdfDocumentTranslation(true);
   if (openLoadingTask) void openLoadingTask.destroy().catch(() => undefined);
   clearDocument();
   void pdfDocument?.destroy();
@@ -4193,6 +4733,7 @@ window.addEventListener('beforeunload', () => {
 });
 
 setDocumentControls(false);
+syncPdfDocumentTranslationUi();
 const initialSource = parsePdfSourceUrl(
   new URLSearchParams(location.search).get('url') ?? undefined,
 );

@@ -51,6 +51,10 @@ export function translationCacheKey(
     style: request.style,
     contentMode: request.contentMode,
     contextText: request.contextText?.trim() ?? '',
+    segments: request.segments?.map((segment) => ({
+      id: segment.id,
+      text: segment.text.trim(),
+    })),
     lexicalLookup: isLexicalLookupCandidate(request),
     revision: request.revision
       ? {

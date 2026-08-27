@@ -38,6 +38,29 @@ export interface TranslateRequest {
   /** Numeric client-side timings only; never forwarded to the translation provider. */
   clientPerformance?: TranslationClientPerformance;
   revision?: TranslationRevisionRequest;
+  /**
+   * Internal structured segments used by document translation. The provider
+   * must return one aligned result for every id; ordinary selection requests
+   * leave this undefined.
+   */
+  segments?: TranslationBatchItem[];
+}
+
+export interface TranslationBatchItem {
+  id: string;
+  text: string;
+}
+
+export type TranslateBatchRequest = Omit<
+  TranslateRequest,
+  'text' | 'segments' | 'revision' | 'sourceLocation' | 'clientPerformance'
+> & {
+  items: TranslationBatchItem[];
+};
+
+export interface TranslationBatchItemResult {
+  id: string;
+  translatedText: string;
 }
 
 export interface TranslationClientPerformance {

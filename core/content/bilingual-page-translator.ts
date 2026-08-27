@@ -1,6 +1,7 @@
 import type {
   BilingualPageSessionResponse,
   RuntimeMessage,
+  TranslationBatchRuntimeResponse,
   TranslateRuntimeResponse,
 } from '../messaging/messages';
 import { translationErrorMessage } from '../messaging/user-facing-error';
@@ -20,6 +21,7 @@ import type {
   TranslationContentMode,
   TranslationStyle,
 } from '../translation/types';
+import { takeDocumentTranslationBatch } from '../translation/document-batch';
 import {
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageDisplayMode,
@@ -125,6 +127,7 @@ interface BilingualBlock {
   pendingTimer?: number;
   errorElement?: HTMLElement;
   urgentQueue?: boolean;
+  batchFallbackNext?: boolean;
   bypassCacheNext?: boolean;
   restoreStateAfterRetranslation?: Pick<
     BilingualPageState,
@@ -2496,6 +2499,61 @@ export function createBilingualPageTranslator(
     scheduleDynamicScan(0);
   };
 
+  const completeBlockTranslation = (
+    block: BilingualBlock,
+    translatedText: string,
+    options: {
+      preserveHidden?: boolean;
+      replacingTranslation?: boolean;
+      revealActionsHint?: boolean;
+    } = {},
+  ): void => {
+    const translation = translationElement(
+      block,
+      translatedText,
+      currentState.targetLanguage!,
+      {
+        copy: () => void copyBlockTranslation(block),
+        retranslate: () => requestBlockRetranslation(block),
+        toggleHidden: () => setTranslationHidden(
+          block,
+          !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE),
+        ),
+        toggleMore: () => setTouchActionsExpanded(
+          block,
+          !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
+        ),
+        ...(block.hasUnextractableFormula
+          ? { recognizeFormula: () => recognizeBlockVisualFormula(block) }
+          : {}),
+      },
+    );
+    translation.toggleAttribute(
+      TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE,
+      currentState.translationsHidden,
+    );
+    insertTranslation(block, translation);
+    block.translatedText = translatedText.trim();
+    renderBilingualTranslation(translation, block.translatedText);
+    if (options.preserveHidden) setTranslationHidden(block, true);
+    block.status = 'done';
+    delete block.restoredFromSession;
+    delete block.batchFallbackNext;
+    applyBlockDisplayMode(block);
+    consecutiveIsolatedFailures = 0;
+    if (
+      options.revealActionsHint !== false &&
+      !options.replacingTranslation &&
+      !currentState.translationsHidden
+    ) void revealTranslationActionsHint(block);
+    if (options.replacingTranslation && restorePageStateAfterRetranslation(block)) {
+      void persistSessionBlock(block);
+      return;
+    }
+    if (!settleCompletedState()) publish();
+    void persistSessionBlock(block);
+  };
+
   const translateBlock = async (block: BilingualBlock, revision: number): Promise<void> => {
     const requestId = crypto.randomUUID();
     const requestedText = block.text;
@@ -2571,47 +2629,10 @@ export function createBilingualPageTranslator(
       }
       interactionPreemptedRequestIds.delete(requestId);
       delete block.bypassCacheNext;
-      const translation = translationElement(
-        block,
-        response.data.result.translatedText,
-        currentState.targetLanguage!,
-        {
-          copy: () => void copyBlockTranslation(block),
-          retranslate: () => requestBlockRetranslation(block),
-          toggleHidden: () => setTranslationHidden(
-            block,
-            !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE),
-          ),
-          toggleMore: () => setTouchActionsExpanded(
-            block,
-            !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
-          ),
-          ...(block.hasUnextractableFormula
-            ? { recognizeFormula: () => recognizeBlockVisualFormula(block) }
-            : {}),
-        },
-      );
-      translation.toggleAttribute(
-        TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE,
-        currentState.translationsHidden,
-      );
-      insertTranslation(block, translation);
-      block.translatedText = response.data.result.translatedText.trim();
-      renderBilingualTranslation(translation, block.translatedText);
-      if (preserveHidden) setTranslationHidden(block, true);
-      block.status = 'done';
-      delete block.restoredFromSession;
-      applyBlockDisplayMode(block);
-      consecutiveIsolatedFailures = 0;
-      if (!replacingTranslation && !currentState.translationsHidden) {
-        void revealTranslationActionsHint(block);
-      }
-      if (restorePageStateAfterRetranslation(block)) {
-        void persistSessionBlock(block);
-        return;
-      }
-      if (!settleCompletedState()) publish();
-      void persistSessionBlock(block);
+      completeBlockTranslation(block, response.data.result.translatedText, {
+        preserveHidden,
+        replacingTranslation,
+      });
     } catch (error) {
       if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
       activeRequestId = undefined;
@@ -2645,6 +2666,121 @@ export function createBilingualPageTranslator(
     }
   };
 
+  const requeueBatch = (
+    batch: readonly BilingualBlock[],
+    options: { fallbackToSingles?: boolean } = {},
+  ): void => {
+    for (const block of [...batch].reverse()) {
+      clearBlockPending(block);
+      if (!blocks.includes(block) || !block.element.isConnected) continue;
+      block.status = 'idle';
+      if (options.fallbackToSingles) block.batchFallbackNext = true;
+      enqueue(block, 'front');
+    }
+    syncCounts();
+    publish();
+  };
+
+  const translateBlockBatch = async (
+    batch: readonly BilingualBlock[],
+    revision: number,
+  ): Promise<void> => {
+    const requestId = crypto.randomUUID();
+    const requestedTexts = new Map(batch.map((block) => [block, block.text]));
+    const itemIds = new Map(batch.map((block, index) => [block, `B${index + 1}`]));
+    activeRequestId = requestId;
+    for (const block of batch) block.status = 'translating';
+    const pendingBlock = batch.find((block) => !block.translation?.isConnected) ?? batch[0];
+    if (pendingBlock) scheduleBlockPending(pendingBlock, requestId, revision);
+    syncCounts();
+    publish();
+    const config = options.requestConfig();
+    const contextText = batch[0] ? referenceContextForBlock(batch[0]) : undefined;
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'TRANSLATE_DOCUMENT_BATCH',
+        payload: {
+          requestId,
+          items: batch.map((block) => ({
+            id: itemIds.get(block)!,
+            text: block.text,
+          })),
+          pageUrl: options.pageUrl(),
+          targetLanguage: currentState.targetLanguage!,
+          sourceLanguage: config.sourceLanguage,
+          style: config.style,
+          contentMode: config.contentMode,
+          ...(contextText ? { contextText } : {}),
+        },
+      } satisfies RuntimeMessage) as TranslationBatchRuntimeResponse;
+      if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
+      activeRequestId = undefined;
+      if (interactionPreemptedRequestIds.delete(requestId)) {
+        requeueBatch(batch);
+        return;
+      }
+      if (!response.ok) {
+        if (isIsolatedBilingualBlockError(response.error.code)) {
+          requeueBatch(batch, { fallbackToSingles: true });
+          return;
+        }
+        const message = translationErrorMessage(response.error.code, response.error.message);
+        batch.forEach((block, index) => {
+          clearBlockPending(block);
+          block.status = index === 0 ? 'error' : 'queued';
+        });
+        syncCounts();
+        setState({ phase: 'error', message });
+        return;
+      }
+
+      const translatedById = new Map(
+        response.data.items.map((item) => [item.id, item.translatedText]),
+      );
+      const fallback: BilingualBlock[] = [];
+      let revealedHint = false;
+      for (const block of batch) {
+        clearBlockPending(block);
+        const requestedText = requestedTexts.get(block)!;
+        if (!blockRequestStillCurrent(block, requestedText)) {
+          if (blocks.includes(block) && block.status === 'translating') block.status = 'idle';
+          scheduleDynamicScan(0);
+          continue;
+        }
+        const translatedText = translatedById.get(itemIds.get(block)!);
+        if (!translatedText?.trim()) {
+          block.status = 'idle';
+          block.batchFallbackNext = true;
+          fallback.push(block);
+          continue;
+        }
+        completeBlockTranslation(block, translatedText, {
+          revealActionsHint: !revealedHint,
+        });
+        revealedHint = true;
+      }
+      for (const block of [...fallback].reverse()) enqueue(block, 'front');
+      syncCounts();
+      if (!settleCompletedState()) publish();
+    } catch (error) {
+      if (disposed || revision !== taskRevision || activeRequestId !== requestId) return;
+      activeRequestId = undefined;
+      if (interactionPreemptedRequestIds.delete(requestId)) {
+        requeueBatch(batch);
+        return;
+      }
+      batch.forEach((block, index) => {
+        clearBlockPending(block);
+        block.status = index === 0 ? 'error' : 'queued';
+      });
+      syncCounts();
+      setState({
+        phase: 'error',
+        message: error instanceof Error ? error.message : '无法继续翻译网页正文。',
+      });
+    }
+  };
+
   const processQueue = async (): Promise<void> => {
     if (activeTask || currentState.phase !== 'running') return;
     const revision = taskRevision;
@@ -2654,8 +2790,42 @@ export function createBilingualPageTranslator(
         const block = queue.shift();
         if (!block) break;
         if (block.status !== 'queued') continue;
+        const singleRequest = Boolean(
+          block.urgentQueue ||
+          block.batchFallbackNext ||
+          block.bypassCacheNext ||
+          block.translation?.isConnected,
+        );
         delete block.urgentQueue;
-        await translateBlock(block, revision);
+        if (singleRequest) {
+          delete block.batchFallbackNext;
+          await translateBlock(block, revision);
+        } else {
+          const firstBounds = block.element.getBoundingClientRect();
+          const nearViewport = firstBounds.bottom >= -80 && firstBounds.top <= window.innerHeight + 240;
+          const candidates = [block, ...queue]
+            .filter((candidate) => candidate.status === 'queued')
+            .map((candidate) => ({
+              value: candidate,
+              text: candidate.text,
+              urgent: Boolean(
+                candidate.urgentQueue ||
+                candidate.batchFallbackNext ||
+                candidate.bypassCacheNext ||
+                candidate.translation?.isConnected,
+              ),
+            }));
+          const selected = takeDocumentTranslationBatch(candidates, {
+            maximumItems: nearViewport ? 2 : 6,
+          }).map((candidate) => candidate.value);
+          if (selected.length < 2) {
+            await translateBlock(block, revision);
+          } else {
+            const selectedSet = new Set(selected.slice(1));
+            queue = queue.filter((candidate) => !selectedSet.has(candidate));
+            await translateBlockBatch(selected, revision);
+          }
+        }
         if (currentState.phase !== 'running') break;
       }
     })().finally(() => {
@@ -2687,8 +2857,9 @@ export function createBilingualPageTranslator(
   };
 
   const suspendForInteractiveTranslation = (): string | undefined => {
-    const activeBlock = blocks.find((block) => block.status === 'translating');
-    if (activeBlock) clearBlockPending(activeBlock);
+    blocks
+      .filter((block) => block.status === 'translating')
+      .forEach((block) => clearBlockPending(block));
     if (currentState.phase === 'paused' && currentState.pauseReason === 'user') {
       if (activeRequestId) interactionPreemptedRequestIds.add(activeRequestId);
       return undefined;
@@ -2927,6 +3098,7 @@ export function createBilingualPageTranslator(
         if (block.status !== 'queued' && block.status !== 'translating') return;
         clearBlockPending(block);
         block.status = block.translation?.isConnected ? 'done' : 'idle';
+        delete block.batchFallbackNext;
         delete block.bypassCacheNext;
         delete block.restoreStateAfterRetranslation;
         setTranslationBusy(block, false);

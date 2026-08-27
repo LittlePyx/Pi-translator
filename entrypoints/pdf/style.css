@@ -82,6 +82,8 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .toolbar .quiet { padding-inline: 9px; }
 .toolbar .outline-open { color: #4f46e5; }
 .toolbar .search-open { color: #4f46e5; }
+.toolbar .document-translate { color: #4338ca; border-color: #c5c7f3; background: #f5f5ff; }
+.toolbar .document-translate[aria-expanded="true"] { color: #fff; border-color: #5054db; background: #5659df; }
 .toolbar .region-action[aria-pressed="true"] { color: #4338ca; border-color: #8f92ed; background: #eef0ff; }
 .region-tools { position: relative; display: flex; align-items: center; gap: 5px; }
 .toolbar .queue-action { min-height: 25px; padding: 3px 7px; color: #5659df; font-size: 9px; }
@@ -126,6 +128,73 @@ button { color: inherit; font: inherit; cursor: pointer; }
   backdrop-filter: blur(16px);
 }
 .pdf-outline[hidden] { display: none; }
+
+.pdf-document-translation {
+  position: fixed;
+  z-index: 11;
+  top: 54px;
+  right: 0;
+  bottom: 0;
+  display: grid;
+  width: min(390px, 100vw);
+  grid-template-rows: auto auto auto minmax(0, 1fr);
+  border-left: 1px solid var(--line);
+  background: #fff;
+  box-shadow: -10px 0 30px rgba(20, 30, 50, .12);
+}
+.pdf-document-translation[hidden] { display: none; }
+.pdf-document-translation > header {
+  display: flex;
+  min-height: 52px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 8px 8px 8px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.pdf-document-translation > header span { display: grid; min-width: 0; gap: 2px; }
+.pdf-document-translation > header strong { font-size: 13px; }
+.pdf-document-translation > header small { color: var(--muted); font-size: 9px; font-variant-numeric: tabular-nums; }
+.pdf-document-translation > header button {
+  width: 34px;
+  height: 34px;
+  border: 0;
+  border-radius: 6px;
+  color: #718096;
+  background: transparent;
+  font-size: 20px;
+}
+.pdf-document-translation > header button:hover { color: #4338ca; background: #f3f4ff; }
+.pdf-document-translation-actions { display: flex; gap: 6px; padding: 10px 14px 4px; }
+.pdf-document-translation-actions button {
+  min-height: 32px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 11px;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 700;
+}
+.pdf-document-translation-actions .primary { color: #fff; border-color: #5054db; background: #5659df; }
+.pdf-document-translation-actions button:disabled { opacity: .5; cursor: default; }
+.pdf-document-translation-note { margin: 5px 14px 9px; color: var(--muted); font-size: 9px; line-height: 1.55; }
+.pdf-document-translation-pages { overflow: auto; padding: 0 14px 24px; scrollbar-width: thin; }
+.pdf-document-translation-page { padding: 13px 0 17px; border-top: 1px solid #e7eaf0; }
+.pdf-document-translation-page > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
+.pdf-document-translation-page > header button {
+  border: 0;
+  padding: 2px 0;
+  color: #4f46e5;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 750;
+}
+.pdf-document-translation-page > header small { color: var(--muted); font-size: 8px; }
+.pdf-document-translation-block { margin: 0 0 10px; color: #273247; font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
+.pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
+.pdf-document-translation-block[data-status="error"] { color: #b42336; }
+.pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
+.pdf-document-translation-empty { margin: 22px 6px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }
 .pdf-outline > header {
   display: flex;
   min-height: 42px;
@@ -455,10 +524,11 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .document-stage {
   --pdf-sidebar-left: 0px;
   --pdf-sidebar-right: 0px;
+  --pdf-document-sidebar-right: 0px;
   position: relative;
   height: calc(100vh - 54px);
   margin-left: var(--pdf-sidebar-left);
-  margin-right: var(--pdf-sidebar-right);
+  margin-right: calc(var(--pdf-sidebar-right) + var(--pdf-document-sidebar-right));
   overflow: auto;
   scrollbar-gutter: stable;
 }
@@ -821,6 +891,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .outline-open::before { color: var(--muted); content: "导"; font-size: 11px; }
   .toolbar .search-open { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
   .toolbar .search-open::before { color: var(--muted); content: "查"; font-size: 11px; }
+  .toolbar .document-translate { width: 32px; overflow: hidden; padding-inline: 0; font-size: 0; }
+  .toolbar .document-translate::before { content: "译"; font-size: 11px; }
   .toolbar .region-action[aria-pressed="true"]::before { color: #4338ca; }
   .brand small { max-width: 28vw; }
   .pdf-viewer { padding-inline: 14px; }
@@ -833,6 +905,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
     left: 9px;
     grid-template-columns: 15px minmax(90px, 1fr) minmax(62px, auto) repeat(4, 30px);
   }
+  .pdf-document-translation { top: 54px; width: 100vw; }
 }
 
 @media (max-width: 460px) {
@@ -875,6 +948,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .queue-item button { color: #f0a0aa; border-color: #4b5568; }
   .toolbar .outline-open { color: #a5b4fc; }
   .toolbar .search-open { color: #a5b4fc; }
+  .toolbar .document-translate { color: #c7d2fe; border-color: #50547e; background: rgba(99, 102, 241, .14); }
+  .toolbar .document-translate[aria-expanded="true"] { color: #fff; border-color: #7377dc; background: #5659df; }
+  .pdf-document-translation { background: #1a222f; box-shadow: -10px 0 30px rgba(0, 0, 0, .32); }
+  .pdf-document-translation-page { border-top-color: #354052; }
+  .pdf-document-translation-block { color: #dde4ef; }
+  .pdf-document-translation-block[data-status="error"] { color: #ff9cab; }
   .pdf-link-return { color: #d4d9e5; border-color: #4b5568; background: rgba(31, 40, 55, .96); }
   .pdf-link-return:hover { color: #c7d2fe; border-color: #656b96; background: #272c42; }
   .pdf-navigation-tabs button[aria-selected="true"] { color: #c7d2fe; }

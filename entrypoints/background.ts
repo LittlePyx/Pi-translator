@@ -22,6 +22,7 @@ import {
   type RecognizePdfPageResponse,
   type RuntimeMessage,
   type RuntimeResponse,
+  type TranslationBatchRuntimeResponse,
   type TranslateRuntimeResponse,
 } from '../core/messaging/messages';
 import {
@@ -100,6 +101,7 @@ import {
 } from '../core/translation/checkpoint-repository';
 import { splitTranslationSegments } from '../core/translation/sentence-segmentation';
 import { splitLongTranslationText } from '../core/translation/text-chunker';
+import { validTranslationBatchItems } from '../core/translation/document-batch';
 import type { SupportedTargetLanguage } from '../core/language/supported-target-languages';
 import type { BilingualPageAction } from '../core/translation/bilingual-page';
 import {
@@ -192,6 +194,7 @@ import type {
   GlossaryEntry,
   LexicalLookup,
   ScopedGlossaryTerm,
+  TranslateBatchRequest,
   TranslateRequest,
   TranslateImageRegionRequest,
   TranslateResult,
@@ -1954,11 +1957,14 @@ async function translate(
     ) {
       const chunk = chunks[chunkIndex]!;
       const protectedLatex = protect ? protectLatex(chunk, `FULL${chunkIndex + 1}`) : undefined;
-      const sourceSegments = splitTranslationSegments(chunk, request.sourceLanguage).map(
-        (segment) => ({ ...segment, id: `C${chunkIndex + 1}${segment.id}` }),
-      );
+      const sourceSegments = request.segments
+        ? request.segments.map((segment) => ({ ...segment }))
+        : splitTranslationSegments(chunk, request.sourceLanguage).map(
+            (segment) => ({ ...segment, id: `C${chunkIndex + 1}${segment.id}` }),
+          );
       const requestProviderAlignment =
-        settings.sentenceAlignmentDefault && sourceSegments.length > 1;
+        Boolean(request.segments?.length) ||
+        (settings.sentenceAlignmentDefault && sourceSegments.length > 1);
       const preparedSegments = sourceSegments.map((segment, index) => ({
         source: segment,
         protected: protect && requestProviderAlignment
@@ -2060,7 +2066,39 @@ async function translate(
         lexicalLookup = providerResult.lexicalLookup;
       }
       let checkpointAlignedSegments: TranslationSegment[] | undefined;
-      if (
+      if (request.segments?.length) {
+        const returnedCounts = new Map<string, number>();
+        for (const segment of providerResult.alignedSegments ?? []) {
+          returnedCounts.set(segment.id, (returnedCounts.get(segment.id) ?? 0) + 1);
+        }
+        const translatedById = new Map(
+          (providerResult.alignedSegments ?? [])
+            .filter((segment) => returnedCounts.get(segment.id) === 1)
+            .map((segment) => [segment.id, segment.translatedText]),
+        );
+        checkpointAlignedSegments = preparedSegments.flatMap(({
+          source,
+          protected: protectedSegment,
+        }) => {
+          const translated = translatedById.get(source.id)?.trim();
+          if (!translated) return [];
+          try {
+            return [{
+              id: source.id,
+              originalText: source.text,
+              translatedText: protectedSegment
+                ? restoreLatex(translated, protectedSegment).text
+                : translated,
+            }];
+          } catch {
+            return [];
+          }
+        });
+        combinedSegments.push(...checkpointAlignedSegments);
+        if (checkpointAlignedSegments.length !== preparedSegments.length) {
+          alignmentComplete = false;
+        }
+      } else if (
         requestProviderAlignment &&
         providerResult.alignedSegments?.length === preparedSegments.length
       ) {
@@ -2140,7 +2178,7 @@ async function translate(
       translatedText,
       ...(detectedLanguage ? { detectedLanguage } : {}),
       warnings,
-      ...(alignmentComplete && combinedSegments.length
+      ...((request.segments?.length ? combinedSegments.length > 0 : alignmentComplete && combinedSegments.length)
         ? { alignedSegments: combinedSegments }
         : {}),
       ...(sourceHost ? { sourceHost } : {}),
@@ -2260,6 +2298,58 @@ async function translate(
       pendingTranslationRequests.delete(tabId);
     }
   }
+}
+
+async function translateDocumentBatch(
+  request: TranslateBatchRequest,
+  tabId: number,
+): Promise<TranslationBatchRuntimeResponse> {
+  if (!validTranslationBatchItems(request.items)) {
+    return errorResponse(new TranslationError(
+      'INVALID_RESPONSE',
+      '全文翻译批次格式不正确。',
+      false,
+    ));
+  }
+  const { items, ...baseRequest } = request;
+  const response = await translate({
+    ...baseRequest,
+    text: items.map((item) => item.text.trim()).join('\n\n'),
+    segments: items.map((item) => ({ id: item.id, text: item.text.trim() })),
+  }, tabId, 'none', undefined, 'transient');
+  if (!response.ok) return response;
+
+  const requestedIds = new Set(items.map((item) => item.id));
+  const returnedCounts = new Map<string, number>();
+  for (const segment of response.data.result.alignedSegments ?? []) {
+    if (!requestedIds.has(segment.id)) continue;
+    returnedCounts.set(segment.id, (returnedCounts.get(segment.id) ?? 0) + 1);
+  }
+  const returned = new Map(
+    (response.data.result.alignedSegments ?? [])
+      .filter((segment) => (
+        requestedIds.has(segment.id) &&
+        returnedCounts.get(segment.id) === 1 &&
+        Boolean(segment.translatedText.trim())
+      ))
+      .map((segment) => [segment.id, segment.translatedText.trim()]),
+  );
+  if (items.length === 1 && !returned.has(items[0]!.id)) {
+    const translatedText = response.data.result.translatedText.trim();
+    if (translatedText) returned.set(items[0]!.id, translatedText);
+  }
+  return {
+    ok: true,
+    data: {
+      items: items.flatMap((item) => {
+        const translatedText = returned.get(item.id);
+        return translatedText ? [{ id: item.id, translatedText }] : [];
+      }),
+      missingItemIds: items
+        .filter((item) => !returned.has(item.id))
+        .map((item) => item.id),
+    },
+  };
 }
 
 function correctionTermSourceKey(value: string): string {
@@ -5149,6 +5239,25 @@ export default defineBackground(() => {
           undefined,
           'transient',
         );
+      }
+
+      if (message.type === 'TRANSLATE_DOCUMENT_BATCH') {
+        const tabId = sender.tab?.id;
+        const sourceUrl = sender.url ?? sender.tab?.url;
+        const isOrdinaryWebSource = Boolean(
+          sourceUrl && isInjectableWebUrl(sourceUrl) && !isOverleafProjectUrl(sourceUrl),
+        );
+        const isPiPdfSource = Boolean(
+          sourceUrl && isExtensionPdfReaderUrl(sourceUrl, PI_PDF_READER_URL),
+        );
+        if (tabId === undefined || (!isOrdinaryWebSource && !isPiPdfSource)) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '全文批量翻译请求必须来自当前网页或 Pi PDF。',
+            false,
+          )));
+        }
+        return translateDocumentBatch(message.payload, tabId);
       }
 
       if (message.type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR') {
