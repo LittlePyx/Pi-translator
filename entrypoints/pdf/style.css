@@ -191,6 +191,24 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .pdf-document-translation-page > header small { color: var(--muted); font-size: 8px; }
 .pdf-document-translation-block { margin: 0 0 10px; color: #273247; font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
+.pdf-document-translation-block[data-source-anchor][data-status="done"] {
+  margin-left: -8px;
+  padding: 5px 7px 5px 8px;
+  border-left: 2px solid transparent;
+  border-radius: 0 5px 5px 0;
+  cursor: pointer;
+  transition: background-color .14s ease, border-color .14s ease;
+}
+.pdf-document-translation-block[data-source-anchor][data-status="done"]:hover {
+  border-left-color: rgba(79, 70, 229, .52);
+  background: rgba(99, 102, 241, .055);
+}
+.pdf-document-translation-block[data-source-anchor][data-status="done"]:focus-visible {
+  border-left-color: #5659df;
+  outline: 2px solid rgba(86, 89, 223, .55);
+  outline-offset: 1px;
+  background: rgba(99, 102, 241, .07);
+}
 .pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
 .pdf-document-translation-block[data-status="error"] { color: #b42336; }
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }

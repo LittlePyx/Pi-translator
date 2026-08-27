@@ -89,6 +89,7 @@ interface SelectionTranslatorOptions {
   onSidebarLayoutChange?: (layout: SelectionTranslatorSidebarLayout) => void;
   onSidebarActiveChange?: (active: boolean) => void;
   onPublicSettingsChange?: (settings: PublicSettings) => void;
+  shouldIgnoreSelection?: (selection: Selection) => boolean;
   selectionPreview?: (snapshot: SelectionSnapshot) => SelectionTriggerPreview | undefined;
   onAdjustPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
   onNavigateToPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
@@ -1315,6 +1316,14 @@ export async function startSelectionTranslator(
       return;
     }
     if (overlay.ownsCurrentSelection()) return;
+    const currentSelection = window.getSelection();
+    if (currentSelection && options.shouldIgnoreSelection?.(currentSelection)) {
+      latestSelection = undefined;
+      overlay.hideTrigger();
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = undefined;
+      return;
+    }
     const snapshot = captureSelectionSnapshot(settings.contextMode);
     latestSelection = snapshot;
     if (snapshot) rememberSelectionMarkerAnchor(snapshot);

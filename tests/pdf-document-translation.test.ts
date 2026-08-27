@@ -86,6 +86,13 @@ describe('PDF document translation', () => {
     expect(prepared.multiColumnPages).toBe(1);
     expect(text.startsWith('A Layout-Aware Translation Study')).toBe(true);
     expect(text.indexOf('Left body 3.')).toBeLessThan(text.indexOf('Right body 1.'));
+    expect(prepared.blocks[0]!.sourceAnchor).toMatchObject({
+      topRatio: expect.any(Number),
+      leftRatio: expect.any(Number),
+      widthRatio: expect.any(Number),
+      heightRatio: expect.any(Number),
+    });
+    expect(prepared.blocks[0]!.sourceAnchor!.topRatio).toBeLessThan(0.08);
   });
 
   it('preserves table cells by row instead of reading down inferred columns', () => {
@@ -144,5 +151,23 @@ describe('PDF document translation', () => {
     expect(prepared.blocks[0]!.text).toBe(
       '한국어 문장은 일반 본문입니다. 다음 줄은 같은 문단으로 이어집니다.',
     );
+  });
+
+  it('anchors later long-page blocks near their own source instead of the page top', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(1,
+      Array.from({ length: 48 }, (_, index) => positioned(
+        `Source line ${index + 1} contains enough prose to exercise stable chunk mapping.`,
+        54,
+        70 + index * 13,
+        360,
+        10,
+      )),
+    )]);
+    expect(prepared.blocks.length).toBeGreaterThan(1);
+    const firstAnchor = prepared.blocks[0]!.sourceAnchor!;
+    const secondAnchor = prepared.blocks[1]!.sourceAnchor!;
+    expect(firstAnchor.topRatio).toBeLessThan(secondAnchor.topRatio);
+    expect(firstAnchor.heightRatio).toBeLessThan(0.1);
+    expect(secondAnchor.heightRatio).toBeLessThan(0.1);
   });
 });

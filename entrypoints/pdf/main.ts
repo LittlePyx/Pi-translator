@@ -609,8 +609,8 @@ function syncPdfDocumentTranslationUi(): void {
       : '',
   ].filter(Boolean).join('；');
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `正文只在确认后批量发送；${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}`
-    : `正文只在确认后批量发送；原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ' 译文按页排列。'}`;
+    ? `正文只在确认后批量发送；${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 点击译文可返回原文。`
+    : `正文只在确认后批量发送；原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
 }
 
 function ensurePdfDocumentTranslationPage(pageNumber: number): HTMLElement {
@@ -656,6 +656,29 @@ function updatePdfDocumentTranslationPageProgress(pageNumber: number): void {
   if (progress) progress.textContent = `${done}/${pageBlocks.length}${failed ? ` · ${failed} 待重试` : ''}`;
 }
 
+function pdfDocumentTranslationSourceLocation(
+  block: PdfDocumentTranslationRuntimeBlock,
+): PdfSourceLocation | undefined {
+  if (!block.sourceAnchor) return undefined;
+  return {
+    documentId: currentDocumentSessionId,
+    pageNumber: block.pageNumber,
+    ...block.sourceAnchor,
+  };
+}
+
+function activatePdfDocumentTranslationSource(
+  block: PdfDocumentTranslationRuntimeBlock,
+): void {
+  if (block.status !== 'done') return;
+  const reference = pdfDocumentTranslationSourceLocation(block);
+  if (!reference) return;
+  void navigateToPdfRegion(reference).then(() => {
+    updatePageControl({ pageNumber: block.pageNumber, ratio: reference.topRatio });
+    syncPdfDocumentTranslationCurrentPage(block.pageNumber);
+  });
+}
+
 function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeBlock): void {
   if (block.status === 'idle') {
     documentTranslationPages.querySelector(`[data-translation-block="${block.id}"]`)?.remove();
@@ -670,6 +693,22 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     container = document.createElement('article');
     container.className = 'pdf-document-translation-block';
     container.dataset.translationBlock = block.id;
+    if (block.sourceAnchor) {
+      container.addEventListener('click', (event) => {
+        if ((event.target as Element | null)?.closest('button')) return;
+        const selection = window.getSelection();
+        if (selection && !selection.isCollapsed && (
+          container!.contains(selection.anchorNode) || container!.contains(selection.focusNode)
+        )) return;
+        activatePdfDocumentTranslationSource(block);
+      });
+      container.addEventListener('keydown', (event) => {
+        if (event.key !== 'Enter' && event.key !== ' ') return;
+        if ((event.target as Element | null)?.closest('button')) return;
+        event.preventDefault();
+        activatePdfDocumentTranslationSource(block);
+      });
+    }
     const next = [...section.querySelectorAll<HTMLElement>('[data-translation-block]')]
       .find((candidate) => {
         const other = pdfDocumentTranslationBlocksState.find(
@@ -680,6 +719,19 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     section.insertBefore(container, next ?? null);
   }
   container.dataset.status = block.status;
+  const sourceAvailable = Boolean(block.sourceAnchor && block.status === 'done');
+  container.toggleAttribute('data-source-anchor', sourceAvailable);
+  if (sourceAvailable) {
+    container.tabIndex = 0;
+    container.setAttribute('role', 'link');
+    container.setAttribute('aria-label', `返回第 ${block.pageNumber} 页对应原文`);
+    container.title = '点击返回并高亮 PDF 原文；拖选译文不会跳转';
+  } else {
+    container.removeAttribute('tabindex');
+    container.removeAttribute('role');
+    container.removeAttribute('aria-label');
+    container.removeAttribute('title');
+  }
   if (block.status === 'done' && block.translatedText) {
     void renderTranslationContent(
       container,
@@ -4714,6 +4766,10 @@ const selectionTranslator = startSelectionTranslator(
     documentId: () => currentReadingIdentity,
     allowSitePause: false,
     viewportInsets: () => ({ top: toolbar.getBoundingClientRect().bottom }),
+    shouldIgnoreSelection: (selection) => Boolean(
+      (selection.anchorNode && documentTranslationPanel.contains(selection.anchorNode)) ||
+      (selection.focusNode && documentTranslationPanel.contains(selection.focusNode)),
+    ),
     onSidebarLayoutChange: applyPdfSidebarLayout,
     onSidebarActiveChange: (active) => { continuousSidebarActive = active; },
     selectionPreview: pdfSelectionPreview,

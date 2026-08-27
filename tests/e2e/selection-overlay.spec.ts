@@ -5106,6 +5106,38 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
+    const firstTranslation = panel.locator(
+      '.pdf-document-translation-page[data-page-number="1"] [data-source-anchor]',
+    );
+    const secondTranslation = panel.locator(
+      '.pdf-document-translation-page[data-page-number="2"] [data-source-anchor]',
+    );
+    await expect(firstTranslation).toHaveCount(1);
+    await expect(secondTranslation).toHaveCount(1);
+    await secondTranslation.click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('2');
+    await expect(pdfPage.locator(
+      '.pdf-page[data-page-number="2"] .region-source-highlight',
+    )).toBeVisible();
+
+    await firstTranslation.evaluate((block) => {
+      const selection = window.getSelection();
+      const range = document.createRange();
+      range.selectNodeContents(block);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      (block as HTMLElement).click();
+    });
+    await expect(pdfPage.locator('#page-number')).toHaveValue('2');
+    await pdfPage.waitForTimeout(180);
+    await expect(pdfPage.locator('#tex-selection-translator-root').locator('.trigger-shell'))
+      .toHaveCount(0);
+    await pdfPage.evaluate(() => window.getSelection()?.removeAllRanges());
+    await firstTranslation.press('Enter');
+    await expect(pdfPage.locator('#page-number')).toHaveValue('1');
+    await expect(pdfPage.locator(
+      '.pdf-page[data-page-number="1"] .region-source-highlight',
+    )).toBeVisible();
     expect(textRequests).toHaveLength(requestsBeforePreview + 2);
     expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
       getComputedStyle(stage).marginRight

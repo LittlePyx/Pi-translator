@@ -6,6 +6,14 @@ export interface PdfDocumentTranslationBlock {
   pageNumber: number;
   blockIndex: number;
   text: string;
+  sourceAnchor?: PdfDocumentTranslationSourceAnchor;
+}
+
+export interface PdfDocumentTranslationSourceAnchor {
+  leftRatio: number;
+  topRatio: number;
+  widthRatio: number;
+  heightRatio: number;
 }
 
 /** Coordinates use a top-left origin in the scale-1 PDF viewport. */
@@ -52,6 +60,17 @@ interface VisualLine {
   structured: boolean;
   region?: VisualLineRegion;
   breakBefore?: boolean;
+}
+
+interface JoinedLayoutLine {
+  line: VisualLine;
+  start: number;
+  end: number;
+}
+
+interface JoinedLayoutText {
+  text: string;
+  lines: JoinedLayoutLine[];
 }
 
 interface AnalyzedPage {
@@ -336,8 +355,8 @@ function repeatedMarginSignatures(pages: readonly AnalyzedPage[]): Set<string> {
   )));
 }
 
-function joinedLineText(lines: readonly VisualLine[]): string {
-  if (!lines.length) return '';
+function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
+  if (!lines.length) return { text: '', lines: [] };
   const verticalSteps = lines.flatMap((line, index) => {
     const next = lines[index + 1];
     return next && line.region === next.region && next.top > line.top
@@ -347,6 +366,11 @@ function joinedLineText(lines: readonly VisualLine[]): string {
   const ordinaryStep = median(verticalSteps.filter((step) => step > 0)) ||
     median(lines.map((line) => line.height)) * 1.65;
   let output = lines[0]!.text;
+  const joinedLines: JoinedLayoutLine[] = [{
+    line: lines[0]!,
+    start: 0,
+    end: output.length,
+  }];
   for (let index = 1; index < lines.length; index += 1) {
     const previous = lines[index - 1]!;
     const current = lines[index]!;
@@ -361,6 +385,11 @@ function joinedLineText(lines: readonly VisualLine[]): string {
     );
     if (paragraphBreak) {
       output = `${output.trimEnd()}\n${current.text}`;
+      joinedLines.push({
+        line: current,
+        start: output.length - current.text.length,
+        end: output.length,
+      });
       continue;
     }
     const leftBoundary = output.at(-1) ?? '';
@@ -370,20 +399,86 @@ function joinedLineText(lines: readonly VisualLine[]): string {
       /^[,.;:!?%\)\]}\u201d\u2019]/u.test(current.text) ||
       /[(\[{\u201c\u2018/]$/u.test(output);
     output += `${omitSpace ? '' : ' '}${current.text}`;
+    joinedLines.push({
+      line: current,
+      start: output.length - current.text.length,
+      end: output.length,
+    });
   }
-  return output.trim();
+  return { text: output.trim(), lines: joinedLines };
 }
 
-function blocksFromText(pageNumber: number, text: string): PdfDocumentTranslationBlock[] {
+function sourceAnchorForBlock(
+  start: number,
+  end: number,
+  layout: JoinedLayoutText | undefined,
+  pageSize: { width: number; height: number } | undefined,
+): PdfDocumentTranslationSourceAnchor | undefined {
+  if (!layout || !pageSize || !finitePositive(pageSize.width) || !finitePositive(pageSize.height)) {
+    return undefined;
+  }
+  const overlapping = layout.lines.filter((entry) => entry.end > start && entry.start < end);
+  const first = overlapping[0];
+  if (!first) return undefined;
+  const nearby = [first];
+  for (const candidate of overlapping.slice(1, 4)) {
+    const previous = nearby.at(-1)!.line;
+    const sameFlow = candidate.line.region === first.line.region &&
+      !candidate.line.breakBefore &&
+      candidate.line.top >= previous.top &&
+      candidate.line.top - previous.bottom <= Math.max(
+        previous.height,
+        candidate.line.height,
+      ) * 1.5;
+    if (!sameFlow) break;
+    nearby.push(candidate);
+  }
+  const paddingX = Math.max(3, pageSize.width * 0.006);
+  const paddingY = Math.max(2, pageSize.height * 0.004);
+  const left = Math.max(0, Math.min(...nearby.map((entry) => entry.line.left)) - paddingX);
+  const top = Math.max(0, Math.min(...nearby.map((entry) => entry.line.top)) - paddingY);
+  const right = Math.min(
+    pageSize.width,
+    Math.max(...nearby.map((entry) => entry.line.right)) + paddingX,
+  );
+  const bottom = Math.min(
+    pageSize.height,
+    Math.max(...nearby.map((entry) => entry.line.bottom)) + paddingY,
+  );
+  if (right <= left || bottom <= top) return undefined;
+  return {
+    leftRatio: left / pageSize.width,
+    topRatio: top / pageSize.height,
+    widthRatio: (right - left) / pageSize.width,
+    heightRatio: (bottom - top) / pageSize.height,
+  };
+}
+
+function blocksFromText(
+  pageNumber: number,
+  value: string | JoinedLayoutText,
+  pageSize?: { width: number; height: number },
+): PdfDocumentTranslationBlock[] {
   const safePageNumber = Math.max(1, Math.round(pageNumber));
+  const layout = typeof value === 'string' ? undefined : value;
+  const text = typeof value === 'string' ? value : value.text;
   if (!text.trim()) return [];
+  let cursor = 0;
   return splitLongTranslationText(text.trim(), PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH)
-    .map((block, blockIndex) => ({
+    .map((block, blockIndex) => {
+      const start = text.indexOf(block, cursor);
+      const safeStart = start >= 0 ? start : cursor;
+      const end = safeStart + block.length;
+      cursor = end;
+      const sourceAnchor = sourceAnchorForBlock(safeStart, end, layout, pageSize);
+      return {
       id: `P${safePageNumber}B${blockIndex + 1}`,
       pageNumber: safePageNumber,
       blockIndex,
       text: block,
-    }));
+      ...(sourceAnchor ? { sourceAnchor } : {}),
+      };
+    });
 }
 
 /**
@@ -404,9 +499,11 @@ export function pdfDocumentTranslationBlocks(
       items,
     });
     if (lines?.length) {
-      return blocksFromText(pageNumber, joinedLineText(
-        orderedLayoutLines(lines, pageSize.width).lines,
-      ));
+      return blocksFromText(
+        pageNumber,
+        joinedLineText(orderedLayoutLines(lines, pageSize.width).lines),
+        pageSize,
+      );
     }
   }
   const text = buildPdfSearchPageIndex(pageNumber, items).displayText.trim();
@@ -450,10 +547,10 @@ export function preparePdfDocumentTranslationPages(
     });
     const ordered = orderedLayoutLines(filtered, page.input.pageWidth);
     if (ordered.multiColumn) multiColumnPages += 1;
-    const pageBlocks = blocksFromText(
-      page.input.pageNumber,
-      joinedLineText(ordered.lines),
-    );
+    const pageBlocks = blocksFromText(page.input.pageNumber, joinedLineText(ordered.lines), {
+      width: page.input.pageWidth,
+      height: page.input.pageHeight,
+    });
     if (!pageBlocks.length) unreadablePages += 1;
     blocks.push(...pageBlocks);
   }
