@@ -199,6 +199,7 @@ const translateDocument = element<HTMLButtonElement>('translate-document');
 const documentTranslationPanel = element<HTMLElement>('pdf-document-translation');
 const documentTranslationStatus = element<HTMLElement>('pdf-document-translation-status');
 const documentTranslationClose = element<HTMLButtonElement>('pdf-document-translation-close');
+const documentTranslationProgress = element<HTMLElement>('pdf-document-translation-progress');
 const documentTranslationPrimary = element<HTMLButtonElement>('pdf-document-translation-primary');
 const documentTranslationStop = element<HTMLButtonElement>('pdf-document-translation-stop');
 const documentTranslationClear = element<HTMLButtonElement>('pdf-document-translation-clear');
@@ -832,11 +833,29 @@ function syncPdfDocumentTranslationCurrentPage(pageNumber = visiblePageAnchor().
 function syncPdfDocumentTranslationUi(): void {
   const { translated, failed, total } = pdfDocumentTranslationCounts();
   const pending = Math.max(0, total - translated - failed);
+  const progressPercent = total
+    ? Math.min(100, Math.round((translated / total) * 100))
+    : 0;
   const hasPreparedBlocks = pdfDocumentTranslationBlocksState.length > 0;
   const scopeEnabled = hasPreparedBlocks && pdfDocumentTranslationPhase !== 'preparing';
   const currentRangePage = pdfDocumentTranslationRangeMode === 'current'
     ? pdfDocumentTranslationRangePages[0] ?? visiblePageAnchor().pageNumber
     : visiblePageAnchor().pageNumber;
+  documentTranslationPanel.dataset.phase = pdfDocumentTranslationPhase === 'error'
+    ? 'error'
+    : failed
+      ? 'warning'
+      : pdfDocumentTranslationPhase;
+  documentTranslationPanel.style.setProperty(
+    '--pdf-document-translation-progress',
+    `${progressPercent}%`,
+  );
+  documentTranslationProgress.hidden = !hasPreparedBlocks;
+  documentTranslationProgress.setAttribute('aria-valuenow', String(progressPercent));
+  documentTranslationProgress.setAttribute(
+    'aria-valuetext',
+    total ? `已翻译 ${translated}/${total} 段` : '尚未识别正文',
+  );
   documentTranslationRangeCurrent.textContent = `当前页（第 ${currentRangePage} 页）`;
   documentTranslationRange.disabled = !scopeEnabled;
   documentTranslationCustomRange.hidden = documentTranslationRange.value !== 'custom';

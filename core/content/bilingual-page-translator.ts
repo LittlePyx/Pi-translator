@@ -1238,25 +1238,28 @@ export function createBilingualPageTranslator(
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .launcher { position:relative;display:flex;align-items:center;box-sizing:border-box;border:1px solid rgba(99,102,241,.25);border-radius:999px;padding:3px;color:#30394c;background:rgba(255,255,255,.94);box-shadow:0 6px 22px rgba(15,23,42,.15);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
-          button { min-height:30px;box-sizing:border-box;border:0;border-radius:999px;padding:5px 8px;color:#5a50d6;background:transparent;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
-          button:hover { background:#f0efff; }
-          button[data-action="start"] { display:inline-flex;align-items:center;padding-left:9px;color:#fff;background:linear-gradient(135deg,#5b5ee5,#765fe7); }
-          button[data-action="start"]:hover { filter:brightness(.97); }
-          .mark { display:block;width:15px;height:13px;margin-right:5px;object-fit:contain;filter:brightness(0) invert(1); }
-          .count { margin-left:3px;opacity:.82;font-weight:550; }
-          button[data-action="dismiss"] { min-width:28px;padding-inline:5px;color:#8791a2;font-size:14px;font-weight:500; }
+          .launcher { position:relative;display:flex;align-items:center;gap:2px;box-sizing:border-box;border:1px solid rgba(99,102,241,.24);border-radius:14px;padding:4px;color:#30394c;background:linear-gradient(145deg,rgba(255,255,255,.98),rgba(248,248,255,.95));box-shadow:0 10px 28px rgba(15,23,42,.16);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px); }
+          button { min-height:34px;box-sizing:border-box;border:0;border-radius:9px;padding:6px 9px;color:#5a50d6;background:transparent;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
+          button:hover { background:#efefff; }
+          button[data-action="start"] { display:inline-flex;align-items:center;padding:5px 11px 5px 7px;color:#fff;background:linear-gradient(135deg,#5857dc,#7062e7);box-shadow:0 4px 12px rgba(79,70,229,.22); }
+          button[data-action="start"]:hover { background:linear-gradient(135deg,#4f4dce,#6558dc); }
+          .mark-shell { display:grid;width:24px;height:24px;margin-right:7px;place-items:center;border-radius:7px;background:rgba(255,255,255,.15); }
+          .mark { display:block;width:15px;height:13px;object-fit:contain;filter:brightness(0) invert(1); }
+          .launcher-copy { display:flex;align-items:baseline; }
+          .launcher-copy strong { font:750 11.5px/1.2 inherit; }
+          .count { margin-left:4px;opacity:.82;font-size:10px;font-weight:550; }
+          button[data-action="dismiss"] { min-width:30px;padding-inline:5px;color:#8791a2;font-size:15px;font-weight:500; }
           details.more { position:relative;display:none; }
           details.more > summary { display:grid;place-items:center;width:30px;min-height:30px;box-sizing:border-box;border-radius:999px;color:#697386;cursor:pointer;font:700 14px/1 inherit;list-style:none; }
           details.more > summary::-webkit-details-marker { display:none; }
           details.more > summary:hover,details.more[open] > summary { background:#f0efff;color:#5a50d6; }
           .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:112px;box-sizing:border-box;border:1px solid rgba(99,102,241,.2);border-radius:10px;padding:5px;background:rgba(255,255,255,.98);box-shadow:0 10px 28px rgba(15,23,42,.18); }
           .menu button { width:100%;border-radius:7px;text-align:left; }
-          @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:rgba(24,32,47,.95);box-shadow:0 7px 24px rgba(0,0,0,.34)} button{color:#cbc7ff} button:hover,details.more > summary:hover,details.more[open] > summary{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="dismiss"],details.more > summary{color:#9ca7b8}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)} }
+          @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#44466d;background:linear-gradient(145deg,rgba(25,33,48,.98),rgba(31,35,57,.96));box-shadow:0 10px 28px rgba(0,0,0,.36)} button{color:#cbc7ff} button:hover,details.more > summary:hover,details.more[open] > summary{background:#292943} button[data-action="start"]{color:#fff;background:linear-gradient(135deg,#6769eb,#8069ee)} button[data-action="start"]:hover{background:linear-gradient(135deg,#7475f0,#8b76f2)} button[data-action="dismiss"],details.more > summary{color:#9ca7b8}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)} }
           @media (max-width:520px) { .launcher{padding:2px} button{min-height:32px}.count,.launcher>button[data-action="scope"],.launcher>button[data-action="dismiss"]{display:none}details.more{display:block} }
         </style>
         <div class="launcher" role="group" aria-label="网页正文翻译">
-          <button type="button" data-action="start"><img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />译全文<span class="count"></span></button>
+          <button type="button" data-action="start"><span class="mark-shell"><img class="mark" src="${logoUrl}" alt="" aria-hidden="true" /></span><span class="launcher-copy"><strong>译全文</strong><span class="count"></span></span></button>
           <button type="button" data-action="scope">范围</button>
           <button type="button" data-action="dismiss" aria-label="暂时隐藏译全文入口" title="暂时隐藏">×</button>
           <details class="more">
@@ -1904,40 +1907,50 @@ export function createBilingualPageTranslator(
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);transition:max-width 140ms ease,border-radius 140ms ease,padding 140ms ease;}
-          .bar[data-collapsed="true"] { flex-wrap:nowrap;max-width:min(430px,calc(100vw - 24px));border-radius:999px;padding:4px 5px 4px 9px;gap:6px; }
-          .bar[data-collapsed="true"] output { flex:0 1 auto;max-width:min(235px,calc(100vw - 150px)); }
-          .bar[data-collapsed="true"] .language,.bar[data-collapsed="true"] button[data-action="pause"],.bar[data-collapsed="true"] details.more { display:none; }
-          .mark { flex:0 0 auto;width:16px;height:14px;object-fit:contain; }
-          output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+          .bar { position:relative;display:flex;flex-wrap:wrap;align-items:center;gap:7px;max-width:min(590px,calc(100vw - 32px));min-height:44px;box-sizing:border-box;border:1px solid rgba(99,102,241,.27);border-radius:14px;padding:8px 78px 9px 9px;color:#253047;background:linear-gradient(145deg,rgba(255,255,255,.98),rgba(248,248,255,.96));box-shadow:0 12px 32px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(14px);transition:max-width 140ms ease,border-radius 140ms ease,padding 140ms ease;}
+          .bar[data-collapsed="true"] { flex-wrap:nowrap;max-width:min(430px,calc(100vw - 24px));border-radius:999px;padding:5px 40px 5px 9px;gap:6px; }
+          .bar[data-collapsed="true"] .status-copy { display:block;flex:0 1 auto;max-width:min(235px,calc(100vw - 150px)); }
+          .bar[data-collapsed="true"] .control-title,.bar[data-collapsed="true"] .progress,.bar[data-collapsed="true"] .language,.bar[data-collapsed="true"] button[data-action="pause"],.bar[data-collapsed="true"] details.more { display:none; }
+          .mark { flex:0 0 auto;width:18px;height:16px;object-fit:contain; }
+          .status-copy { display:grid;min-width:150px;flex:1 1 190px;gap:1px; }
+          .control-title { color:#30394d;font-size:10px;font-weight:750;letter-spacing:.01em; }
+          output { min-width:0;overflow:hidden;color:#667085;font-size:10.5px;text-overflow:ellipsis;white-space:nowrap; }
+          .progress { order:10;flex:1 1 180px;height:3px;overflow:hidden;border-radius:999px;background:#e7e9f4; }
+          .progress i { display:block;width:var(--pi-bilingual-progress,0%);height:100%;border-radius:inherit;background:linear-gradient(90deg,#5c58dd,#7773ed 72%,#38b8ca);transition:width .24s ease; }
+          .bar[data-phase="complete"] .progress i { background:linear-gradient(90deg,#16886c,#31aa89); }
+          .bar[data-phase="error"] .progress i { background:linear-gradient(90deg,#c43d55,#e26d7d); }
+          .bar[data-phase="warning"] .progress i { background:linear-gradient(90deg,#c98a1f,#e2ad48); }
           .language,.display { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
           select { min-height:28px;box-sizing:border-box;border:1px solid rgba(99,102,241,.18);border-radius:6px;padding:3px 22px 3px 6px;color:#4f46e5;background:#f7f7ff;cursor:pointer;font:600 11px/1.2 inherit; }
           select:disabled { opacity:.62;cursor:default; }
-          button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
+          button { min-width:32px;min-height:30px;border:1px solid rgba(99,102,241,.13);border-radius:7px;padding:4px 8px;color:#4f46e5;background:#f5f4ff;cursor:pointer;font:650 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#e4e2ff; }
           button:disabled { opacity:.62;cursor:default; }
-          details.more { position:relative;flex:0 0 auto; }
+          details.more { position:absolute;top:8px;right:42px;flex:0 0 auto; }
           details.more > summary { display:grid;place-items:center;min-width:30px;min-height:28px;box-sizing:border-box;border-radius:6px;color:#657084;cursor:pointer;font:700 14px/1 inherit;list-style:none; }
           details.more > summary::-webkit-details-marker { display:none; }
           details.more > summary:hover,details.more[open] > summary { color:#4f46e5;background:#f0efff; }
           .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:118px;box-sizing:border-box;border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:4px;background:rgba(255,255,255,.98);box-shadow:0 9px 28px rgba(15,23,42,.2); }
           .menu button { width:100%;justify-content:flex-start;color:#566176;background:transparent;text-align:left; }
           .menu button:hover { color:#4f46e5;background:#f0efff; }
-          button[data-action="compact"] { min-width:30px;padding-inline:6px;color:#657084;background:transparent;font-size:14px; }
-          .language-confirmation { display:flex;flex:1 0 100%;align-items:center;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          button[data-action="pause"] { order:10;min-width:52px;color:#fff;border-color:#5752d6;background:linear-gradient(135deg,#5c58dd,#6e64e7);box-shadow:0 3px 10px rgba(79,70,229,.18); }
+          button[data-action="pause"]:hover { background:linear-gradient(135deg,#514dce,#6258dc); }
+          button[data-action="compact"] { position:absolute;top:8px;right:8px;min-width:30px;padding-inline:6px;color:#657084;border-color:transparent;background:transparent;font-size:14px; }
+          .bar[data-collapsed="true"] button[data-action="compact"] { top:5px;right:5px; }
+          .language-confirmation { order:20;display:flex;flex:1 0 100%;align-items:center;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
           .language-confirmation[hidden] { display:none; }
           .language-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .language-confirmation button[data-action="cancel-language"] { color:#657084;background:transparent; }
-          .scope-panel { display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          .scope-panel { order:20;display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
           .scope-panel[hidden] { display:none; }
           .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language,.display{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#292943}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:linear-gradient(145deg,rgba(24,32,47,.98),rgba(31,35,57,.96));box-shadow:0 12px 32px rgba(0,0,0,.38)} .mark{filter:brightness(0) invert(1)} .control-title{color:#edf1f7} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;border-color:#44466d;background:#292943} button:hover{background:#363653}button[data-action="pause"]{color:#fff;border-color:#7169e9;background:linear-gradient(135deg,#655fdf,#7668e9)}button[data-action="pause"]:hover{background:linear-gradient(135deg,#716be8,#8275ef)} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#292943}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar">
           <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
-          <output role="status" aria-live="polite"></output>
+          <span class="status-copy"><strong class="control-title">网页全文翻译</strong><output role="status" aria-live="polite"></output></span>
           <label class="language"><span>译为</span><select data-action="language" aria-label="正文目标语言">${SUPPORTED_TARGET_LANGUAGES.map((language) => `<option value="${language.value}">${language.shortLabel}</option>`).join('')}</select></label>
           <label class="display"><span>显示</span><select data-action="display" aria-label="正文显示方式"><option value="bilingual">双语</option><option value="translation">译文</option><option value="source">原文</option></select></label>
           <button type="button" data-action="pause"></button>
@@ -1950,6 +1963,7 @@ export function createBilingualPageTranslator(
             </div>
           </details>
           <button type="button" data-action="compact"></button>
+          <span class="progress" role="progressbar" aria-label="网页全文翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><i></i></span>
           <div class="language-confirmation" role="alert" hidden>
             <span></span>
             <button type="button" data-action="cancel-language">取消</button>
@@ -2031,7 +2045,9 @@ export function createBilingualPageTranslator(
     }
     const shadow = controlHost.shadowRoot;
     const bar = shadow?.querySelector<HTMLElement>('.bar');
+    const controlTitle = shadow?.querySelector<HTMLElement>('.control-title');
     const output = shadow?.querySelector<HTMLOutputElement>('output');
+    const progress = shadow?.querySelector<HTMLElement>('.progress');
     const display = shadow?.querySelector<HTMLSelectElement>('[data-action="display"]');
     const displayControl = shadow?.querySelector<HTMLElement>('.display');
     const pause = shadow?.querySelector<HTMLButtonElement>('[data-action="pause"]');
@@ -2044,13 +2060,34 @@ export function createBilingualPageTranslator(
     const languageControl = shadow?.querySelector<HTMLElement>('.language');
     const languageConfirmation = shadow?.querySelector<HTMLElement>('.language-confirmation');
     const scopePanel = shadow?.querySelector<HTMLElement>('.scope-panel');
-    if (bar) bar.dataset.collapsed = String(controlCollapsed && !scopePreviewActive);
+    if (bar) {
+      const progressPercent = scopePreviewActive
+        ? Math.round((scopeSelectedCount() / Math.max(1, scopePreviewBlocks.length)) * 100)
+        : Math.round((currentState.translated / Math.max(1, currentState.total)) * 100);
+      bar.dataset.collapsed = String(controlCollapsed && !scopePreviewActive);
+      bar.dataset.phase = scopePreviewActive
+        ? 'scope'
+        : currentState.phase === 'error'
+          ? 'error'
+          : currentState.failed
+            ? 'warning'
+            : currentState.phase;
+      bar.style.setProperty('--pi-bilingual-progress', `${Math.min(100, progressPercent)}%`);
+      progress?.setAttribute('aria-valuenow', String(Math.min(100, progressPercent)));
+      progress?.setAttribute(
+        'aria-valuetext',
+        scopePreviewActive
+          ? `已选择 ${scopeSelectedCount()}/${scopePreviewBlocks.length} 段`
+          : `已翻译 ${currentState.translated}/${currentState.total} 段`,
+      );
+    }
     if (scopePreviewActive) {
       const selected = scopeSelectedCount();
       const translatedRemoval = scopeTranslatedRemovalCount();
       if (output) {
         output.textContent = `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
       }
+      if (controlTitle) controlTitle.textContent = '选择翻译范围';
       if (languageControl) languageControl.hidden = true;
       if (displayControl) displayControl.hidden = true;
       if (pause) pause.hidden = true;
@@ -2082,6 +2119,7 @@ export function createBilingualPageTranslator(
       }
       return;
     }
+    if (controlTitle) controlTitle.textContent = '网页全文翻译';
     if (languageControl) languageControl.hidden = false;
     if (displayControl) displayControl.hidden = currentState.translated === 0;
     if (compact) {

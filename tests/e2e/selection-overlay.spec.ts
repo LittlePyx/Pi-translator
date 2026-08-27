@@ -1186,7 +1186,7 @@ test('treats MediaWiki MathML and its fallback image as one extractable formula'
   }
 });
 
-test('discovers bilingual article translation and lets the reader adjust its scope', async () => {
+test('discovers bilingual article translation and lets the reader adjust its scope', async ({}, testInfo) => {
   const popup = await context.newPage();
   let originalTargetLanguage = 'zh-CN';
   try {
@@ -1242,6 +1242,12 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     expect(launcherAvoidance.clear, JSON.stringify(launcherAvoidance)).toBe(true);
     await page.locator('#article-fixed-widget').evaluate((element) => element.remove());
     await expect(launcher).toHaveAttribute('data-pi-placement', 'bottom-right');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await page.screenshot({
+        path: testInfo.outputPath('bilingual-page-launcher.png'),
+        fullPage: false,
+      });
+    }
 
     await page.setViewportSize({ width: 480, height: 720 });
     await expect(launcher.locator('button[data-action="scope"]')).toBeHidden();
@@ -1278,6 +1284,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(launcher).toHaveCount(0);
     await expect(pageControl).toBeVisible();
     await expect(scopeCandidates).toHaveCount(7);
+    await expect(pageControl.locator('.control-title')).toHaveText('选择翻译范围');
     await expect(pageControl.locator('output')).toContainText('正文范围 7/7 段');
     expect(textRequests.length).toBe(requestCountBeforePreview);
 
@@ -1304,6 +1311,9 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(6);
     await expect(pageControl.locator('output')).toContainText('已完成 6/6');
     const controlBar = pageControl.locator('.bar');
+    await expect(controlBar).toHaveAttribute('data-phase', 'complete');
+    await expect(pageControl.locator('.control-title')).toHaveText('网页全文翻译');
+    await expect(pageControl.locator('.progress')).toHaveAttribute('aria-valuenow', '100');
     const compactControl = pageControl.locator('button[data-action="compact"]');
     await expect(controlBar).toHaveAttribute('data-collapsed', 'true');
     await expect(compactControl).toHaveAttribute('aria-expanded', 'false');
@@ -1312,6 +1322,21 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await compactControl.click();
     await expect(controlBar).toHaveAttribute('data-collapsed', 'false');
     await expect(compactControl).toHaveAttribute('aria-expanded', 'true');
+    const expandedControlLayout = await controlBar.evaluate((bar) => {
+      const compact = bar.querySelector<HTMLElement>('[data-action="compact"]')!
+        .getBoundingClientRect();
+      const more = bar.querySelector<HTMLElement>('details.more')!.getBoundingClientRect();
+      return {
+        clientWidth: bar.clientWidth,
+        scrollWidth: bar.scrollWidth,
+        compactTop: compact.top,
+        moreTop: more.top,
+      };
+    });
+    expect(expandedControlLayout.scrollWidth)
+      .toBeLessThanOrEqual(expandedControlLayout.clientWidth + 1);
+    expect(Math.abs(expandedControlLayout.compactTop - expandedControlLayout.moreTop))
+      .toBeLessThanOrEqual(1);
 
     const requestsBeforeRestore = textRequests.length;
     await pageControl.locator('details.more > summary').click();
@@ -1627,8 +1652,14 @@ test('completes bilingual article translation without scrolling and keeps contro
     await sidePanel.reload();
     const sidePanelControl = sidePanel.locator('#bilingual-page-control');
     await expect(sidePanelControl).toBeVisible();
+    await expect(sidePanelControl).toHaveAttribute('data-phase', 'paused');
+    await expect(sidePanelControl.locator('.bilingual-page-mark img'))
+      .toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已暂停');
     await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('继续');
+    await expect(sidePanel.locator('#bilingual-page-progress')).toBeVisible();
+    await expect(sidePanel.locator('#bilingual-page-progress'))
+      .toHaveAttribute('aria-valuenow', /^\d+$/);
     await sidePanel.setViewportSize({ width: 300, height: 720 });
     const controlLayout = await sidePanelControl.evaluate((control) => ({
       clientWidth: control.clientWidth,
@@ -1641,9 +1672,20 @@ test('completes bilingual article translation without scrolling and keeps contro
         .getBoundingClientRect().height,
     }));
     expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
-    expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(29);
-    expect(controlLayout.displayHeight).toBeGreaterThanOrEqual(29);
-    expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(29);
+    expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(33);
+    expect(controlLayout.displayHeight).toBeGreaterThanOrEqual(31);
+    expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(31);
+    const inPageProgressLayout = await pageControl.locator('.bar').evaluate((bar) => {
+      const primary = bar.querySelector<HTMLElement>('[data-action="pause"]')!
+        .getBoundingClientRect();
+      const progress = bar.querySelector<HTMLElement>('.progress')!.getBoundingClientRect();
+      return {
+        primaryCenter: primary.top + primary.height / 2,
+        progressCenter: progress.top + progress.height / 2,
+      };
+    });
+    expect(Math.abs(inPageProgressLayout.primaryCenter - inPageProgressLayout.progressCenter))
+      .toBeLessThanOrEqual(1);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await Promise.all([
         page.screenshot({ path: testInfo.outputPath('bilingual-article-paused.png'), fullPage: false }),
@@ -1680,6 +1722,9 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(page.locator('#article-form-help + [data-pi-bilingual-translation]')).toHaveCount(0);
 
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成');
+    await expect(sidePanelControl).toHaveAttribute('data-phase', 'complete');
+    await expect(sidePanel.locator('#bilingual-page-progress'))
+      .toHaveAttribute('aria-valuenow', '100');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     const requestsWithoutScroll = JSON.stringify(textRequests.slice(requestsBefore));
     expect(requestsWithoutScroll).toContain('The full article task should translate this later paragraph');
@@ -2141,6 +2186,9 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
     await expect(page.locator('[data-pi-bilingual-hint]')).toHaveCount(0);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('1 段待重试');
+    await expect(sidePanel.locator('#bilingual-page-control'))
+      .toHaveAttribute('data-phase', 'warning');
+    await expect(pageControl.locator('.bar')).toHaveAttribute('data-phase', 'warning');
     await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('重试 1 段');
     await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(6);
@@ -5096,13 +5144,21 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await pdfPage.locator('#translate-document').click();
     const panel = pdfPage.locator('#pdf-document-translation');
     await expect(panel).toBeVisible();
+    await expect(panel.locator('.pdf-document-translation-mark img'))
+      .toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(pdfPage.locator('#pdf-document-translation-status'))
       .toContainText('已识别 2 段，等待确认');
+    await expect(pdfPage.locator('#pdf-document-translation-progress')).toBeVisible();
+    await expect(pdfPage.locator('#pdf-document-translation-progress'))
+      .toHaveAttribute('aria-valuenow', '0');
     expect(textRequests).toHaveLength(requestsBeforePreview);
 
     omitNextDocumentBatchItem = true;
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+    await expect(panel).toHaveAttribute('data-phase', 'complete');
+    await expect(pdfPage.locator('#pdf-document-translation-progress'))
+      .toHaveAttribute('aria-valuenow', '100');
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
@@ -5246,7 +5302,7 @@ test('restores PDF full-document progress and translates only newly added paragr
   }
 });
 
-test('limits PDF document translation by pages and recognized back matter', async () => {
+test('limits PDF document translation by pages and recognized back matter', async ({}, testInfo) => {
   const sourceUrl = 'https://www.overleaf.com/pdf-document-range.pdf';
   const bodyText = 'The main paper body remains inside the selected translation range.';
   const referenceText = '[1] A reference entry should be skipped when requested.';
@@ -5348,6 +5404,12 @@ test('limits PDF document translation by pages and recognized back matter', asyn
     await expect(feedback).toContainText('整篇文档 · 1 页 / 1 段');
     await expect(feedback).toContainText('已跳过参考文献 2 段、附录 2 段');
     expect(textRequests).toHaveLength(requestStart + 2);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-translation-360.png'),
+        fullPage: false,
+      });
+    }
   } finally {
     await pdfPage.close();
     await context.unroute(sourceUrl);

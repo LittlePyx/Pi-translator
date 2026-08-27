@@ -92,10 +92,15 @@
       hidden
     >
       <header>
-        <span>
-          <strong>PDF 全文翻译</strong>
-          <small id="pdf-document-translation-status" aria-live="polite">准备文档内容…</small>
-        </span>
+        <div class="pdf-document-translation-title">
+          <span class="pdf-document-translation-mark" aria-hidden="true">
+            <img src="/brand/pi_logo.png" alt="" />
+          </span>
+          <span>
+            <strong>PDF 全文翻译</strong>
+            <small id="pdf-document-translation-status" aria-live="polite">准备文档内容…</small>
+          </span>
+        </div>
         <button
           id="pdf-document-translation-close"
           type="button"
@@ -103,12 +108,28 @@
           aria-label="关闭全文翻译面板"
         >×</button>
       </header>
-      <div class="pdf-document-translation-actions">
-        <button id="pdf-document-translation-primary" class="primary" type="button">开始翻译</button>
-        <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
-        <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
-      </div>
+      <section class="pdf-document-translation-overview" aria-label="PDF 全文翻译进度与操作">
+        <div
+          id="pdf-document-translation-progress"
+          class="pdf-document-translation-progress"
+          role="progressbar"
+          aria-label="PDF 全文翻译进度"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          hidden
+        ><i></i></div>
+        <div class="pdf-document-translation-actions">
+          <button id="pdf-document-translation-primary" class="primary" type="button">开始翻译</button>
+          <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
+          <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
+        </div>
+      </section>
       <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
+        <div class="pdf-document-translation-scope-heading">
+          <strong>翻译范围</strong>
+          <span>只会发送所选正文</span>
+        </div>
         <label class="pdf-document-translation-range-label">
           <span>范围</span>
           <select id="pdf-document-translation-range" aria-label="翻译页码范围" disabled>

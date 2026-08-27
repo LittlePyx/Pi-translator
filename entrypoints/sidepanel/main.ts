@@ -98,6 +98,7 @@ const startWebRegion = element<HTMLButtonElement>('start-web-region');
 const startWebRegionLabel = element<HTMLElement>('start-web-region-label');
 const bilingualPageControl = element<HTMLElement>('bilingual-page-control');
 const bilingualPageStatus = element<HTMLElement>('bilingual-page-status');
+const bilingualPageProgress = element<HTMLElement>('bilingual-page-progress');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
 const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
 const bilingualPageDisplay = element<HTMLSelectElement>('bilingual-page-display');
@@ -706,6 +707,21 @@ function syncBilingualPageControl(): void {
   bilingualPageControl.hidden = !available;
   if (!available) return;
   const state = bilingualPageState;
+  const progressPercent = state.total
+    ? Math.min(100, Math.round((state.translated / state.total) * 100))
+    : 0;
+  bilingualPageControl.dataset.phase = state.phase === 'error'
+    ? 'error'
+    : state.failed
+      ? 'warning'
+      : state.phase;
+  bilingualPageControl.style.setProperty('--bilingual-progress', `${progressPercent}%`);
+  bilingualPageProgress.hidden = state.phase === 'idle';
+  bilingualPageProgress.setAttribute('aria-valuenow', String(progressPercent));
+  bilingualPageProgress.setAttribute(
+    'aria-valuetext',
+    state.total ? `已翻译 ${state.translated}/${state.total} 段` : '尚未开始',
+  );
   if (
     state.phase === 'idle' ||
     pendingBilingualPageLanguageSwitch === state.targetLanguage
@@ -1424,13 +1440,21 @@ function scheduleReadingState(
 }
 
 function scrollReadingToEdge(edge: 'top' | 'bottom'): void {
-  const bounds = readingBounds();
-  if (!bounds || readingNavigation.hidden) return;
+  if (!readingBounds() || readingNavigation.hidden) return;
   const moveFocus = document.activeElement === readingTop || document.activeElement === readingBottom;
   markReadingInteraction();
-  setReadingScrollTop(edge === 'top' ? bounds.top : bounds.bottom);
-  rememberCurrentReadingPosition();
-  updateReadingNavigation();
+  const interactionRevision = readingInteractionRevision;
+  const applyEdge = () => {
+    if (interactionRevision !== readingInteractionRevision) return;
+    const bounds = readingBounds();
+    if (!bounds) return;
+    setReadingScrollTop(edge === 'top' ? bounds.top : bounds.bottom);
+    rememberCurrentReadingPosition();
+    updateReadingNavigation();
+  };
+  applyEdge();
+  // Re-anchor after sticky controls and late font/layout work have settled.
+  window.requestAnimationFrame(applyEdge);
   if (moveFocus) {
     window.queueMicrotask(() => (edge === 'top' ? readingBottom : readingTop)
       .focus({ preventScroll: true }));
