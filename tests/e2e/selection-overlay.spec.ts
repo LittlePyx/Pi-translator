@@ -1675,6 +1675,67 @@ test('completes bilingual article translation without scrolling and keeps contro
     expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(33);
     expect(controlLayout.displayHeight).toBeGreaterThanOrEqual(31);
     expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(31);
+    const exportBeforeCopy = await sidePanel.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'GET_BILINGUAL_PAGE_EXPORT',
+        payload: { tabId: id },
+      });
+    }, tabId!) as {
+      ok: true;
+      data: {
+        export: {
+          translationText: string;
+          bilingualMarkdown: string;
+          blockCount: number;
+        };
+      };
+    };
+    expect(exportBeforeCopy.ok).toBe(true);
+    expect(exportBeforeCopy.data.export.blockCount).toBeGreaterThan(0);
+    await sidePanel.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __piCopiedText?: string };
+      scope.__piCopiedText = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            scope.__piCopiedText = value;
+          },
+        },
+      });
+    });
+    const requestsBeforeCopy = textRequests.length;
+    const copyMenu = sidePanel.locator('#bilingual-page-copy-menu');
+    await expect(copyMenu).toBeVisible();
+    await copyMenu.locator(':scope > summary').click();
+    await sidePanel.locator('#bilingual-page-copy-translation').click();
+    await expect(sidePanel.locator('#bilingual-page-copy-feedback')).toContainText('段译文');
+    expect(await sidePanel.evaluate(() => (
+      globalThis as typeof globalThis & { __piCopiedText?: string }
+    ).__piCopiedText))
+      .toBe(exportBeforeCopy.data.export.translationText);
+    await copyMenu.locator(':scope > summary').click();
+    await sidePanel.locator('#bilingual-page-copy-bilingual').click();
+    await expect(sidePanel.locator('#bilingual-page-copy-feedback'))
+      .toContainText('双语 Markdown');
+    expect(await sidePanel.evaluate(() => (
+      globalThis as typeof globalThis & { __piCopiedText?: string }
+    ).__piCopiedText))
+      .toBe(exportBeforeCopy.data.export.bilingualMarkdown);
+    expect(exportBeforeCopy.data.export.bilingualMarkdown).toContain('> ');
+    expect(textRequests.length).toBe(requestsBeforeCopy);
+    const copyMenuLayout = await copyMenu.evaluate((menu) => ({
+      right: menu.getBoundingClientRect().right,
+      viewportWidth: innerWidth,
+    }));
+    expect(copyMenuLayout.right).toBeLessThanOrEqual(copyMenuLayout.viewportWidth);
+    await pageControl.locator('details.more > summary').click();
+    await expect(pageControl.locator('button[data-action="copy-translation"]')).toBeVisible();
+    await expect(pageControl.locator('button[data-action="copy-bilingual"]')).toBeVisible();
+    await pageControl.locator('details.more > summary').click();
     const inPageProgressLayout = await pageControl.locator('.bar').evaluate((bar) => {
       const primary = bar.querySelector<HTMLElement>('[data-action="pause"]')!
         .getBoundingClientRect();
@@ -5162,6 +5223,40 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
+    const requestsBeforeCopy = textRequests.length;
+    await pdfPage.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __piCopiedText?: string };
+      scope.__piCopiedText = '';
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            scope.__piCopiedText = value;
+          },
+        },
+      });
+    });
+    const copyMenu = panel.locator('#pdf-document-translation-copy-menu');
+    await expect(copyMenu).toBeVisible();
+    await copyMenu.locator(':scope > summary').click();
+    await panel.locator('#pdf-document-translation-copy-translation').click();
+    await expect(panel.locator('#pdf-document-translation-copy-feedback')).toContainText('2 段译文');
+    const pureTranslation = await pdfPage.evaluate(() => (
+      globalThis as typeof globalThis & { __piCopiedText?: string }
+    ).__piCopiedText ?? '');
+    expect(pureTranslation).toContain('批量生成的学术译文');
+    expect(pureTranslation).not.toContain('The first PDF page explains');
+    await copyMenu.locator(':scope > summary').click();
+    await panel.locator('#pdf-document-translation-copy-bilingual').click();
+    await expect(panel.locator('#pdf-document-translation-copy-feedback'))
+      .toContainText('双语 Markdown');
+    const bilingualMarkdown = await pdfPage.evaluate(() => (
+      globalThis as typeof globalThis & { __piCopiedText?: string }
+    ).__piCopiedText ?? '');
+    expect(bilingualMarkdown).toContain('## 第 1 页');
+    expect(bilingualMarkdown).toContain('The first PDF page explains');
+    expect(bilingualMarkdown).toContain('> ');
+    expect(textRequests.length).toBe(requestsBeforeCopy);
     const firstTranslation = panel.locator(
       '.pdf-document-translation-page[data-page-number="1"] [data-source-anchor]',
     );
@@ -5403,6 +5498,29 @@ test('limits PDF document translation by pages and recognized back matter', asyn
     await skipAppendix.check();
     await expect(feedback).toContainText('整篇文档 · 1 页 / 1 段');
     await expect(feedback).toContainText('已跳过参考文献 2 段、附录 2 段');
+    expect(textRequests).toHaveLength(requestStart + 2);
+    await pdfPage.evaluate(() => {
+      const scope = globalThis as typeof globalThis & { __piCopiedText?: string };
+      Object.defineProperty(navigator, 'clipboard', {
+        configurable: true,
+        value: {
+          writeText: async (value: string) => {
+            scope.__piCopiedText = value;
+          },
+        },
+      });
+    });
+    const scopedCopyMenu = pdfPage.locator('#pdf-document-translation-copy-menu');
+    await scopedCopyMenu.locator(':scope > summary').click();
+    await pdfPage.locator('#pdf-document-translation-copy-bilingual').click();
+    await expect(pdfPage.locator('#pdf-document-translation-copy-feedback'))
+      .toContainText('1 段 · 1 页');
+    const scopedMarkdown = await pdfPage.evaluate(() => (
+      globalThis as typeof globalThis & { __piCopiedText?: string }
+    ).__piCopiedText ?? '');
+    expect(scopedMarkdown).toContain(bodyText);
+    expect(scopedMarkdown).not.toContain(referenceText);
+    expect(scopedMarkdown).not.toContain(appendixText);
     expect(textRequests).toHaveLength(requestStart + 2);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({

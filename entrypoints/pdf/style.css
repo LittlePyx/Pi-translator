@@ -221,6 +221,51 @@ button { color: inherit; font: inherit; cursor: pointer; }
   background: linear-gradient(90deg, #c98a1f, #e2ad48);
 }
 .pdf-document-translation-actions { display: flex; min-width: 0; gap: 6px; }
+.pdf-document-translation-copy-menu { position: relative; }
+.pdf-document-translation-copy-menu > summary {
+  display: grid;
+  min-height: 34px;
+  box-sizing: border-box;
+  place-items: center;
+  border: 1px solid #dde0ef;
+  border-radius: 7px;
+  padding: 5px 9px;
+  color: #596579;
+  background: #fff;
+  cursor: pointer;
+  font-size: 10.5px;
+  font-weight: 700;
+  list-style: none;
+}
+.pdf-document-translation-copy-menu > summary::-webkit-details-marker { display: none; }
+.pdf-document-translation-copy-menu > summary:hover,
+.pdf-document-translation-copy-menu[open] > summary { border-color: #b8bae8; background: #f5f4ff; }
+.pdf-document-translation-copy-menu > div {
+  position: absolute;
+  right: 0;
+  z-index: 6;
+  top: calc(100% + 6px);
+  display: grid;
+  min-width: 138px;
+  border: 1px solid #dde0ef;
+  border-radius: 8px;
+  padding: 4px;
+  background: #fff;
+  box-shadow: 0 9px 24px rgba(35, 43, 78, .16);
+}
+.pdf-document-translation-copy-menu > div button {
+  min-height: 30px;
+  border-color: transparent;
+  text-align: left;
+}
+.pdf-document-translation-copy-feedback {
+  min-height: 0;
+  color: #16886c;
+  font-size: 9.5px;
+  line-height: 1.4;
+}
+.pdf-document-translation-copy-feedback:empty { display: none; }
+.pdf-document-translation-copy-feedback[data-tone="error"] { color: #b42336; }
 .pdf-document-translation-actions button {
   min-height: 34px;
   border: 1px solid #dde0ef;
@@ -1158,6 +1203,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   }
   .pdf-document-translation-progress { background: #343d4e; }
   .pdf-document-translation-actions button { color: #cbd5e1; border-color: #465269; background: #202938; }
+  .pdf-document-translation-copy-menu > summary { color: #cbd5e1; border-color: #465269; background: #202938; }
+  .pdf-document-translation-copy-menu > summary:hover,
+  .pdf-document-translation-copy-menu[open] > summary { border-color: #646b8e; background: #292943; }
+  .pdf-document-translation-copy-menu > div { border-color: #465269; background: #202938; box-shadow: 0 10px 28px rgba(0, 0, 0, .34); }
+  .pdf-document-translation-copy-feedback { color: #65d6b3; }
+  .pdf-document-translation-copy-feedback[data-tone="error"] { color: #ff9cab; }
   .pdf-document-translation-actions button:hover:not(:disabled) { border-color: #646b8e; background: #292943; }
   .pdf-document-translation-actions .primary {
     color: #fff;

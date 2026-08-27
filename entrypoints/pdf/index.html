@@ -122,8 +122,16 @@
         <div class="pdf-document-translation-actions">
           <button id="pdf-document-translation-primary" class="primary" type="button">开始翻译</button>
           <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
+          <details id="pdf-document-translation-copy-menu" class="pdf-document-translation-copy-menu" hidden>
+            <summary>复制</summary>
+            <div>
+              <button id="pdf-document-translation-copy-translation" type="button">纯译文</button>
+              <button id="pdf-document-translation-copy-bilingual" type="button">双语 Markdown</button>
+            </div>
+          </details>
           <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
         </div>
+        <small id="pdf-document-translation-copy-feedback" class="pdf-document-translation-copy-feedback" aria-live="polite"></small>
       </section>
       <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
         <div class="pdf-document-translation-scope-heading">

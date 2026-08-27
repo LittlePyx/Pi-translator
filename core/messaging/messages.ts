@@ -48,6 +48,7 @@ import {
   type BilingualPageSessionSnapshot,
   type BilingualPageSessionUpdate,
 } from '../translation/bilingual-page-session';
+import type { DocumentTranslationExport } from '../translation/document-export';
 
 export interface DocumentMemoryLocator {
   pageUrl: string;
@@ -190,6 +191,7 @@ export type RuntimeMessage =
       payload: { tabId: number; targetLanguage: SupportedTargetLanguage };
     }
   | { type: 'GET_BILINGUAL_PAGE_STATE'; payload: { tabId: number } }
+  | { type: 'GET_BILINGUAL_PAGE_EXPORT'; payload: { tabId: number } }
   | {
       type: 'CONTROL_BILINGUAL_PAGE';
       payload: { tabId: number; action: BilingualPageAction };
@@ -199,6 +201,7 @@ export type RuntimeMessage =
       payload: { targetLanguage: SupportedTargetLanguage };
     }
   | { type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB' }
+  | { type: 'GET_BILINGUAL_PAGE_EXPORT_IN_TAB' }
   | {
       type: 'CONTROL_BILINGUAL_PAGE_IN_TAB';
       payload: { action: BilingualPageAction };
@@ -416,6 +419,7 @@ export type TranslationBatchRuntimeResponse = RuntimeResponse<{
   missingItemIds: string[];
 }>;
 export type BilingualPageStateResponse = RuntimeResponse<{ state: BilingualPageState }>;
+export type BilingualPageExportResponse = RuntimeResponse<{ export: DocumentTranslationExport }>;
 export type BilingualPageSessionResponse = RuntimeResponse<{
   session?: BilingualPageSessionSnapshot;
 }>;
@@ -753,6 +757,14 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       validTabId(payload.tabId),
     );
   }
+  if (type === 'GET_BILINGUAL_PAGE_EXPORT') {
+    const payload = record(message.payload);
+    return Boolean(
+      payload &&
+      hasOnlyKeys(payload, ['tabId']) &&
+      validTabId(payload.tabId),
+    );
+  }
   if (type === 'CONTROL_BILINGUAL_PAGE') {
     const payload = record(message.payload);
     return Boolean(
@@ -771,6 +783,9 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     );
   }
   if (type === 'GET_BILINGUAL_PAGE_STATE_IN_TAB') {
+    return message.payload === undefined;
+  }
+  if (type === 'GET_BILINGUAL_PAGE_EXPORT_IN_TAB') {
     return message.payload === undefined;
   }
   if (type === 'CONTROL_BILINGUAL_PAGE_IN_TAB') {

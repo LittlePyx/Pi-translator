@@ -78,6 +78,16 @@
               <option value="source">原文</option>
             </select>
           </label>
+          <details id="bilingual-page-copy-menu" class="bilingual-page-copy-menu" hidden>
+            <summary>复制</summary>
+            <div>
+              <button id="bilingual-page-copy-translation" type="button">纯译文</button>
+              <button id="bilingual-page-copy-bilingual" type="button">双语 Markdown</button>
+            </div>
+          </details>
+        </div>
+        <div class="bilingual-page-footer">
+          <small id="bilingual-page-copy-feedback" class="bilingual-page-copy-feedback" aria-live="polite"></small>
           <button id="bilingual-page-clear" type="button" title="清除当前网页的全文译文" hidden>清除</button>
         </div>
         <div id="bilingual-page-language-confirmation" class="bilingual-page-language-confirmation" role="alert" hidden>

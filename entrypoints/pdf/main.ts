@@ -52,6 +52,7 @@ import {
 } from '../../core/messaging/user-facing-error';
 import { isIsolatedBilingualBlockError } from '../../core/translation/bilingual-page';
 import { takeDocumentTranslationBatch } from '../../core/translation/document-batch';
+import { buildDocumentTranslationExport } from '../../core/translation/document-export';
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   comparePdfDocumentTranslationPriority,
@@ -203,6 +204,18 @@ const documentTranslationProgress = element<HTMLElement>('pdf-document-translati
 const documentTranslationPrimary = element<HTMLButtonElement>('pdf-document-translation-primary');
 const documentTranslationStop = element<HTMLButtonElement>('pdf-document-translation-stop');
 const documentTranslationClear = element<HTMLButtonElement>('pdf-document-translation-clear');
+const documentTranslationCopyMenu = element<HTMLDetailsElement>(
+  'pdf-document-translation-copy-menu',
+);
+const documentTranslationCopyTranslation = element<HTMLButtonElement>(
+  'pdf-document-translation-copy-translation',
+);
+const documentTranslationCopyBilingual = element<HTMLButtonElement>(
+  'pdf-document-translation-copy-bilingual',
+);
+const documentTranslationCopyFeedback = element<HTMLElement>(
+  'pdf-document-translation-copy-feedback',
+);
 const documentTranslationRange = element<HTMLSelectElement>('pdf-document-translation-range');
 const documentTranslationRangeCurrent = element<HTMLOptionElement>(
   'pdf-document-translation-range-current',
@@ -347,6 +360,8 @@ let pdfDocumentTranslationRequestId: string | undefined;
 let pdfDocumentTranslationTask: Promise<void> | undefined;
 let pdfDocumentTranslationRevision = 0;
 let pdfDocumentTranslationMessage: string | undefined;
+let pdfDocumentTranslationCopyPending = false;
+let pdfDocumentTranslationCopyFeedbackTimer: number | undefined;
 type PdfDocumentTranslationRangeMode = 'all' | 'current' | 'custom';
 let pdfDocumentTranslationRangeMode: PdfDocumentTranslationRangeMode = 'all';
 let pdfDocumentTranslationRangePages: number[] = [];
@@ -914,6 +929,9 @@ function syncPdfDocumentTranslationUi(): void {
   ) || pdfDocumentTranslationPhase === 'preparing';
   documentTranslationClear.textContent = '重新翻译';
   documentTranslationClear.title = '清除已恢复或已完成的译文，并重新调用翻译接口';
+  documentTranslationCopyMenu.hidden = translated === 0;
+  documentTranslationCopyTranslation.disabled = pdfDocumentTranslationCopyPending;
+  documentTranslationCopyBilingual.disabled = pdfDocumentTranslationCopyPending;
   translateDocument.setAttribute('aria-expanded', String(!documentTranslationPanel.hidden));
   translateDocument.title = total
     ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
@@ -929,6 +947,53 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
     ? `正文只在确认后批量发送；已完成译文只保留在当前 Edge 会话中。${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 点击译文可返回原文。`
     : `正文只在确认后批量发送；已完成译文只保留在当前 Edge 会话中。原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
+}
+
+function setPdfDocumentTranslationCopyFeedback(message: string, error = false): void {
+  if (pdfDocumentTranslationCopyFeedbackTimer !== undefined) {
+    window.clearTimeout(pdfDocumentTranslationCopyFeedbackTimer);
+  }
+  documentTranslationCopyFeedback.textContent = message;
+  documentTranslationCopyFeedback.dataset.tone = error ? 'error' : 'success';
+  pdfDocumentTranslationCopyFeedbackTimer = window.setTimeout(() => {
+    documentTranslationCopyFeedback.textContent = '';
+    delete documentTranslationCopyFeedback.dataset.tone;
+    pdfDocumentTranslationCopyFeedbackTimer = undefined;
+  }, 2_800);
+}
+
+async function copyPdfDocumentTranslationResult(
+  mode: 'translation' | 'bilingual',
+): Promise<void> {
+  if (pdfDocumentTranslationCopyPending) return;
+  const result = buildDocumentTranslationExport(
+    pdfDocumentTranslationBlocksState.flatMap((block) => (
+      block.included && block.status === 'done' && block.translatedText
+        ? [{
+            sourceText: block.text,
+            translatedText: block.translatedText,
+            pageNumber: block.pageNumber,
+          }]
+        : []
+    )),
+  );
+  const text = mode === 'translation' ? result.translationText : result.bilingualMarkdown;
+  if (!text) return;
+  pdfDocumentTranslationCopyPending = true;
+  syncPdfDocumentTranslationUi();
+  try {
+    await navigator.clipboard.writeText(text);
+    documentTranslationCopyMenu.open = false;
+    const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
+    setPdfDocumentTranslationCopyFeedback(mode === 'translation'
+      ? `已复制 ${result.blockCount} 段译文${pageLabel}`
+      : `已复制双语 Markdown · ${result.blockCount} 段${pageLabel}`);
+  } catch {
+    setPdfDocumentTranslationCopyFeedback('复制失败，请检查剪贴板权限。', true);
+  } finally {
+    pdfDocumentTranslationCopyPending = false;
+    syncPdfDocumentTranslationUi();
+  }
 }
 
 function ensurePdfDocumentTranslationPage(pageNumber: number): HTMLElement {
@@ -5177,6 +5242,12 @@ documentTranslationPrimary.addEventListener('click', startOrTogglePdfDocumentTra
 documentTranslationStop.addEventListener('click', stopPdfDocumentTranslation);
 documentTranslationClear.addEventListener('click', () => {
   void restartPdfDocumentTranslation();
+});
+documentTranslationCopyTranslation.addEventListener('click', () => {
+  void copyPdfDocumentTranslationResult('translation');
+});
+documentTranslationCopyBilingual.addEventListener('click', () => {
+  void copyPdfDocumentTranslationResult('bilingual');
 });
 documentTranslationRange.addEventListener('change', () => {
   pdfDocumentTranslationRangeError = undefined;

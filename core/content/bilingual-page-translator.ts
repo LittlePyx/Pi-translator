@@ -23,6 +23,10 @@ import type {
 } from '../translation/types';
 import { takeDocumentTranslationBatch } from '../translation/document-batch';
 import {
+  buildDocumentTranslationExport,
+  type DocumentTranslationExport,
+} from '../translation/document-export';
+import {
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageDisplayMode,
   bilingualPageViewportPriority,
@@ -159,6 +163,7 @@ export interface BilingualPageTranslator {
   resumeAfterInteractiveTranslation(token: string | undefined): void;
   refreshDiscovery(): void;
   state(): BilingualPageState;
+  exportResult(): DocumentTranslationExport;
   dispose(): void;
 }
 
@@ -887,11 +892,45 @@ export function createBilingualPageTranslator(
   let sessionExcludedSignatures = new Set<string>();
   let sessionPersistenceTimer: number | undefined;
   let sessionWriteTail: Promise<void> = Promise.resolve();
+  let resultCopyFeedback: string | undefined;
+  let resultCopyFeedbackTimer: number | undefined;
   let scheduleSessionStatePersistence: () => void = () => undefined;
   let persistSessionBlock: (block: BilingualBlock) => Promise<void> = async () => undefined;
   let applyBlockDisplayMode: (block: BilingualBlock) => void = () => undefined;
   let restoreBlockSource: (block: BilingualBlock) => void = () => undefined;
   const originalSourceAriaHidden = new WeakMap<HTMLElement, string | null>();
+
+  const exportResult = (): DocumentTranslationExport => buildDocumentTranslationExport(
+    blocks.map((block) => ({
+      sourceText: block.text,
+      ...(block.status === 'done' && block.translatedText
+        ? { translatedText: block.translatedText }
+        : {}),
+    })),
+  );
+
+  const copyFullTranslationResult = async (
+    mode: 'translation' | 'bilingual',
+  ): Promise<void> => {
+    const result = exportResult();
+    const text = mode === 'translation' ? result.translationText : result.bilingualMarkdown;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      resultCopyFeedback = mode === 'translation'
+        ? `已复制 ${result.blockCount} 段译文`
+        : `已复制双语 Markdown · ${result.blockCount} 段`;
+    } catch {
+      resultCopyFeedback = '复制失败，请检查剪贴板权限';
+    }
+    if (resultCopyFeedbackTimer !== undefined) window.clearTimeout(resultCopyFeedbackTimer);
+    renderControl();
+    resultCopyFeedbackTimer = window.setTimeout(() => {
+      resultCopyFeedback = undefined;
+      resultCopyFeedbackTimer = undefined;
+      renderControl();
+    }, 2_600);
+  };
 
   const assignSessionSignatures = (candidates: BilingualBlock[]): void => {
     const occurrences = new Map<string, number>();
@@ -1957,6 +1996,8 @@ export function createBilingualPageTranslator(
           <details class="more">
             <summary aria-label="更多正文操作" title="更多正文操作">•••</summary>
             <div class="menu">
+              <button type="button" data-action="copy-translation">复制纯译文</button>
+              <button type="button" data-action="copy-bilingual">复制双语 Markdown</button>
               <button type="button" data-action="stop">停止翻译</button>
               <button type="button" data-action="scope">调整范围</button>
               <button type="button" data-action="clear">清除译文</button>
@@ -1993,6 +2034,10 @@ export function createBilingualPageTranslator(
             void control(shouldResume ? 'resume' : 'pause');
           } else if (action === 'stop' || action === 'clear') {
             void control(action);
+          } else if (action === 'copy-translation' || action === 'copy-bilingual') {
+            void copyFullTranslationResult(
+              action === 'copy-translation' ? 'translation' : 'bilingual',
+            );
           } else if (action === 'scope') {
             beginScopePreview();
           } else if (action === 'reset-scope') {
@@ -2054,6 +2099,12 @@ export function createBilingualPageTranslator(
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
     const scope = shadow?.querySelector<HTMLButtonElement>('[data-action="scope"]');
     const clearButton = shadow?.querySelector<HTMLButtonElement>('[data-action="clear"]');
+    const copyTranslation = shadow?.querySelector<HTMLButtonElement>(
+      '[data-action="copy-translation"]',
+    );
+    const copyBilingual = shadow?.querySelector<HTMLButtonElement>(
+      '[data-action="copy-bilingual"]',
+    );
     const compact = shadow?.querySelector<HTMLButtonElement>('[data-action="compact"]');
     const more = shadow?.querySelector<HTMLDetailsElement>('details.more');
     const language = shadow?.querySelector<HTMLSelectElement>('[data-action="language"]');
@@ -2094,6 +2145,8 @@ export function createBilingualPageTranslator(
       if (stop) stop.hidden = true;
       if (scope) scope.hidden = true;
       if (clearButton) clearButton.hidden = true;
+      if (copyTranslation) copyTranslation.hidden = true;
+      if (copyBilingual) copyBilingual.hidden = true;
       if (compact) compact.hidden = true;
       if (more) more.hidden = true;
       if (languageConfirmation) languageConfirmation.hidden = true;
@@ -2138,7 +2191,11 @@ export function createBilingualPageTranslator(
       scope.title = '查看并调整当前正文范围';
     }
     if (clearButton) clearButton.hidden = false;
-    if (output) {
+    if (copyTranslation) copyTranslation.hidden = currentState.translated === 0;
+    if (copyBilingual) copyBilingual.hidden = currentState.translated === 0;
+    if (output && resultCopyFeedback) {
+      output.textContent = resultCopyFeedback;
+    } else if (output) {
       const restoredPrefix = currentState.restored
         ? `已恢复 ${currentState.restored} 段 · `
         : '';
@@ -3158,10 +3215,13 @@ export function createBilingualPageTranslator(
     suspendForInteractiveTranslation,
     resumeAfterInteractiveTranslation,
     state: snapshot,
+    exportResult,
     dispose: () => {
       if (disposed) return;
       if (launcherRefreshTimer !== undefined) window.clearTimeout(launcherRefreshTimer);
       launcherRefreshTimer = undefined;
+      if (resultCopyFeedbackTimer !== undefined) window.clearTimeout(resultCopyFeedbackTimer);
+      resultCopyFeedbackTimer = undefined;
       void persistSessionState();
       clear(false);
       scopeExcludedElements.clear();

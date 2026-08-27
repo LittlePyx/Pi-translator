@@ -1,4 +1,5 @@
 import type {
+  BilingualPageExportResponse,
   PublicSettings,
   PublicSettingsResponse,
   BilingualPageStateResponse,
@@ -2237,6 +2238,7 @@ export async function startSelectionTranslator(
   ): void | Promise<
     SettingsRecoveryAck |
     RuntimeResponse<{ started: true }> |
+    BilingualPageExportResponse |
     BilingualPageStateResponse
   > => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
@@ -2265,6 +2267,17 @@ export async function startSelectionTranslator(
           failed: 0,
           displayMode: 'bilingual',
           translationsHidden: false,
+        } },
+      });
+    }
+    if (typed.type === 'GET_BILINGUAL_PAGE_EXPORT_IN_TAB') {
+      return Promise.resolve({
+        ok: true,
+        data: { export: bilingualPageTranslator?.exportResult() ?? {
+          translationText: '',
+          bilingualMarkdown: '',
+          blockCount: 0,
+          pageCount: 0,
         } },
       });
     }

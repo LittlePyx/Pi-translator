@@ -1,5 +1,6 @@
 import type {
   OpenOptionsPageResponse,
+  BilingualPageExportResponse,
   BilingualPageStateResponse,
   PdfSidePanelSession,
   RuntimeMessage,
@@ -102,6 +103,14 @@ const bilingualPageProgress = element<HTMLElement>('bilingual-page-progress');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
 const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
 const bilingualPageDisplay = element<HTMLSelectElement>('bilingual-page-display');
+const bilingualPageCopyMenu = element<HTMLDetailsElement>('bilingual-page-copy-menu');
+const bilingualPageCopyTranslation = element<HTMLButtonElement>(
+  'bilingual-page-copy-translation',
+);
+const bilingualPageCopyBilingual = element<HTMLButtonElement>(
+  'bilingual-page-copy-bilingual',
+);
+const bilingualPageCopyFeedback = element<HTMLElement>('bilingual-page-copy-feedback');
 const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
 const bilingualPageLanguage = element<HTMLSelectElement>('bilingual-page-language');
 const bilingualPageLanguageConfirmation = element<HTMLElement>(
@@ -202,6 +211,8 @@ let bilingualPageFeatureEnabled = true;
 let defaultTargetLanguage: SupportedTargetLanguage = 'zh-CN';
 let bilingualPagePreferredTargetLanguage: SupportedTargetLanguage | undefined;
 let pendingBilingualPageLanguageSwitch: SupportedTargetLanguage | undefined;
+let bilingualPageCopyPending = false;
+let bilingualPageCopyFeedbackTimer: number | undefined;
 let targetLanguagePending = false;
 let targetLanguagePendingRequestId: string | undefined;
 let targetLanguagePendingTimer: number | undefined;
@@ -771,8 +782,60 @@ function syncBilingualPageControl(): void {
   bilingualPageDisplay.value = bilingualPageDisplayMode(state);
   bilingualPageDisplayControl.hidden = state.phase === 'idle' || state.translated === 0;
   bilingualPageDisplay.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  bilingualPageCopyMenu.hidden = state.translated === 0;
+  bilingualPageCopyTranslation.disabled = bilingualPageCopyPending;
+  bilingualPageCopyBilingual.disabled = bilingualPageCopyPending;
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
+}
+
+function setBilingualPageCopyFeedback(message: string, error = false): void {
+  if (bilingualPageCopyFeedbackTimer !== undefined) {
+    window.clearTimeout(bilingualPageCopyFeedbackTimer);
+  }
+  bilingualPageCopyFeedback.textContent = message;
+  bilingualPageCopyFeedback.dataset.tone = error ? 'error' : 'success';
+  bilingualPageCopyFeedbackTimer = window.setTimeout(() => {
+    bilingualPageCopyFeedback.textContent = '';
+    delete bilingualPageCopyFeedback.dataset.tone;
+    bilingualPageCopyFeedbackTimer = undefined;
+  }, 2_800);
+}
+
+async function copyBilingualPageResult(mode: 'translation' | 'bilingual'): Promise<void> {
+  if (bilingualPageCopyPending || activeTabId === undefined || bilingualPageState.translated === 0) {
+    return;
+  }
+  const tabId = activeTabId;
+  bilingualPageCopyPending = true;
+  syncBilingualPageControl();
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'GET_BILINGUAL_PAGE_EXPORT',
+      payload: { tabId },
+    } satisfies RuntimeMessage) as BilingualPageExportResponse;
+    if (!response.ok) throw new Error(response.error.message);
+    if (activeTabId !== tabId) return;
+    const result = response.data.export;
+    const text = mode === 'translation' ? result.translationText : result.bilingualMarkdown;
+    if (!text) throw new Error('当前还没有可复制的已完成译文。');
+    await navigator.clipboard.writeText(text);
+    bilingualPageCopyMenu.open = false;
+    setBilingualPageCopyFeedback(mode === 'translation'
+      ? `已复制 ${result.blockCount} 段译文`
+      : `已复制双语 Markdown · ${result.blockCount} 段`);
+  } catch (error) {
+    if (activeTabId !== tabId) return;
+    setBilingualPageCopyFeedback(
+      error instanceof Error ? error.message : '复制失败，请检查剪贴板权限。',
+      true,
+    );
+  } finally {
+    if (activeTabId === tabId) {
+      bilingualPageCopyPending = false;
+      syncBilingualPageControl();
+    }
+  }
 }
 
 function bilingualPagePrimaryAction(): 'start' | BilingualPageAction {
@@ -2418,6 +2481,12 @@ bilingualPageDisplay.addEventListener('change', () => {
 });
 bilingualPageClear.addEventListener('click', () => {
   void updateBilingualPage('clear');
+});
+bilingualPageCopyTranslation.addEventListener('click', () => {
+  void copyBilingualPageResult('translation');
+});
+bilingualPageCopyBilingual.addEventListener('click', () => {
+  void copyBilingualPageResult('bilingual');
 });
 bilingualPageLanguage.addEventListener('change', () => {
   if (!isSupportedTargetLanguage(bilingualPageLanguage.value)) {

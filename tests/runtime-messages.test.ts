@@ -100,6 +100,15 @@ describe('runtime message guard', () => {
       payload: { tabId: 7, targetLanguage: 'zh-CN' },
     })).toBe(true);
     expect(isRuntimeMessage({
+      type: 'GET_BILINGUAL_PAGE_EXPORT',
+      payload: { tabId: 7 },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'GET_BILINGUAL_PAGE_EXPORT',
+      payload: { tabId: -1 },
+    })).toBe(false);
+    expect(isRuntimeMessage({ type: 'GET_BILINGUAL_PAGE_EXPORT_IN_TAB' })).toBe(true);
+    expect(isRuntimeMessage({
       type: 'CONTROL_BILINGUAL_PAGE',
       payload: { tabId: 7, action: 'pause' },
     })).toBe(true);

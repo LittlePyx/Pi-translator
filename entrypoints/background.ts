@@ -14,6 +14,7 @@ import {
   type ConnectionTestResponse,
   type VisionCapabilityTestResponse,
   type ApiDiagnosticResponse,
+  type BilingualPageExportResponse,
   type BilingualPageStateResponse,
   type ModelListResponse,
   type PdfSidePanelSession,
@@ -3942,6 +3943,19 @@ async function getBilingualPageState(tabId: number): Promise<BilingualPageStateR
   }
 }
 
+async function getBilingualPageExport(tabId: number): Promise<BilingualPageExportResponse> {
+  try {
+    await bilingualPageTab(tabId);
+    const response = await browser.tabs.sendMessage(tabId, {
+      type: 'GET_BILINGUAL_PAGE_EXPORT_IN_TAB',
+    } satisfies RuntimeMessage) as BilingualPageExportResponse | undefined;
+    if (!response) throw new Error('The page translator did not respond.');
+    return response;
+  } catch (error) {
+    return errorResponse(error);
+  }
+}
+
 async function controlBilingualPage(
   tabId: number,
   action: BilingualPageAction,
@@ -4821,6 +4835,7 @@ export default defineBackground(() => {
       if (
         message.type === 'START_BILINGUAL_PAGE' ||
         message.type === 'GET_BILINGUAL_PAGE_STATE' ||
+        message.type === 'GET_BILINGUAL_PAGE_EXPORT' ||
         message.type === 'CONTROL_BILINGUAL_PAGE'
       ) {
         const extensionSender = Boolean(sender.url?.startsWith(browser.runtime.getURL('')));
@@ -4839,6 +4854,9 @@ export default defineBackground(() => {
         }
         if (message.type === 'GET_BILINGUAL_PAGE_STATE') {
           return getBilingualPageState(message.payload.tabId);
+        }
+        if (message.type === 'GET_BILINGUAL_PAGE_EXPORT') {
+          return getBilingualPageExport(message.payload.tabId);
         }
         return controlBilingualPage(message.payload.tabId, message.payload.action);
       }
