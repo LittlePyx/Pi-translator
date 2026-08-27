@@ -12,6 +12,23 @@ const LEGACY_MATH_RENDER_SELECTOR = [
   ':scope > .MathJax_Display',
 ].join(',');
 
+const UNEXTRACTABLE_RENDERED_MATH_SELECTOR = [
+  '.katex',
+  '.katex-display',
+  '.MathJax',
+  '.MathJax_Preview',
+  '.MathJax_Display',
+  'mjx-container',
+  'math',
+  '[data-tex]',
+  '[data-latex]',
+  '[role="math"]',
+].join(',');
+
+const FORMULA_VISUAL_TAG_SELECTOR = 'img,svg,canvas,object,embed';
+const FORMULA_HINT = /(?:^|[^a-z])(?:math|mathjax|katex|latex|tex|equation|formula|eqn)(?:[^a-z]|$)/iu;
+const FORMULA_TEXT_HINT = /(?:\\(?:frac|sqrt|sum|prod|int|lim|begin)|\^\s*[{\w(]|_\s*[{\w(]|[=≈≃≅≠≤≥]\s*\S)/u;
+
 function renderedMathLatex(element: Element): string | undefined {
   const annotation = element.matches('annotation[encoding*="tex" i]')
     ? element
@@ -37,6 +54,31 @@ function delimitedLatex(latex: string, display: boolean): string {
 function legacyDisplayMode(script: HTMLScriptElement): boolean {
   return /mode\s*=\s*display/iu.test(script.type) ||
     Boolean(script.closest('.MathJax_Display'));
+}
+
+function visualFormulaHint(element: Element): boolean {
+  const values: string[] = [];
+  let current: Element | null = element;
+  for (let depth = 0; current && depth < 3; depth += 1, current = current.parentElement) {
+    for (const name of ['class', 'id', 'role', 'data-type', 'aria-label', 'title', 'alt', 'src']) {
+      const value = current.getAttribute(name);
+      if (value) values.push(value.slice(0, 400));
+    }
+  }
+  const joined = values.join(' ');
+  return FORMULA_HINT.test(joined) || FORMULA_TEXT_HINT.test(joined);
+}
+
+function topLevelElements(elements: Element[]): Element[] {
+  const selected = new Set(elements);
+  return elements.filter((element) => {
+    let parent = element.parentElement;
+    while (parent) {
+      if (selected.has(parent)) return false;
+      parent = parent.parentElement;
+    }
+    return true;
+  });
 }
 
 /**
@@ -83,4 +125,18 @@ export function replaceRenderedMathWithLatex(root: ParentNode): number {
   }
 
   return replacements;
+}
+
+/**
+ * Removes formula renderings that expose no recoverable TeX. The original page
+ * remains untouched because callers run this on a cloned paragraph. Returning
+ * the count lets the bilingual reader offer an explicit vision fallback.
+ */
+export function removeUnextractableRenderedMath(root: ParentNode): number {
+  const explicit = [...root.querySelectorAll(UNEXTRACTABLE_RENDERED_MATH_SELECTOR)];
+  const hintedVisuals = [...root.querySelectorAll(FORMULA_VISUAL_TAG_SELECTOR)]
+    .filter(visualFormulaHint);
+  const candidates = topLevelElements([...new Set([...explicit, ...hintedVisuals])]);
+  for (const element of candidates) element.remove();
+  return candidates.length;
 }

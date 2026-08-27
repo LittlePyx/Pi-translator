@@ -11,7 +11,11 @@ import {
   type SupportedTargetLanguage,
 } from '../language/supported-target-languages';
 import { isLikelySourceCode } from '../selection/passive-selection-intent';
-import { replaceRenderedMathWithLatex } from '../selection/rendered-math';
+import {
+  removeUnextractableRenderedMath,
+  replaceRenderedMathWithLatex,
+} from '../selection/rendered-math';
+import type { ViewportRect } from '../selection/types';
 import type {
   TranslationContentMode,
   TranslationStyle,
@@ -45,6 +49,7 @@ const TRANSLATION_ATTRIBUTE = 'data-pi-bilingual-translation';
 const TRANSLATION_TEXT_ATTRIBUTE = 'data-pi-bilingual-text';
 const TRANSLATION_ACTIONS_ATTRIBUTE = 'data-pi-bilingual-actions';
 const TRANSLATION_FEEDBACK_ATTRIBUTE = 'data-pi-bilingual-feedback';
+const TRANSLATION_FORMULA_NOTICE_ATTRIBUTE = 'data-pi-bilingual-formula-notice';
 const TRANSLATION_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-hidden';
 const TRANSLATION_GLOBAL_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-global-hidden';
 const SOURCE_HIDDEN_ATTRIBUTE = 'data-pi-bilingual-source-hidden';
@@ -113,6 +118,7 @@ interface BilingualBlock {
   sessionSignature?: string;
   restoredFromSession?: boolean;
   translatedText?: string;
+  hasUnextractableFormula?: boolean;
   translation?: HTMLElement;
   pendingElement?: HTMLElement;
   pendingTimer?: number;
@@ -137,6 +143,7 @@ interface BilingualPageTranslatorOptions {
   preferredTargetLanguage(): SupportedTargetLanguage;
   launcherEnabled(): boolean;
   launcherSuppressed(): boolean;
+  onRecognizeVisualFormula(rect: ViewportRect): void;
   onStateChange(state: BilingualPageState): void;
 }
 
@@ -168,13 +175,17 @@ function hasExcludedAncestor(element: HTMLElement): boolean {
   return excluded !== element || !element.hasAttribute(SOURCE_HIDDEN_ATTRIBUTE);
 }
 
-function readableElementText(element: HTMLElement): string {
+function readableElementContent(element: HTMLElement): {
+  text: string;
+  hasUnextractableFormula: boolean;
+} {
   const clone = element.cloneNode(true) as HTMLElement;
   clone.querySelectorAll<HTMLElement>('code, kbd, samp').forEach((node) => {
     const code = normalizeBilingualPageText(node.textContent ?? '');
     node.replaceWith(document.createTextNode(code ? ` \`${code}\` ` : ''));
   });
   replaceRenderedMathWithLatex(clone);
+  const hasUnextractableFormula = removeUnextractableRenderedMath(clone) > 0;
   clone.querySelectorAll([
     'script',
     'style',
@@ -188,7 +199,14 @@ function readableElementText(element: HTMLElement): string {
     `[${TRANSLATION_PENDING_ATTRIBUTE}]`,
     `[${ERROR_ATTRIBUTE}]`,
   ].join(',')).forEach((node) => node.remove());
-  return normalizeBilingualPageText(clone.textContent ?? '');
+  return {
+    text: normalizeBilingualPageText(clone.textContent ?? ''),
+    hasUnextractableFormula,
+  };
+}
+
+function readableElementText(element: HTMLElement): string {
+  return readableElementContent(element).text;
 }
 
 function linkTextLength(element: HTMLElement): number {
@@ -203,10 +221,6 @@ function hasExcludedSourceDescendant(element: HTMLElement): boolean {
     'select',
     'textarea',
     'pre',
-    '.katex-display',
-    '.MathJax_Display',
-    'math[display="block"]',
-    'mjx-container[display="true"]',
   ].join(',');
   return [...element.querySelectorAll(selector)].some((descendant) => !descendant.closest([
     `[${TRANSLATION_ATTRIBUTE}]`,
@@ -230,13 +244,18 @@ function candidateElements(
       (element.tagName === 'LI' && Boolean(element.querySelector('p, blockquote, ul, ol, li'))) ||
       (element.tagName === 'BLOCKQUOTE' && Boolean(element.querySelector('p, blockquote')))
     ) continue;
-    const text = readableElementText(element);
+    const { text, hasUnextractableFormula } = readableElementContent(element);
     if (
       !isBilingualPageTextCandidate(text, element.tagName, linkTextLength(element)) ||
       isLikelySourceCode(text) ||
       isLikelyTargetLanguage(text, targetLanguage)
     ) continue;
-    candidates.push({ element, text, status: 'idle' });
+    candidates.push({
+      element,
+      text,
+      status: 'idle',
+      ...(hasUnextractableFormula ? { hasUnextractableFormula: true } : {}),
+    });
     if (candidates.length >= MAX_BILINGUAL_BLOCKS) break;
   }
   return candidates;
@@ -323,6 +342,7 @@ interface BilingualTranslationActions {
   retranslate(): void;
   toggleHidden(): void;
   toggleMore(): void;
+  recognizeFormula?: () => void;
 }
 
 function translationActionButton(
@@ -336,6 +356,21 @@ function translationActionButton(
   button.textContent = label;
   button.addEventListener('click', listener);
   return button;
+}
+
+function formulaRecognitionNotice(listener: () => void): HTMLElement {
+  const notice = document.createElement('span');
+  notice.setAttribute(TRANSLATION_FORMULA_NOTICE_ATTRIBUTE, '');
+  const message = document.createElement('span');
+  message.textContent = '本段公式无法读取，已保留原文';
+  const recognize = document.createElement('button');
+  recognize.type = 'button';
+  recognize.dataset.action = 'recognize-formula';
+  recognize.textContent = '框选识别';
+  recognize.title = '预先框选本段，确认后使用多模态模型识别公式';
+  recognize.addEventListener('click', listener);
+  notice.append(message, recognize);
+  return notice;
 }
 
 function translationElement(
@@ -368,7 +403,9 @@ function translationElement(
   );
   toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]')
     ?.setAttribute('aria-expanded', 'false');
-  translation.append(text, toolbar);
+  translation.append(text);
+  if (actions.recognizeFormula) translation.append(formulaRecognitionNotice(actions.recognizeFormula));
+  translation.append(toolbar);
   applySourceTypography(translation, block, 18);
   return translation;
 }
@@ -398,6 +435,16 @@ function applySourceTypography(
 function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
   if (block.element.tagName === 'LI') block.element.append(element);
   else block.element.insertAdjacentElement('afterend', element);
+}
+
+function visibleElementRegion(element: HTMLElement, padding = 6): ViewportRect | undefined {
+  const bounds = element.getBoundingClientRect();
+  const left = Math.max(0, bounds.left - padding);
+  const top = Math.max(0, bounds.top - padding);
+  const right = Math.min(innerWidth, bounds.right + padding);
+  const bottom = Math.min(innerHeight, bounds.bottom + padding);
+  if (right - left < 24 || bottom - top < 24) return undefined;
+  return { left, top, right, bottom };
 }
 
 function clearBlockPending(block: BilingualBlock, removeElement = true): void {
@@ -581,6 +628,42 @@ function installTranslationStyle(): void {
       color: inherit !important;
       font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif !important;
       font-synthesis: none !important;
+    }
+    [${TRANSLATION_FORMULA_NOTICE_ATTRIBUTE}] {
+      all: initial !important;
+      display: flex !important;
+      width: fit-content !important;
+      max-width: 100% !important;
+      box-sizing: border-box !important;
+      margin-top: .36em !important;
+      align-items: center !important;
+      gap: .38em !important;
+      color: color-mix(in srgb, var(--pi-bilingual-color) 66%, #64748b 34%) !important;
+      font-family: var(--pi-bilingual-font) !important;
+      font-size: max(11px, calc(var(--pi-bilingual-size) * .72)) !important;
+      font-style: normal !important;
+      font-weight: 400 !important;
+      line-height: 1.35 !important;
+    }
+    [${TRANSLATION_FORMULA_NOTICE_ATTRIBUTE}] button {
+      all: initial !important;
+      min-height: 24px !important;
+      box-sizing: border-box !important;
+      border: 1px solid color-mix(in srgb, #6558d9 28%, transparent) !important;
+      border-radius: 999px !important;
+      padding: 2px 8px !important;
+      color: #5548c8 !important;
+      background: color-mix(in srgb, #6558d9 7%, transparent) !important;
+      cursor: pointer !important;
+      font: 600 11px/1.2 var(--pi-bilingual-font) !important;
+      white-space: nowrap !important;
+    }
+    [${TRANSLATION_FORMULA_NOTICE_ATTRIBUTE}] button:hover {
+      background: color-mix(in srgb, #6558d9 13%, transparent) !important;
+    }
+    [${TRANSLATION_FORMULA_NOTICE_ATTRIBUTE}] button:focus-visible {
+      outline: 2px solid rgba(101, 88, 217, .42) !important;
+      outline-offset: 2px !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       all: initial !important;
@@ -1706,7 +1789,8 @@ export function createBilingualPageTranslator(
     const hideSource = mode === 'translation' &&
       block.status === 'done' &&
       Boolean(block.translation?.isConnected) &&
-      !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE);
+      !block.translation?.hasAttribute(TRANSLATION_HIDDEN_ATTRIBUTE) &&
+      !block.hasUnextractableFormula;
     if (!hideSource) {
       restoreBlockSource(block);
       return;
@@ -1762,6 +1846,38 @@ export function createBilingualPageTranslator(
     } catch {
       setTranslationFeedback(block, '复制失败，请重试');
     }
+  };
+
+  const recognizeBlockVisualFormula = (block: BilingualBlock): void => {
+    setTouchActionsExpanded(block, false);
+    const start = (): boolean => {
+      const rect = visibleElementRegion(block.element);
+      if (!rect) return false;
+      options.onRecognizeVisualFormula(rect);
+      return true;
+    };
+    if (start()) return;
+    block.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    window.setTimeout(() => {
+      if (!start()) setTranslationFeedback(block, '当前段落不在可见区域，请滚动后重试');
+    }, 120);
+  };
+
+  const syncBlockFormulaNotice = (block: BilingualBlock): void => {
+    const translation = block.translation;
+    if (!translation) return;
+    const existing = translation.querySelector<HTMLElement>(
+      `[${TRANSLATION_FORMULA_NOTICE_ATTRIBUTE}]`,
+    );
+    if (!block.hasUnextractableFormula) {
+      existing?.remove();
+      return;
+    }
+    if (existing) return;
+    const toolbar = translation.querySelector<HTMLElement>(`[${TRANSLATION_ACTIONS_ATTRIBUTE}]`);
+    const notice = formulaRecognitionNotice(() => recognizeBlockVisualFormula(block));
+    if (toolbar) translation.insertBefore(notice, toolbar);
+    else translation.append(notice);
   };
 
   const renderControl = (): void => {
@@ -2116,6 +2232,8 @@ export function createBilingualPageTranslator(
       let block = previousByElement.get(candidate.element);
       if (block && !used.has(block)) {
         used.add(block);
+        if (candidate.hasUnextractableFormula) block.hasUnextractableFormula = true;
+        else delete block.hasUnextractableFormula;
         if (block.text !== candidate.text) {
           clearBlockPending(block);
           restoreBlockSource(block);
@@ -2131,6 +2249,7 @@ export function createBilingualPageTranslator(
           block.status = 'idle';
           newWork = true;
         }
+        syncBlockFormulaNotice(block);
         if (candidate.sessionSignature) block.sessionSignature = candidate.sessionSignature;
         else delete block.sessionSignature;
       } else {
@@ -2139,6 +2258,8 @@ export function createBilingualPageTranslator(
         if (block) {
           observer?.unobserve(block.element);
           block.element = candidate.element;
+          if (candidate.hasUnextractableFormula) block.hasUnextractableFormula = true;
+          else delete block.hasUnextractableFormula;
           if (candidate.sessionSignature) block.sessionSignature = candidate.sessionSignature;
           else delete block.sessionSignature;
           used.add(block);
@@ -2155,6 +2276,7 @@ export function createBilingualPageTranslator(
             block.status = 'idle';
             newWork = true;
           }
+          syncBlockFormulaNotice(block);
           structureChanged = true;
         } else {
           block = candidate;
@@ -2457,6 +2579,9 @@ export function createBilingualPageTranslator(
             block,
             !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
           ),
+          ...(block.hasUnextractableFormula
+            ? { recognizeFormula: () => recognizeBlockVisualFormula(block) }
+            : {}),
         },
       );
       translation.toggleAttribute(
@@ -2683,6 +2808,9 @@ export function createBilingualPageTranslator(
               block,
               !block.translation?.hasAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE),
             ),
+            ...(block.hasUnextractableFormula
+              ? { recognizeFormula: () => recognizeBlockVisualFormula(block) }
+              : {}),
           },
         );
         translation.toggleAttribute(

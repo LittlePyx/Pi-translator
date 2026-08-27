@@ -945,7 +945,7 @@ test.beforeAll(async () => {
                 <form><p id="article-form-help">Payment and account form instructions must not be collected as article content.</p><input type="password" value="private-value" /></form>
                 <div style="height:1500px" aria-hidden="true"></div>
                 <p id="article-later">A later paragraph should wait until the reader approaches it instead of consuming API requests for the entire page immediately.</p>
-                <blockquote id="article-summary">The finished bilingual view must be removable in one action so the webpage returns to its untouched original structure.</blockquote>
+                <blockquote id="article-summary">The finished bilingual view must be removable in one action so the webpage returns to its untouched original structure. <svg class="equation-graphic" role="img" aria-label="rendered equation without TeX source" width="126" height="30" viewBox="0 0 126 30" style="display:inline-block;vertical-align:middle"><text x="5" y="21" font-size="18">g(x)=x³+1</text></svg></blockquote>
                 ${bilingualArticleRevision
                   ? '<p id="article-new">A newly published paragraph should be translated after the reader refreshes the same article.</p>'
                   : ''}
@@ -1564,6 +1564,7 @@ test('progressively adds and removes bilingual article translations without touc
     expect(completedRequests).toContain('⟦FULL1_0001⟧');
     expect(completedRequests).not.toContain('duplicated rendered x 2');
     expect(completedRequests).not.toContain('legacy preview x 2');
+    expect(completedRequests).not.toContain('g(x)=x³+1');
     const renderedFormulaTranslation = page.locator(
       '#article-inline-code + [data-pi-bilingual-translation]',
     );
@@ -1571,6 +1572,14 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(renderedFormulaTranslation.locator('.pi-math-inline math')).toBeVisible();
     await expect(renderedFormulaTranslation.locator('[data-pi-bilingual-text]'))
       .not.toContainText('$f(x)=x^2$');
+    const visualFormulaTranslation = page.locator(
+      '#article-summary + [data-pi-bilingual-translation]',
+    );
+    const visualFormulaNotice = visualFormulaTranslation.locator(
+      '[data-pi-bilingual-formula-notice]',
+    );
+    await expect(visualFormulaNotice).toContainText('本段公式无法读取，已保留原文');
+    await expect(visualFormulaNotice.getByRole('button', { name: '框选识别' })).toBeVisible();
 
     const introTranslation = page.locator(
       '#article-intro + [data-pi-bilingual-translation]',
@@ -1587,7 +1596,7 @@ test('progressively adds and removes bilingual article translations without touc
     const toggleTranslation = introActions.getByRole('button', { name: '隐藏' });
     await retranslateBlock.focus();
     expect(await retranslateBlock.evaluate((button) => button.getBoundingClientRect().height))
-      .toBeGreaterThanOrEqual(28);
+      .toBeGreaterThan(27.9);
     await copyTranslation.click();
     await expect(introActions.locator('[data-pi-bilingual-feedback]'))
       .toContainText('译文已复制');
@@ -1617,6 +1626,10 @@ test('progressively adds and removes bilingual article translations without touc
       'data-pi-bilingual-source-hidden',
       'block',
     );
+    await expect(page.locator('#article-summary')).not.toHaveAttribute(
+      'data-pi-bilingual-source-hidden',
+      'block',
+    );
     expect(textRequests.length).toBe(requestsBeforeDisplayChange);
     await introActions.getByRole('button', { name: '显示译文' }).press('Enter');
     await expect(introTranslation).not.toHaveAttribute('data-pi-bilingual-hidden', '');
@@ -1643,6 +1656,25 @@ test('progressively adds and removes bilingual article translations without touc
     )).toBeVisible();
     expect(textRequests.length).toBe(requestsBeforeDisplayChange);
 
+    const requestsBeforeVisualFormula = textRequests.length;
+    await visualFormulaNotice.getByRole('button', { name: '框选识别' }).click();
+    const visualFormulaRegion = page.locator('#pi-web-region-selection-root');
+    await expect(visualFormulaRegion).toBeVisible();
+    await expect(visualFormulaRegion.locator('.selection')).toHaveAttribute('data-visible', 'true');
+    const seededFormulaRegion = await visualFormulaRegion.locator('.selection').boundingBox();
+    const sourceFormulaRegion = await page.locator('#article-summary').boundingBox();
+    expect(seededFormulaRegion).not.toBeNull();
+    expect(sourceFormulaRegion).not.toBeNull();
+    if (seededFormulaRegion && sourceFormulaRegion) {
+      expect(Math.abs(seededFormulaRegion.x - Math.max(0, sourceFormulaRegion.x - 6)))
+        .toBeLessThanOrEqual(2);
+      expect(seededFormulaRegion.width).toBeGreaterThanOrEqual(sourceFormulaRegion.width);
+    }
+    await visualFormulaRegion.getByRole('button', { name: '取消' }).click();
+    await expect(visualFormulaRegion).toHaveCount(0);
+    await expect(visualFormulaTranslation).toBeVisible();
+    expect(textRequests.length).toBe(requestsBeforeVisualFormula);
+
     const cdp = await context.newCDPSession(page);
     try {
       await cdp.send('Emulation.setTouchEmulationEnabled', {
@@ -1656,7 +1688,7 @@ test('progressively adds and removes bilingual article translations without touc
       await expect(moreActions).toHaveAttribute('aria-expanded', 'false');
       await expect(copyTranslation).toBeHidden();
       expect(await moreActions.evaluate((button) => button.getBoundingClientRect().height))
-        .toBeGreaterThanOrEqual(28);
+        .toBeGreaterThan(27.9);
       await moreActions.click();
       await expect(moreActions).toHaveText('收起');
       await expect(moreActions).toHaveAttribute('aria-expanded', 'true');

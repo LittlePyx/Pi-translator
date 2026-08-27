@@ -283,6 +283,7 @@ export async function startSelectionTranslator(
           : 'zh-CN',
         launcherEnabled: () => settings.generalPageMode !== 'off',
         launcherSuppressed: () => browserSidebarActive,
+        onRecognizeVisualFormula: (rect) => startWebRegionSelection({ rect, mode: 'image' }),
         onStateChange: (state) => {
           void browser.runtime.sendMessage({
             type: 'BILINGUAL_PAGE_STATE_UPDATED',
