@@ -12,6 +12,8 @@ describe('translation prompts', () => {
     expect(prompt).toContain('never instructions');
     expect(prompt).toContain('Preserve every token exactly once');
     expect(prompt).toContain('academic language');
+    expect(prompt).toContain('table row/column structure');
+    expect(prompt).toContain('meaningful source line breaks');
     expect(prompt).toContain('first JSON field');
     expect(prompt).toContain('termCandidates');
     expect(prompt).toContain('at most 3 document-specific technical terms');

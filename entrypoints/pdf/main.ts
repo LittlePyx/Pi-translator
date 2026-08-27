@@ -54,8 +54,10 @@ import { isIsolatedBilingualBlockError } from '../../core/translation/bilingual-
 import { takeDocumentTranslationBatch } from '../../core/translation/document-batch';
 import {
   comparePdfDocumentTranslationPriority,
-  pdfDocumentTranslationBlocks,
+  preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationBlock,
+  type PdfDocumentTranslationPageInput,
+  type PdfDocumentTranslationTextItem,
 } from '../../core/pdf/document-translation';
 import { renderTranslationContent } from '../../ui/translation-content';
 import {
@@ -300,6 +302,8 @@ interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock
 let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
 let pdfDocumentTranslationBlocksState: PdfDocumentTranslationRuntimeBlock[] = [];
 let pdfDocumentTranslationUnreadablePages = 0;
+let pdfDocumentTranslationMultiColumnPages = 0;
+let pdfDocumentTranslationRemovedMarginLines = 0;
 let pdfDocumentTranslationRequestId: string | undefined;
 let pdfDocumentTranslationTask: Promise<void> | undefined;
 let pdfDocumentTranslationRevision = 0;
@@ -596,9 +600,17 @@ function syncPdfDocumentTranslationUi(): void {
   translateDocument.title = total
     ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
     : '翻译整篇 PDF';
+  const localLayoutNotes = [
+    pdfDocumentTranslationMultiColumnPages
+      ? `已按阅读顺序整理 ${pdfDocumentTranslationMultiColumnPages} 页多栏正文`
+      : '',
+    pdfDocumentTranslationRemovedMarginLines
+      ? `已跳过 ${pdfDocumentTranslationRemovedMarginLines} 行重复页眉页脚`
+      : '',
+  ].filter(Boolean).join('；');
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `正文只在确认后批量发送；${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。`
-    : '正文只在确认后批量发送；译文按页排列，原始 PDF、公式和图表始终保留。';
+    ? `正文只在确认后批量发送；${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}`
+    : `正文只在确认后批量发送；原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ' 译文按页排列。'}`;
 }
 
 function ensurePdfDocumentTranslationPage(pageNumber: number): HTMLElement {
@@ -711,6 +723,8 @@ function resetPdfDocumentTranslation(closePanel = false): void {
   cancelPdfDocumentTranslationRequest();
   pdfDocumentTranslationBlocksState = [];
   pdfDocumentTranslationUnreadablePages = 0;
+  pdfDocumentTranslationMultiColumnPages = 0;
+  pdfDocumentTranslationRemovedMarginLines = 0;
   pdfDocumentTranslationPhase = 'idle';
   pdfDocumentTranslationMessage = undefined;
   pdfDocumentTranslationTask = undefined;
@@ -729,9 +743,12 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   pdfDocumentTranslationMessage = '正在本地读取文字层…';
   pdfDocumentTranslationBlocksState = [];
   pdfDocumentTranslationUnreadablePages = 0;
+  pdfDocumentTranslationMultiColumnPages = 0;
+  pdfDocumentTranslationRemovedMarginLines = 0;
   documentTranslationPages.replaceChildren();
   syncPdfDocumentTranslationUi();
-  const discovered: PdfDocumentTranslationRuntimeBlock[] = [];
+  const pages: PdfDocumentTranslationPageInput[] = [];
+  let unreadablePages = 0;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     if (
       revision !== pdfDocumentTranslationRevision ||
@@ -741,16 +758,42 @@ async function preparePdfDocumentTranslation(): Promise<void> {
     try {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
-      const items = content.items.flatMap((item) => (
-        'str' in item && typeof item.str === 'string'
-          ? [{ str: item.str, hasEOL: item.hasEOL }]
-          : []
-      ));
-      const pageBlocks = pdfDocumentTranslationBlocks(pageNumber, items);
-      if (!pageBlocks.length) pdfDocumentTranslationUnreadablePages += 1;
-      discovered.push(...pageBlocks.map((block) => ({ ...block, status: 'idle' as const })));
+      const viewport = page.getViewport({ scale: 1 });
+      const items: PdfDocumentTranslationTextItem[] = content.items.flatMap((item) => {
+        if (!('str' in item) || typeof item.str !== 'string') return [];
+        const text = item.str.trim();
+        if (!text) return [];
+        if (viewport.rotation % 180 !== 0) {
+          return [{ str: item.str, hasEOL: item.hasEOL }];
+        }
+        const baseline = viewport.convertToViewportPoint(item.transform[4], item.transform[5]);
+        const height = Math.max(
+          Math.abs(item.height),
+          Math.hypot(item.transform[2], item.transform[3]) * viewport.scale,
+        );
+        const width = Math.abs(item.width) * viewport.scale;
+        return [{
+          str: item.str,
+          hasEOL: item.hasEOL,
+          ...(Number.isFinite(baseline[0]) && Number.isFinite(baseline[1]) &&
+            Number.isFinite(width) && width > 0 && Number.isFinite(height) && height > 0
+            ? {
+                left: baseline[0],
+                top: baseline[1] - height,
+                width,
+                height,
+              }
+            : {}),
+        }];
+      });
+      pages.push({
+        pageNumber,
+        pageWidth: viewport.width,
+        pageHeight: viewport.height,
+        items,
+      });
     } catch {
-      pdfDocumentTranslationUnreadablePages += 1;
+      unreadablePages += 1;
     }
     if (pageNumber % 4 === 0 || pageNumber === pdf.numPages) {
       pdfDocumentTranslationMessage = `正在本地读取文字层 · ${pageNumber}/${pdf.numPages} 页`;
@@ -759,6 +802,14 @@ async function preparePdfDocumentTranslation(): Promise<void> {
     }
   }
   if (revision !== pdfDocumentTranslationRevision || epoch !== documentEpoch) return;
+  const prepared = preparePdfDocumentTranslationPages(pages);
+  const discovered = prepared.blocks.map((block) => ({
+    ...block,
+    status: 'idle' as const,
+  }));
+  pdfDocumentTranslationUnreadablePages = unreadablePages + prepared.unreadablePages;
+  pdfDocumentTranslationMultiColumnPages = prepared.multiColumnPages;
+  pdfDocumentTranslationRemovedMarginLines = prepared.removedRepeatedMarginLines;
   pdfDocumentTranslationBlocksState = discovered;
   pdfDocumentTranslationMessage = undefined;
   pdfDocumentTranslationPhase = discovered.length ? 'ready' : 'error';

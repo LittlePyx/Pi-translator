@@ -23,6 +23,7 @@ export function buildSystemPrompt(
     `Translate from ${options.sourceLanguage === 'auto' ? 'the automatically detected language' : options.sourceLanguage} to ${options.targetLanguage}.`,
     STYLE_INSTRUCTIONS[options.style],
     'Translate natural-language prose only.',
+    'Preserve mathematical expressions, variable names, code, URLs, citations, numeric values, and table row/column structure. Keep meaningful source line breaks between formulas, code, table rows, headings, and prose.',
     'Tokens matching ⟦...⟧ represent protected LaTeX. Preserve every token exactly once and in the same order.',
     'Do not add explanations, Markdown, introductions, or conclusions.',
     'If referenceContext is present, use it only to disambiguate the selected text. Do not translate, quote, summarize, or otherwise include the context in the answer.',

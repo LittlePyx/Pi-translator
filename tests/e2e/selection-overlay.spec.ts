@@ -5124,6 +5124,54 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
   }
 });
 
+test('orders a two-column PDF by reading column before full-document translation', async () => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'two-column-full-document.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoColumnTextPdf(
+        [
+          'Left column opening sentence.',
+          'Left column supporting evidence.',
+          'Left column closing sentence.',
+        ],
+        [
+          'Right column opening sentence.',
+          'Right column supporting evidence.',
+          'Right column closing sentence.',
+        ],
+        [{ text: 'Layout-aware paper title', x: 54, y: 752 }],
+      ),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 1 段，等待确认');
+    await expect(pdfPage.locator('#pdf-document-translation-note'))
+      .toContainText('已按阅读顺序整理 1 页多栏正文');
+
+    const requestStart = textRequests.length;
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
+    expect(textRequests.length).toBe(requestStart + 1);
+    const request = textRequests[requestStart]!;
+    const messages = request.messages as Array<{ role?: string; content?: string }>;
+    const userContent = messages.find((message) => message.role === 'user')?.content;
+    expect(userContent).toBeTruthy();
+    const payload = JSON.parse(userContent!) as {
+      segments: Array<{ id: string; text: string }>;
+    };
+    const source = payload.segments.map((segment) => segment.text).join('\n');
+    expect(source.startsWith('Layout-aware paper title')).toBe(true);
+    expect(source.indexOf('Left column closing sentence.'))
+      .toBeLessThan(source.indexOf('Right column opening sentence.'));
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('uses the native PDF outline for compact chapter navigation', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   try {
