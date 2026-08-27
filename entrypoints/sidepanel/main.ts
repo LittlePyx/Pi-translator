@@ -723,7 +723,7 @@ function syncBilingualPageControl(): void {
   if (!languageConfirmation) pendingBilingualPageLanguageSwitch = undefined;
   const restoredPrefix = state.restored ? `已恢复 ${state.restored} 段 · ` : '';
   bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'running'
-    ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 滚动继续`
+    ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
     : state.phase === 'paused'
       ? state.pauseReason === 'interactive'
         ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`

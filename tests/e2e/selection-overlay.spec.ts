@@ -685,6 +685,7 @@ test.beforeAll(async () => {
       holdNextBilingualRequest &&
       (
         requestedText.includes('A practical guide to reliable bilingual reading') ||
+        requestedText.includes('Bilingual reading should preserve the original article') ||
         requestedText.includes('A held dynamically loaded paragraph')
       )
     ) {
@@ -950,11 +951,11 @@ test.beforeAll(async () => {
                 <p id="article-method">${bilingualArticleRevision
                   ? 'The updated translator should restore unchanged paragraphs and translate only the article content that actually changed.'
                   : 'The translator should process nearby paragraphs first, remain responsive during long articles, and let the reader pause without losing completed work.'}</p>
-                <pre id="article-code"><code>const result = await translateVisibleParagraphs(article);</code></pre>
+                <pre id="article-code"><code>const result = await translateAllParagraphs(article);</code></pre>
                 <p id="article-inline-code">Run <code>npm run build:edge</code> after changing the extension, while keeping the score <span class="math notranslate nohighlight"><span class="MathJax_Preview">legacy preview x 2</span><span class="MathJax">duplicated rendered x 2</span><script type="math/tex">f(x)=x^2</script></span> and its surrounding explanation readable.</p>
                 <form><p id="article-form-help">Payment and account form instructions must not be collected as article content.</p><input type="password" value="private-value" /></form>
                 <div style="height:1500px" aria-hidden="true"></div>
-                <p id="article-later">A later paragraph should wait until the reader approaches it instead of consuming API requests for the entire page immediately.</p>
+                <p id="article-later">The full article task should translate this later paragraph without requiring the reader to scroll through the entire page.</p>
                 <blockquote id="article-summary">The finished bilingual view must be removable in one action so the webpage returns to its untouched original structure. <svg class="equation-graphic" role="img" aria-label="rendered equation without TeX source" width="126" height="30" viewBox="0 0 126 30" style="display:inline-block;vertical-align:middle"><text x="5" y="21" font-size="18">g(x)=x³+1</text></svg></blockquote>
                 ${bilingualArticleRevision
                   ? '<p id="article-new">A newly published paragraph should be translated after the reader refreshes the same article.</p>'
@@ -1496,7 +1497,7 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
   }
 });
 
-test('progressively adds and removes bilingual article translations without touching code or history', async ({}, testInfo) => {
+test('completes bilingual article translation without scrolling and keeps controls safe', async ({}, testInfo) => {
   const popup = await context.newPage();
   const sidePanel = await context.newPage();
   let originalTargetLanguage = 'zh-CN';
@@ -1532,6 +1533,13 @@ test('progressively adds and removes bilingual article translations without touc
       return history?.[String(id)]?.length ?? 0;
     }, tabId!);
     const requestsBefore = textRequests.length;
+    const initialBilingualRequestStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
 
     const translatePage = popup.locator('#translate-page');
     await expect(translatePage).toBeVisible();
@@ -1543,6 +1551,11 @@ test('progressively adds and removes bilingual article translations without touc
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl).toBeVisible();
+    await initialBilingualRequestStarted;
+    await pageControl.locator('button[data-action="pause"]').click();
+    await expect(pageControl.locator('output')).toContainText('已暂停');
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
     const hintedTranslation = page.locator('[data-pi-bilingual-translation]').first();
     await expect(hintedTranslation).toBeVisible();
     await expect(hintedTranslation).toHaveAttribute('data-pi-bilingual-hint', '');
@@ -1562,8 +1575,6 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(hintedTranslation).not.toHaveAttribute('data-pi-bilingual-hint', '');
     await expect(hintedActions.locator('[data-pi-bilingual-feedback]'))
       .toHaveText('译文已复制');
-    await pageControl.locator('button[data-action="pause"]').click();
-    await expect(pageControl.locator('output')).toContainText('已暂停');
     // A request already sent before pausing is allowed to finish; no new request
     // should begin once that active paragraph has settled.
     await page.waitForTimeout(450);
@@ -1601,22 +1612,26 @@ test('progressively adds and removes bilingual article translations without touc
       ]);
     }
 
+    const resumedBilingualRequestStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
     await sidePanel.locator('#bilingual-page-primary').click();
-    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
-    await expect.poll(() => page.locator('[data-pi-bilingual-translation]').count())
-      .toBeGreaterThanOrEqual(3);
+    await resumedBilingualRequestStarted;
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('全文翻译中');
     await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="stop"]').click();
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
     await expect(pageControl.locator('output')).toContainText('已停止');
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已停止');
     const translatedAfterStop = await page.locator('[data-pi-bilingual-translation]').count();
     await page.waitForTimeout(350);
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(translatedAfterStop);
     await sidePanel.locator('#bilingual-page-primary').click();
-    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
-    const requestsBeforeScroll = JSON.stringify(textRequests.slice(requestsBefore));
-    expect(requestsBeforeScroll).not.toContain('A later paragraph should wait');
-    expect(requestsBeforeScroll).not.toContain('translateVisibleParagraphs');
     await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toBeVisible();
     await expect(page.locator('#article-intro')).toHaveText(
       'Bilingual reading should preserve the original article while placing a clear translation directly below each readable paragraph.',
@@ -1625,9 +1640,11 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(page.locator('#article-navigation + [data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(page.locator('#article-form-help + [data-pi-bilingual-translation]')).toHaveCount(0);
 
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    const requestsWithoutScroll = JSON.stringify(textRequests.slice(requestsBefore));
+    expect(requestsWithoutScroll).toContain('The full article task should translate this later paragraph');
+    expect(requestsWithoutScroll).not.toContain('translateAllParagraphs');
     const pageControlBar = pageControl.locator('.bar');
     const compactPageControl = pageControl.locator('button[data-action="compact"]');
     await expect(pageControlBar).toHaveAttribute('data-collapsed', 'true');
@@ -1846,7 +1863,7 @@ test('progressively adds and removes bilingual article translations without touc
       });
     }
 
-    const dynamicText = 'A dynamically loaded paragraph should join bilingual reading only when it approaches the reader viewport.';
+    const dynamicText = 'A dynamically loaded paragraph should join the active full-page translation without requiring the reader to scroll.';
     const requestsBeforeDynamicBlock = textRequests.length;
     await globalDisplay.selectOption('source');
     await expect(globalDisplay).toHaveValue('source');
@@ -1859,10 +1876,6 @@ test('progressively adds and removes bilingual article translations without touc
     const dynamicTranslation = page.locator(
       '#article-dynamic + [data-pi-bilingual-translation]',
     );
-    await page.waitForTimeout(650);
-    expect(textRequests.length).toBe(requestsBeforeDynamicBlock);
-    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('7/8');
-    await page.locator('#article-dynamic').scrollIntoViewIfNeeded();
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeDynamicBlock);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 8/8');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
@@ -2083,7 +2096,6 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(blockError.locator('button')).toHaveText('重试本段');
     await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
     await expect(page.locator('[data-pi-bilingual-hint]')).toHaveCount(0);
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('1 段待重试');
     await expect(sidePanel.locator('#bilingual-page-primary')).toHaveText('重试 1 段');
     await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
@@ -2126,6 +2138,8 @@ test('progressively adds and removes bilingual article translations without touc
     await sidePanel.locator('#bilingual-page-clear').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
   } finally {
+    releaseHeldBilingualRequest?.();
+    releaseHeldBilingualRequest = undefined;
     if (originalTargetLanguage !== 'zh-CN' && !popup.isClosed()) {
       await popup.locator('#target-language').selectOption(originalTargetLanguage).catch(() => undefined);
       await popup.locator('#status').waitFor({ state: 'visible' }).catch(() => undefined);
@@ -2386,9 +2400,8 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
       return history?.[String(tab.id)]?.length ?? 0;
     }, page.url())).toBe(historyBefore + 1);
     await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
-    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
+    await expect(sidePanel.locator('#bilingual-page-status')).toContainText('全文翻译中');
 
-    await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toHaveCount(1);

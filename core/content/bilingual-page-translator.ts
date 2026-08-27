@@ -1549,11 +1549,6 @@ export function createBilingualPageTranslator(
     publish();
   };
 
-  const eligibleForViewport = (block: BilingualBlock): boolean => {
-    const bounds = block.element.getBoundingClientRect();
-    return bounds.bottom >= -window.innerHeight * .35 && bounds.top <= window.innerHeight * 2.2;
-  };
-
   const enqueue = (block: BilingualBlock, position: 'front' | 'end' = 'end'): void => {
     if (block.status !== 'idle') return;
     block.status = 'queued';
@@ -2118,7 +2113,7 @@ export function createBilingualPageTranslator(
               : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
               ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
-              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 滚动继续`);
+              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 全文翻译中`);
     }
     if (display) {
       display.value = bilingualPageDisplayMode(currentState);
@@ -2326,7 +2321,7 @@ export function createBilingualPageTranslator(
     }
     if (currentState.phase === 'running') {
       for (const block of blocks) {
-        if (block.status === 'idle' && eligibleForViewport(block)) enqueue(block);
+        if (block.status === 'idle') enqueue(block);
       }
     }
     syncCounts();
@@ -2390,7 +2385,7 @@ export function createBilingualPageTranslator(
     block.status = 'idle';
     enqueue(block, 'front');
     for (const candidate of blocks) {
-      if (candidate.status === 'idle' && eligibleForViewport(candidate)) enqueue(candidate);
+      if (candidate.status === 'idle') enqueue(candidate);
     }
     syncCounts();
     consecutiveIsolatedFailures = 0;
@@ -2682,7 +2677,7 @@ export function createBilingualPageTranslator(
       enqueue(block, 'front');
     }
     for (const block of blocks) {
-      if (block.status === 'idle' && eligibleForViewport(block)) enqueue(block);
+      if (block.status === 'idle') enqueue(block);
     }
     syncCounts();
     delete currentState.message;
@@ -2856,7 +2851,7 @@ export function createBilingualPageTranslator(
     observeBlocks();
     observeArticleMutations();
     if (currentState.phase === 'running') {
-      blocks.filter(eligibleForViewport).forEach((block) => enqueue(block));
+      blocks.filter((block) => block.status === 'idle').forEach((block) => enqueue(block));
       const firstPendingBlock = blocks.find((block) => block.status === 'idle');
       if (!queue.length && firstPendingBlock) enqueue(firstPendingBlock);
     }
