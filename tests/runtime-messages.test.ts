@@ -146,6 +146,7 @@ describe('runtime message guard', () => {
         excludedSignatures: [],
         displayMode: 'bilingual',
         translationsHidden: false,
+        controlCollapsed: false,
         activity: 'active',
         block: {
           signature: blockSignature,
@@ -166,6 +167,7 @@ describe('runtime message guard', () => {
         excludedSignatures: ['block-not-in-document'],
         displayMode: 'bilingual',
         translationsHidden: false,
+        controlCollapsed: false,
         activity: 'active',
       },
     })).toBe(false);

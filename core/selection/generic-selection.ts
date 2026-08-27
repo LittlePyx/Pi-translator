@@ -6,6 +6,7 @@ import type {
 } from './types';
 import type { ContextMode } from '../settings/schema';
 import { isSensitiveTextControl, selectionContext } from './selection-context';
+import { replaceRenderedMathWithLatex } from './rendered-math';
 
 function createRequestId(): string {
   return crypto.randomUUID();
@@ -31,15 +32,6 @@ function toViewportRect(rect: DOMRect): ViewportRect | undefined {
     bottom: rect.bottom,
   };
 }
-
-const RENDERED_MATH_SELECTOR = [
-  '.katex',
-  'mjx-container',
-  'math',
-  '[data-tex]',
-  '[data-latex]',
-  'script[type^="math/tex"]',
-].join(',');
 
 const TERMINAL_SURFACE_SELECTOR = [
   '[role="terminal"]',
@@ -99,38 +91,10 @@ function passiveSelectionEnvironmentForRange(range: Range): PassiveSelectionEnvi
   return common && (!start || start === common) && (!end || end === common) ? common : undefined;
 }
 
-function renderedMathLatex(element: Element): string | undefined {
-  const annotation = element.matches('annotation[encoding*="tex" i]')
-    ? element
-    : element.querySelector('annotation[encoding*="tex" i]');
-  const candidate =
-    element.getAttribute('data-tex') ??
-    element.getAttribute('data-latex') ??
-    element.getAttribute('alttext') ??
-    (element.matches('script[type^="math/tex"]') ? element.textContent : undefined) ??
-    annotation?.textContent;
-  const latex = candidate?.trim();
-  return latex || undefined;
-}
-
 function selectionTextWithMathSource(range: Range, fallback: string): string {
   const fragment = range.cloneContents();
-  const candidates = [...fragment.querySelectorAll(RENDERED_MATH_SELECTOR)].filter(
-    (element) => !element.parentElement?.closest(RENDERED_MATH_SELECTOR),
-  );
-  let replaced = false;
-  for (const element of candidates) {
-    const latex = renderedMathLatex(element);
-    if (!latex) continue;
-    const alreadyDelimited = /^(?:\$|\\\(|\\\[)/u.test(latex);
-    const display = element.classList.contains('katex-display') ||
-      element.getAttribute('display') === 'block';
-    element.replaceWith(document.createTextNode(
-      alreadyDelimited ? latex : display ? `\\[${latex}\\]` : `$${latex}$`,
-    ));
-    replaced = true;
-  }
-  return replaced ? fragment.textContent?.trim() || fallback : fallback;
+  const replacements = replaceRenderedMathWithLatex(fragment);
+  return replacements ? fragment.textContent?.trim() || fallback : fallback;
 }
 
 function createSnapshot(

@@ -41,6 +41,7 @@ const update = (
   excludedSignatures: [signatures[2]!],
   displayMode: 'bilingual',
   translationsHidden: false,
+  controlCollapsed: false,
   activity: 'active',
   block,
 });
@@ -68,6 +69,7 @@ describe('bilingual webpage session repository', () => {
     await expect(getBilingualPageSession(7, descriptor(), behavior)).resolves.toMatchObject({
       pageKey: descriptor().pageKey,
       activity: 'active',
+      controlCollapsed: false,
       excludedSignatures: [signatures[2]],
       blocks: [{ translatedText: '可恢复的文章标题', hidden: false }],
     });
@@ -75,6 +77,18 @@ describe('bilingual webpage session repository', () => {
     const serialized = JSON.stringify(storage[BILINGUAL_PAGE_SESSIONS_STORAGE_KEY]);
     expect(serialized).not.toContain('https://example.com/article');
     expect(serialized).not.toContain('The first durable article paragraph.');
+  });
+
+  it('retains the compact webpage control state in the browser session', async () => {
+    const behavior = bilingualPageSessionBehaviorKey('compact-control');
+    await saveBilingualPageSession(7, {
+      ...update(),
+      controlCollapsed: true,
+    }, behavior);
+
+    await expect(getBilingualPageSession(7, descriptor(), behavior)).resolves.toMatchObject({
+      controlCollapsed: true,
+    });
   });
 
   it('upserts translated paragraphs and retains visibility and pause state', async () => {

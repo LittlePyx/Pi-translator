@@ -34,6 +34,7 @@ export interface BilingualPageSessionSnapshot extends BilingualPageSessionDescri
   excludedSignatures: string[];
   displayMode: BilingualPageDisplayMode;
   translationsHidden: boolean;
+  controlCollapsed: boolean;
   activity: BilingualPageSessionActivity;
   blocks: BilingualPageSessionBlock[];
   updatedAt: number;
@@ -45,6 +46,7 @@ export interface BilingualPageSessionUpdate {
   excludedSignatures: string[];
   displayMode: BilingualPageDisplayMode;
   translationsHidden: boolean;
+  controlCollapsed: boolean;
   activity: BilingualPageSessionActivity;
   block?: BilingualPageSessionBlock;
 }
@@ -170,6 +172,7 @@ export function isBilingualPageSessionUpdate(
     'excludedSignatures',
     'displayMode',
     'translationsHidden',
+    'controlCollapsed',
     'activity',
     'block',
   ].includes(key))) return false;
@@ -180,6 +183,7 @@ export function isBilingualPageSessionUpdate(
     !validDisplayMode(update.displayMode) ||
     typeof update.translationsHidden !== 'boolean' ||
     update.translationsHidden !== (update.displayMode === 'source') ||
+    typeof update.controlCollapsed !== 'boolean' ||
     !['active', 'paused', 'stopped'].includes(String(update.activity)) ||
     (update.block !== undefined && !isBilingualPageSessionBlock(update.block))
   ) return false;
@@ -219,6 +223,7 @@ function validStoredSession(value: unknown): value is StoredBilingualPageSession
     validDisplayMode(session.displayMode) &&
     typeof session.translationsHidden === 'boolean' &&
     session.translationsHidden === (session.displayMode === 'source') &&
+    typeof session.controlCollapsed === 'boolean' &&
     ['active', 'paused', 'stopped'].includes(String(session.activity)) &&
     Array.isArray(session.blocks) &&
     session.blocks.length <= MAX_DOCUMENT_SIGNATURES &&
@@ -338,6 +343,7 @@ export function saveBilingualPageSession(
       excludedSignatures: [...update.excludedSignatures],
       displayMode: update.displayMode,
       translationsHidden: update.translationsHidden,
+      controlCollapsed: update.controlCollapsed,
       activity: update.activity,
       blocks,
       updatedAt: Date.now(),

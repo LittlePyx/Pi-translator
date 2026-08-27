@@ -941,7 +941,7 @@ test.beforeAll(async () => {
                   ? 'The updated translator should restore unchanged paragraphs and translate only the article content that actually changed.'
                   : 'The translator should process nearby paragraphs first, remain responsive during long articles, and let the reader pause without losing completed work.'}</p>
                 <pre id="article-code"><code>const result = await translateVisibleParagraphs(article);</code></pre>
-                <p id="article-inline-code">Run <code>npm run build:edge</code> after changing the extension, while keeping the score <span class="katex" data-latex="f(x)=x^2"><span>duplicated rendered x 2</span></span> and its surrounding explanation readable.</p>
+                <p id="article-inline-code">Run <code>npm run build:edge</code> after changing the extension, while keeping the score <span class="math notranslate nohighlight"><span class="MathJax_Preview">legacy preview x 2</span><span class="MathJax">duplicated rendered x 2</span><script type="math/tex">f(x)=x^2</script></span> and its surrounding explanation readable.</p>
                 <form><p id="article-form-help">Payment and account form instructions must not be collected as article content.</p><input type="password" value="private-value" /></form>
                 <div style="height:1500px" aria-hidden="true"></div>
                 <p id="article-later">A later paragraph should wait until the reader approaches it instead of consuming API requests for the entire page immediately.</p>
@@ -1164,8 +1164,18 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(6);
     await expect(pageControl.locator('output')).toContainText('已完成 6/6');
+    const controlBar = pageControl.locator('.bar');
+    const compactControl = pageControl.locator('button[data-action="compact"]');
+    await expect(controlBar).toHaveAttribute('data-collapsed', 'true');
+    await expect(compactControl).toHaveAttribute('aria-expanded', 'false');
+    const compactWidth = await controlBar.evaluate((bar) => bar.getBoundingClientRect().width);
+    expect(compactWidth).toBeLessThan(440);
+    await compactControl.click();
+    await expect(controlBar).toHaveAttribute('data-collapsed', 'false');
+    await expect(compactControl).toHaveAttribute('aria-expanded', 'true');
 
     const requestsBeforeRestore = textRequests.length;
+    await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="scope"]').click();
     await expect(page.locator('#article-later')).toHaveAttribute(
       'data-pi-bilingual-scope-preview',
@@ -1180,6 +1190,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     expect(textRequests.length).toBe(requestsBeforeRestore + 1);
 
     const requestsBeforeCancelledExclusion = textRequests.length;
+    await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="scope"]').click();
     await page.locator('#article-later').evaluate((element) => (element as HTMLElement).click());
     await expect(pageControl.locator('.scope-panel span')).toContainText('将清除已译 1 段');
@@ -1189,6 +1200,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(page.locator('#article-later + [data-pi-bilingual-translation]')).toBeVisible();
     expect(textRequests.length).toBe(requestsBeforeCancelledExclusion);
 
+    await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="clear"]').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect(launcher).toBeVisible();
@@ -1224,8 +1236,10 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await page.bringToFront();
     await expect(launcher).toHaveCount(0);
   } finally {
-    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
-      .click({ timeout: 500 }).catch(() => undefined);
+    await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#pi-translator-bilingual-page-control')?.shadowRoot
+        ?.querySelector<HTMLButtonElement>('button[data-action="clear"]')?.click();
+    }).catch(() => undefined);
     await popup.evaluate(async () => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { session: { remove(key: string): Promise<void> } } };
@@ -1272,6 +1286,8 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(page.locator('#pi-translator-bilingual-page-control output'))
       .toContainText('已完成 7/7');
+    await expect(page.locator('#pi-translator-bilingual-page-control .bar'))
+      .toHaveAttribute('data-collapsed', 'true');
 
     const introTranslation = page.locator(
       '#article-intro + [data-pi-bilingual-translation]',
@@ -1341,8 +1357,11 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
       .toBeVisible();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(8);
     await expect(pageControl.locator('output')).toContainText('已完成 8/8');
+    await expect(pageControl.locator('.bar')).toHaveAttribute('data-collapsed', 'true');
     expect(textRequests.length - requestsBeforeRefresh).toBe(2);
 
+    await pageControl.locator('button[data-action="compact"]').click();
+    await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="clear"]').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
     await expect.poll(() => popup.evaluate(async () => {
@@ -1354,8 +1373,10 @@ test('restores unchanged bilingual paragraphs after refresh and translates only 
     })).toBe(false);
   } finally {
     bilingualArticleRevision = 0;
-    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
-      .click({ timeout: 500 }).catch(() => undefined);
+    await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#pi-translator-bilingual-page-control')?.shadowRoot
+        ?.querySelector<HTMLButtonElement>('button[data-action="clear"]')?.click();
+    }).catch(() => undefined);
     await popup.evaluate(async () => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { session: { remove(keys: string | string[]): Promise<void> } } };
@@ -1485,6 +1506,7 @@ test('progressively adds and removes bilingual article translations without touc
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('滚动继续');
     await expect.poll(() => page.locator('[data-pi-bilingual-translation]').count())
       .toBeGreaterThanOrEqual(3);
+    await pageControl.locator('details.more > summary').click();
     await pageControl.locator('button[data-action="stop"]').click();
     await expect(pageControl.locator('output')).toContainText('已停止');
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已停止');
@@ -1507,6 +1529,12 @@ test('progressively adds and removes bilingual article translations without touc
     await page.evaluate(() => window.scrollTo(0, document.documentElement.scrollHeight));
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+    const pageControlBar = pageControl.locator('.bar');
+    const compactPageControl = pageControl.locator('button[data-action="compact"]');
+    await expect(pageControlBar).toHaveAttribute('data-collapsed', 'true');
+    await expect(compactPageControl).toHaveAttribute('aria-expanded', 'false');
+    await compactPageControl.click();
+    await expect(pageControlBar).toHaveAttribute('data-collapsed', 'false');
     await expect(page.locator('#article-intro-repeat + [data-pi-bilingual-translation]'))
       .toBeVisible();
     const articleRequests = textRequests.slice(requestsBefore);
@@ -1535,8 +1563,14 @@ test('progressively adds and removes bilingual article translations without touc
     expect(completedRequests).toContain('`npm run build:edge`');
     expect(completedRequests).toContain('⟦FULL1_0001⟧');
     expect(completedRequests).not.toContain('duplicated rendered x 2');
-    await expect(page.locator('#article-inline-code + [data-pi-bilingual-translation]'))
-      .toContainText('$f(x)=x^2$');
+    expect(completedRequests).not.toContain('legacy preview x 2');
+    const renderedFormulaTranslation = page.locator(
+      '#article-inline-code + [data-pi-bilingual-translation]',
+    );
+    await expect(renderedFormulaTranslation.locator('.pi-math-inline')).toBeVisible();
+    await expect(renderedFormulaTranslation.locator('.pi-math-inline math')).toBeVisible();
+    await expect(renderedFormulaTranslation.locator('[data-pi-bilingual-text]'))
+      .not.toContainText('$f(x)=x^2$');
 
     const introTranslation = page.locator(
       '#article-intro + [data-pi-bilingual-translation]',
@@ -1668,8 +1702,7 @@ test('progressively adds and removes bilingual article translations without touc
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeFailedRetranslation);
     await expect(formulaActions.locator('[data-pi-bilingual-feedback]'))
       .toContainText('重译失败');
-    await expect(formulaTranslation.locator('[data-pi-bilingual-text]'))
-      .toContainText('$f(x)=x^2$');
+    await expect(formulaTranslation.locator('.pi-math-inline math')).toBeVisible();
     await expect(page.locator('#article-inline-code + [data-pi-bilingual-error]')).toHaveCount(0);
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
@@ -1831,6 +1864,8 @@ test('progressively adds and removes bilingual article translations without touc
       await expect.poll(() => JSON.stringify(
         textRequests.slice(requestsBeforeCancelledPopupSwitch),
       )).toContain('to ja');
+      await pageControl.locator('button[data-action="compact"]').click();
+      await expect(pageControl.locator('.bar')).toHaveAttribute('data-collapsed', 'false');
 
       const requestsBeforeCancelledSidePanelSwitch = textRequests.length;
       await sidePanelPageLanguage.selectOption('de');
@@ -1934,8 +1969,9 @@ test('progressively adds and removes bilingual article translations without touc
     await blockError.locator('button').click();
     await expect.poll(() => textRequests.length).toBeGreaterThan(retryRequestsBefore);
     await expect(blockError).toHaveCount(0);
-    await expect(page.locator('#article-inline-code + [data-pi-bilingual-translation]'))
-      .toContainText('$f(x)=x^2$');
+    await expect(page.locator(
+      '#article-inline-code + [data-pi-bilingual-translation] .pi-math-inline math',
+    )).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
     await sidePanel.locator('#bilingual-page-clear').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
@@ -2079,8 +2115,10 @@ test('reprioritizes pending bilingual paragraphs around the current viewport', a
     expect(requestedSources.indexOf(currentViewportText)).toBeGreaterThan(0);
     expect(requestedSources.indexOf(currentViewportText))
       .toBeLessThan(requestedSources.indexOf(oldQueuedText));
-    await page.locator('#pi-translator-bilingual-page-control button[data-action="clear"]')
-      .click();
+    await page.evaluate(() => {
+      document.querySelector<HTMLElement>('#pi-translator-bilingual-page-control')?.shadowRoot
+        ?.querySelector<HTMLButtonElement>('button[data-action="clear"]')?.click();
+    });
   } finally {
     releaseHeldBilingualRequest?.();
     releaseHeldBilingualRequest = undefined;

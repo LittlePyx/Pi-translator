@@ -11,6 +11,7 @@ import {
   type SupportedTargetLanguage,
 } from '../language/supported-target-languages';
 import { isLikelySourceCode } from '../selection/passive-selection-intent';
+import { replaceRenderedMathWithLatex } from '../selection/rendered-math';
 import type {
   TranslationContentMode,
   TranslationStyle,
@@ -38,6 +39,7 @@ import {
   type BilingualPageSessionSnapshot,
   type BilingualPageSessionUpdate,
 } from '../translation/bilingual-page-session';
+import { renderTranslationContent } from '../../ui/translation-content';
 
 const TRANSLATION_ATTRIBUTE = 'data-pi-bilingual-translation';
 const TRANSLATION_TEXT_ATTRIBUTE = 'data-pi-bilingual-text';
@@ -67,14 +69,6 @@ const SCOPE_PREVIEW_ATTRIBUTE = 'data-pi-bilingual-scope-preview';
 const MIN_LAUNCHER_BLOCKS = 4;
 const MIN_LAUNCHER_TEXT_LENGTH = 480;
 const BLOCK_SELECTOR = 'h1, h2, h3, h4, p, blockquote, figcaption, li';
-const RENDERED_MATH_SELECTOR = [
-  '.katex',
-  'mjx-container',
-  'math',
-  '[data-tex]',
-  '[data-latex]',
-  'script[type^="math/tex"]',
-].join(',');
 const EXCLUDED_ANCESTOR_SELECTOR = [
   'nav',
   'header',
@@ -118,6 +112,7 @@ interface BilingualBlock {
   status: BlockStatus;
   sessionSignature?: string;
   restoredFromSession?: boolean;
+  translatedText?: string;
   translation?: HTMLElement;
   pendingElement?: HTMLElement;
   pendingTimer?: number;
@@ -179,21 +174,7 @@ function readableElementText(element: HTMLElement): string {
     const code = normalizeBilingualPageText(node.textContent ?? '');
     node.replaceWith(document.createTextNode(code ? ` \`${code}\` ` : ''));
   });
-  const mathNodes = [...clone.querySelectorAll(RENDERED_MATH_SELECTOR)].filter(
-    (node) => !node.parentElement?.closest(RENDERED_MATH_SELECTOR),
-  );
-  for (const node of mathNodes) {
-    const annotation = node.querySelector('annotation[encoding*="tex" i]');
-    const candidate = node.getAttribute('data-tex') ??
-      node.getAttribute('data-latex') ??
-      node.getAttribute('alttext') ??
-      (node.matches('script[type^="math/tex"]') ? node.textContent : undefined) ??
-      annotation?.textContent;
-    const tex = candidate?.trim();
-    if (!tex) continue;
-    const delimited = /^(?:\$|\\\(|\\\[)/u.test(tex) ? tex : `$${tex}$`;
-    node.replaceWith(document.createTextNode(` ${delimited} `));
-  }
+  replaceRenderedMathWithLatex(clone);
   clone.querySelectorAll([
     'script',
     'style',
@@ -442,6 +423,15 @@ function insertTranslation(block: BilingualBlock, translation: HTMLElement): voi
   block.translation = translation;
 }
 
+function renderBilingualTranslation(
+  translation: HTMLElement,
+  translatedText: string,
+): void {
+  const content = translation.querySelector<HTMLElement>(`[${TRANSLATION_TEXT_ATTRIBUTE}]`);
+  if (!content) return;
+  void renderTranslationContent(content, translatedText.trim(), true);
+}
+
 function blockPendingElement(block: BilingualBlock): HTMLElement {
   const pending = document.createElement('pi-translator-bilingual-pending');
   pending.setAttribute(TRANSLATION_PENDING_ATTRIBUTE, '');
@@ -545,6 +535,52 @@ function installTranslationStyle(): void {
       letter-spacing: inherit !important;
       white-space: pre-wrap !important;
       overflow-wrap: anywhere !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-rich-strong {
+      font-weight: 700 !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-math-inline {
+      display: inline-flex !important;
+      max-width: 100% !important;
+      vertical-align: -.14em !important;
+      white-space: normal !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-math-display {
+      display: block !important;
+      width: 100% !important;
+      margin: .62em 0 !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      text-align: center !important;
+      line-height: 1.28 !important;
+      white-space: normal !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-math-display.pi-math-numbered {
+      display: grid !important;
+      grid-template-columns: minmax(0, 1fr) max-content !important;
+      align-items: center !important;
+      column-gap: 6px !important;
+      overflow: visible !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-math-scroll {
+      min-width: 0 !important;
+      max-width: 100% !important;
+      overflow-x: auto !important;
+      overflow-y: hidden !important;
+      text-align: center !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-equation-tag {
+      align-self: center !important;
+      font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif !important;
+      font-size: .9em !important;
+      font-variant-numeric: tabular-nums !important;
+      line-height: 1 !important;
+      white-space: nowrap !important;
+    }
+    [${TRANSLATION_TEXT_ATTRIBUTE}] .pi-math math {
+      color: inherit !important;
+      font-family: "Cambria Math", "STIX Two Math", "Latin Modern Math", serif !important;
+      font-synthesis: none !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       all: initial !important;
@@ -738,6 +774,8 @@ export function createBilingualPageTranslator(
   let navigationTimer: number | undefined;
   let disposed = false;
   let controlHost: HTMLElement | undefined;
+  let controlCollapsed = false;
+  let controlCollapseUserSet = false;
   let launcherHost: HTMLElement | undefined;
   let launcherRefreshTimer: number | undefined;
   let launcherNavigationTimer: number | undefined;
@@ -810,6 +848,7 @@ export function createBilingualPageTranslator(
         .filter((signature) => sessionDocumentSignatures.includes(signature)),
       displayMode: bilingualPageDisplayMode(currentState),
       translationsHidden: currentState.translationsHidden,
+      controlCollapsed,
       activity: sessionActivity(),
       ...(block ? { block } : {}),
     };
@@ -1397,6 +1436,8 @@ export function createBilingualPageTranslator(
     resumeAfterInteractive = false;
     pendingLanguageSwitch = undefined;
     currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+    controlCollapsed = false;
+    controlCollapseUserSet = false;
     destroyControl();
     destroyLauncher();
     stopLauncherNavigationMonitor();
@@ -1470,11 +1511,7 @@ export function createBilingualPageTranslator(
     });
   };
 
-  const translationText = (block: BilingualBlock): string =>
-    block.translation
-      ?.querySelector<HTMLElement>(`[${TRANSLATION_TEXT_ATTRIBUTE}]`)
-      ?.textContent
-      ?.trim() ?? '';
+  const translationText = (block: BilingualBlock): string => block.translatedText?.trim() ?? '';
 
   persistSessionBlock = async (block: BilingualBlock): Promise<void> => {
     const translatedText = translationText(block);
@@ -1741,7 +1778,10 @@ export function createBilingualPageTranslator(
       shadow.innerHTML = `
         <style>
           :host { color-scheme: light dark; }
-          .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);}
+          .bar { display:flex;flex-wrap:wrap;align-items:center;gap:8px;max-width:min(560px,calc(100vw - 32px));min-height:38px;box-sizing:border-box;border:1px solid rgba(99,102,241,.3);border-radius:10px;padding:6px 7px 6px 10px;color:#253047;background:rgba(255,255,255,.96);box-shadow:0 8px 28px rgba(15,23,42,.18);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(12px);transition:max-width 140ms ease,border-radius 140ms ease,padding 140ms ease;}
+          .bar[data-collapsed="true"] { flex-wrap:nowrap;max-width:min(430px,calc(100vw - 24px));border-radius:999px;padding:4px 5px 4px 9px;gap:6px; }
+          .bar[data-collapsed="true"] output { flex:0 1 auto;max-width:min(235px,calc(100vw - 150px)); }
+          .bar[data-collapsed="true"] .language,.bar[data-collapsed="true"] button[data-action="pause"],.bar[data-collapsed="true"] details.more { display:none; }
           .mark { flex:0 0 auto;width:16px;height:14px;object-fit:contain; }
           output { min-width:0;flex:1 1 auto;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
           .language,.display { display:inline-flex;flex:0 0 auto;align-items:center;gap:3px;color:#657084;font-size:10.5px;white-space:nowrap; }
@@ -1750,7 +1790,14 @@ export function createBilingualPageTranslator(
           button { min-width:32px;min-height:28px;border:0;border-radius:6px;padding:4px 7px;color:#4f46e5;background:#f0efff;cursor:pointer;font:600 11px/1.2 inherit;white-space:nowrap; }
           button:hover { background:#e4e2ff; }
           button:disabled { opacity:.62;cursor:default; }
-          button[data-action="clear"] { color:#657084;background:transparent; }
+          details.more { position:relative;flex:0 0 auto; }
+          details.more > summary { display:grid;place-items:center;min-width:30px;min-height:28px;box-sizing:border-box;border-radius:6px;color:#657084;cursor:pointer;font:700 14px/1 inherit;list-style:none; }
+          details.more > summary::-webkit-details-marker { display:none; }
+          details.more > summary:hover,details.more[open] > summary { color:#4f46e5;background:#f0efff; }
+          .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:118px;box-sizing:border-box;border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:4px;background:rgba(255,255,255,.98);box-shadow:0 9px 28px rgba(15,23,42,.2); }
+          .menu button { width:100%;justify-content:flex-start;color:#566176;background:transparent;text-align:left; }
+          .menu button:hover { color:#4f46e5;background:#f0efff; }
+          button[data-action="compact"] { min-width:30px;padding-inline:6px;color:#657084;background:transparent;font-size:14px; }
           .language-confirmation { display:flex;flex:1 0 100%;align-items:center;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
           .language-confirmation[hidden] { display:none; }
           .language-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
@@ -1759,18 +1806,24 @@ export function createBilingualPageTranslator(
           .scope-panel[hidden] { display:none; }
           .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language,.display{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} button[data-action="clear"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#4b4d7d;background:rgba(24,32,47,.96);box-shadow:0 8px 28px rgba(0,0,0,.36)} .mark{filter:brightness(0) invert(1)} .language,.display{color:#aab3c2} select{color:#cbc7ff;border-color:#44466d;background:#222a3a} button{color:#cbc7ff;background:#292943} button:hover{background:#363653} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#292943}.menu{border-color:#44466d;background:rgba(24,32,47,.98);box-shadow:0 10px 28px rgba(0,0,0,.38)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
-        <div class="bar" role="status" aria-live="polite">
+        <div class="bar">
           <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
-          <output></output>
+          <output role="status" aria-live="polite"></output>
           <label class="language"><span>译为</span><select data-action="language" aria-label="正文目标语言">${SUPPORTED_TARGET_LANGUAGES.map((language) => `<option value="${language.value}">${language.shortLabel}</option>`).join('')}</select></label>
           <label class="display"><span>显示</span><select data-action="display" aria-label="正文显示方式"><option value="bilingual">双语</option><option value="translation">译文</option><option value="source">原文</option></select></label>
           <button type="button" data-action="pause"></button>
-          <button type="button" data-action="stop">停止</button>
-          <button type="button" data-action="scope">范围</button>
-          <button type="button" data-action="clear">清除</button>
+          <details class="more">
+            <summary aria-label="更多正文操作" title="更多正文操作">•••</summary>
+            <div class="menu">
+              <button type="button" data-action="stop">停止翻译</button>
+              <button type="button" data-action="scope">调整范围</button>
+              <button type="button" data-action="clear">清除译文</button>
+            </div>
+          </details>
+          <button type="button" data-action="compact"></button>
           <div class="language-confirmation" role="alert" hidden>
             <span></span>
             <button type="button" data-action="cancel-language">取消</button>
@@ -1786,7 +1839,13 @@ export function createBilingualPageTranslator(
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
         button.addEventListener('click', () => {
           const action = button.dataset.action;
-          if (action === 'pause') {
+          button.closest('details')?.removeAttribute('open');
+          if (action === 'compact') {
+            controlCollapsed = !controlCollapsed;
+            controlCollapseUserSet = true;
+            renderControl();
+            scheduleSessionStatePersistence();
+          } else if (action === 'pause') {
             const shouldResume = currentState.phase === 'paused' ||
               currentState.phase === 'error' ||
               currentState.phase === 'stopped' ||
@@ -1845,6 +1904,7 @@ export function createBilingualPageTranslator(
       document.documentElement.append(controlHost);
     }
     const shadow = controlHost.shadowRoot;
+    const bar = shadow?.querySelector<HTMLElement>('.bar');
     const output = shadow?.querySelector<HTMLOutputElement>('output');
     const display = shadow?.querySelector<HTMLSelectElement>('[data-action="display"]');
     const displayControl = shadow?.querySelector<HTMLElement>('.display');
@@ -1852,10 +1912,13 @@ export function createBilingualPageTranslator(
     const stop = shadow?.querySelector<HTMLButtonElement>('[data-action="stop"]');
     const scope = shadow?.querySelector<HTMLButtonElement>('[data-action="scope"]');
     const clearButton = shadow?.querySelector<HTMLButtonElement>('[data-action="clear"]');
+    const compact = shadow?.querySelector<HTMLButtonElement>('[data-action="compact"]');
+    const more = shadow?.querySelector<HTMLDetailsElement>('details.more');
     const language = shadow?.querySelector<HTMLSelectElement>('[data-action="language"]');
     const languageControl = shadow?.querySelector<HTMLElement>('.language');
     const languageConfirmation = shadow?.querySelector<HTMLElement>('.language-confirmation');
     const scopePanel = shadow?.querySelector<HTMLElement>('.scope-panel');
+    if (bar) bar.dataset.collapsed = String(controlCollapsed && !scopePreviewActive);
     if (scopePreviewActive) {
       const selected = scopeSelectedCount();
       const translatedRemoval = scopeTranslatedRemovalCount();
@@ -1868,6 +1931,8 @@ export function createBilingualPageTranslator(
       if (stop) stop.hidden = true;
       if (scope) scope.hidden = true;
       if (clearButton) clearButton.hidden = true;
+      if (compact) compact.hidden = true;
+      if (more) more.hidden = true;
       if (languageConfirmation) languageConfirmation.hidden = true;
       if (scopePanel) {
         scopePanel.hidden = false;
@@ -1893,6 +1958,14 @@ export function createBilingualPageTranslator(
     }
     if (languageControl) languageControl.hidden = false;
     if (displayControl) displayControl.hidden = currentState.translated === 0;
+    if (compact) {
+      compact.hidden = false;
+      compact.textContent = controlCollapsed ? '⌃' : '⌄';
+      compact.title = controlCollapsed ? '展开正文翻译控制' : '收起正文翻译控制';
+      compact.setAttribute('aria-label', compact.title);
+      compact.setAttribute('aria-expanded', String(!controlCollapsed));
+    }
+    if (more) more.hidden = false;
     if (scopePanel) scopePanel.hidden = true;
     if (scope) {
       scope.hidden = currentState.total === 0;
@@ -2049,6 +2122,7 @@ export function createBilingualPageTranslator(
           block.translation?.remove();
           block.errorElement?.remove();
           delete block.translation;
+          delete block.translatedText;
           delete block.errorElement;
           delete block.bypassCacheNext;
           delete block.restoreStateAfterRetranslation;
@@ -2170,6 +2244,7 @@ export function createBilingualPageTranslator(
     delete currentState.message;
     delete currentState.pauseReason;
     resumeAfterInteractive = false;
+    if (!controlCollapseUserSet) controlCollapsed = true;
     setState({ phase: 'complete' });
     return true;
   };
@@ -2389,6 +2464,8 @@ export function createBilingualPageTranslator(
         currentState.translationsHidden,
       );
       insertTranslation(block, translation);
+      block.translatedText = response.data.result.translatedText.trim();
+      renderBilingualTranslation(translation, block.translatedText);
       if (preserveHidden) setTranslationHidden(block, true);
       block.status = 'done';
       delete block.restoredFromSession;
@@ -2582,6 +2659,8 @@ export function createBilingualPageTranslator(
       targetLanguage,
       ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
     };
+    controlCollapsed = stored?.controlCollapsed ?? false;
+    controlCollapseUserSet = Boolean(stored);
     if (stored) {
       const storedBlocks = new Map(stored.blocks.map((block) => [block.signature, block]));
       for (const block of blocks) {
@@ -2611,6 +2690,8 @@ export function createBilingualPageTranslator(
           currentState.translationsHidden,
         );
         insertTranslation(block, translation);
+        block.translatedText = restored.translatedText;
+        renderBilingualTranslation(translation, block.translatedText);
         if (restored.hidden) setTranslationHidden(block, true);
         block.status = 'done';
         block.restoredFromSession = true;
