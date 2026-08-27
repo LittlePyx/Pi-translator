@@ -1,0 +1,25 @@
+Pi Translator has no Pi account or publisher backend. It is a bring-your-own-API-key client. Use these temporary review credentials:
+
+TEXT TRANSLATION
+Base URL: https://api.deepseek.com
+Model: deepseek-v4-flash
+Key: [TEMPORARY TEXT KEY]
+
+OPTIONAL IMAGE TRANSLATION/OCR
+Base URL: https://dashscope.aliyuncs.com/compatible-mode/v1
+Model: qwen3.7-plus
+Key: [TEMPORARY VISION KEY]
+
+Valid through: [DATE AFTER REVIEW]
+
+Test steps:
+1. Install the extension. Settings opens automatically. Enter the text values above, connect, and save.
+2. On any public HTTPS article, select an English sentence, right-click, and choose “使用 Pi Translator 翻译选中文本”. Verify streaming, copy/correction, and continuous sidebar actions.
+3. Open either the in-page fixed translation sidebar or the Edge browser side panel and click the prominent “框选网页” action at its top (the toolbar popup also keeps “框选网页区域”). Draw over visible article text or a rendered formula. The confirmation states that the selected visible region will be sent to the configured multimodal model. Nothing is captured or sent until the confirmation button is clicked. Both sidebars keep the action available while translating or viewing a result; pressing Escape during selection restores the in-page sidebar without a request. From the result menu, “调整区域” restores the box while “重新框选” starts empty; neither makes a request until reconfirmed.
+4. Optional with the image credentials: draw over an image or Canvas. Only the selected visible region is captured, and only after the confirmation button is clicked. Full-page, auto-scroll, and continuous capture are unavailable. Regions containing password, verification-code, or payment fields are blocked.
+5. From a result, open the Edge browser side panel and select more page text. Its recent-result arrows and “全文 / 逐句” view switch do not make another API request.
+6. On a sufficiently long foreign-language article, open Pi Translator and use “译全文 · N 段”. Verify that bilingual translations appear below the main prose while navigation, forms, code blocks, and independent formulas stay unchanged. The page control can switch among bilingual, translated-only, and original-only display without another API request.
+7. Optional: open “PDF 阅读器”, load a local PDF, and translate selectable text or a confirmed image region. Selectable text does not require image capability.
+8. Optional: open a PDF directly in Edge, select text, and use the same context-menu command. The result appears in Edge’s side panel.
+
+Requests go directly to the configured provider. Keys stay in extension storage, are not bundled, and are not exposed to webpages. Screenshots are not stored. No remote code is loaded.

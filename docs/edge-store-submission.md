@@ -23,7 +23,7 @@ $certificationNotesPath = "docs/edge-certification-notes-v$releaseVersion.txt"
 
 ## 2. Single Purpose
 
-Pi Translator translates content that users explicitly select on Microsoft Edge webpages, Overleaf, and PDF documents. For webpage images or complex visual content, the toolbar popup can start a one-shot region selector on the current visible tab; it sends locally extracted text by default and sends a cropped screenshot only after explicit confirmation when text is unavailable or the user chooses image mode. When selectable PDF text is unavailable, the packaged PDF reader can likewise translate a user-confirmed image region. Translation results are shown in a page card or side panel, with LaTeX notation preserved when present. All features serve this single translation purpose.
+Pi Translator translates user-selected content and the main prose of user-requested webpages in Microsoft Edge, Overleaf, and PDF documents. A one-shot webpage region selector sends only a cropped screenshot of the current visible tab to the configured multimodal model, and only after explicit confirmation; ordinary text selection and webpage body translation continue to use the text API. When selectable PDF text is unavailable, the packaged PDF reader can likewise translate a user-confirmed image region. Translation results are shown in the page or side panel, with LaTeX notation preserved when present. All features serve this single translation purpose.
 
 ## 3. 权限说明
 
@@ -119,7 +119,7 @@ Test steps:
 5. Verify that the result streams into a translation card, can be copied, and can be switched between full translation and sentence alignment.
 6. Click “固定侧栏”, select another sentence, and verify that the pinned sidebar translates the new selection. Collapse and close the sidebar.
 7. Click the toolbar icon and verify the target language can be changed without opening the full settings page.
-8. Optional webpage-region test: click the toolbar icon, choose “框选网页区域”, and draw over visible article text. Verify that the confirmation identifies locally extracted text and does not send a screenshot unless image mode is explicitly selected and confirmed.
+8. Optional webpage-region test: click the toolbar icon, choose “框选网页区域”, and draw over visible article text or a rendered formula. Verify that the confirmation clearly states that the cropped visible region will use the multimodal model, and that no screenshot or request is made until the user explicitly confirms.
 9. Optional PDF test: open any public text-based PDF in Edge, select text, and choose the Pi Translator context-menu item. Verify that the native Edge side panel receives the translation while the PDF remains open.
 10. Optional packaged-reader test: click “打开 PDF 阅读器”, choose a local text-based PDF, and translate selected text. Only selected text is sent; the complete PDF remains local.
 
