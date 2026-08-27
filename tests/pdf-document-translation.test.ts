@@ -1,11 +1,51 @@
 import { describe, expect, it } from 'vitest';
 import {
   comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationItemsFromOcr,
   pdfDocumentTranslationBlocks,
   preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationPageInput,
   type PdfDocumentTranslationTextItem,
 } from '../core/pdf/document-translation';
+
+describe('PDF document translation OCR input', () => {
+  it('keeps trusted upright text and formulas in provider reading order', () => {
+    const items = pdfDocumentTranslationItemsFromOcr({
+      pageNumber: 3,
+      coordinateSystem: 'normalized-page',
+      blocks: [
+        {
+          id: 'text', order: 0, text: 'Scanned paragraph.', confidence: 0.91,
+          kind: 'text', box: { left: .1, top: .2, width: .7, height: .05 },
+        },
+        {
+          id: 'formula', order: 1, text: String.raw`E=mc^2`, confidence: 0.9,
+          kind: 'formula', box: { left: .2, top: .3, width: .3, height: .04 },
+        },
+        {
+          id: 'low', order: 2, text: 'Uncertain.', confidence: 0.5,
+          kind: 'text', box: { left: .1, top: .4, width: .4, height: .04 },
+        },
+        {
+          id: 'rotated', order: 3, text: 'Margin.', confidence: 0.95,
+          kind: 'text', rotationDegrees: 90,
+          box: { left: .02, top: .2, width: .04, height: .5 },
+        },
+      ],
+    }, 600, 800);
+
+    expect(items).toEqual([
+      {
+        str: 'Scanned paragraph.', hasEOL: true,
+        left: 60, top: 160, width: 420, height: 40,
+      },
+      {
+        str: String.raw`E=mc^2`, hasEOL: true,
+        left: 120, top: 240, width: 180, height: 32,
+      },
+    ]);
+  });
+});
 
 function positioned(
   str: string,

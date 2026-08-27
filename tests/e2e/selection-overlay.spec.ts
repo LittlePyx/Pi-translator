@@ -5307,6 +5307,166 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
   }
 });
 
+test('adds scanned pages to PDF full translation only after explicit OCR confirmation', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  await pdfPage.addInitScript(() => {
+    const scope = globalThis as typeof globalThis & { __documentOcrRequests?: number };
+    scope.__documentOcrRequests = 0;
+    const runtime = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown, ...args: unknown[]): Promise<unknown> } };
+    }).chrome.runtime;
+    const original = runtime.sendMessage.bind(runtime);
+    runtime.sendMessage = (message: unknown, ...args: unknown[]) => {
+      if (
+        message && typeof message === 'object' && 'type' in message &&
+        message.type === 'RECOGNIZE_PDF_PAGE'
+      ) {
+        scope.__documentOcrRequests = (scope.__documentOcrRequests ?? 0) + 1;
+        if (scope.__documentOcrRequests === 1) {
+          return Promise.resolve({
+            ok: false,
+            error: {
+              code: 'OCR_INVALID_RESPONSE',
+              message: 'Synthetic unreadable scan.',
+              retryable: true,
+            },
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          data: {
+            page: {
+              pageNumber: 1,
+              coordinateSystem: 'normalized-page',
+              source: 'qwen-advanced-recognition',
+              blocks: [
+                {
+                  id: 'document-ocr-text', order: 0,
+                  text: 'Scanned full-document paragraph for translation.',
+                  confidence: 0.93, confidenceSource: 'trusted-adapter', kind: 'text',
+                  box: { left: .1, top: .18, width: .76, height: .06 },
+                },
+                {
+                  id: 'document-ocr-formula', order: 1,
+                  text: 'E=mc^2', confidence: 0.91,
+                  confidenceSource: 'trusted-adapter', kind: 'formula',
+                  box: { left: .2, top: .3, width: .28, height: .05 },
+                },
+              ],
+            },
+          },
+        });
+      }
+      return original(message, ...args);
+    };
+  });
+  const requestStart = textRequests.length;
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'scanned-full-document.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    const panel = pdfPage.locator('#pdf-document-translation');
+    const ocr = pdfPage.locator('#pdf-document-translation-ocr');
+    const ocrAction = pdfPage.locator('#pdf-document-translation-ocr-action');
+    await expect(panel).toBeVisible();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('没有读取到文字层');
+    await expect(ocr).toBeVisible();
+    await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
+      .toContainText('点击后才会逐页发送页面图像');
+    await expect(ocrAction).toHaveText('识别 1 页');
+    await expect(pdfPage.locator('#pdf-document-translation-range')).toBeEnabled();
+    expect(await pdfPage.evaluate(() => (
+      globalThis as typeof globalThis & { __documentOcrRequests?: number }
+    ).__documentOcrRequests)).toBe(0);
+    expect(textRequests).toHaveLength(requestStart);
+
+    await ocrAction.click();
+    await expect(ocr).toHaveAttribute('data-tone', 'error');
+    await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
+      .toContainText('1 页未识别');
+    await expect(ocrAction).toHaveText('识别 1 页');
+    expect(await pdfPage.evaluate(() => (
+      globalThis as typeof globalThis & { __documentOcrRequests?: number }
+    ).__documentOcrRequests)).toBe(1);
+    expect(textRequests).toHaveLength(requestStart);
+
+    await ocrAction.click();
+    await expect(ocr).toBeHidden();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('扫描页已加入正文');
+    await expect(pdfPage.locator('#pdf-document-translation-primary')).toBeEnabled();
+    await expect(pdfPage.locator('[data-pi-ocr-block="document-ocr-text"]'))
+      .toContainText('Scanned full-document paragraph');
+    const panelLayout = await panel.evaluate((element) => ({
+      clientWidth: element.clientWidth,
+      scrollWidth: element.scrollWidth,
+    }));
+    expect(panelLayout.scrollWidth).toBeLessThanOrEqual(panelLayout.clientWidth + 1);
+
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+    expect(textRequests).toHaveLength(requestStart + 1);
+    const request = textRequests.at(-1)!;
+    const messages = request.messages as Array<{ role?: string; content?: string }>;
+    const content = messages.find((message) => message.role === 'user')?.content;
+    const payload = JSON.parse(content!) as { segments: Array<{ text: string }> };
+    expect(payload.segments[0]?.text).toContain('Scanned full-document paragraph');
+    expect(payload.segments.map((segment) => segment.text).join('\n')).toContain('E=mc^2');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-ocr-360.png'),
+        fullPage: false,
+      });
+    }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('stops PDF full-document OCR while keeping recognized-page consent explicit', async () => {
+  const pdfPage = await context.newPage();
+  await pdfPage.addInitScript(() => {
+    const runtime = (globalThis as typeof globalThis & {
+      chrome: { runtime: { sendMessage(message: unknown, ...args: unknown[]): Promise<unknown> } };
+    }).chrome.runtime;
+    const original = runtime.sendMessage.bind(runtime);
+    runtime.sendMessage = (message: unknown, ...args: unknown[]) => {
+      if (
+        message && typeof message === 'object' && 'type' in message &&
+        message.type === 'RECOGNIZE_PDF_PAGE'
+      ) return new Promise(() => undefined);
+      return original(message, ...args);
+    };
+  });
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'stoppable-scanned-document.pdf',
+      mimeType: 'application/pdf',
+      buffer: createRasterPdf(),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    const action = pdfPage.locator('#pdf-document-translation-ocr-action');
+    await action.click();
+    await expect(action).toHaveText('停止识别');
+    await action.click();
+    await expect(action).toHaveText('识别 1 页');
+    await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
+      .toContainText('识别已停止');
+    await expect(pdfPage.locator('#pdf-document-translation-primary')).toBeDisabled();
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('restores PDF full-document progress and translates only newly added paragraphs', async () => {
   const sourceUrl = 'https://www.overleaf.com/pdf-document-resume.pdf';
   let expandedDocument = false;

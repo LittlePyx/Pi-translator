@@ -56,6 +56,7 @@ import { buildDocumentTranslationExport } from '../../core/translation/document-
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationItemsFromOcr,
   preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationBlock,
   type PdfDocumentTranslationPageInput,
@@ -235,6 +236,13 @@ const documentTranslationSkipAppendix = element<HTMLInputElement>(
 const documentTranslationRangeFeedback = element<HTMLElement>(
   'pdf-document-translation-range-feedback',
 );
+const documentTranslationOcr = element<HTMLElement>('pdf-document-translation-ocr');
+const documentTranslationOcrStatus = element<HTMLElement>(
+  'pdf-document-translation-ocr-status',
+);
+const documentTranslationOcrAction = element<HTMLButtonElement>(
+  'pdf-document-translation-ocr-action',
+);
 const documentTranslationNote = element<HTMLElement>('pdf-document-translation-note');
 const documentTranslationPages = element<HTMLElement>('pdf-document-translation-pages');
 const searchPanel = element<HTMLElement>('pdf-search');
@@ -354,12 +362,19 @@ interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock
 let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
 let pdfDocumentTranslationBlocksState: PdfDocumentTranslationRuntimeBlock[] = [];
 let pdfDocumentTranslationUnreadablePages = 0;
+let pdfDocumentTranslationUnreadablePageNumbers: number[] = [];
 let pdfDocumentTranslationMultiColumnPages = 0;
 let pdfDocumentTranslationRemovedMarginLines = 0;
 let pdfDocumentTranslationRequestId: string | undefined;
 let pdfDocumentTranslationTask: Promise<void> | undefined;
 let pdfDocumentTranslationRevision = 0;
 let pdfDocumentTranslationMessage: string | undefined;
+let pdfDocumentTranslationOcrRunning = false;
+let pdfDocumentTranslationOcrProgress = { completed: 0, total: 0 };
+let pdfDocumentTranslationOcrMessage: string | undefined;
+let pdfDocumentTranslationOcrError = false;
+let pdfDocumentTranslationOcrRevision = 0;
+let pdfDocumentTranslationOcrRequestId: string | undefined;
 let pdfDocumentTranslationCopyPending = false;
 let pdfDocumentTranslationCopyFeedbackTimer: number | undefined;
 type PdfDocumentTranslationRangeMode = 'all' | 'current' | 'custom';
@@ -616,6 +631,12 @@ function pdfDocumentTranslationPageInRange(pageNumber: number): boolean {
     pdfDocumentTranslationRangePages.includes(pageNumber);
 }
 
+function pdfDocumentTranslationUnreadablePagesInScope(): number[] {
+  return pdfDocumentTranslationUnreadablePageNumbers.filter(
+    (pageNumber) => pdfDocumentTranslationPageInRange(pageNumber),
+  );
+}
+
 function pdfDocumentTranslationBlockInScope(
   block: PdfDocumentTranslationRuntimeBlock,
 ): boolean {
@@ -779,6 +800,10 @@ function applyPdfDocumentTranslationScope(): boolean {
   });
   pdfDocumentTranslationRangeError = undefined;
   rebuildPdfDocumentTranslationResults();
+  if (!pdfDocumentTranslationBlocksState.length) {
+    syncPdfDocumentTranslationUi();
+    return true;
+  }
   const scoped = scopedPdfDocumentTranslationBlocks();
   const allSettled = scoped.every((block) => ['done', 'error'].includes(block.status));
   const translated = scoped.some((block) => block.status === 'done');
@@ -819,6 +844,8 @@ function updatePdfDocumentTranslationRange(
   pdfDocumentTranslationRangeSummary = summary;
   documentTranslationRange.value = mode;
   documentTranslationCustomRange.hidden = mode !== 'custom';
+  pdfDocumentTranslationOcrMessage = undefined;
+  pdfDocumentTranslationOcrError = false;
   if (applyPdfDocumentTranslationScope()) return true;
   pdfDocumentTranslationRangeMode = previous.mode;
   pdfDocumentTranslationRangePages = previous.pages;
@@ -852,7 +879,10 @@ function syncPdfDocumentTranslationUi(): void {
     ? Math.min(100, Math.round((translated / total) * 100))
     : 0;
   const hasPreparedBlocks = pdfDocumentTranslationBlocksState.length > 0;
-  const scopeEnabled = hasPreparedBlocks && pdfDocumentTranslationPhase !== 'preparing';
+  const unreadablePagesInScope = pdfDocumentTranslationUnreadablePagesInScope();
+  const scopeEnabled = (
+    hasPreparedBlocks || pdfDocumentTranslationUnreadablePageNumbers.length > 0
+  ) && pdfDocumentTranslationPhase !== 'preparing' && !pdfDocumentTranslationOcrRunning;
   const currentRangePage = pdfDocumentTranslationRangeMode === 'current'
     ? pdfDocumentTranslationRangePages[0] ?? visiblePageAnchor().pageNumber
     : visiblePageAnchor().pageNumber;
@@ -907,7 +937,8 @@ function syncPdfDocumentTranslationUi(): void {
                   : `已完成 ${translated}/${total}`
                 : `翻译中断 · ${translated}/${total}`;
   documentTranslationStatus.textContent = pdfDocumentTranslationMessage ?? defaultStatus;
-  documentTranslationPrimary.disabled = pdfDocumentTranslationPhase === 'preparing' || total === 0;
+  documentTranslationPrimary.disabled = pdfDocumentTranslationPhase === 'preparing' ||
+    pdfDocumentTranslationOcrRunning || total === 0;
   documentTranslationPrimary.hidden = pdfDocumentTranslationPhase === 'complete' && failed === 0;
   documentTranslationPrimary.textContent = pdfDocumentTranslationPhase === 'running'
     ? '暂停'
@@ -932,6 +963,18 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationCopyMenu.hidden = translated === 0;
   documentTranslationCopyTranslation.disabled = pdfDocumentTranslationCopyPending;
   documentTranslationCopyBilingual.disabled = pdfDocumentTranslationCopyPending;
+  documentTranslationOcr.hidden = !pdfDocumentTranslationOcrRunning &&
+    unreadablePagesInScope.length === 0;
+  documentTranslationOcr.dataset.tone = pdfDocumentTranslationOcrError ? 'error' : 'info';
+  documentTranslationOcrAction.disabled = pdfDocumentTranslationPhase === 'preparing' ||
+    (pdfDocumentTranslationPhase === 'running' && !pdfDocumentTranslationOcrRunning);
+  documentTranslationOcrAction.textContent = pdfDocumentTranslationOcrRunning
+    ? '停止识别'
+    : `识别 ${unreadablePagesInScope.length} 页`;
+  documentTranslationOcrStatus.textContent = pdfDocumentTranslationOcrRunning
+    ? `正在逐页识别 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
+    : pdfDocumentTranslationOcrMessage ??
+      `${unreadablePagesInScope.length} 页没有文字层；点击后才会逐页发送页面图像`;
   translateDocument.setAttribute('aria-expanded', String(!documentTranslationPanel.hidden));
   translateDocument.title = total
     ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
@@ -945,7 +988,7 @@ function syncPdfDocumentTranslationUi(): void {
       : '',
   ].filter(Boolean).join('；');
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `正文只在确认后批量发送；已完成译文只保留在当前 Edge 会话中。${pdfDocumentTranslationUnreadablePages} 页没有可用文字层，已保留原页且不会自动截图。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 点击译文可返回原文。`
+    ? `正文与扫描页图像只在你分别确认后发送；已完成译文只保留在当前 Edge 会话中。仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 原始 PDF 始终保留。`
     : `正文只在确认后批量发送；已完成译文只保留在当前 Edge 会话中。原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
 }
 
@@ -1157,15 +1200,32 @@ function cancelPdfDocumentTranslationRequest(): void {
   } satisfies RuntimeMessage).catch(() => undefined);
 }
 
+function cancelPdfDocumentTranslationOcrRequest(): void {
+  if (!pdfDocumentTranslationOcrRequestId) return;
+  const requestId = pdfDocumentTranslationOcrRequestId;
+  pdfDocumentTranslationOcrRequestId = undefined;
+  void browser.runtime.sendMessage({
+    type: 'CANCEL_TRANSLATION',
+    payload: { requestId },
+  } satisfies RuntimeMessage).catch(() => undefined);
+}
+
 function resetPdfDocumentTranslation(closePanel = false): void {
   pdfDocumentTranslationRevision += 1;
   cancelPdfDocumentTranslationRequest();
+  pdfDocumentTranslationOcrRevision += 1;
+  cancelPdfDocumentTranslationOcrRequest();
   pdfDocumentTranslationBlocksState = [];
   pdfDocumentTranslationUnreadablePages = 0;
+  pdfDocumentTranslationUnreadablePageNumbers = [];
   pdfDocumentTranslationMultiColumnPages = 0;
   pdfDocumentTranslationRemovedMarginLines = 0;
   pdfDocumentTranslationPhase = 'idle';
   pdfDocumentTranslationMessage = undefined;
+  pdfDocumentTranslationOcrRunning = false;
+  pdfDocumentTranslationOcrProgress = { completed: 0, total: 0 };
+  pdfDocumentTranslationOcrMessage = undefined;
+  pdfDocumentTranslationOcrError = false;
   pdfDocumentTranslationTask = undefined;
   pdfDocumentTranslationSessionContext = undefined;
   resetPdfDocumentTranslationScope();
@@ -1185,12 +1245,12 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   pdfDocumentTranslationBlocksState = [];
   pdfDocumentTranslationSessionContext = undefined;
   pdfDocumentTranslationUnreadablePages = 0;
+  pdfDocumentTranslationUnreadablePageNumbers = [];
   pdfDocumentTranslationMultiColumnPages = 0;
   pdfDocumentTranslationRemovedMarginLines = 0;
   documentTranslationPages.replaceChildren();
   syncPdfDocumentTranslationUi();
   const pages: PdfDocumentTranslationPageInput[] = [];
-  let unreadablePages = 0;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     if (
       revision !== pdfDocumentTranslationRevision ||
@@ -1201,7 +1261,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
       const page = await pdf.getPage(pageNumber);
       const content = await page.getTextContent();
       const viewport = page.getViewport({ scale: 1 });
-      const items: PdfDocumentTranslationTextItem[] = content.items.flatMap((item) => {
+      let items: PdfDocumentTranslationTextItem[] = content.items.flatMap((item) => {
         if (!('str' in item) || typeof item.str !== 'string') return [];
         const text = item.str.trim();
         if (!text) return [];
@@ -1228,6 +1288,16 @@ async function preparePdfDocumentTranslation(): Promise<void> {
             : {}),
         }];
       });
+      if (!items.length) {
+        const temporaryOcrPage = temporaryOcrPages.get(pageNumber);
+        if (temporaryOcrPage) {
+          items = pdfDocumentTranslationItemsFromOcr(
+            temporaryOcrPage,
+            viewport.width,
+            viewport.height,
+          );
+        }
+      }
       pages.push({
         pageNumber,
         pageWidth: viewport.width,
@@ -1235,7 +1305,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         items,
       });
     } catch {
-      unreadablePages += 1;
+      // Missing pages are identified after the local preparation pass.
     }
     if (pageNumber % 4 === 0 || pageNumber === pdf.numPages) {
       pdfDocumentTranslationMessage = `正在本地读取文字层 · ${pageNumber}/${pdf.numPages} 页`;
@@ -1263,7 +1333,12 @@ async function preparePdfDocumentTranslation(): Promise<void> {
       status: 'idle' as const,
     };
   });
-  pdfDocumentTranslationUnreadablePages = unreadablePages + prepared.unreadablePages;
+  const readablePageNumbers = new Set(prepared.blocks.map((block) => block.pageNumber));
+  pdfDocumentTranslationUnreadablePageNumbers = Array.from(
+    { length: pdf.numPages },
+    (_, index) => index + 1,
+  ).filter((pageNumber) => !readablePageNumbers.has(pageNumber));
+  pdfDocumentTranslationUnreadablePages = pdfDocumentTranslationUnreadablePageNumbers.length;
   pdfDocumentTranslationMultiColumnPages = prepared.multiColumnPages;
   pdfDocumentTranslationRemovedMarginLines = prepared.removedRepeatedMarginLines;
   pdfDocumentTranslationBlocksState = discovered;
@@ -1316,9 +1391,234 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         : 'ready'
     : 'error';
   if (!discovered.length) {
-    pdfDocumentTranslationMessage = '没有读取到可翻译文字；扫描版请先使用“识别本页”。';
+    pdfDocumentTranslationMessage = pdfDocumentTranslationUnreadablePages
+      ? '没有读取到文字层；可在下方确认识别扫描页。'
+      : '没有读取到可翻译正文。';
   }
   syncPdfDocumentTranslationUi();
+}
+
+async function capturePdfDocumentTranslationOcrPage(
+  pdf: PDFDocumentProxy,
+  pageNumber: number,
+): Promise<{
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  pageWidth: number;
+  pageHeight: number;
+  captureMs: number;
+}> {
+  const startedAt = performance.now();
+  const page = await pdf.getPage(pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.25, Math.max(
+    0.5,
+    1_800 / Math.max(baseViewport.width, baseViewport.height, 1),
+  ));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('当前浏览器无法生成 OCR 页面图像。');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
+  return {
+    imageDataUrl: canvas.toDataURL('image/jpeg', .84),
+    imageWidth: canvas.width,
+    imageHeight: canvas.height,
+    pageWidth: baseViewport.width,
+    pageHeight: baseViewport.height,
+    captureMs: Math.max(0, performance.now() - startedAt),
+  };
+}
+
+function addPdfDocumentTranslationOcrPage(
+  page: CoordinateOcrPage,
+  pageWidth: number,
+  pageHeight: number,
+): number {
+  const items = pdfDocumentTranslationItemsFromOcr(page, pageWidth, pageHeight);
+  const prepared = preparePdfDocumentTranslationPages([{
+    pageNumber: page.pageNumber,
+    pageWidth,
+    pageHeight,
+    items,
+  }]);
+  if (!prepared.blocks.length) return 0;
+  const signatureOccurrences = new Map<string, number>();
+  for (const block of pdfDocumentTranslationBlocksState) {
+    const key = `${block.pageNumber}\u0000${block.text}`;
+    signatureOccurrences.set(key, (signatureOccurrences.get(key) ?? 0) + 1);
+  }
+  const added: PdfDocumentTranslationRuntimeBlock[] = prepared.blocks.map((block) => {
+    const occurrenceKey = `${block.pageNumber}\u0000${block.text}`;
+    const occurrence = signatureOccurrences.get(occurrenceKey) ?? 0;
+    signatureOccurrences.set(occurrenceKey, occurrence + 1);
+    return {
+      ...block,
+      sessionSignature: pdfDocumentTranslationSessionBlockSignature(
+        block.pageNumber,
+        block.text,
+        occurrence,
+      ),
+      section: 'body',
+      included: true,
+      status: 'idle',
+    };
+  });
+  pdfDocumentTranslationBlocksState.push(...added);
+  pdfDocumentTranslationBlocksState.sort((left, right) => (
+    left.pageNumber - right.pageNumber || left.blockIndex - right.blockIndex
+  ));
+  const sections = classifyPdfDocumentTranslationSections(pdfDocumentTranslationBlocksState);
+  pdfDocumentTranslationBlocksState.forEach((block, index) => {
+    block.section = sections[index] ?? 'body';
+    block.included = pdfDocumentTranslationBlockInScope(block);
+  });
+  rebuildPdfDocumentTranslationResults();
+  return added.length;
+}
+
+function settlePdfDocumentTranslationAfterOcr(previousPhase: PdfDocumentTranslationPhase): void {
+  const scoped = scopedPdfDocumentTranslationBlocks();
+  const hasPending = scoped.some((block) => block.status === 'idle');
+  const hasTranslated = scoped.some((block) => block.status === 'done');
+  if (!scoped.length) {
+    pdfDocumentTranslationPhase = 'error';
+  } else if (!hasPending && scoped.every((block) => block.status === 'done')) {
+    pdfDocumentTranslationPhase = 'complete';
+  } else if (previousPhase === 'stopped') {
+    pdfDocumentTranslationPhase = 'stopped';
+  } else if (hasTranslated || ['paused', 'complete'].includes(previousPhase)) {
+    pdfDocumentTranslationPhase = 'paused';
+  } else {
+    pdfDocumentTranslationPhase = 'ready';
+  }
+}
+
+function stopPdfDocumentTranslationOcr(): void {
+  if (!pdfDocumentTranslationOcrRunning) return;
+  pdfDocumentTranslationOcrRevision += 1;
+  cancelPdfDocumentTranslationOcrRequest();
+  pdfDocumentTranslationOcrRunning = false;
+  pdfDocumentTranslationOcrMessage = '识别已停止；成功页面已保留，可继续识别剩余页面。';
+  pdfDocumentTranslationOcrError = false;
+  syncPdfDocumentTranslationUi();
+}
+
+async function recognizePdfDocumentTranslationPages(): Promise<void> {
+  if (pdfDocumentTranslationOcrRunning) {
+    stopPdfDocumentTranslationOcr();
+    return;
+  }
+  const pdf = pdfDocument;
+  const targets = pdfDocumentTranslationUnreadablePagesInScope();
+  if (!pdf || !targets.length || pdfDocumentTranslationPhase === 'preparing') return;
+  const revision = ++pdfDocumentTranslationOcrRevision;
+  const epoch = documentEpoch;
+  const previousPhase = pdfDocumentTranslationPhase;
+  pdfDocumentTranslationOcrRunning = true;
+  pdfDocumentTranslationOcrProgress = { completed: 0, total: targets.length };
+  pdfDocumentTranslationOcrMessage = undefined;
+  pdfDocumentTranslationOcrError = false;
+  syncPdfDocumentTranslationUi();
+  let recognizedPages = 0;
+  let failedPages = 0;
+  let latestError: string | undefined;
+  for (const [index, pageNumber] of targets.entries()) {
+    if (
+      revision !== pdfDocumentTranslationOcrRevision ||
+      epoch !== documentEpoch ||
+      pdfDocument !== pdf
+    ) return;
+    pdfDocumentTranslationOcrProgress = { completed: index, total: targets.length };
+    syncPdfDocumentTranslationUi();
+    try {
+      const capture = await capturePdfDocumentTranslationOcrPage(pdf, pageNumber);
+      if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
+      const requestId = crypto.randomUUID();
+      pdfDocumentTranslationOcrRequestId = requestId;
+      const response = await browser.runtime.sendMessage({
+        type: 'RECOGNIZE_PDF_PAGE',
+        payload: {
+          requestId,
+          imageDataUrl: capture.imageDataUrl,
+          imageWidth: capture.imageWidth,
+          imageHeight: capture.imageHeight,
+          pageNumber,
+          clientPerformance: { captureMs: capture.captureMs },
+        },
+      } satisfies RuntimeMessage) as RecognizePdfPageResponse;
+      if (
+        revision !== pdfDocumentTranslationOcrRevision ||
+        epoch !== documentEpoch ||
+        pdfDocument !== pdf
+      ) return;
+      pdfDocumentTranslationOcrRequestId = undefined;
+      if (!response.ok) {
+        latestError = translationErrorMessage(response.error.code, response.error.message);
+        failedPages += 1;
+        const recovery = translationErrorRecovery(
+          response.error.code,
+          response.error.retryable,
+          'vision',
+        );
+        if (recovery.settingsFocus) {
+          showNotice(latestError, {
+            tone: 'error',
+            action: {
+              label: recovery.settingsLabel ?? '检查图像 API',
+              onClick: () => { void openPdfSettings(recovery.settingsFocus); },
+            },
+          });
+          break;
+        }
+        continue;
+      }
+      const page = response.data.page;
+      const added = addPdfDocumentTranslationOcrPage(
+        page,
+        capture.pageWidth,
+        capture.pageHeight,
+      );
+      if (!added) throw new Error('OCR 没有返回足够可靠的正文，请调整后重试。');
+      temporaryOcrPages.set(pageNumber, page);
+      updatePdfSearchIndexFromTemporaryOcrPage(pageNumber, page);
+      const pageElement = viewer.querySelector<HTMLElement>(
+        `.pdf-page[data-page-number="${pageNumber}"]`,
+      );
+      if (pageElement) {
+        const lineCount = renderTemporaryOcrTextLayer(pageElement, page);
+        if (lineCount) pageElement.dataset.hasText = 'true';
+      }
+      pdfDocumentTranslationUnreadablePageNumbers =
+        pdfDocumentTranslationUnreadablePageNumbers.filter((value) => value !== pageNumber);
+      pdfDocumentTranslationUnreadablePages = pdfDocumentTranslationUnreadablePageNumbers.length;
+      recognizedPages += 1;
+    } catch (error) {
+      latestError = error instanceof Error ? error.message : '页面识别失败。';
+      failedPages += 1;
+    } finally {
+      pdfDocumentTranslationOcrRequestId = undefined;
+      pdfDocumentTranslationOcrProgress = { completed: index + 1, total: targets.length };
+      syncPdfDocumentTranslationUi();
+    }
+  }
+  if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
+  pdfDocumentTranslationOcrRunning = false;
+  settlePdfDocumentTranslationAfterOcr(previousPhase);
+  pdfDocumentTranslationOcrError = failedPages > 0;
+  pdfDocumentTranslationOcrMessage = failedPages
+    ? `${recognizedPages ? `已识别 ${recognizedPages} 页；` : ''}${failedPages} 页未识别${latestError ? `：${latestError}` : ''}`
+    : undefined;
+  pdfDocumentTranslationMessage = recognizedPages
+    ? `扫描页已加入正文 · 新增 ${recognizedPages} 页`
+    : pdfDocumentTranslationMessage;
+  syncPdfDocumentTranslationUi();
+  void persistPdfDocumentTranslationSession();
 }
 
 function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock): string | undefined {
@@ -1492,6 +1792,7 @@ function closePdfDocumentTranslation(): void {
 }
 
 function startOrTogglePdfDocumentTranslation(): void {
+  if (pdfDocumentTranslationOcrRunning) return;
   if (pdfDocumentTranslationPhase === 'running') {
     pdfDocumentTranslationPhase = 'paused';
     pdfDocumentTranslationMessage = undefined;
@@ -5248,6 +5549,9 @@ documentTranslationCopyTranslation.addEventListener('click', () => {
 });
 documentTranslationCopyBilingual.addEventListener('click', () => {
   void copyPdfDocumentTranslationResult('bilingual');
+});
+documentTranslationOcrAction.addEventListener('click', () => {
+  void recognizePdfDocumentTranslationPages();
 });
 documentTranslationRange.addEventListener('change', () => {
   pdfDocumentTranslationRangeError = undefined;

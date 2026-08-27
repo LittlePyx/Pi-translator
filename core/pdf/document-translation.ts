@@ -1,5 +1,6 @@
 import { buildPdfSearchPageIndex, type PdfSearchTextItem } from './search';
 import { splitLongTranslationText } from '../translation/text-chunker';
+import type { CoordinateOcrPage } from './ocr-text-layer';
 
 export interface PdfDocumentTranslationBlock {
   id: string;
@@ -37,6 +38,27 @@ export interface PdfDocumentTranslationPreparation {
   layoutAwarePages: number;
   multiColumnPages: number;
   removedRepeatedMarginLines: number;
+}
+
+/** Converts trusted, upright OCR blocks into the same local layout input as a PDF text layer. */
+export function pdfDocumentTranslationItemsFromOcr(
+  page: CoordinateOcrPage,
+  pageWidth: number,
+  pageHeight: number,
+  minimumConfidence = 0.82,
+): PdfDocumentTranslationTextItem[] {
+  if (!(pageWidth > 0) || !(pageHeight > 0)) return [];
+  return page.blocks.filter((block) => (
+    block.confidence >= minimumConfidence &&
+    Math.abs(block.rotationDegrees ?? 0) <= 5
+  )).map((block) => ({
+    str: block.text,
+    hasEOL: true,
+    left: block.box.left * pageWidth,
+    top: block.box.top * pageHeight,
+    width: block.box.width * pageWidth,
+    height: block.box.height * pageHeight,
+  }));
 }
 
 interface VisualAtom {

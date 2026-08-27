@@ -169,6 +169,19 @@
         </div>
         <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
       </section>
+      <section
+        id="pdf-document-translation-ocr"
+        class="pdf-document-translation-ocr"
+        aria-label="扫描页文字识别"
+        hidden
+      >
+        <span class="pdf-document-translation-ocr-badge" aria-hidden="true">OCR</span>
+        <span class="pdf-document-translation-ocr-copy">
+          <strong>扫描页尚未识别</strong>
+          <small id="pdf-document-translation-ocr-status" aria-live="polite"></small>
+        </span>
+        <button id="pdf-document-translation-ocr-action" type="button"></button>
+      </section>
       <p id="pdf-document-translation-note" class="pdf-document-translation-note">
         先在本地读取文字层；确认开始后才会批量发送正文。扫描页会保留原页并标记为未识别。
       </p>
