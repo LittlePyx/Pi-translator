@@ -82,8 +82,13 @@ describe('PDF document translation', () => {
         positioned(`Right body ${index + 1}.`, 330, 100 + index * 22),
       ]),
     ])]);
-    const text = prepared.blocks[0]!.text;
+    const text = prepared.blocks.map((block) => block.text).join('\n');
     expect(prepared.multiColumnPages).toBe(1);
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'A Layout-Aware Translation Study',
+      'Left body 1. Left body 2. Left body 3.',
+      'Right body 1. Right body 2. Right body 3.',
+    ]);
     expect(text.startsWith('A Layout-Aware Translation Study')).toBe(true);
     expect(text.indexOf('Left body 3.')).toBeLessThan(text.indexOf('Right body 1.'));
     expect(prepared.blocks[0]!.sourceAnchor).toMatchObject({
@@ -105,7 +110,10 @@ describe('PDF document translation', () => {
       positioned('1.2 s', 384, 138, 40),
     ])]);
     expect(prepared.multiColumnPages).toBe(0);
-    expect(prepared.blocks[0]!.text).toContain('Model\tScore\tTime\nPi\t98\t1.2 s');
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'Model\tScore\tTime',
+      'Pi\t98\t1.2 s',
+    ]);
   });
 
   it('removes only repeated headers and page-number footers across pages', () => {
@@ -138,9 +146,12 @@ describe('PDF document translation', () => {
       positioned('const score = model(x);', 54, 150, 190),
       positioned('The evaluation then continues.', 54, 180, 220),
     ])]);
-    expect(prepared.blocks[0]!.text).toContain(
-      'The objective is defined below.\nE = mc² + λ\t(12)\nconst score = model(x);\nThe evaluation then continues.',
-    );
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'The objective is defined below.',
+      'E = mc² + λ\t(12)',
+      'const score = model(x);',
+      'The evaluation then continues.',
+    ]);
   });
 
   it('does not mistake ordinary Korean prose for mathematical alphanumeric symbols', () => {
@@ -169,5 +180,35 @@ describe('PDF document translation', () => {
     expect(firstAnchor.topRatio).toBeLessThan(secondAnchor.topRatio);
     expect(firstAnchor.heightRatio).toBeLessThan(0.1);
     expect(secondAnchor.heightRatio).toBeLessThan(0.1);
+  });
+
+  it('merges visual line wraps but starts a new block at a first-line indent', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(1, [
+      positioned('The first paragraph wraps across', 54, 100, 250),
+      positioned('two visual lines and ends here.', 54, 115, 230),
+      positioned('A newly indented paragraph starts here', 66, 130, 260),
+      positioned('and its continuation returns to the margin.', 54, 145, 290),
+    ])]);
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'The first paragraph wraps across two visual lines and ends here.',
+      'A newly indented paragraph starts here and its continuation returns to the margin.',
+    ]);
+  });
+
+  it('uses a larger vertical gap and section heading as paragraph boundaries', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(1, [
+      positioned('Opening body line one', 54, 90, 200),
+      positioned('continues on line two.', 54, 105, 190),
+      positioned('A second paragraph begins after spacing', 54, 135, 270),
+      positioned('and keeps its wrapped continuation.', 54, 150, 240),
+      positioned('2 Methods:', 54, 180, 90),
+      positioned('The method description follows the heading.', 54, 205, 290),
+    ])]);
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'Opening body line one continues on line two.',
+      'A second paragraph begins after spacing and keeps its wrapped continuation.',
+      '2 Methods:',
+      'The method description follows the heading.',
+    ]);
   });
 });

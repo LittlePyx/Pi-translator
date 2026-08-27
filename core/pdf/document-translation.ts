@@ -71,6 +71,7 @@ interface JoinedLayoutLine {
 interface JoinedLayoutText {
   text: string;
   lines: JoinedLayoutLine[];
+  paragraphs: Array<{ start: number; end: number }>;
 }
 
 interface AnalyzedPage {
@@ -86,6 +87,27 @@ const LATIN_OR_DIGIT_START = /^[\p{L}\p{N}]/u;
 const CJK_BOUNDARY = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u;
 const EQUATION_NUMBER = /^(?:\(?\d{1,4}[a-z]?\)?|\[\d{1,4}\])$/iu;
 const CODE_LINE = /^(?:[$>#]\s|(?:const|let|var|function|class|def|import|from|return|if|for|while)\b|\w+\s*(?:\([^)]*\))?\s*(?:=>|:=|==|!=|<=|>=)|[{}[\];]|\S+\s*=\s*\S+)/u;
+const LIST_ITEM_LINE = /^(?:[-*\u2022\u2023\u25aa\u25e6\u2013\u2014]\s+|\d{1,3}[.)]\s+|\(\d{1,3}\)\s+|[A-Za-z][.)]\s+|\([A-Za-z]\)\s+|\[\d{1,4}\]\s+)/u;
+const SECTION_HEADING_LINE = /^(?:(?:\d+(?:\.\d+){0,4}|[IVXLC]+)\.?\s+)[\p{Lu}\d]/u;
+const SENTENCE_END = /[.!?。！？:：][\])}\u201d\u2019'"]?$/u;
+const HEADING_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
+const KNOWN_SECTION_HEADINGS = new Set([
+  'abstract',
+  'acknowledgments',
+  'appendix',
+  'conclusion',
+  'conclusions',
+  'discussion',
+  'experiments',
+  'introduction',
+  'limitations',
+  'method',
+  'methodology',
+  'methods',
+  'references',
+  'related work',
+  'results',
+]);
 
 function finitePositive(value: number | undefined): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value > 0;
@@ -98,6 +120,12 @@ function median(values: readonly number[]): number {
   return sorted.length % 2
     ? sorted[middle]!
     : (sorted[middle - 1]! + sorted[middle]!) / 2;
+}
+
+function lowerQuartile(values: readonly number[]): number {
+  if (!values.length) return 0;
+  const sorted = [...values].sort((left, right) => left - right);
+  return sorted[Math.floor((sorted.length - 1) * 0.25)] ?? sorted[0] ?? 0;
 }
 
 function normalizedItemText(value: string): string {
@@ -252,6 +280,30 @@ function looksProtectedStructure(text: string): boolean {
   return text.includes('\t') || looksMathDominant(text) || CODE_LINE.test(text.trim());
 }
 
+function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {
+  const text = line.text.replace(/\s+/gu, ' ').trim();
+  if (!text || text.length > 150 || HEADING_SENTENCE_END.test(text)) return false;
+  const normalized = text.replace(/\s*[:：]\s*$/u, '').toLocaleLowerCase('en-US');
+  if (KNOWN_SECTION_HEADINGS.has(normalized) || SECTION_HEADING_LINE.test(text)) return true;
+  const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}'’-]*/gu) ?? [];
+  return words.length <= 18 && line.height >= typicalHeight * 1.18;
+}
+
+function regionLeftEdges(lines: readonly VisualLine[]): Map<VisualLineRegion | 'single', number> {
+  const grouped = new Map<VisualLineRegion | 'single', number[]>();
+  for (const line of lines) {
+    if (line.structured) continue;
+    const key = line.region ?? 'single';
+    const values = grouped.get(key) ?? [];
+    values.push(line.left);
+    grouped.set(key, values);
+  }
+  return new Map([...grouped.entries()].map(([key, values]) => {
+    values.sort((left, right) => left - right);
+    return [key, values[Math.floor((values.length - 1) * 0.2)] ?? values[0] ?? 0];
+  }));
+}
+
 function candidateColumnDivider(lines: readonly VisualLine[], pageWidth: number): number | undefined {
   const usable = lines.filter((line) => !line.structured && line.text.length >= 3);
   if (usable.length < 6) return undefined;
@@ -356,16 +408,21 @@ function repeatedMarginSignatures(pages: readonly AnalyzedPage[]): Set<string> {
 }
 
 function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
-  if (!lines.length) return { text: '', lines: [] };
+  if (!lines.length) return { text: '', lines: [], paragraphs: [] };
   const verticalSteps = lines.flatMap((line, index) => {
     const next = lines[index + 1];
     return next && line.region === next.region && next.top > line.top
       ? [next.top - line.top]
       : [];
   });
-  const ordinaryStep = median(verticalSteps.filter((step) => step > 0)) ||
+  const ordinaryStep = lowerQuartile(verticalSteps.filter((step) => step > 0)) ||
     median(lines.map((line) => line.height)) * 1.65;
+  const typicalHeight = median(lines.filter((line) => !line.structured).map((line) => line.height)) ||
+    median(lines.map((line) => line.height));
+  const leftEdges = regionLeftEdges(lines);
   let output = lines[0]!.text;
+  let paragraphStart = 0;
+  const paragraphs: Array<{ start: number; end: number }> = [];
   const joinedLines: JoinedLayoutLine[] = [{
     line: lines[0]!,
     start: 0,
@@ -377,14 +434,28 @@ function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
     const verticalStep = current.top - previous.top;
     const protectedBoundary = looksProtectedStructure(previous.text) ||
       looksProtectedStructure(current.text);
+    const headingBoundary = looksHeadingLine(previous, typicalHeight) ||
+      looksHeadingLine(current, typicalHeight);
+    const currentRegion = current.region ?? 'single';
+    const currentIndent = current.left - (leftEdges.get(currentRegion) ?? current.left);
+    const startsIndentedParagraph =
+      currentIndent >= Math.max(7, typicalHeight * 0.7) &&
+      SENTENCE_END.test(previous.text.trim());
     const paragraphBreak = Boolean(
       current.breakBefore ||
       previous.region !== current.region ||
       protectedBoundary ||
-      (verticalStep > 0 && verticalStep > ordinaryStep * 1.55),
+      headingBoundary ||
+      LIST_ITEM_LINE.test(current.text.trim()) ||
+      startsIndentedParagraph ||
+      (verticalStep > 0 && verticalStep > ordinaryStep * 1.35),
     );
     if (paragraphBreak) {
-      output = `${output.trimEnd()}\n${current.text}`;
+      output = output.trimEnd();
+      if (output.length > paragraphStart) paragraphs.push({ start: paragraphStart, end: output.length });
+      output += '\n\n';
+      paragraphStart = output.length;
+      output += current.text;
       joinedLines.push({
         line: current,
         start: output.length - current.text.length,
@@ -405,7 +476,9 @@ function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
       end: output.length,
     });
   }
-  return { text: output.trim(), lines: joinedLines };
+  output = output.trimEnd();
+  if (output.length > paragraphStart) paragraphs.push({ start: paragraphStart, end: output.length });
+  return { text: output, lines: joinedLines, paragraphs };
 }
 
 function sourceAnchorForBlock(
@@ -463,22 +536,32 @@ function blocksFromText(
   const layout = typeof value === 'string' ? undefined : value;
   const text = typeof value === 'string' ? value : value.text;
   if (!text.trim()) return [];
-  let cursor = 0;
-  return splitLongTranslationText(text.trim(), PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH)
-    .map((block, blockIndex) => {
+  const ranges = layout?.paragraphs.length
+    ? layout.paragraphs
+    : [{ start: 0, end: text.length }];
+  const chunks = ranges.flatMap((range) => {
+    const paragraph = text.slice(range.start, range.end).trim();
+    if (!paragraph) return [];
+    const paragraphOffset = text.indexOf(paragraph, range.start);
+    let cursor = Math.max(range.start, paragraphOffset);
+    return splitLongTranslationText(paragraph, PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH).map((block) => {
       const start = text.indexOf(block, cursor);
-      const safeStart = start >= 0 ? start : cursor;
-      const end = safeStart + block.length;
-      cursor = end;
-      const sourceAnchor = sourceAnchorForBlock(safeStart, end, layout, pageSize);
-      return {
+      const safeStart = start >= 0 && start < range.end ? start : cursor;
+      cursor = safeStart + block.length;
+      return { text: block, start: safeStart, end: cursor };
+    });
+  });
+  return chunks.map((chunk, blockIndex) => {
+    const { text: block, start, end } = chunk;
+    const sourceAnchor = sourceAnchorForBlock(start, end, layout, pageSize);
+    return {
       id: `P${safePageNumber}B${blockIndex + 1}`,
       pageNumber: safePageNumber,
       blockIndex,
       text: block,
       ...(sourceAnchor ? { sourceAnchor } : {}),
-      };
-    });
+    };
+  });
 }
 
 /**

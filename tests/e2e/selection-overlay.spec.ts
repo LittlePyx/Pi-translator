@@ -5180,13 +5180,13 @@ test('orders a two-column PDF by reading column before full-document translation
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
     await expect(pdfPage.locator('#pdf-document-translation-status'))
-      .toContainText('已识别 1 段，等待确认');
+      .toContainText('已识别 3 段，等待确认');
     await expect(pdfPage.locator('#pdf-document-translation-note'))
       .toContainText('已按阅读顺序整理 1 页多栏正文');
 
     const requestStart = textRequests.length;
     await pdfPage.locator('#pdf-document-translation-primary').click();
-    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 3/3');
     expect(textRequests.length).toBe(requestStart + 1);
     const request = textRequests[requestStart]!;
     const messages = request.messages as Array<{ role?: string; content?: string }>;
@@ -5195,6 +5195,7 @@ test('orders a two-column PDF by reading column before full-document translation
     const payload = JSON.parse(userContent!) as {
       segments: Array<{ id: string; text: string }>;
     };
+    expect(payload.segments.map((segment) => segment.id)).toEqual(['P1B1', 'P1B2', 'P1B3']);
     const source = payload.segments.map((segment) => segment.text).join('\n');
     expect(source.startsWith('Layout-aware paper title')).toBe(true);
     expect(source.indexOf('Left column closing sentence.'))
