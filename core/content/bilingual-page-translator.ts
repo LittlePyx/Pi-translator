@@ -64,6 +64,7 @@ const ACTIONS_HINT_TOUCH_MESSAGE = '点“更多”可复制、重译或隐藏';
 const MAX_BILINGUAL_BLOCKS = 240;
 const DYNAMIC_SCAN_DELAY_MS = 280;
 const TRANSLATION_PENDING_DELAY_MS = 350;
+const FORMULA_RECOGNITION_SCROLL_SETTLE_MS = 180;
 const ARTICLE_CHANGED_MESSAGE = '页面正文已更新，请重新开始正文翻译。';
 const ERROR_ATTRIBUTE = 'data-pi-bilingual-error';
 const CONTROL_HOST_ID = 'pi-translator-bilingual-page-control';
@@ -1856,11 +1857,22 @@ export function createBilingualPageTranslator(
       options.onRecognizeVisualFormula(rect);
       return true;
     };
-    if (start()) return;
-    block.element.scrollIntoView({ block: 'center', inline: 'nearest' });
-    window.setTimeout(() => {
+    let settleTimer: number | undefined;
+    const finish = (): void => {
+      window.removeEventListener('scroll', schedule, true);
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      settleTimer = undefined;
       if (!start()) setTranslationFeedback(block, '当前段落不在可见区域，请滚动后重试');
-    }, 120);
+    };
+    const schedule = (): void => {
+      if (settleTimer !== undefined) window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(finish, FORMULA_RECOGNITION_SCROLL_SETTLE_MS);
+    };
+    window.addEventListener('scroll', schedule, true);
+    if (!visibleElementRegion(block.element)) {
+      block.element.scrollIntoView({ block: 'center', inline: 'nearest' });
+    }
+    schedule();
   };
 
   const syncBlockFormulaNotice = (block: BilingualBlock): void => {

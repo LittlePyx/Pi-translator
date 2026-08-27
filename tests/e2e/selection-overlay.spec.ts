@@ -20,6 +20,8 @@ const OVERLEAF_FIXTURE_URL =
   'https://www.overleaf.com/project/pi-translator-e2e';
 const ARTICLE_FIXTURE_URL =
   'https://www.overleaf.com/pi-translator-bilingual-article-e2e';
+const MEDIAWIKI_MATH_FIXTURE_URL =
+  'https://www.overleaf.com/pi-translator-mediawiki-math-e2e';
 
 let context: BrowserContext;
 let page: Page;
@@ -664,6 +666,9 @@ test.beforeAll(async () => {
     const isGlossaryReviewSelection = requestedText.includes('should remain stable');
     const isLexicalLookupSelection = requestedText.includes('continuity');
     const isBilingualFormulaParagraph = requestedText.includes('npm run build:edge');
+    const isMediaWikiFormulaParagraph = requestedText.includes(
+      'MediaWiki keeps accessible MathML beside a visible fallback image',
+    );
     const isBilingualRetranslation = returnBilingualRetranslationOnce && requestedText.includes(
       'Bilingual reading should preserve the original article',
     );
@@ -840,6 +845,11 @@ test.beforeAll(async () => {
               detectedLanguage: 'en',
               warnings: [],
               segments: [],
+            } : isMediaWikiFormulaParagraph ? {
+              translation: `MediaWiki 会把可访问公式 ${requiredPlaceholderTokens[0] ?? ''} 与可见回退图像放在一起。`,
+              detectedLanguage: 'en',
+              warnings: [],
+              segments: [],
             } : isDocumentTermSelection ? {
               translation: '自适应感知策略在该文档中保持稳定，并在具有层级约束的多阶段重建任务中持续保持一致的技术术语与推理边界。',
               detectedLanguage: 'en',
@@ -955,6 +965,34 @@ test.beforeAll(async () => {
         </html>`,
     });
   });
+  await page.route(MEDIAWIKI_MATH_FIXTURE_URL, async (route) => {
+    await route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html>
+        <html>
+          <head><title>MediaWiki formula compatibility</title></head>
+          <body style="margin:0;font:18px/1.7 Georgia,serif;color:#1f2937;background:#fff">
+            <main style="max-width:760px;margin:0 auto;padding:48px 28px 120px">
+              <article>
+                <h1>Accessible mathematics in a reference article</h1>
+                <p>The surrounding explanation should remain readable before the mathematical example.</p>
+                <p id="mediawiki-inline">MediaWiki keeps accessible MathML beside a visible fallback image
+                  <span class="mwe-math-element mwe-math-element-inline" typeof="mw:Extension/math" data-mw='{"name":"math","attrs":{},"body":{"extsrc":"f(x)=x^2"}}'>
+                    <span class="mwe-math-mathml-inline mwe-math-mathml-a11y" style="display:none">
+                      <math class="mathjax_ignore" alttext="{\\displaystyle f(x)=x^{2}}">
+                        <semantics><mrow><mi>f</mi><mo>(</mo><mi>x</mi><mo>)</mo><mo>=</mo><msup><mi>x</mi><mn>2</mn></msup></mrow><annotation encoding="application/x-tex">{\\displaystyle f(x)=x^{2}}</annotation></semantics>
+                      </math>
+                    </span>
+                    <img class="mwe-math-fallback-image-inline" src="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='90' height='24'%3E%3Ctext x='2' y='18'%3Ef(x)=x%C2%B2%3C/text%3E%3C/svg%3E" alt="{\\displaystyle f(x)=x^{2}}" aria-hidden="true" />
+                  </span>
+                  without requiring a second visual-recognition action.</p>
+                <p>The final paragraph verifies that ordinary prose continues after the formula.</p>
+              </article>
+            </main>
+          </body>
+        </html>`,
+    });
+  });
   await page.route(OVERLEAF_FIXTURE_URL, async (route) => {
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
@@ -1045,6 +1083,67 @@ test('exposes the native Edge side panel API to the service worker', async () =>
     };
   });
   expect(availability.chromeSidePanel || availability.browserSidePanel).toBe(true);
+});
+
+test('treats MediaWiki MathML and its fallback image as one extractable formula', async () => {
+  const popup = await context.newPage();
+  try {
+    await page.goto(MEDIAWIKI_MATH_FIXTURE_URL);
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    const requestsBefore = textRequests.length;
+    const startResponse = await popup.evaluate(async (targetUrl) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: {
+          tabs: { query(query: object): Promise<Array<{ id?: number; url?: string }>> };
+          runtime: { sendMessage(message: object): Promise<unknown> };
+        };
+      }).chrome;
+      const tab = (await api.tabs.query({})).find((candidate) => candidate.url === targetUrl);
+      if (tab?.id === undefined) throw new Error('MediaWiki fixture tab not found.');
+      return api.runtime.sendMessage({
+        type: 'START_BILINGUAL_PAGE',
+        payload: { tabId: tab.id, targetLanguage: 'zh-CN' },
+      });
+    }, MEDIAWIKI_MATH_FIXTURE_URL);
+    expect(startResponse).toMatchObject({ ok: true });
+
+    const source = page.locator('#mediawiki-inline');
+    const translation = page.locator(
+      '#mediawiki-inline + [data-pi-bilingual-translation]',
+    );
+    await expect(translation).toBeVisible();
+    await expect(translation.locator('[data-pi-bilingual-formula-notice]')).toHaveCount(0);
+    await expect(translation.locator('math')).toBeVisible();
+    await expect(source.locator('.mwe-math-element img')).toBeVisible();
+    await expect(page.locator('#pi-translator-bilingual-page-control output'))
+      .toContainText('已完成 4/4');
+
+    const mediaWikiRequests = textRequests.slice(requestsBefore).filter((request) => {
+      const messages = request.messages as Array<{ role?: string; content?: unknown }> | undefined;
+      const content = messages?.find((message) => message.role === 'user')?.content;
+      if (typeof content !== 'string') return false;
+      try {
+        const payload = JSON.parse(content) as { text?: unknown };
+        return typeof payload.text === 'string' && payload.text.includes(
+          'MediaWiki keeps accessible MathML beside a visible fallback image',
+        );
+      } catch {
+        return false;
+      }
+    }).map((request) => JSON.stringify(request));
+    expect(mediaWikiRequests).toHaveLength(1);
+    expect(mediaWikiRequests[0]).toMatch(/⟦FULL\d+_/u);
+    expect(mediaWikiRequests[0]).not.toContain('mwe-math-fallback-image');
+
+    await page.locator(
+      '#pi-translator-bilingual-page-control select[data-action="display"]',
+    ).selectOption('translation');
+    await expect(source).toHaveAttribute('data-pi-bilingual-source-hidden', 'block');
+  } finally {
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL).catch(() => undefined);
+  }
 });
 
 test('discovers bilingual article translation and lets the reader adjust its scope', async () => {

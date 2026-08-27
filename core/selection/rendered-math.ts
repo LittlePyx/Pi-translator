@@ -1,5 +1,7 @@
 const RENDERED_MATH_SELECTOR = [
   '.katex',
+  '.mwe-math-element',
+  '[typeof~="mw:Extension/math"]',
   'mjx-container',
   'math',
   '[data-tex]',
@@ -117,6 +119,7 @@ export function replaceRenderedMathWithLatex(root: ParentNode): number {
     if (!latex) continue;
     const display = Boolean(
       element.closest('.katex-display') ||
+      element.matches('.mwe-math-element-block') ||
       element.getAttribute('display') === 'block' ||
       element.getAttribute('display') === 'true',
     );
