@@ -303,7 +303,7 @@ main {
   z-index: 4;
   bottom: calc(100% + 6px);
   display: grid;
-  min-width: 132px;
+  min-width: 176px;
   border: 1px solid #dfe1f1;
   border-radius: 8px;
   padding: 4px;
@@ -314,6 +314,11 @@ main {
   min-height: 30px;
   border-color: transparent;
   text-align: left;
+}
+.bilingual-page-copy-menu > div [role="separator"] {
+  height: 1px;
+  margin: 4px 6px;
+  background: #e6e8ef;
 }
 .bilingual-page-copy-feedback {
   min-height: 0;
@@ -920,6 +925,7 @@ button:focus-visible {
   .bilingual-page-retention input:checked { border-color: #7169e9; background: #655fdf; }
   .bilingual-page-retention-actions button { color: #aaa7ff; }
   .bilingual-page-retention-actions button:hover { color: #d0ceff; background: #282943; }
+  .bilingual-page-copy-menu > div [role="separator"] { background: #394354; }
   .bilingual-page-display { color: #9ba5b5; background: transparent; }
   .bilingual-page-display:hover { background: #252d3b; }
   .bilingual-page-display select { color: #c7c3ff; }

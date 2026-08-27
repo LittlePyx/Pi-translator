@@ -52,7 +52,12 @@ import {
 } from '../../core/messaging/user-facing-error';
 import { isIsolatedBilingualBlockError } from '../../core/translation/bilingual-page';
 import { takeDocumentTranslationBatch } from '../../core/translation/document-batch';
-import { buildDocumentTranslationExport } from '../../core/translation/document-export';
+import {
+  buildDocumentTranslationExport,
+  documentTranslationDownload,
+  triggerDocumentTranslationDownload,
+  type DocumentTranslationExportFormat,
+} from '../../core/translation/document-export';
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   comparePdfDocumentTranslationPriority,
@@ -216,6 +221,15 @@ const documentTranslationCopyTranslation = element<HTMLButtonElement>(
 );
 const documentTranslationCopyBilingual = element<HTMLButtonElement>(
   'pdf-document-translation-copy-bilingual',
+);
+const documentTranslationDownloadTranslation = element<HTMLButtonElement>(
+  'pdf-document-translation-download-translation',
+);
+const documentTranslationDownloadBilingual = element<HTMLButtonElement>(
+  'pdf-document-translation-download-bilingual',
+);
+const documentTranslationDownloadHtml = element<HTMLButtonElement>(
+  'pdf-document-translation-download-html',
 );
 const documentTranslationCopyFeedback = element<HTMLElement>(
   'pdf-document-translation-copy-feedback',
@@ -1042,8 +1056,13 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationClear.textContent = '重新翻译';
   documentTranslationClear.title = '清除已恢复或已完成的译文，并重新调用翻译接口';
   documentTranslationCopyMenu.hidden = translated === 0;
-  documentTranslationCopyTranslation.disabled = pdfDocumentTranslationCopyPending;
-  documentTranslationCopyBilingual.disabled = pdfDocumentTranslationCopyPending;
+  for (const button of [
+    documentTranslationCopyTranslation,
+    documentTranslationCopyBilingual,
+    documentTranslationDownloadTranslation,
+    documentTranslationDownloadBilingual,
+    documentTranslationDownloadHtml,
+  ]) button.disabled = pdfDocumentTranslationCopyPending;
   documentTranslationRetention.hidden = !pdfDocumentTranslationSessionContext ||
     ['idle', 'preparing'].includes(pdfDocumentTranslationPhase);
   documentTranslationRetention.dataset.tone = pdfDocumentTranslationRetentionError
@@ -1102,34 +1121,64 @@ function setPdfDocumentTranslationCopyFeedback(message: string, error = false): 
   }, 2_800);
 }
 
-async function copyPdfDocumentTranslationResult(
-  mode: 'translation' | 'bilingual',
+function pdfDocumentTranslationExportResult() {
+  return buildDocumentTranslationExport(
+    pdfDocumentTranslationBlocksState.flatMap((block) => block.included
+      ? [{
+          sourceText: block.text,
+          ...(block.status === 'done' && block.translatedText
+            ? { translatedText: block.translatedText }
+            : {}),
+          pageNumber: block.pageNumber,
+        }]
+      : []),
+    { unavailablePageCount: pdfDocumentTranslationUnreadablePagesInScope().length },
+  );
+}
+
+type PdfDocumentTranslationExportAction =
+  | 'copy-translation'
+  | 'copy-bilingual'
+  | DocumentTranslationExportFormat;
+
+async function handlePdfDocumentTranslationExport(
+  action: PdfDocumentTranslationExportAction,
 ): Promise<void> {
   if (pdfDocumentTranslationCopyPending) return;
-  const result = buildDocumentTranslationExport(
-    pdfDocumentTranslationBlocksState.flatMap((block) => (
-      block.included && block.status === 'done' && block.translatedText
-        ? [{
-            sourceText: block.text,
-            translatedText: block.translatedText,
-            pageNumber: block.pageNumber,
-          }]
-        : []
-    )),
-  );
-  const text = mode === 'translation' ? result.translationText : result.bilingualMarkdown;
-  if (!text) return;
+  const result = pdfDocumentTranslationExportResult();
+  if (!result.blockCount) return;
   pdfDocumentTranslationCopyPending = true;
   syncPdfDocumentTranslationUi();
   try {
-    await navigator.clipboard.writeText(text);
-    documentTranslationCopyMenu.open = false;
     const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
-    setPdfDocumentTranslationCopyFeedback(mode === 'translation'
-      ? `已复制 ${result.blockCount} 段译文${pageLabel}`
-      : `已复制双语 Markdown · ${result.blockCount} 段${pageLabel}`);
-  } catch {
-    setPdfDocumentTranslationCopyFeedback('复制失败，请检查剪贴板权限。', true);
+    const partialLabel = result.complete
+      ? ''
+      : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段${result.unavailablePageCount ? `，${result.unavailablePageCount} 页未识别` : ''}`;
+    let message: string;
+    if (action === 'copy-translation' || action === 'copy-bilingual') {
+      await navigator.clipboard.writeText(action === 'copy-translation'
+        ? result.translationText
+        : result.bilingualMarkdown);
+      message = action === 'copy-translation'
+        ? `已复制 ${result.blockCount} 段译文${pageLabel}`
+        : `已复制双语 Markdown · ${result.blockCount} 段${pageLabel}`;
+    } else {
+      const download = documentTranslationDownload(result, action, 'pdf');
+      triggerDocumentTranslationDownload(download);
+      message = action === 'translation-markdown'
+        ? '已下载纯译文 Markdown'
+        : action === 'bilingual-markdown'
+          ? '已下载双语 Markdown'
+          : '已下载可打印 HTML';
+      message += pageLabel;
+    }
+    documentTranslationCopyMenu.open = false;
+    setPdfDocumentTranslationCopyFeedback(`${message}${partialLabel}`);
+  } catch (error) {
+    setPdfDocumentTranslationCopyFeedback(
+      error instanceof Error ? error.message : '导出失败，请重试。',
+      true,
+    );
   } finally {
     pdfDocumentTranslationCopyPending = false;
     syncPdfDocumentTranslationUi();
@@ -5714,10 +5763,19 @@ documentTranslationClear.addEventListener('click', () => {
   void restartPdfDocumentTranslation();
 });
 documentTranslationCopyTranslation.addEventListener('click', () => {
-  void copyPdfDocumentTranslationResult('translation');
+  void handlePdfDocumentTranslationExport('copy-translation');
 });
 documentTranslationCopyBilingual.addEventListener('click', () => {
-  void copyPdfDocumentTranslationResult('bilingual');
+  void handlePdfDocumentTranslationExport('copy-bilingual');
+});
+documentTranslationDownloadTranslation.addEventListener('click', () => {
+  void handlePdfDocumentTranslationExport('translation-markdown');
+});
+documentTranslationDownloadBilingual.addEventListener('click', () => {
+  void handlePdfDocumentTranslationExport('bilingual-markdown');
+});
+documentTranslationDownloadHtml.addEventListener('click', () => {
+  void handlePdfDocumentTranslationExport('printable-html');
 });
 documentTranslationRetentionToggle.addEventListener('change', () => {
   void setPdfDocumentTranslationRetention(documentTranslationRetentionToggle.checked);

@@ -2275,9 +2275,15 @@ export async function startSelectionTranslator(
         ok: true,
         data: { export: bilingualPageTranslator?.exportResult() ?? {
           translationText: '',
+          translationMarkdown: '',
           bilingualMarkdown: '',
+          printableHtml: '',
           blockCount: 0,
+          totalBlockCount: 0,
+          missingBlockCount: 0,
+          unavailablePageCount: 0,
           pageCount: 0,
+          complete: false,
         } },
       });
     }

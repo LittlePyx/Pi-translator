@@ -24,7 +24,10 @@ import type {
 import { takeDocumentTranslationBatch } from '../translation/document-batch';
 import {
   buildDocumentTranslationExport,
+  documentTranslationDownload,
+  triggerDocumentTranslationDownload,
   type DocumentTranslationExport,
+  type DocumentTranslationExportFormat,
 } from '../translation/document-export';
 import {
   bilingualPageLanguageSwitchConfirmation,
@@ -931,6 +934,33 @@ export function createBilingualPageTranslator(
       resultCopyFeedbackTimer = undefined;
       renderControl();
     }, 2_600);
+  };
+
+  const downloadFullTranslationResult = (
+    format: DocumentTranslationExportFormat,
+  ): void => {
+    try {
+      const result = exportResult();
+      const download = documentTranslationDownload(result, format, 'webpage');
+      triggerDocumentTranslationDownload(download);
+      const partialLabel = result.complete
+        ? ''
+        : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+      resultCopyFeedback = (format === 'translation-markdown'
+        ? '已下载纯译文 Markdown'
+        : format === 'bilingual-markdown'
+          ? '已下载双语 Markdown'
+          : '已下载可打印 HTML') + partialLabel;
+    } catch (error) {
+      resultCopyFeedback = error instanceof Error ? error.message : '导出失败，请重试';
+    }
+    if (resultCopyFeedbackTimer !== undefined) window.clearTimeout(resultCopyFeedbackTimer);
+    renderControl();
+    resultCopyFeedbackTimer = window.setTimeout(() => {
+      resultCopyFeedback = undefined;
+      resultCopyFeedbackTimer = undefined;
+      renderControl();
+    }, 2_800);
   };
 
   const assignSessionSignatures = (candidates: BilingualBlock[]): void => {
@@ -2107,9 +2137,10 @@ export function createBilingualPageTranslator(
           details.more > summary { display:grid;place-items:center;min-width:30px;min-height:28px;box-sizing:border-box;border-radius:6px;color:#657084;cursor:pointer;font:700 14px/1 inherit;list-style:none; }
           details.more > summary::-webkit-details-marker { display:none; }
           details.more > summary:hover,details.more[open] > summary { color:#4f46d8;background:#f5f5fb; }
-          .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:118px;box-sizing:border-box;border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:4px;background:rgba(255,255,255,.98);box-shadow:0 9px 28px rgba(15,23,42,.2); }
+          .menu { position:absolute;right:0;bottom:calc(100% + 7px);display:grid;min-width:174px;box-sizing:border-box;border:1px solid rgba(99,102,241,.22);border-radius:9px;padding:4px;background:rgba(255,255,255,.98);box-shadow:0 9px 28px rgba(15,23,42,.2); }
           .menu button { width:100%;justify-content:flex-start;color:#566176;background:transparent;text-align:left; }
           .menu button:hover { color:#4f46e5;background:#f0efff; }
+          .menu [role="separator"] { height:1px;margin:4px 5px;background:rgba(100,116,139,.2); }
           button[data-action="pause"] { order:10;min-width:48px;color:#4f46d8;background:#f1f1fb; }
           button[data-action="pause"]:hover { color:#4338ca;background:#e8e8f8; }
           button[data-action="compact"] { position:absolute;top:6px;right:6px;min-width:28px;padding-inline:5px;color:#7a8290;background:transparent;font-size:13px; }
@@ -2136,6 +2167,11 @@ export function createBilingualPageTranslator(
             <div class="menu">
               <button type="button" data-action="copy-translation">复制纯译文</button>
               <button type="button" data-action="copy-bilingual">复制双语 Markdown</button>
+              <span role="separator"></span>
+              <button type="button" data-action="download-translation">下载纯译文 .md</button>
+              <button type="button" data-action="download-bilingual">下载双语 .md</button>
+              <button type="button" data-action="download-html">下载可打印 HTML</button>
+              <span role="separator"></span>
               <button type="button" data-action="stop">停止翻译</button>
               <button type="button" data-action="scope">调整范围</button>
               <button type="button" data-action="retention" title="只保存匿名页面指纹和译文，不保存网页原文或网址">关闭后保留译文</button>
@@ -2176,6 +2212,18 @@ export function createBilingualPageTranslator(
           } else if (action === 'copy-translation' || action === 'copy-bilingual') {
             void copyFullTranslationResult(
               action === 'copy-translation' ? 'translation' : 'bilingual',
+            );
+          } else if (
+            action === 'download-translation' ||
+            action === 'download-bilingual' ||
+            action === 'download-html'
+          ) {
+            downloadFullTranslationResult(
+              action === 'download-translation'
+                ? 'translation-markdown'
+                : action === 'download-bilingual'
+                  ? 'bilingual-markdown'
+                  : 'printable-html',
             );
           } else if (action === 'scope') {
             beginScopePreview();
@@ -2247,6 +2295,9 @@ export function createBilingualPageTranslator(
     const copyBilingual = shadow?.querySelector<HTMLButtonElement>(
       '[data-action="copy-bilingual"]',
     );
+    const downloadButtons = [...(shadow?.querySelectorAll<HTMLButtonElement>(
+      '[data-action="download-translation"],[data-action="download-bilingual"],[data-action="download-html"]',
+    ) ?? [])];
     const compact = shadow?.querySelector<HTMLButtonElement>('[data-action="compact"]');
     const more = shadow?.querySelector<HTMLDetailsElement>('details.more');
     const language = shadow?.querySelector<HTMLSelectElement>('[data-action="language"]');
@@ -2290,6 +2341,7 @@ export function createBilingualPageTranslator(
       if (clearButton) clearButton.hidden = true;
       if (copyTranslation) copyTranslation.hidden = true;
       if (copyBilingual) copyBilingual.hidden = true;
+      downloadButtons.forEach((button) => { button.hidden = true; });
       if (compact) compact.hidden = true;
       if (more) more.hidden = true;
       if (languageConfirmation) languageConfirmation.hidden = true;
@@ -2347,6 +2399,9 @@ export function createBilingualPageTranslator(
     if (clearButton) clearButton.hidden = false;
     if (copyTranslation) copyTranslation.hidden = currentState.translated === 0;
     if (copyBilingual) copyBilingual.hidden = currentState.translated === 0;
+    downloadButtons.forEach((button) => {
+      button.hidden = currentState.translated === 0;
+    });
     if (output && resultCopyFeedback) {
       output.textContent = resultCopyFeedback;
     } else if (output) {

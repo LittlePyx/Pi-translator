@@ -9,7 +9,7 @@ import {
   type Route,
 } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { deflateSync } from 'node:zlib';
@@ -1783,7 +1783,10 @@ test('completes bilingual article translation without scrolling and keeps contro
         export: {
           translationText: string;
           bilingualMarkdown: string;
+          printableHtml: string;
           blockCount: number;
+          totalBlockCount: number;
+          complete: boolean;
         };
       };
     };
@@ -1820,6 +1823,22 @@ test('completes bilingual article translation without scrolling and keeps contro
     ).__piCopiedText))
       .toBe(exportBeforeCopy.data.export.bilingualMarkdown);
     expect(exportBeforeCopy.data.export.bilingualMarkdown).toContain('> ');
+    await copyMenu.locator(':scope > summary').click();
+    const htmlDownloadPromise = sidePanel.waitForEvent('download');
+    await sidePanel.locator('#bilingual-page-download-html').click();
+    const htmlDownload = await htmlDownloadPromise;
+    expect(htmlDownload.suggestedFilename()).toBe('pi-translator-webpage-bilingual.html');
+    const htmlDownloadPath = await htmlDownload.path();
+    expect(htmlDownloadPath).toBeTruthy();
+    const htmlContent = await readFile(htmlDownloadPath!, 'utf8');
+    expect(htmlContent).toContain('Pi Translator 双语译文');
+    expect(htmlContent).toContain(exportBeforeCopy.data.export.complete
+      ? `完整结果 · ${exportBeforeCopy.data.export.blockCount} 段`
+      : `部分结果 · 已完成 ${exportBeforeCopy.data.export.blockCount}/${exportBeforeCopy.data.export.totalBlockCount} 段`);
+    expect(htmlContent).not.toContain(ARTICLE_FIXTURE_URL);
+    expect(htmlContent).not.toContain('<script');
+    await expect(sidePanel.locator('#bilingual-page-copy-feedback'))
+      .toContainText('已下载可打印 HTML');
     expect(textRequests.length).toBe(requestsBeforeCopy);
     const copyMenuLayout = await copyMenu.evaluate((menu) => ({
       right: menu.getBoundingClientRect().right,
@@ -1829,6 +1848,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await pageControl.locator('details.more > summary').click();
     await expect(pageControl.locator('button[data-action="copy-translation"]')).toBeVisible();
     await expect(pageControl.locator('button[data-action="copy-bilingual"]')).toBeVisible();
+    await expect(pageControl.locator('button[data-action="download-html"]')).toBeVisible();
     await pageControl.locator('details.more > summary').click();
     const inPageProgressLayout = await pageControl.locator('.bar').evaluate((bar) => {
       const barRect = bar.getBoundingClientRect();
@@ -5373,6 +5393,20 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     expect(bilingualMarkdown).toContain('## 第 1 页');
     expect(bilingualMarkdown).toContain('The first PDF page explains');
     expect(bilingualMarkdown).toContain('> ');
+    await copyMenu.locator(':scope > summary').click();
+    const markdownDownloadPromise = pdfPage.waitForEvent('download');
+    await panel.locator('#pdf-document-translation-download-translation').click();
+    const markdownDownload = await markdownDownloadPromise;
+    expect(markdownDownload.suggestedFilename()).toBe('pi-translator-pdf-translation.md');
+    const markdownDownloadPath = await markdownDownload.path();
+    expect(markdownDownloadPath).toBeTruthy();
+    const downloadedMarkdown = (await readFile(markdownDownloadPath!, 'utf8')).replace(/^\uFEFF/u, '');
+    expect(downloadedMarkdown).toContain('## 第 1 页');
+    expect(downloadedMarkdown).toContain('批量生成的学术译文');
+    expect(downloadedMarkdown).not.toContain('The first PDF page explains');
+    expect(downloadedMarkdown).not.toContain('full-document-translation.pdf');
+    await expect(panel.locator('#pdf-document-translation-copy-feedback'))
+      .toContainText('已下载纯译文 Markdown');
     expect(textRequests.length).toBe(requestsBeforeCopy);
     const firstTranslation = panel.locator(
       '.pdf-document-translation-page[data-page-number="1"] [data-source-anchor]',

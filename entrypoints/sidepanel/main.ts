@@ -79,6 +79,11 @@ import {
   type BilingualPageDisplayMode,
   type BilingualPageState,
 } from '../../core/translation/bilingual-page';
+import {
+  documentTranslationDownload,
+  triggerDocumentTranslationDownload,
+  type DocumentTranslationExportFormat,
+} from '../../core/translation/document-export';
 
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
@@ -114,6 +119,13 @@ const bilingualPageCopyTranslation = element<HTMLButtonElement>(
 const bilingualPageCopyBilingual = element<HTMLButtonElement>(
   'bilingual-page-copy-bilingual',
 );
+const bilingualPageDownloadTranslation = element<HTMLButtonElement>(
+  'bilingual-page-download-translation',
+);
+const bilingualPageDownloadBilingual = element<HTMLButtonElement>(
+  'bilingual-page-download-bilingual',
+);
+const bilingualPageDownloadHtml = element<HTMLButtonElement>('bilingual-page-download-html');
 const bilingualPageCopyFeedback = element<HTMLElement>('bilingual-page-copy-feedback');
 const bilingualPageClear = element<HTMLButtonElement>('bilingual-page-clear');
 const bilingualPageLanguage = element<HTMLSelectElement>('bilingual-page-language');
@@ -789,8 +801,13 @@ function syncBilingualPageControl(): void {
   bilingualPageDisplayControl.hidden = state.phase === 'idle' || state.translated === 0;
   bilingualPageDisplay.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageCopyMenu.hidden = state.translated === 0;
-  bilingualPageCopyTranslation.disabled = bilingualPageCopyPending;
-  bilingualPageCopyBilingual.disabled = bilingualPageCopyPending;
+  for (const button of [
+    bilingualPageCopyTranslation,
+    bilingualPageCopyBilingual,
+    bilingualPageDownloadTranslation,
+    bilingualPageDownloadBilingual,
+    bilingualPageDownloadHtml,
+  ]) button.disabled = bilingualPageCopyPending;
   bilingualPageRetention.hidden = state.phase === 'idle';
   bilingualPageRetention.dataset.tone = state.retentionError ? 'error' : 'normal';
   if (!bilingualPagePending) {
@@ -819,7 +836,12 @@ function setBilingualPageCopyFeedback(message: string, error = false): void {
   }, 2_800);
 }
 
-async function copyBilingualPageResult(mode: 'translation' | 'bilingual'): Promise<void> {
+type BilingualPageExportAction =
+  | 'copy-translation'
+  | 'copy-bilingual'
+  | DocumentTranslationExportFormat;
+
+async function handleBilingualPageExport(action: BilingualPageExportAction): Promise<void> {
   if (bilingualPageCopyPending || activeTabId === undefined || bilingualPageState.translated === 0) {
     return;
   }
@@ -834,13 +856,30 @@ async function copyBilingualPageResult(mode: 'translation' | 'bilingual'): Promi
     if (!response.ok) throw new Error(response.error.message);
     if (activeTabId !== tabId) return;
     const result = response.data.export;
-    const text = mode === 'translation' ? result.translationText : result.bilingualMarkdown;
-    if (!text) throw new Error('当前还没有可复制的已完成译文。');
-    await navigator.clipboard.writeText(text);
+    const partialLabel = result.complete
+      ? ''
+      : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+    let message: string;
+    if (action === 'copy-translation' || action === 'copy-bilingual') {
+      const text = action === 'copy-translation'
+        ? result.translationText
+        : result.bilingualMarkdown;
+      if (!text) throw new Error('当前还没有可复制的已完成译文。');
+      await navigator.clipboard.writeText(text);
+      message = action === 'copy-translation'
+        ? `已复制 ${result.blockCount} 段译文`
+        : `已复制双语 Markdown · ${result.blockCount} 段`;
+    } else {
+      const download = documentTranslationDownload(result, action, 'webpage');
+      triggerDocumentTranslationDownload(download);
+      message = action === 'translation-markdown'
+        ? '已下载纯译文 Markdown'
+        : action === 'bilingual-markdown'
+          ? '已下载双语 Markdown'
+          : '已下载可打印 HTML';
+    }
     bilingualPageCopyMenu.open = false;
-    setBilingualPageCopyFeedback(mode === 'translation'
-      ? `已复制 ${result.blockCount} 段译文`
-      : `已复制双语 Markdown · ${result.blockCount} 段`);
+    setBilingualPageCopyFeedback(`${message}${partialLabel}`);
   } catch (error) {
     if (activeTabId !== tabId) return;
     setBilingualPageCopyFeedback(
@@ -2506,10 +2545,19 @@ bilingualPageRetentionToggle.addEventListener('change', () => {
 });
 bilingualPageRetentionManage.addEventListener('click', () => openFullSettings('storage'));
 bilingualPageCopyTranslation.addEventListener('click', () => {
-  void copyBilingualPageResult('translation');
+  void handleBilingualPageExport('copy-translation');
 });
 bilingualPageCopyBilingual.addEventListener('click', () => {
-  void copyBilingualPageResult('bilingual');
+  void handleBilingualPageExport('copy-bilingual');
+});
+bilingualPageDownloadTranslation.addEventListener('click', () => {
+  void handleBilingualPageExport('translation-markdown');
+});
+bilingualPageDownloadBilingual.addEventListener('click', () => {
+  void handleBilingualPageExport('bilingual-markdown');
+});
+bilingualPageDownloadHtml.addEventListener('click', () => {
+  void handleBilingualPageExport('printable-html');
 });
 bilingualPageLanguage.addEventListener('change', () => {
   if (!isSupportedTargetLanguage(bilingualPageLanguage.value)) {
