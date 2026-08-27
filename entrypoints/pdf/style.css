@@ -137,7 +137,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
   bottom: 0;
   display: grid;
   width: min(390px, 100vw);
-  grid-template-rows: auto auto auto minmax(0, 1fr);
+  grid-template-rows: auto auto auto auto minmax(0, 1fr);
   border-left: 1px solid var(--line);
   background: #fff;
   box-shadow: -10px 0 30px rgba(20, 30, 50, .12);
@@ -177,6 +177,74 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .pdf-document-translation-actions .primary { color: #fff; border-color: #5054db; background: #5659df; }
 .pdf-document-translation-actions button:disabled { opacity: .5; cursor: default; }
+.pdf-document-translation-scope {
+  display: grid;
+  gap: 7px;
+  margin: 5px 14px 3px;
+  padding: 9px 10px;
+  border: 1px solid #e7eaf0;
+  border-radius: 7px;
+  background: #fafbfe;
+}
+.pdf-document-translation-range-label {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 9px;
+  font-weight: 700;
+}
+.pdf-document-translation-scope select,
+.pdf-document-translation-scope input[type="text"] {
+  width: 100%;
+  min-height: 30px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 5px 8px;
+  color: inherit;
+  background: #fff;
+  font: inherit;
+  font-size: 10px;
+}
+.pdf-document-translation-scope select:focus-visible,
+.pdf-document-translation-scope input[type="text"]:focus-visible {
+  border-color: #676ae0;
+  outline: 2px solid rgba(86, 89, 223, .22);
+  outline-offset: 1px;
+}
+.pdf-document-translation-scope select:disabled,
+.pdf-document-translation-scope input:disabled { opacity: .55; cursor: default; }
+.pdf-document-translation-scope form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+}
+.pdf-document-translation-scope form[hidden] { display: none; }
+.pdf-document-translation-scope form button {
+  min-height: 30px;
+  border: 1px solid #cfd3e2;
+  border-radius: 6px;
+  padding: 4px 10px;
+  color: #4f46e5;
+  background: #fff;
+  font-size: 9px;
+  font-weight: 750;
+}
+.pdf-document-translation-section-options { display: flex; flex-wrap: wrap; gap: 5px 14px; }
+.pdf-document-translation-section-options label {
+  display: inline-flex;
+  min-height: 24px;
+  align-items: center;
+  gap: 5px;
+  color: #4b5568;
+  font-size: 9px;
+  cursor: pointer;
+}
+.pdf-document-translation-section-options input { width: 14px; height: 14px; margin: 0; accent-color: #5659df; }
+.pdf-document-translation-section-options label:has(input:disabled) { opacity: .55; cursor: default; }
+.pdf-document-translation-scope > small { color: var(--muted); font-size: 8px; line-height: 1.45; }
+.pdf-document-translation-scope > small[data-tone="error"] { color: #b42336; }
 .pdf-document-translation-note { margin: 5px 14px 9px; color: var(--muted); font-size: 9px; line-height: 1.55; }
 .pdf-document-translation-pages { overflow: auto; padding: 0 14px 24px; scrollbar-width: thin; }
 .pdf-document-translation-page { padding: 13px 0 17px; border-top: 1px solid #e7eaf0; }
@@ -969,6 +1037,13 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .document-translate { color: #c7d2fe; border-color: #50547e; background: rgba(99, 102, 241, .14); }
   .toolbar .document-translate[aria-expanded="true"] { color: #fff; border-color: #7377dc; background: #5659df; }
   .pdf-document-translation { background: #1a222f; box-shadow: -10px 0 30px rgba(0, 0, 0, .32); }
+  .pdf-document-translation-scope { border-color: #354052; background: #1d2634; }
+  .pdf-document-translation-scope select,
+  .pdf-document-translation-scope input[type="text"],
+  .pdf-document-translation-scope form button { color: #dde4ef; border-color: #465269; background: #202938; }
+  .pdf-document-translation-scope form button { color: #c7d2fe; }
+  .pdf-document-translation-section-options label { color: #cbd5e1; }
+  .pdf-document-translation-scope > small[data-tone="error"] { color: #ff9cab; }
   .pdf-document-translation-page { border-top-color: #354052; }
   .pdf-document-translation-block { color: #dde4ef; }
   .pdf-document-translation-block[data-status="error"] { color: #ff9cab; }

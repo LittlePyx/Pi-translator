@@ -5246,6 +5246,114 @@ test('restores PDF full-document progress and translates only newly added paragr
   }
 });
 
+test('limits PDF document translation by pages and recognized back matter', async () => {
+  const sourceUrl = 'https://www.overleaf.com/pdf-document-range.pdf';
+  const bodyText = 'The main paper body remains inside the selected translation range.';
+  const referenceText = '[1] A reference entry should be skipped when requested.';
+  const appendixText = 'Appendix details remain translatable independently.';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createMultiPageTextPdf([
+        { text: bodyText },
+        { text: 'References' },
+        { text: referenceText },
+        { text: 'Appendix A: Proofs' },
+        { text: appendixText },
+      ]),
+    });
+  });
+  const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  readerUrl.searchParams.set('url', sourceUrl);
+  const pdfPage = await context.newPage();
+  const requestStart = textRequests.length;
+  try {
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await pdfPage.goto(readerUrl.href);
+    await expect(pdfPage.locator('#page-count')).toHaveText('5');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 5 段，等待确认');
+    const range = pdfPage.locator('#pdf-document-translation-range');
+    const customForm = pdfPage.locator('#pdf-document-translation-custom-range');
+    const customPages = pdfPage.locator('#pdf-document-translation-custom-pages');
+    const feedback = pdfPage.locator('#pdf-document-translation-range-feedback');
+    const skipReferences = pdfPage.locator('#pdf-document-translation-skip-references');
+    const skipAppendix = pdfPage.locator('#pdf-document-translation-skip-appendix');
+    await expect(range).toBeEnabled();
+    await expect(skipReferences).toBeEnabled();
+    await expect(skipAppendix).toBeEnabled();
+    expect(textRequests).toHaveLength(requestStart);
+
+    await range.selectOption('custom');
+    await expect(customForm).toBeVisible();
+    const scopeLayout = await pdfPage.locator('.pdf-document-translation-scope')
+      .evaluate((scope) => ({
+        clientWidth: scope.clientWidth,
+        scrollWidth: scope.scrollWidth,
+      }));
+    expect(scopeLayout.scrollWidth).toBeLessThanOrEqual(scopeLayout.clientWidth);
+    await customPages.fill('0-2');
+    await customForm.getByRole('button', { name: '应用' }).click();
+    await expect(feedback).toContainText('页码必须在 1–5 之间');
+    expect(textRequests).toHaveLength(requestStart);
+
+    await customPages.fill('2-5');
+    await customForm.getByRole('button', { name: '应用' }).click();
+    await skipReferences.check();
+    await expect(feedback).toContainText('2–5 页 · 2 页 / 2 段');
+    await expect(feedback).toContainText('已跳过参考文献 2 段');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 2 段，等待确认');
+    expect(textRequests).toHaveLength(requestStart);
+
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 2/2');
+    expect(textRequests).toHaveLength(requestStart + 1);
+    const rangedRequest = textRequests.at(-1)!;
+    const rangedMessages = rangedRequest.messages as Array<{ role?: string; content?: string }>;
+    const rangedContent = rangedMessages.find((message) => message.role === 'user')?.content;
+    const rangedPayload = JSON.parse(rangedContent!) as {
+      segments: Array<{ id: string; text: string }>;
+    };
+    expect(rangedPayload.segments.map((segment) => segment.text)).toEqual([
+      'Appendix A: Proofs',
+      appendixText,
+    ]);
+
+    await range.selectOption('current');
+    await expect(feedback).toContainText('第 1 页 · 1 页 / 1 段');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已暂停 · 0/1');
+    expect(textRequests).toHaveLength(requestStart + 1);
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 1/1');
+    expect(textRequests).toHaveLength(requestStart + 2);
+    const currentRequest = textRequests.at(-1)!;
+    const currentMessages = currentRequest.messages as Array<{ role?: string; content?: string }>;
+    const currentContent = currentMessages.find((message) => message.role === 'user')?.content;
+    const currentPayload = JSON.parse(currentContent!) as {
+      segments: Array<{ id: string; text: string }>;
+    };
+    expect(currentPayload.segments.map((segment) => segment.text)).toEqual([bodyText]);
+
+    await range.selectOption('all');
+    await expect(feedback).toContainText('整篇文档 · 3 页 / 3 段');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 3/3');
+    await skipAppendix.check();
+    await expect(feedback).toContainText('整篇文档 · 1 页 / 1 段');
+    await expect(feedback).toContainText('已跳过参考文献 2 段、附录 2 段');
+    expect(textRequests).toHaveLength(requestStart + 2);
+  } finally {
+    await pdfPage.close();
+    await context.unroute(sourceUrl);
+  }
+});
+
 test('orders a two-column PDF by reading column before full-document translation', async () => {
   const pdfPage = await context.newPage();
   try {

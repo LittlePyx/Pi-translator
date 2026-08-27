@@ -108,6 +108,38 @@
         <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
         <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
       </div>
+      <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
+        <label class="pdf-document-translation-range-label">
+          <span>范围</span>
+          <select id="pdf-document-translation-range" aria-label="翻译页码范围" disabled>
+            <option value="all">整篇文档</option>
+            <option id="pdf-document-translation-range-current" value="current">当前页</option>
+            <option value="custom">指定页码</option>
+          </select>
+        </label>
+        <form id="pdf-document-translation-custom-range" hidden>
+          <input
+            id="pdf-document-translation-custom-pages"
+            type="text"
+            inputmode="numeric"
+            autocomplete="off"
+            aria-label="指定翻译页码"
+            placeholder="如 1-6, 9, 12-15"
+          />
+          <button type="submit">应用</button>
+        </form>
+        <div class="pdf-document-translation-section-options">
+          <label title="从识别到的 References 或参考文献标题开始跳过，遇到附录标题后停止">
+            <input id="pdf-document-translation-skip-references" type="checkbox" disabled />
+            <span>跳过参考文献</span>
+          </label>
+          <label title="从识别到的 Appendix、Supplementary Materials 或附录标题开始跳过">
+            <input id="pdf-document-translation-skip-appendix" type="checkbox" disabled />
+            <span>跳过附录</span>
+          </label>
+        </div>
+        <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
+      </section>
       <p id="pdf-document-translation-note" class="pdf-document-translation-note">
         先在本地读取文字层；确认开始后才会批量发送正文。扫描页会保留原页并标记为未识别。
       </p>

@@ -40,6 +40,7 @@ export interface PdfDocumentTranslationSessionUpdate {
   descriptor: PdfDocumentTranslationSessionDescriptor;
   documentSignatures: string[];
   blocks?: PdfDocumentTranslationSessionBlock[];
+  replaceBlocks?: boolean;
   activity: PdfDocumentTranslationSessionActivity;
 }
 
@@ -271,6 +272,7 @@ export function savePdfDocumentTranslationSession(
     !uniqueSignatures(update.documentSignatures) ||
     !validActivity(update.activity) ||
     !validBehaviorKey(behaviorKey) ||
+    (update.replaceBlocks !== undefined && typeof update.replaceBlocks !== 'boolean') ||
     (update.blocks !== undefined && (
       !Array.isArray(update.blocks) ||
       update.blocks.length > MAX_DOCUMENT_SIGNATURES ||
@@ -287,9 +289,11 @@ export function savePdfDocumentTranslationSession(
     const previous = sessions.find((candidate) => (
       descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
     ));
-    let blocks = previous?.blocks
-      .filter((block) => documentSet.has(block.signature))
-      .map((block) => ({ ...block })) ?? [];
+    let blocks = update.replaceBlocks
+      ? []
+      : previous?.blocks
+        .filter((block) => documentSet.has(block.signature))
+        .map((block) => ({ ...block })) ?? [];
     for (const block of update.blocks ?? []) {
       blocks = [
         { ...block, translatedText: block.translatedText.trim() },

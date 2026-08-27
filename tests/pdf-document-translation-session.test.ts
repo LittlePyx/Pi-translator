@@ -104,6 +104,31 @@ describe('PDF document translation session repository', () => {
       });
   });
 
+  it('can replace cached blocks when the user explicitly retranslates a range', async () => {
+    const behaviorKey = pdfDocumentTranslationSessionBehaviorKey('same-model');
+    await savePdfDocumentTranslationSession({
+      descriptor: descriptor(),
+      documentSignatures: signatures,
+      activity: 'complete',
+      blocks: [
+        { signature: signatures[0]!, translatedText: '旧标题' },
+        { signature: signatures[1]!, translatedText: '保留正文' },
+      ],
+    }, behaviorKey);
+    await savePdfDocumentTranslationSession({
+      descriptor: descriptor(),
+      documentSignatures: signatures,
+      activity: 'paused',
+      replaceBlocks: true,
+      blocks: [{ signature: signatures[1]!, translatedText: '保留正文' }],
+    }, behaviorKey);
+
+    await expect(getPdfDocumentTranslationSession(descriptor(), behaviorKey)).resolves
+      .toMatchObject({
+        blocks: [{ signature: signatures[1], translatedText: '保留正文' }],
+      });
+  });
+
   it('invalidates a session when the provider behavior changes', async () => {
     const firstBehavior = pdfDocumentTranslationSessionBehaviorKey('model-a');
     const secondBehavior = pdfDocumentTranslationSessionBehaviorKey('model-b');
