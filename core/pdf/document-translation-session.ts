@@ -3,11 +3,15 @@ import type { TranslationContentMode, TranslationStyle } from '../translation/ty
 
 export const PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY =
   'pdfDocumentTranslationSessionsV1';
+export const PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY =
+  'pdfDocumentTranslationRetainedV1';
 
 const MAX_DOCUMENT_SIGNATURES = 4_000;
 const MAX_TRANSLATION_LENGTH = 20_000;
 const MAX_STORED_SESSIONS = 8;
 const MAX_TOTAL_TRANSLATION_CHARACTERS = 2_000_000;
+const MAX_RETAINED_SESSIONS = 6;
+const MAX_RETAINED_TRANSLATION_CHARACTERS = 1_000_000;
 
 export type PdfDocumentTranslationSessionActivity =
   | 'active'
@@ -223,6 +227,8 @@ async function readAll(): Promise<StoredPdfDocumentTranslationSession[]> {
 
 function prunedSessions(
   sessions: StoredPdfDocumentTranslationSession[],
+  maximumSessions = MAX_STORED_SESSIONS,
+  maximumCharacters = MAX_TOTAL_TRANSLATION_CHARACTERS,
 ): StoredPdfDocumentTranslationSession[] {
   const ordered = [...sessions].sort((left, right) => right.updatedAt - left.updatedAt);
   const retained: StoredPdfDocumentTranslationSession[] = [];
@@ -233,8 +239,8 @@ function prunedSessions(
       0,
     );
     if (
-      retained.length >= MAX_STORED_SESSIONS ||
-      retainedCharacters + characters > MAX_TOTAL_TRANSLATION_CHARACTERS
+      retained.length >= maximumSessions ||
+      retainedCharacters + characters > maximumCharacters
     ) continue;
     retained.push(session);
     retainedCharacters += characters;
@@ -338,6 +344,111 @@ export function clearPdfDocumentTranslationSession(
       });
     } else {
       await browser.storage.session.remove(PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY);
+    }
+  });
+}
+
+async function readRetained(): Promise<StoredPdfDocumentTranslationSession[]> {
+  const stored = await browser.storage.local.get(
+    PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,
+  );
+  return storedSessions(stored[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]);
+}
+
+/**
+ * Reads an explicitly retained translation without deleting older results when
+ * the active model changes. The caller may replace that result after the user
+ * enables retention for the new behavior.
+ */
+export function getRetainedPdfDocumentTranslationSession(
+  descriptor: PdfDocumentTranslationSessionDescriptor,
+  behaviorKey: string,
+): Promise<PdfDocumentTranslationSessionSnapshot | undefined> {
+  return serializeSessionOperation(async () => {
+    const sessions = await readRetained();
+    const session = sessions.find((candidate) => (
+      descriptorMatches(candidate, descriptor) && candidate.behaviorKey === behaviorKey
+    ));
+    return session ? cloneSession(session) : undefined;
+  });
+}
+
+export function saveRetainedPdfDocumentTranslationSession(
+  update: PdfDocumentTranslationSessionUpdate,
+  behaviorKey: string,
+): Promise<PdfDocumentTranslationSessionSnapshot> {
+  if (
+    !isPdfDocumentTranslationSessionDescriptor(update.descriptor) ||
+    !uniqueSignatures(update.documentSignatures) ||
+    !validActivity(update.activity) ||
+    !validBehaviorKey(behaviorKey) ||
+    (update.replaceBlocks !== undefined && typeof update.replaceBlocks !== 'boolean') ||
+    (update.blocks !== undefined && (
+      !Array.isArray(update.blocks) ||
+      update.blocks.length > MAX_DOCUMENT_SIGNATURES ||
+      !update.blocks.every(isPdfDocumentTranslationSessionBlock)
+    ))
+  ) return Promise.reject(new Error('Invalid retained PDF translation update.'));
+  const documentSet = new Set(update.documentSignatures);
+  if (update.blocks?.some((block) => !documentSet.has(block.signature))) {
+    return Promise.reject(new Error('Retained PDF translation block is not part of this document.'));
+  }
+
+  return serializeSessionOperation(async () => {
+    const sessions = await readRetained();
+    const previous = sessions.find((candidate) => (
+      descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
+    ));
+    let blocks = update.replaceBlocks
+      ? []
+      : previous?.blocks
+        .filter((block) => documentSet.has(block.signature))
+        .map((block) => ({ ...block })) ?? [];
+    for (const block of update.blocks ?? []) {
+      blocks = [
+        { ...block, translatedText: block.translatedText.trim() },
+        ...blocks.filter((candidate) => candidate.signature !== block.signature),
+      ];
+    }
+    const next: StoredPdfDocumentTranslationSession = {
+      ...update.descriptor,
+      documentSignatures: [...update.documentSignatures],
+      blocks: blocks.slice(0, MAX_DOCUMENT_SIGNATURES),
+      activity: update.activity,
+      behaviorKey,
+      updatedAt: Date.now(),
+    };
+    const retained = prunedSessions([
+      next,
+      ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
+    ], MAX_RETAINED_SESSIONS, MAX_RETAINED_TRANSLATION_CHARACTERS);
+    if (!retained.includes(next)) {
+      throw new Error('This PDF translation is too large to retain locally.');
+    }
+    await browser.storage.local.set({
+      [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained,
+    });
+    return cloneSession(next);
+  });
+}
+
+export function clearRetainedPdfDocumentTranslationSession(
+  descriptor?: PdfDocumentTranslationSessionDescriptor,
+): Promise<void> {
+  return serializeSessionOperation(async () => {
+    if (!descriptor) {
+      await browser.storage.local.remove(PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY);
+      return;
+    }
+    const sessions = await readRetained();
+    const retained = sessions.filter((candidate) => !descriptorMatches(candidate, descriptor));
+    if (retained.length === sessions.length) return;
+    if (retained.length) {
+      await browser.storage.local.set({
+        [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained,
+      });
+    } else {
+      await browser.storage.local.remove(PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY);
     }
   });
 }

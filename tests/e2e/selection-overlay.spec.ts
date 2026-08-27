@@ -5502,7 +5502,7 @@ test('stops PDF full-document OCR while keeping recognized-page consent explicit
   }
 });
 
-test('restores PDF full-document progress and translates only newly added paragraphs', async () => {
+test('restores explicitly retained PDF progress after session loss and translates only new paragraphs', async ({}, testInfo) => {
   const sourceUrl = 'https://www.overleaf.com/pdf-document-resume.pdf';
   let expandedDocument = false;
   const firstText = 'The resumable PDF begins with a stable first paragraph.';
@@ -5529,6 +5529,17 @@ test('restores PDF full-document progress and translates only newly added paragr
     await firstReader.locator('#translate-document').click();
     await expect(firstReader.locator('#pdf-document-translation-status'))
       .toContainText('已识别 2 段，等待确认');
+    const retention = firstReader.locator('#pdf-document-translation-retention-toggle');
+    await expect(retention).toBeVisible();
+    await expect(retention).not.toBeChecked();
+    await retention.check();
+    await expect(firstReader.locator('#pdf-document-translation-retention-status'))
+      .toContainText('已保留到本机');
+    const range = firstReader.locator('#pdf-document-translation-range');
+    await range.selectOption('current');
+    await expect(retention).toBeChecked();
+    await range.selectOption('all');
+    await expect(retention).toBeChecked();
     await firstReader.locator('#pdf-document-translation-primary').click();
     await expect(firstReader.locator('#pdf-document-translation-status'))
       .toContainText('已完成 2/2');
@@ -5544,6 +5555,24 @@ test('restores PDF full-document progress and translates only newly added paragr
     expect(serializedSession).not.toContain(sourceUrl);
     expect(serializedSession).not.toContain(firstText);
     expect(serializedSession).not.toContain(secondText);
+    const serializedLocal = await firstReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      return JSON.stringify(await api.storage.local.get(
+        'pdfDocumentTranslationRetainedV1',
+      ));
+    });
+    expect(serializedLocal).not.toContain(sourceUrl);
+    expect(serializedLocal).not.toContain(firstText);
+    expect(serializedLocal).not.toContain(secondText);
+    expect(serializedLocal).toContain('批量生成的学术译文');
+    await firstReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { session: { remove(key: string): Promise<void> } } };
+      }).chrome;
+      await api.storage.session.remove('pdfDocumentTranslationSessionsV1');
+    });
   } finally {
     await firstReader.close();
   }
@@ -5551,12 +5580,15 @@ test('restores PDF full-document progress and translates only newly added paragr
   expandedDocument = true;
   const restoredReader = await context.newPage();
   try {
+    await restoredReader.setViewportSize({ width: 360, height: 700 });
     await restoredReader.goto(readerUrl.href);
     await expect(restoredReader.locator('#page-count')).toHaveText('3');
     await restoredReader.locator('#translate-document').click();
     const panel = restoredReader.locator('#pdf-document-translation');
     await expect(restoredReader.locator('#pdf-document-translation-status'))
-      .toContainText('已恢复 2/3 段，可继续翻译');
+      .toContainText('已从本机恢复 2/3 段，可继续翻译');
+    await expect(restoredReader.locator('#pdf-document-translation-retention-toggle'))
+      .toBeChecked();
     await expect(panel.locator('[data-status="done"]')).toHaveCount(2);
     expect(textRequests).toHaveLength(requestStart + 1);
 
@@ -5586,6 +5618,27 @@ test('restores PDF full-document progress and translates only newly added paragr
     };
     expect(restartedPayload.segments.map((segment) => segment.text))
       .toEqual([firstText, secondText, thirdText]);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await restoredReader.screenshot({
+        path: testInfo.outputPath('pdf-full-document-retained-360.png'),
+        fullPage: false,
+      });
+    }
+    const restoredRetention = restoredReader.locator(
+      '#pdf-document-translation-retention-toggle',
+    );
+    await restoredRetention.uncheck();
+    await expect(restoredReader.locator('#pdf-document-translation-retention-status'))
+      .toContainText('本机保存已清除');
+    const retainedAfterClear = await restoredReader.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { storage: { local: { get(key: string): Promise<Record<string, unknown>> } } };
+      }).chrome;
+      return (await api.storage.local.get(
+        'pdfDocumentTranslationRetainedV1',
+      )).pdfDocumentTranslationRetainedV1;
+    });
+    expect(retainedAfterClear).toBeUndefined();
   } finally {
     await restoredReader.close();
     await context.unroute(sourceUrl);

@@ -261,6 +261,62 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .pdf-document-translation-copy-feedback:empty { display: none; }
 .pdf-document-translation-copy-feedback[data-tone="error"] { color: #b42336; }
+.pdf-document-translation-retention {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding-top: 7px;
+  border-top: 1px solid #eef0f4;
+  cursor: pointer;
+}
+.pdf-document-translation-retention[hidden] { display: none; }
+.pdf-document-translation-retention > span { display: grid; min-width: 0; gap: 1px; }
+.pdf-document-translation-retention strong { color: #4b5568; font-size: 9.5px; }
+.pdf-document-translation-retention small {
+  overflow: hidden;
+  color: #8a93a4;
+  font-size: 8.5px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.pdf-document-translation-retention[data-tone="error"] small { color: #b42336; }
+.pdf-document-translation-retention input {
+  position: relative;
+  width: 30px;
+  height: 18px;
+  flex: 0 0 auto;
+  appearance: none;
+  border: 1px solid #cfd4df;
+  border-radius: 999px;
+  background: #e9ecf2;
+  cursor: pointer;
+  transition: border-color .16s ease, background .16s ease;
+}
+.pdf-document-translation-retention input::before {
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, .18);
+  content: "";
+  transition: transform .16s ease;
+}
+.pdf-document-translation-retention input:checked {
+  border-color: #5b57dc;
+  background: #5b57dc;
+}
+.pdf-document-translation-retention input:checked::before { transform: translateX(12px); }
+.pdf-document-translation-retention input:disabled { opacity: .55; cursor: wait; }
+.pdf-document-translation-retention input:focus-visible {
+  outline: 2px solid rgba(86, 89, 223, .26);
+  outline-offset: 2px;
+}
 .pdf-document-translation-actions button {
   min-height: 34px;
   border: 1px solid #dde0ef;
@@ -1244,6 +1300,12 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-document-translation-copy-menu > div { border-color: #465269; background: #202938; box-shadow: 0 10px 28px rgba(0, 0, 0, .34); }
   .pdf-document-translation-copy-feedback { color: #65d6b3; }
   .pdf-document-translation-copy-feedback[data-tone="error"] { color: #ff9cab; }
+  .pdf-document-translation-retention { border-top-color: #303a49; }
+  .pdf-document-translation-retention strong { color: #cbd5e1; }
+  .pdf-document-translation-retention small { color: #8f9aab; }
+  .pdf-document-translation-retention[data-tone="error"] small { color: #ff9cab; }
+  .pdf-document-translation-retention input { border-color: #4a5567; background: #303947; }
+  .pdf-document-translation-retention input:checked { border-color: #7169e9; background: #655fdf; }
   .pdf-document-translation-actions button:hover:not(:disabled) { border-color: #646b8e; background: #292943; }
   .pdf-document-translation-actions .primary {
     color: #fff;

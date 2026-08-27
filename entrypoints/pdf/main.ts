@@ -68,11 +68,14 @@ import {
   type PdfDocumentTranslationSection,
 } from '../../core/pdf/document-translation-range';
 import {
+  clearRetainedPdfDocumentTranslationSession,
   clearPdfDocumentTranslationSession,
+  getRetainedPdfDocumentTranslationSession,
   getPdfDocumentTranslationSession,
   pdfDocumentTranslationSessionBehaviorKey,
   pdfDocumentTranslationSessionBlockSignature,
   pdfDocumentTranslationSessionDocumentKey,
+  saveRetainedPdfDocumentTranslationSession,
   savePdfDocumentTranslationSession,
   type PdfDocumentTranslationSessionActivity,
   type PdfDocumentTranslationSessionDescriptor,
@@ -216,6 +219,15 @@ const documentTranslationCopyBilingual = element<HTMLButtonElement>(
 );
 const documentTranslationCopyFeedback = element<HTMLElement>(
   'pdf-document-translation-copy-feedback',
+);
+const documentTranslationRetention = element<HTMLElement>(
+  'pdf-document-translation-retention',
+);
+const documentTranslationRetentionStatus = element<HTMLElement>(
+  'pdf-document-translation-retention-status',
+);
+const documentTranslationRetentionToggle = element<HTMLInputElement>(
+  'pdf-document-translation-retention-toggle',
 );
 const documentTranslationRange = element<HTMLSelectElement>('pdf-document-translation-range');
 const documentTranslationRangeCurrent = element<HTMLOptionElement>(
@@ -377,6 +389,10 @@ let pdfDocumentTranslationOcrRevision = 0;
 let pdfDocumentTranslationOcrRequestId: string | undefined;
 let pdfDocumentTranslationCopyPending = false;
 let pdfDocumentTranslationCopyFeedbackTimer: number | undefined;
+let pdfDocumentTranslationRetainedLocally = false;
+let pdfDocumentTranslationRetentionPending = false;
+let pdfDocumentTranslationRetentionMessage: string | undefined;
+let pdfDocumentTranslationRetentionError = false;
 type PdfDocumentTranslationRangeMode = 'all' | 'current' | 'custom';
 let pdfDocumentTranslationRangeMode: PdfDocumentTranslationRangeMode = 'all';
 let pdfDocumentTranslationRangePages: number[] = [];
@@ -736,30 +752,92 @@ function pdfDocumentTranslationSessionActivity(): PdfDocumentTranslationSessionA
   return 'paused';
 }
 
+function pdfDocumentTranslationSessionUpdate(
+  context: PdfDocumentTranslationSessionContext,
+  blocks: readonly PdfDocumentTranslationRuntimeBlock[],
+  replaceBlocks = false,
+) {
+  const completed = blocks.flatMap((block) => (
+    block.status === 'done' && block.translatedText?.trim()
+      ? [{ signature: block.sessionSignature, translatedText: block.translatedText.trim() }]
+      : []
+  ));
+  return {
+    descriptor: context.descriptor,
+    documentSignatures: pdfDocumentTranslationBlocksState.map(
+      (block) => block.sessionSignature,
+    ),
+    activity: pdfDocumentTranslationSessionActivity(),
+    ...(completed.length ? { blocks: completed } : {}),
+    ...(replaceBlocks ? { replaceBlocks: true } : {}),
+  };
+}
+
 async function persistPdfDocumentTranslationSession(
   blocks: readonly PdfDocumentTranslationRuntimeBlock[] = [],
   replaceBlocks = false,
 ): Promise<boolean> {
   const context = pdfDocumentTranslationSessionContext;
   if (!context) return false;
-  const completed = blocks.flatMap((block) => (
-    block.status === 'done' && block.translatedText?.trim()
-      ? [{ signature: block.sessionSignature, translatedText: block.translatedText.trim() }]
-      : []
-  ));
+  const update = pdfDocumentTranslationSessionUpdate(context, blocks, replaceBlocks);
+  let sessionSaved = false;
   try {
-    await savePdfDocumentTranslationSession({
-      descriptor: context.descriptor,
-      documentSignatures: pdfDocumentTranslationBlocksState.map(
-        (block) => block.sessionSignature,
-      ),
-      activity: pdfDocumentTranslationSessionActivity(),
-      ...(completed.length ? { blocks: completed } : {}),
-      ...(replaceBlocks ? { replaceBlocks: true } : {}),
-    }, context.behaviorKey);
-    return true;
+    await savePdfDocumentTranslationSession(update, context.behaviorKey);
+    sessionSaved = true;
   } catch {
-    return false;
+    // Session checkpoints are best effort and must never stop translation.
+  }
+  if (pdfDocumentTranslationRetainedLocally) {
+    try {
+      await saveRetainedPdfDocumentTranslationSession(update, context.behaviorKey);
+      if (pdfDocumentTranslationRetentionError) {
+        pdfDocumentTranslationRetentionError = false;
+        pdfDocumentTranslationRetentionMessage = undefined;
+      }
+    } catch {
+      pdfDocumentTranslationRetentionError = true;
+      pdfDocumentTranslationRetentionMessage =
+        '本机保留暂时失败；当前 Edge 会话中的进度仍然安全。';
+      syncPdfDocumentTranslationUi();
+    }
+  }
+  return sessionSaved;
+}
+
+async function setPdfDocumentTranslationRetention(enabled: boolean): Promise<void> {
+  const context = pdfDocumentTranslationSessionContext;
+  if (!context || pdfDocumentTranslationRetentionPending) return;
+  pdfDocumentTranslationRetentionPending = true;
+  pdfDocumentTranslationRetentionError = false;
+  pdfDocumentTranslationRetentionMessage = enabled ? '正在保存到本机…' : '正在清除本机保存…';
+  pdfDocumentTranslationRetainedLocally = enabled;
+  syncPdfDocumentTranslationUi();
+  try {
+    if (enabled) {
+      pdfDocumentTranslationRetainedLocally = true;
+      await saveRetainedPdfDocumentTranslationSession(
+        pdfDocumentTranslationSessionUpdate(
+          context,
+          pdfDocumentTranslationBlocksState,
+          true,
+        ),
+        context.behaviorKey,
+      );
+      pdfDocumentTranslationRetentionMessage =
+        '已保留到本机；再次打开同一 PDF 会自动恢复。';
+    } else {
+      await clearRetainedPdfDocumentTranslationSession(context.descriptor);
+      pdfDocumentTranslationRetentionMessage = '本机保存已清除；当前会话中的译文不受影响。';
+    }
+  } catch {
+    pdfDocumentTranslationRetainedLocally = !enabled;
+    pdfDocumentTranslationRetentionError = true;
+    pdfDocumentTranslationRetentionMessage = enabled
+      ? '无法保留到本机，请检查扩展存储空间后重试。'
+      : '无法清除本机保存，请稍后重试。';
+  } finally {
+    pdfDocumentTranslationRetentionPending = false;
+    syncPdfDocumentTranslationUi();
   }
 }
 
@@ -963,6 +1041,19 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationCopyMenu.hidden = translated === 0;
   documentTranslationCopyTranslation.disabled = pdfDocumentTranslationCopyPending;
   documentTranslationCopyBilingual.disabled = pdfDocumentTranslationCopyPending;
+  documentTranslationRetention.hidden = !pdfDocumentTranslationSessionContext ||
+    ['idle', 'preparing'].includes(pdfDocumentTranslationPhase);
+  documentTranslationRetention.dataset.tone = pdfDocumentTranslationRetentionError
+    ? 'error'
+    : 'info';
+  documentTranslationRetentionToggle.checked = pdfDocumentTranslationRetainedLocally;
+  documentTranslationRetentionToggle.disabled = pdfDocumentTranslationRetentionPending ||
+    !pdfDocumentTranslationSessionContext;
+  documentTranslationRetentionStatus.textContent = pdfDocumentTranslationRetentionMessage ?? (
+    pdfDocumentTranslationRetainedLocally
+      ? '只保存译文和匿名段落标识；打开同一 PDF 自动恢复'
+      : '默认只保留在当前 Edge 会话'
+  );
   documentTranslationOcr.hidden = !pdfDocumentTranslationOcrRunning &&
     unreadablePagesInScope.length === 0;
   documentTranslationOcr.dataset.tone = pdfDocumentTranslationOcrError ? 'error' : 'info';
@@ -987,9 +1078,12 @@ function syncPdfDocumentTranslationUi(): void {
       ? `已跳过 ${pdfDocumentTranslationRemovedMarginLines} 行重复页眉页脚`
       : '',
   ].filter(Boolean).join('；');
+  const retentionNote = pdfDocumentTranslationRetainedLocally
+    ? '已完成译文会保留在本机；不会保存原文、PDF 文件或页面图像。'
+    : '已完成译文默认只保留在当前 Edge 会话中。';
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `正文与扫描页图像只在你分别确认后发送；已完成译文只保留在当前 Edge 会话中。仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 原始 PDF 始终保留。`
-    : `正文只在确认后批量发送；已完成译文只保留在当前 Edge 会话中。原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
+    ? `正文与扫描页图像只在你分别确认后发送；${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 原始 PDF 始终保留。`
+    : `正文只在确认后批量发送；${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
 }
 
 function setPdfDocumentTranslationCopyFeedback(message: string, error = false): void {
@@ -1226,6 +1320,10 @@ function resetPdfDocumentTranslation(closePanel = false): void {
   pdfDocumentTranslationOcrProgress = { completed: 0, total: 0 };
   pdfDocumentTranslationOcrMessage = undefined;
   pdfDocumentTranslationOcrError = false;
+  pdfDocumentTranslationRetainedLocally = false;
+  pdfDocumentTranslationRetentionPending = false;
+  pdfDocumentTranslationRetentionMessage = undefined;
+  pdfDocumentTranslationRetentionError = false;
   pdfDocumentTranslationTask = undefined;
   pdfDocumentTranslationSessionContext = undefined;
   resetPdfDocumentTranslationScope();
@@ -1346,12 +1444,19 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   const sessionContext = currentPdfDocumentTranslationSessionContext();
   pdfDocumentTranslationSessionContext = sessionContext;
   let restoredCount = 0;
-  if (sessionContext && discovered.length) {
+  let restoredFromLocalCount = 0;
+  if (sessionContext) {
     try {
-      const restored = await getPdfDocumentTranslationSession(
-        sessionContext.descriptor,
-        sessionContext.behaviorKey,
-      );
+      const [restored, retained] = await Promise.all([
+        getPdfDocumentTranslationSession(
+          sessionContext.descriptor,
+          sessionContext.behaviorKey,
+        ),
+        getRetainedPdfDocumentTranslationSession(
+          sessionContext.descriptor,
+          sessionContext.behaviorKey,
+        ),
+      ]);
       if (
         revision !== pdfDocumentTranslationRevision ||
         epoch !== documentEpoch ||
@@ -1360,18 +1465,25 @@ async function preparePdfDocumentTranslation(): Promise<void> {
           currentPdfDocumentTranslationSessionContext(),
         )
       ) return;
-      const translatedBySignature = new Map(
+      pdfDocumentTranslationRetainedLocally = Boolean(retained);
+      const retainedBySignature = new Map(
+        retained?.blocks.map((block) => [block.signature, block.translatedText]),
+      );
+      const sessionBySignature = new Map(
         restored?.blocks.map((block) => [block.signature, block.translatedText]),
       );
       for (const block of discovered) {
-        const translatedText = translatedBySignature.get(block.sessionSignature)?.trim();
+        const fromSession = sessionBySignature.get(block.sessionSignature)?.trim();
+        const fromLocal = retainedBySignature.get(block.sessionSignature)?.trim();
+        const translatedText = fromSession ?? fromLocal;
         if (!translatedText) continue;
         block.status = 'done';
         block.translatedText = translatedText;
         restoredCount += 1;
+        if (!fromSession && fromLocal) restoredFromLocalCount += 1;
         renderPdfDocumentTranslationBlock(block);
       }
-      if (restored && restoredCount === 0) {
+      if (restored && discovered.length && restoredCount === 0) {
         void clearPdfDocumentTranslationSession(sessionContext.descriptor);
       }
     } catch {
@@ -1380,8 +1492,8 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   }
   pdfDocumentTranslationMessage = restoredCount
     ? restoredCount === discovered.length
-      ? `已恢复 ${restoredCount}/${discovered.length} 段，无需重复翻译`
-      : `已恢复 ${restoredCount}/${discovered.length} 段，可继续翻译`
+      ? `${restoredFromLocalCount ? '已从本机恢复' : '已恢复'} ${restoredCount}/${discovered.length} 段，无需重复翻译`
+      : `${restoredFromLocalCount ? '已从本机恢复' : '已恢复'} ${restoredCount}/${discovered.length} 段，可继续翻译`
     : undefined;
   pdfDocumentTranslationPhase = discovered.length
     ? restoredCount === discovered.length
@@ -1396,6 +1508,12 @@ async function preparePdfDocumentTranslation(): Promise<void> {
       : '没有读取到可翻译正文。';
   }
   syncPdfDocumentTranslationUi();
+  if (pdfDocumentTranslationRetainedLocally) {
+    void persistPdfDocumentTranslationSession(
+      pdfDocumentTranslationBlocksState.filter((block) => block.status === 'done'),
+      true,
+    );
+  }
 }
 
 async function capturePdfDocumentTranslationOcrPage(
@@ -1480,6 +1598,48 @@ function addPdfDocumentTranslationOcrPage(
   });
   rebuildPdfDocumentTranslationResults();
   return added.length;
+}
+
+async function restorePdfDocumentTranslationIdleBlocks(): Promise<{
+  restored: number;
+  fromLocal: number;
+}> {
+  const context = pdfDocumentTranslationSessionContext;
+  if (!context) return { restored: 0, fromLocal: 0 };
+  try {
+    const [session, retained] = await Promise.all([
+      getPdfDocumentTranslationSession(context.descriptor, context.behaviorKey),
+      getRetainedPdfDocumentTranslationSession(context.descriptor, context.behaviorKey),
+    ]);
+    if (!samePdfDocumentTranslationSessionContext(
+      context,
+      currentPdfDocumentTranslationSessionContext(),
+    )) return { restored: 0, fromLocal: 0 };
+    if (retained) pdfDocumentTranslationRetainedLocally = true;
+    const sessionBySignature = new Map(
+      session?.blocks.map((block) => [block.signature, block.translatedText]),
+    );
+    const retainedBySignature = new Map(
+      retained?.blocks.map((block) => [block.signature, block.translatedText]),
+    );
+    let restored = 0;
+    let fromLocal = 0;
+    for (const block of pdfDocumentTranslationBlocksState) {
+      if (block.status !== 'idle') continue;
+      const currentSessionText = sessionBySignature.get(block.sessionSignature)?.trim();
+      const localText = retainedBySignature.get(block.sessionSignature)?.trim();
+      const translatedText = currentSessionText ?? localText;
+      if (!translatedText) continue;
+      block.status = 'done';
+      block.translatedText = translatedText;
+      restored += 1;
+      if (!currentSessionText && localText) fromLocal += 1;
+      renderPdfDocumentTranslationBlock(block);
+    }
+    return { restored, fromLocal };
+  } catch {
+    return { restored: 0, fromLocal: 0 };
+  }
 }
 
 function settlePdfDocumentTranslationAfterOcr(previousPhase: PdfDocumentTranslationPhase): void {
@@ -1609,16 +1769,22 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
   }
   if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
   pdfDocumentTranslationOcrRunning = false;
+  const restoredAfterOcr = await restorePdfDocumentTranslationIdleBlocks();
+  if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
   settlePdfDocumentTranslationAfterOcr(previousPhase);
   pdfDocumentTranslationOcrError = failedPages > 0;
   pdfDocumentTranslationOcrMessage = failedPages
     ? `${recognizedPages ? `已识别 ${recognizedPages} 页；` : ''}${failedPages} 页未识别${latestError ? `：${latestError}` : ''}`
     : undefined;
-  pdfDocumentTranslationMessage = recognizedPages
-    ? `扫描页已加入正文 · 新增 ${recognizedPages} 页`
+  pdfDocumentTranslationMessage = restoredAfterOcr.restored
+    ? `${restoredAfterOcr.fromLocal ? '已从本机恢复' : '已恢复'} ${restoredAfterOcr.restored} 段扫描页译文`
+    : recognizedPages
+      ? `扫描页已加入正文 · 新增 ${recognizedPages} 页`
     : pdfDocumentTranslationMessage;
   syncPdfDocumentTranslationUi();
-  void persistPdfDocumentTranslationSession();
+  void persistPdfDocumentTranslationSession(
+    pdfDocumentTranslationBlocksState.filter((block) => block.status === 'done'),
+  );
 }
 
 function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock): string | undefined {
@@ -5549,6 +5715,9 @@ documentTranslationCopyTranslation.addEventListener('click', () => {
 });
 documentTranslationCopyBilingual.addEventListener('click', () => {
   void copyPdfDocumentTranslationResult('bilingual');
+});
+documentTranslationRetentionToggle.addEventListener('change', () => {
+  void setPdfDocumentTranslationRetention(documentTranslationRetentionToggle.checked);
 });
 documentTranslationOcrAction.addEventListener('click', () => {
   void recognizePdfDocumentTranslationPages();
