@@ -1222,6 +1222,16 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     await expect(launcher.locator('img.mark')).toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(launcher.locator('button[data-action="start"]')).toContainText('译全文');
     await expect(launcher.locator('.count')).toHaveText('· 7 段');
+    const launcherStyle = await launcher.locator('.launcher').evaluate((element) => ({
+      shadow: getComputedStyle(element).boxShadow,
+      startBackground: getComputedStyle(
+        element.querySelector<HTMLElement>('button[data-action="start"]')!,
+      ).backgroundColor,
+      markFilter: getComputedStyle(element.querySelector<HTMLElement>('.mark')!).filter,
+    }));
+    expect(launcherStyle.shadow).not.toContain('24px');
+    expect(launcherStyle.startBackground).toBe('rgba(0, 0, 0, 0)');
+    expect(launcherStyle.markFilter).toBe('none');
     await expect(launcher).not.toHaveAttribute('data-pi-placement', 'bottom-right');
     const launcherAvoidance = await page.evaluate(() => {
       const launcherRect = document.getElementById('pi-translator-bilingual-page-launcher')!
@@ -1664,6 +1674,11 @@ test('completes bilingual article translation without scrolling and keeps contro
     const controlLayout = await sidePanelControl.evaluate((control) => ({
       clientWidth: control.clientWidth,
       scrollWidth: control.scrollWidth,
+      borderRadius: getComputedStyle(control).borderRadius,
+      boxShadow: getComputedStyle(control).boxShadow,
+      markDisplay: getComputedStyle(
+        control.querySelector<HTMLElement>('.bilingual-page-mark')!,
+      ).display,
       primaryHeight: control.querySelector<HTMLButtonElement>('#bilingual-page-primary')!
         .getBoundingClientRect().height,
       displayHeight: control.querySelector<HTMLSelectElement>('#bilingual-page-display')!
@@ -1672,6 +1687,9 @@ test('completes bilingual article translation without scrolling and keeps contro
         .getBoundingClientRect().height,
     }));
     expect(controlLayout.scrollWidth).toBeLessThanOrEqual(controlLayout.clientWidth + 1);
+    expect(controlLayout.borderRadius).toBe('0px');
+    expect(controlLayout.boxShadow).toBe('none');
+    expect(controlLayout.markDisplay).toBe('none');
     expect(controlLayout.primaryHeight).toBeGreaterThanOrEqual(33);
     expect(controlLayout.displayHeight).toBeGreaterThanOrEqual(31);
     expect(controlLayout.languageHeight).toBeGreaterThanOrEqual(31);
@@ -1737,20 +1755,37 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(pageControl.locator('button[data-action="copy-bilingual"]')).toBeVisible();
     await pageControl.locator('details.more > summary').click();
     const inPageProgressLayout = await pageControl.locator('.bar').evaluate((bar) => {
-      const primary = bar.querySelector<HTMLElement>('[data-action="pause"]')!
-        .getBoundingClientRect();
+      const barRect = bar.getBoundingClientRect();
       const progress = bar.querySelector<HTMLElement>('.progress')!.getBoundingClientRect();
       return {
-        primaryCenter: primary.top + primary.height / 2,
-        progressCenter: progress.top + progress.height / 2,
+        bottomGap: barRect.bottom - progress.bottom,
+        leftInset: progress.left - barRect.left,
+        rightInset: barRect.right - progress.right,
+        languageBorder: getComputedStyle(
+          bar.querySelector<HTMLSelectElement>('[data-action="language"]')!,
+        ).borderTopWidth,
       };
     });
-    expect(Math.abs(inPageProgressLayout.primaryCenter - inPageProgressLayout.progressCenter))
-      .toBeLessThanOrEqual(1);
+    expect(Math.abs(inPageProgressLayout.bottomGap)).toBeLessThanOrEqual(2);
+    expect(inPageProgressLayout.leftInset).toBeGreaterThanOrEqual(8);
+    expect(inPageProgressLayout.rightInset).toBeGreaterThanOrEqual(8);
+    expect(inPageProgressLayout.languageBorder).toBe('0px');
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await Promise.all([
         page.screenshot({ path: testInfo.outputPath('bilingual-article-paused.png'), fullPage: false }),
         sidePanel.screenshot({ path: testInfo.outputPath('bilingual-sidepanel-300.png'), fullPage: true }),
+      ]);
+      await Promise.all([
+        page.emulateMedia({ colorScheme: 'dark' }),
+        sidePanel.emulateMedia({ colorScheme: 'dark' }),
+      ]);
+      await Promise.all([
+        page.screenshot({ path: testInfo.outputPath('bilingual-article-paused-dark.png'), fullPage: false }),
+        sidePanel.screenshot({ path: testInfo.outputPath('bilingual-sidepanel-300-dark.png'), fullPage: true }),
+      ]);
+      await Promise.all([
+        page.emulateMedia({ colorScheme: 'light' }),
+        sidePanel.emulateMedia({ colorScheme: 'light' }),
       ]);
     }
 
