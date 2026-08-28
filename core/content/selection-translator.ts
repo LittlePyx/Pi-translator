@@ -242,10 +242,39 @@ function sameExtensionPage(left: string, right: string): boolean {
   }
 }
 
-export async function startSelectionTranslator(
+const SELECTION_TRANSLATOR_START_KEY = '__piTranslatorSelectionControllerV1';
+
+type SelectionTranslatorGlobal = typeof globalThis & {
+  [SELECTION_TRANSLATOR_START_KEY]?: Promise<SelectionTranslatorController>;
+};
+
+export function startSelectionTranslator(
   ctx: ContentScriptRuntimeContext,
   surface: TranslationSurface,
   options: SelectionTranslatorOptions = {},
+): Promise<SelectionTranslatorController> {
+  const scope = globalThis as SelectionTranslatorGlobal;
+  const existing = scope[SELECTION_TRANSLATOR_START_KEY];
+  if (existing) return existing;
+  const started = startSelectionTranslatorInstance(ctx, surface, options);
+  scope[SELECTION_TRANSLATOR_START_KEY] = started;
+  ctx.onInvalidated(() => {
+    if (scope[SELECTION_TRANSLATOR_START_KEY] === started) {
+      delete scope[SELECTION_TRANSLATOR_START_KEY];
+    }
+  });
+  void started.catch(() => {
+    if (scope[SELECTION_TRANSLATOR_START_KEY] === started) {
+      delete scope[SELECTION_TRANSLATOR_START_KEY];
+    }
+  });
+  return started;
+}
+
+async function startSelectionTranslatorInstance(
+  ctx: ContentScriptRuntimeContext,
+  surface: TranslationSurface,
+  options: SelectionTranslatorOptions,
 ): Promise<SelectionTranslatorController> {
   let settings = DEFAULT_PUBLIC_SETTINGS;
   let latestSelection: SelectionSnapshot | undefined;
@@ -272,6 +301,7 @@ export async function startSelectionTranslator(
   let pdfSelectionInProgress = false;
   let temporaryTargetLanguage = settings.targetLanguage;
   let temporaryStyle = settings.style;
+  let initializationPromise: Promise<void> = Promise.resolve();
   const bilingualPageTranslator = surface === 'general'
     ? createBilingualPageTranslator({
         pageUrl: () => options.pageUrl?.() ?? location.href,
@@ -1155,39 +1185,41 @@ export async function startSelectionTranslator(
     persistedMarkerHistory = markerHistoryFromEntries(entries);
   }
 
-  try {
-    const response = (await browser.runtime.sendMessage({
-      type: 'GET_PUBLIC_SETTINGS',
-    } satisfies RuntimeMessage)) as PublicSettingsResponse;
-    if (response.ok) {
-      settings = response.data;
-      options.onPublicSettingsChange?.(settings);
-      temporaryTargetLanguage = settings.targetLanguage;
-      temporaryStyle = settings.style;
-      overlay.setPreferences({
-        targetLanguage: temporaryTargetLanguage,
-        style: temporaryStyle,
-        sidebarMode: settings.sidebarMode,
-        sidebarSide: settings.sidebarSide,
-        sidebarWidth: settings.sidebarWidth,
-        autoRenderLatex: settings.autoRenderLatex,
-      });
+  const initializeTranslator = async (): Promise<void> => {
+    try {
+      const response = (await browser.runtime.sendMessage({
+        type: 'GET_PUBLIC_SETTINGS',
+      } satisfies RuntimeMessage)) as PublicSettingsResponse;
+      if (response.ok) {
+        settings = response.data;
+        options.onPublicSettingsChange?.(settings);
+        temporaryTargetLanguage = settings.targetLanguage;
+        temporaryStyle = settings.style;
+        overlay.setPreferences({
+          targetLanguage: temporaryTargetLanguage,
+          style: temporaryStyle,
+          sidebarMode: settings.sidebarMode,
+          sidebarSide: settings.sidebarSide,
+          sidebarWidth: settings.sidebarWidth,
+          autoRenderLatex: settings.autoRenderLatex,
+        });
+      }
+    } catch {
+      // Defaults keep the content UI usable while the service worker restarts.
     }
-  } catch {
-    // Defaults keep the content UI usable while the service worker restarts.
-  }
-  await bilingualPageTranslator?.restoreSession();
-  bilingualPageTranslator?.refreshDiscovery();
+    await bilingualPageTranslator?.restoreSession();
+    bilingualPageTranslator?.refreshDiscovery();
 
-  try {
-    const response = await browser.runtime.sendMessage({
-      type: 'GET_CONTINUOUS_TRANSLATION_STATE',
-    } satisfies RuntimeMessage) as RuntimeResponse<{ paused: boolean }>;
-    if (response.ok) applyContinuousTranslationPaused(response.data.paused);
-  } catch {
-    // A temporary pause defaults to active translation after an unavailable
-    // service worker rather than making the sidebar appear unresponsive.
-  }
+    try {
+      const response = await browser.runtime.sendMessage({
+        type: 'GET_CONTINUOUS_TRANSLATION_STATE',
+      } satisfies RuntimeMessage) as RuntimeResponse<{ paused: boolean }>;
+      if (response.ok) applyContinuousTranslationPaused(response.data.paused);
+    } catch {
+      // A temporary pause defaults to active translation after an unavailable
+      // service worker rather than making the sidebar appear unresponsive.
+    }
+  };
 
   function selectionRect(snapshot: SelectionSnapshot): ViewportRect | undefined {
     return snapshot.rect;
@@ -2233,7 +2265,7 @@ export async function startSelectionTranslator(
     });
   }
 
-  const messageListener = (
+  const handleMessage = (
     message: unknown,
   ): void | Promise<
     SettingsRecoveryAck |
@@ -2282,6 +2314,7 @@ export async function startSelectionTranslator(
           totalBlockCount: 0,
           missingBlockCount: 0,
           unavailablePageCount: 0,
+          contentTruncated: false,
           pageCount: 0,
           complete: false,
         } },
@@ -2493,6 +2526,57 @@ export async function startSelectionTranslator(
     }
   };
 
+  const handledMessageTypes = new Set([
+    'START_BILINGUAL_PAGE_IN_TAB',
+    'GET_BILINGUAL_PAGE_STATE_IN_TAB',
+    'GET_BILINGUAL_PAGE_EXPORT_IN_TAB',
+    'CONTROL_BILINGUAL_PAGE_IN_TAB',
+    'RETRANSLATE_WEB_SIDE_PANEL_TRANSLATION',
+    'SETTINGS_RECOVERY_READY',
+    'TRANSLATION_PROGRESS',
+    'PUBLIC_SETTINGS_UPDATED',
+    'BROWSER_SIDEBAR_ACTIVE',
+    'BROWSER_SIDEBAR_CLOSED',
+    'CONTINUOUS_TRANSLATION_STATE_UPDATED',
+    'OPEN_SIDEBAR',
+    'START_WEB_REGION_SELECTION',
+    'TRIGGER_TRANSLATE',
+    'CONTEXT_MENU_TRANSLATE',
+  ]);
+
+  const messageListener = (message: unknown) => {
+    const type = (message as { type?: unknown } | undefined)?.type;
+    if (typeof type !== 'string' || !handledMessageTypes.has(type)) {
+      // Other extension messages belong to the background or another page.
+      // Returning a Promise here would claim the one allowed response with
+      // `undefined` before the intended listener can answer.
+      return;
+    }
+    if (
+      type === 'GET_BILINGUAL_PAGE_STATE_IN_TAB' ||
+      type === 'SETTINGS_RECOVERY_READY'
+    ) {
+      // Recovery ownership must also be checked synchronously: non-owner
+      // extension pages intentionally return nothing and must not win the
+      // single runtime response race with an async `undefined` response.
+      return handleMessage(message);
+    }
+    return (async () => {
+      await initializationPromise;
+      return handleMessage(message);
+    })();
+  };
+
+  initializationPromise = initializeTranslator();
+  // General webpages need the runtime listener immediately so the background
+  // can detect an in-flight content-script startup without injecting a second
+  // instance. Pi PDF and Overleaf keep their original ordering: finish restore
+  // work before selection listeners become interactive, otherwise a late reset
+  // can erase the retry context created by a user's first translation.
+  if (surface !== 'general') {
+    await initializationPromise;
+  }
+
   document.addEventListener('pointerdown', beginPdfSelection, true);
   document.addEventListener('pointerup', finishPdfSelection, true);
   document.addEventListener('pointercancel', finishPdfSelection, true);
@@ -2532,6 +2616,9 @@ export async function startSelectionTranslator(
     resultRetryContexts.clear();
   });
 
+  if (surface === 'general') {
+    await initializationPromise;
+  }
   return {
     translateImageRegion: (capture) => translateImageRegion(capture),
     translatePdfRegionText: (capture) => translatePdfRegionText(capture),

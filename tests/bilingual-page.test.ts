@@ -62,9 +62,19 @@ describe('bilingual webpage reading', () => {
       total: 12,
       translated: 4,
       failed: 0,
+      contentTruncated: true,
       translationsHidden: false,
       targetLanguage: 'zh-CN',
     })).toBe(true);
+    expect(isBilingualPageState({
+      phase: 'complete',
+      total: 1_200,
+      translated: 1_200,
+      failed: 0,
+      contentTruncated: 'yes',
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    })).toBe(false);
     expect(isBilingualPageState({
       phase: 'paused',
       total: 12,

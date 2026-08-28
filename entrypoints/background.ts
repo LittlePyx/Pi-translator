@@ -3831,10 +3831,21 @@ async function sendToSelectionContentScript(
     return;
   }
 
-  await browser.scripting.executeScript({
-    target: { tabId: tab.id },
-    files: [GENERAL_CONTENT_SCRIPT_FILE],
-  });
+  let contentScriptReady = false;
+  try {
+    const readiness = await browser.tabs.sendMessage(tab.id, {
+      type: 'GET_BILINGUAL_PAGE_STATE_IN_TAB',
+    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    contentScriptReady = Boolean(readiness);
+  } catch {
+    // On-demand pages have no receiver until Pi Translator is used once.
+  }
+  if (!contentScriptReady) {
+    await browser.scripting.executeScript({
+      target: { tabId: tab.id },
+      files: [GENERAL_CONTENT_SCRIPT_FILE],
+    });
+  }
   await browser.tabs.sendMessage(tab.id, message);
 }
 

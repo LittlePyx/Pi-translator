@@ -32,6 +32,8 @@ export interface BilingualPageState {
   total: number;
   translated: number;
   failed: number;
+  /** The page contains more eligible content blocks than the explicit safety limit. */
+  contentTruncated?: boolean;
   /** Completed paragraphs restored from the current browser session or explicit local retention. */
   restored?: number;
   restoredFrom?: 'session' | 'local';
@@ -51,6 +53,7 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   total: 0,
   translated: 0,
   failed: 0,
+  contentTruncated: false,
   displayMode: 'bilingual',
   translationsHidden: false,
 };
@@ -212,6 +215,7 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
     validCount(state.total) &&
     validCount(state.translated) &&
     validCount(state.failed) &&
+    (state.contentTruncated === undefined || typeof state.contentTruncated === 'boolean') &&
     (state.restored === undefined || validCount(state.restored)) &&
     (state.restoredFrom === undefined || ['session', 'local'].includes(
       typeof state.restoredFrom === 'string' ? state.restoredFrom : '',

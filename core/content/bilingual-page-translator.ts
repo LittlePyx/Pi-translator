@@ -70,7 +70,9 @@ const ACTIONS_HINT_STORAGE_KEY = 'bilingualParagraphActionsHintSeen';
 const ACTIONS_HINT_DURATION_MS = 3_200;
 const ACTIONS_HINT_MOUSE_MESSAGE = '悬停译文可复制、重译或隐藏';
 const ACTIONS_HINT_TOUCH_MESSAGE = '点“更多”可复制、重译或隐藏';
-const MAX_BILINGUAL_BLOCKS = 240;
+const BILINGUAL_DISCOVERY_PREVIEW_LIMIT = 240;
+const BILINGUAL_DISCOVERY_BATCH_SIZE = 240;
+const MAX_BILINGUAL_BLOCKS = 1_200;
 const DYNAMIC_SCAN_DELAY_MS = 280;
 const TRANSLATION_PENDING_DELAY_MS = 350;
 const FORMULA_RECOGNITION_SCROLL_SETTLE_MS = 180;
@@ -141,6 +143,15 @@ interface BilingualBlock {
     BilingualPageState,
     'phase' | 'message' | 'pauseReason'
   >;
+}
+
+interface BilingualCandidateDiscovery {
+  blocks: BilingualBlock[];
+  truncated: boolean;
+}
+
+interface BilingualArticleSelection extends BilingualCandidateDiscovery {
+  root: HTMLElement;
 }
 
 export interface BilingualPageRequestConfig {
@@ -242,55 +253,95 @@ function hasExcludedSourceDescendant(element: HTMLElement): boolean {
   ].join(',')));
 }
 
+function candidateBlock(
+  element: HTMLElement,
+  targetLanguage: string,
+  excludedElements?: ReadonlySet<HTMLElement>,
+): BilingualBlock | undefined {
+  if (
+    excludedElements?.has(element) ||
+    hasExcludedAncestor(element) ||
+    !elementVisible(element) ||
+    hasExcludedSourceDescendant(element) ||
+    (element.tagName === 'LI' && Boolean(element.querySelector('p, blockquote, ul, ol, li'))) ||
+    (element.tagName === 'BLOCKQUOTE' && Boolean(element.querySelector('p, blockquote')))
+  ) return undefined;
+  const { text, hasUnextractableFormula } = readableElementContent(element);
+  if (
+    !isBilingualPageTextCandidate(text, element.tagName, linkTextLength(element)) ||
+    isLikelySourceCode(text) ||
+    isLikelyTargetLanguage(text, targetLanguage)
+  ) return undefined;
+  return {
+    element,
+    text,
+    status: 'idle',
+    ...(hasUnextractableFormula ? { hasUnextractableFormula: true } : {}),
+  };
+}
+
 function candidateElements(
   root: ParentNode,
   targetLanguage: string,
   excludedElements?: ReadonlySet<HTMLElement>,
-): BilingualBlock[] {
-  const candidates: BilingualBlock[] = [];
+  maximum = MAX_BILINGUAL_BLOCKS,
+): BilingualCandidateDiscovery {
+  const limit = Math.max(1, Math.min(MAX_BILINGUAL_BLOCKS, Math.floor(maximum)));
+  const blocks: BilingualBlock[] = [];
   for (const element of root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)) {
-    if (
-      excludedElements?.has(element) ||
-      hasExcludedAncestor(element) ||
-      !elementVisible(element) ||
-      hasExcludedSourceDescendant(element) ||
-      (element.tagName === 'LI' && Boolean(element.querySelector('p, blockquote, ul, ol, li'))) ||
-      (element.tagName === 'BLOCKQUOTE' && Boolean(element.querySelector('p, blockquote')))
-    ) continue;
-    const { text, hasUnextractableFormula } = readableElementContent(element);
-    if (
-      !isBilingualPageTextCandidate(text, element.tagName, linkTextLength(element)) ||
-      isLikelySourceCode(text) ||
-      isLikelyTargetLanguage(text, targetLanguage)
-    ) continue;
-    candidates.push({
-      element,
-      text,
-      status: 'idle',
-      ...(hasUnextractableFormula ? { hasUnextractableFormula: true } : {}),
-    });
-    if (candidates.length >= MAX_BILINGUAL_BLOCKS) break;
+    const block = candidateBlock(element, targetLanguage, excludedElements);
+    if (!block) continue;
+    if (blocks.length >= limit) return { blocks, truncated: true };
+    blocks.push(block);
   }
-  return candidates;
+  return { blocks, truncated: false };
+}
+
+async function candidateElementsProgressively(
+  root: ParentNode,
+  targetLanguage: string,
+  excludedElements?: ReadonlySet<HTMLElement>,
+): Promise<BilingualCandidateDiscovery> {
+  const elements = [...root.querySelectorAll<HTMLElement>(BLOCK_SELECTOR)];
+  const blocks: BilingualBlock[] = [];
+  for (let offset = 0; offset < elements.length; offset += BILINGUAL_DISCOVERY_BATCH_SIZE) {
+    const batch = elements.slice(offset, offset + BILINGUAL_DISCOVERY_BATCH_SIZE);
+    for (const element of batch) {
+      const block = candidateBlock(element, targetLanguage, excludedElements);
+      if (!block) continue;
+      if (blocks.length >= MAX_BILINGUAL_BLOCKS) return { blocks, truncated: true };
+      blocks.push(block);
+    }
+    if (offset + BILINGUAL_DISCOVERY_BATCH_SIZE < elements.length) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    }
+  }
+  return { blocks, truncated: false };
 }
 
 function articleRoot(
   targetLanguage: string,
   excludedElements?: ReadonlySet<HTMLElement>,
-): { root: HTMLElement; blocks: BilingualBlock[] } {
+  maximum = MAX_BILINGUAL_BLOCKS,
+): BilingualArticleSelection {
   const containers = [...document.querySelectorAll<HTMLElement>('article, main, [role="main"]')]
     .filter((element) => !element.closest(EXCLUDED_ANCESTOR_SELECTOR) && elementVisible(element));
-  let best: { root: HTMLElement; blocks: BilingualBlock[]; score: number } | undefined;
+  let best: (BilingualArticleSelection & { score: number }) | undefined;
   for (const root of containers) {
-    const blocks = candidateElements(root, targetLanguage, excludedElements);
-    const score = blocks.reduce((total, block) => total + Math.min(block.text.length, 800), 0);
-    if (!best || score > best.score) best = { root, blocks, score };
+    const discovery = candidateElements(root, targetLanguage, excludedElements, maximum);
+    const score = discovery.blocks.reduce(
+      (total, block) => total + Math.min(block.text.length, 800),
+      0,
+    );
+    if (!best || score > best.score) best = { root, ...discovery, score };
   }
   if (best && (best.blocks.length >= 2 || best.score >= 240)) return best;
   const root = document.body;
   return {
     root,
-    blocks: root ? candidateElements(root, targetLanguage, excludedElements) : [],
+    ...(root
+      ? candidateElements(root, targetLanguage, excludedElements, maximum)
+      : { blocks: [], truncated: false }),
   };
 }
 
@@ -880,6 +931,7 @@ export function createBilingualPageTranslator(
   let launcherPageIdentity = '';
   let launcherDismissedPageIdentity = '';
   let launcherCandidateCount = 0;
+  let launcherCandidateTruncated = false;
   let consecutiveIsolatedFailures = 0;
   let actionsHintClaimed = false;
   const interactiveSuspensions = new Set<string>();
@@ -911,6 +963,7 @@ export function createBilingualPageTranslator(
         ? { translatedText: block.translatedText }
         : {}),
     })),
+    { contentTruncated: currentState.contentTruncated === true },
   );
 
   const copyFullTranslationResult = async (
@@ -945,7 +998,9 @@ export function createBilingualPageTranslator(
       triggerDocumentTranslationDownload(download);
       const partialLabel = result.complete
         ? ''
-        : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+        : result.contentTruncated
+          ? ' · 部分结果 · 页面仍有后续正文'
+          : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
       resultCopyFeedback = (format === 'translation-markdown'
         ? '已下载纯译文 Markdown'
         : format === 'bilingual-markdown'
@@ -1497,10 +1552,12 @@ export function createBilingualPageTranslator(
     const shadow = launcherHost.shadowRoot;
     const count = shadow?.querySelector<HTMLElement>('.count');
     const startButton = shadow?.querySelector<HTMLButtonElement>('button[data-action="start"]');
-    if (count) count.textContent = `· ${launcherCandidateCount} 段`;
+    if (count) count.textContent = `· ${launcherCandidateCount}${launcherCandidateTruncated ? '+' : ''} 段`;
     startButton?.setAttribute(
       'aria-label',
-      `翻译网页正文，已识别 ${launcherCandidateCount} 段`,
+      launcherCandidateTruncated
+        ? `翻译网页正文，已快速识别至少 ${launcherCandidateCount} 段`
+        : `翻译网页正文，已识别 ${launcherCandidateCount} 段`,
     );
     scheduleLauncherPlacement();
   };
@@ -1529,10 +1586,15 @@ export function createBilingualPageTranslator(
       destroyLauncher();
       return;
     }
-    const selection = articleRoot(options.preferredTargetLanguage(), scopeExcludedElements);
+    const selection = articleRoot(
+      options.preferredTargetLanguage(),
+      scopeExcludedElements,
+      BILINGUAL_DISCOVERY_PREVIEW_LIMIT,
+    );
     launcherCandidateCount = launcherCandidate(selection.blocks)
       ? selection.blocks.length
       : 0;
+    launcherCandidateTruncated = launcherCandidateCount > 0 && selection.truncated;
     renderLauncher();
   };
 
@@ -1622,7 +1684,7 @@ export function createBilingualPageTranslator(
     const selection = articleContainer?.isConnected
       ? {
           root: articleContainer,
-          blocks: candidateElements(articleContainer, targetLanguage),
+          ...candidateElements(articleContainer, targetLanguage),
         }
       : articleRoot(targetLanguage);
     if (!selection.blocks.length) return;
@@ -1692,13 +1754,15 @@ export function createBilingualPageTranslator(
     if (!shouldStart && articleContainer?.isConnected && currentState.targetLanguage) {
       const activeBlock = blocks.find((block) => block.status === 'translating');
       if (activeBlock && scopeExcludedElements.has(activeBlock.element)) cancelActiveRequest();
-      reconcileDynamicBlocks(
-        candidateElements(
-          articleContainer,
-          currentState.targetLanguage,
-          scopeExcludedElements,
-        ),
+      const discovery = candidateElements(
         articleContainer,
+        currentState.targetLanguage,
+        scopeExcludedElements,
+      );
+      reconcileDynamicBlocks(
+        discovery.blocks,
+        articleContainer,
+        discovery.truncated,
       );
     }
     finishScopePreview(!shouldStart);
@@ -2313,7 +2377,7 @@ export function createBilingualPageTranslator(
         ? 'scope'
         : currentState.phase === 'error'
           ? 'error'
-          : currentState.failed
+          : currentState.failed || (currentState.phase === 'complete' && currentState.contentTruncated)
             ? 'warning'
             : currentState.phase;
       bar.style.setProperty('--pi-bilingual-progress', `${Math.min(100, progressPercent)}%`);
@@ -2322,7 +2386,10 @@ export function createBilingualPageTranslator(
         'aria-valuetext',
         scopePreviewActive
           ? `已选择 ${scopeSelectedCount()}/${scopePreviewBlocks.length} 段`
-          : `已翻译 ${currentState.translated}/${currentState.total} 段`,
+          : `已翻译 ${currentState.translated} 段，待处理 ${Math.max(
+            0,
+            currentState.total - currentState.translated - currentState.failed,
+          )} 段，共发现 ${currentState.total} 段${currentState.contentTruncated ? '，页面仍有后续正文' : ''}`,
       );
     }
     if (scopePreviewActive) {
@@ -2382,7 +2449,9 @@ export function createBilingualPageTranslator(
     if (scope) {
       scope.hidden = currentState.total === 0;
       scope.disabled = currentState.pauseReason === 'interactive';
-      scope.textContent = currentState.total ? `范围 ${currentState.total}` : '范围';
+      scope.textContent = currentState.total
+        ? `范围 ${currentState.total}${currentState.contentTruncated ? '+' : ''}`
+        : '范围';
       scope.title = '查看并调整当前正文范围';
     }
     if (retention) {
@@ -2413,14 +2482,19 @@ export function createBilingualPageTranslator(
         : currentState.phase === 'complete'
           ? currentState.failed
             ? `双语正文 ${currentState.translated}/${currentState.total} · ${currentState.failed} 段待重试`
-            : `双语正文已完成 ${currentState.translated}/${currentState.total}`
+            : currentState.contentTruncated
+              ? `已完成已识别的 ${currentState.translated} 段 · 页面仍有后续正文`
+              : `双语正文已完成 ${currentState.translated}/${currentState.total}`
           : currentState.phase === 'paused'
             ? currentState.pauseReason === 'interactive'
               ? `正在处理划词，正文稍后继续 · ${currentState.translated}/${currentState.total}`
-              : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
+              : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
-              ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
-              : `双语正文 ${currentState.translated}/${currentState.total}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 全文翻译中`);
+              ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
+              : `双语正文已翻译 ${currentState.translated} · 待处理 ${Math.max(
+                0,
+                currentState.total - currentState.translated - currentState.failed,
+              )} · 共发现 ${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 全文翻译中`);
     }
     if (display) {
       display.value = bilingualPageDisplayMode(currentState);
@@ -2512,6 +2586,7 @@ export function createBilingualPageTranslator(
   const reconcileDynamicBlocks = (
     candidates: BilingualBlock[],
     nextRoot: HTMLElement,
+    contentTruncated: boolean,
   ): void => {
     if (!candidates.length) {
       emptyCandidateScans += 1;
@@ -2525,6 +2600,8 @@ export function createBilingualPageTranslator(
       return;
     }
 
+    const truncationChanged = Boolean(currentState.contentTruncated) !== contentTruncated;
+    currentState = { ...currentState, contentTruncated };
     const previousBlocks = blocks;
     const previousByElement = new Map(
       previousBlocks.map((block) => [block.element, block] as const),
@@ -2620,12 +2697,13 @@ export function createBilingualPageTranslator(
       observeArticleMutations();
     }
     if (structureChanged) observeBlocks();
-    if (!newWork && !structureChanged) return;
+    if (!newWork && !structureChanged && !truncationChanged) return;
 
     if (newWork && currentState.phase === 'complete') {
       currentState = { ...currentState, phase: 'running' };
       delete currentState.message;
       delete currentState.pauseReason;
+      if (!controlCollapseUserSet) controlCollapsed = false;
     }
     if (currentState.phase === 'running') {
       for (const block of blocks) {
@@ -2650,7 +2728,7 @@ export function createBilingualPageTranslator(
     const selection = articleContainer?.isConnected
       ? {
           root: articleContainer,
-          blocks: candidateElements(articleContainer, targetLanguage),
+          ...candidateElements(articleContainer, targetLanguage),
         }
       : articleRoot(targetLanguage);
     assignSessionSignatures(selection.blocks);
@@ -2667,6 +2745,7 @@ export function createBilingualPageTranslator(
     reconcileDynamicBlocks(
       selection.blocks.filter((block) => !scopeExcludedElements.has(block.element)),
       selection.root,
+      selection.truncated,
     );
   };
 
@@ -2678,7 +2757,9 @@ export function createBilingualPageTranslator(
   const settleCompletedState = (): boolean => {
     syncCounts();
     if (currentState.translated + currentState.failed < currentState.total) return false;
-    delete currentState.message;
+    if (currentState.contentTruncated) {
+      currentState.message = `已完成已识别的 ${currentState.total} 段；页面仍有后续正文超出安全上限。`;
+    } else delete currentState.message;
     delete currentState.pauseReason;
     resumeAfterInteractive = false;
     if (!controlCollapseUserSet) controlCollapsed = true;
@@ -3221,7 +3302,21 @@ export function createBilingualPageTranslator(
       await discardRetainedSession();
       clear(false);
     }
-    const selection = articleRoot(targetLanguage);
+    const discoveryRevision = ++taskRevision;
+    const quickSelection = articleRoot(
+      targetLanguage,
+      undefined,
+      BILINGUAL_DISCOVERY_PREVIEW_LIMIT,
+    );
+    const discovery = await candidateElementsProgressively(
+      quickSelection.root,
+      targetLanguage,
+    );
+    if (disposed || discoveryRevision !== taskRevision) return snapshot();
+    const selection: BilingualArticleSelection = {
+      root: quickSelection.root,
+      ...discovery,
+    };
     assignSessionSignatures(selection.blocks);
     const descriptor = sessionDescriptor(targetLanguage);
     let [stored, retained] = await Promise.all([
@@ -3273,6 +3368,7 @@ export function createBilingualPageTranslator(
       total: blocks.length,
       translated: 0,
       failed: 0,
+      contentTruncated: selection.truncated,
       displayMode: presentation?.displayMode ?? 'bilingual',
       translationsHidden: presentation?.displayMode === 'source',
       targetLanguage,

@@ -13,6 +13,7 @@ export interface DocumentTranslationExport {
   totalBlockCount: number;
   missingBlockCount: number;
   unavailablePageCount: number;
+  contentTruncated: boolean;
   pageCount: number;
   complete: boolean;
 }
@@ -32,6 +33,7 @@ export interface DocumentTranslationDownload {
 
 export interface DocumentTranslationExportOptions {
   unavailablePageCount?: number;
+  contentTruncated?: boolean;
 }
 
 function cleanExportText(value: string): string {
@@ -55,17 +57,28 @@ function partialResultDescription(
   completed: number,
   total: number,
   unavailablePages: number,
+  contentTruncated: boolean,
 ): string {
   const pageNote = unavailablePages ? `，另有 ${unavailablePages} 页尚未识别` : '';
-  return `已完成 ${completed}/${total} 段${pageNote}；未完成内容未包含在此文件中`;
+  const webNote = contentTruncated ? '，页面仍有后续正文超出安全上限' : '';
+  const blockProgress = contentTruncated && completed === total
+    ? `已完成已识别的 ${completed} 段`
+    : `已完成 ${completed}/${total} 段`;
+  return `${blockProgress}${pageNote}${webNote}；未完成内容未包含在此文件中`;
 }
 
 function partialMarkdownNotice(
   completed: number,
   total: number,
   unavailablePages: number,
+  contentTruncated: boolean,
 ): string {
-  return `> Pi Translator 部分结果：${partialResultDescription(completed, total, unavailablePages)}。`;
+  return `> Pi Translator 部分结果：${partialResultDescription(
+    completed,
+    total,
+    unavailablePages,
+    contentTruncated,
+  )}。`;
 }
 
 function buildPrintableHtml(
@@ -73,8 +86,9 @@ function buildPrintableHtml(
   completed: number,
   total: number,
   unavailablePages: number,
+  contentTruncated: boolean,
 ): string {
-  const complete = total > 0 && completed === total && unavailablePages === 0;
+  const complete = total > 0 && completed === total && unavailablePages === 0 && !contentTruncated;
   const content: string[] = [];
   let previousPage: number | undefined;
   for (const block of blocks) {
@@ -86,7 +100,12 @@ function buildPrintableHtml(
   }
   const status = complete
     ? `完整结果 · ${completed} 段`
-    : `部分结果 · ${partialResultDescription(completed, total, unavailablePages)}`;
+    : `部分结果 · ${partialResultDescription(
+      completed,
+      total,
+      unavailablePages,
+      contentTruncated,
+    )}`;
   return `<!doctype html>
 <html lang="zh-CN">
 <head>
@@ -139,7 +158,11 @@ export function buildDocumentTranslationExport(
   const unavailablePageCount = Number.isSafeInteger(options.unavailablePageCount)
     ? Math.max(0, options.unavailablePageCount ?? 0)
     : 0;
-  const complete = totalBlockCount > 0 && missingBlockCount === 0 && unavailablePageCount === 0;
+  const contentTruncated = options.contentTruncated === true;
+  const complete = totalBlockCount > 0 &&
+    missingBlockCount === 0 &&
+    unavailablePageCount === 0 &&
+    !contentTruncated;
   const pages = new Set(completed.flatMap((block) => (
     block.pageNumber === undefined ? [] : [block.pageNumber]
   )));
@@ -160,6 +183,7 @@ export function buildDocumentTranslationExport(
       completed.length,
       totalBlockCount,
       unavailablePageCount,
+      contentTruncated,
     );
     translationParts.unshift(notice);
     bilingualParts.unshift(notice);
@@ -173,11 +197,13 @@ export function buildDocumentTranslationExport(
       completed.length,
       totalBlockCount,
       unavailablePageCount,
+      contentTruncated,
     ),
     blockCount: completed.length,
     totalBlockCount,
     missingBlockCount,
     unavailablePageCount,
+    contentTruncated,
     pageCount: pages.size,
     complete,
   };

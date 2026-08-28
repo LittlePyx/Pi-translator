@@ -135,6 +135,40 @@ describe('bilingual webpage session repository', () => {
     ]);
   });
 
+  it('restores more than the former 240-paragraph limit on long webpages', async () => {
+    const behavior = bilingualPageSessionBehaviorKey('long-webpage');
+    const longSignatures = Array.from({ length: 520 }, (_, index) => (
+      bilingualPageSessionBlockSignature(
+        'p',
+        `Long webpage paragraph ${String(index + 1).padStart(4, '0')}.`,
+        0,
+      )
+    ));
+    const longBlocks = longSignatures.map((signature, index) => ({
+      signature,
+      translatedText: `长网页译文 ${index + 1}。`,
+      hidden: false,
+    }));
+    await saveBilingualPageSession(7, {
+      descriptor: descriptor(),
+      documentSignatures: longSignatures,
+      excludedSignatures: [],
+      displayMode: 'bilingual',
+      translationsHidden: false,
+      controlCollapsed: true,
+      activity: 'active',
+      blocks: longBlocks,
+      replaceBlocks: true,
+    }, behavior);
+
+    const restored = await getBilingualPageSession(7, descriptor(), behavior);
+    expect(restored?.documentSignatures).toHaveLength(520);
+    expect(restored?.blocks).toHaveLength(520);
+    expect(restored?.blocks).toEqual(expect.arrayContaining([
+      expect.objectContaining({ translatedText: '长网页译文 520。' }),
+    ]));
+  });
+
   it('retains translation-only reading mode without treating translations as hidden', async () => {
     const behavior = bilingualPageSessionBehaviorKey('translation-layout');
     await saveBilingualPageSession(7, {

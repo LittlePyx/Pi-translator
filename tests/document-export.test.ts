@@ -25,6 +25,7 @@ describe('document translation export', () => {
       totalBlockCount: 4,
       missingBlockCount: 2,
       unavailablePageCount: 0,
+      contentTruncated: false,
       pageCount: 0,
       complete: false,
     });
@@ -63,6 +64,7 @@ describe('document translation export', () => {
       totalBlockCount: 3,
       missingBlockCount: 0,
       unavailablePageCount: 0,
+      contentTruncated: false,
       pageCount: 2,
       complete: true,
     });
@@ -81,6 +83,7 @@ describe('document translation export', () => {
       totalBlockCount: 1,
       missingBlockCount: 1,
       unavailablePageCount: 0,
+      contentTruncated: false,
       pageCount: 0,
       complete: false,
     });
@@ -101,6 +104,23 @@ describe('document translation export', () => {
     });
     expect(result.translationMarkdown).toContain('另有 2 页尚未识别');
     expect(result.printableHtml).toContain('另有 2 页尚未识别');
+  });
+
+  it('does not call a safety-limited webpage export complete', () => {
+    const result = buildDocumentTranslationExport([{
+      sourceText: 'Recognized paragraph.',
+      translatedText: '已识别段落。',
+    }], { contentTruncated: true });
+
+    expect(result).toMatchObject({
+      blockCount: 1,
+      totalBlockCount: 1,
+      contentTruncated: true,
+      complete: false,
+    });
+    expect(result.translationMarkdown).toContain('已完成已识别的 1 段');
+    expect(result.translationMarkdown).toContain('页面仍有后续正文超出安全上限');
+    expect(result.printableHtml).toContain('页面仍有后续正文超出安全上限');
   });
 
   it('builds anonymous downloads and escapes untrusted document content in HTML', () => {

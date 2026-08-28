@@ -20,6 +20,8 @@ const OVERLEAF_FIXTURE_URL =
   'https://www.overleaf.com/project/pi-translator-e2e';
 const ARTICLE_FIXTURE_URL =
   'https://www.overleaf.com/pi-translator-bilingual-article-e2e';
+const LONG_ARTICLE_FIXTURE_URL =
+  'https://www.overleaf.com/pi-translator-long-bilingual-article-e2e';
 const MEDIAWIKI_MATH_FIXTURE_URL =
   'https://www.overleaf.com/pi-translator-mediawiki-math-e2e';
 
@@ -698,7 +700,8 @@ test.beforeAll(async () => {
       (
         requestedText.includes('A practical guide to reliable bilingual reading') ||
         requestedText.includes('Bilingual reading should preserve the original article') ||
-        requestedText.includes('A held dynamically loaded paragraph')
+        requestedText.includes('A held dynamically loaded paragraph') ||
+        requestedText.includes('Overflow article paragraph')
       )
     ) {
       holdNextBilingualRequest = false;
@@ -999,6 +1002,24 @@ test.beforeAll(async () => {
                   ? '<p id="article-new">A newly published paragraph should be translated after the reader refreshes the same article.</p>'
                   : ''}
               </article>
+            </main>
+          </body>
+        </html>`,
+    });
+  });
+  await page.route(LONG_ARTICLE_FIXTURE_URL, async (route) => {
+    const paragraphs = Array.from({ length: 520 }, (_, index) => {
+      const number = String(index + 1).padStart(4, '0');
+      return `<p id="long-paragraph-${number}">Long article paragraph ${number} contains enough natural-language prose to verify complete translation beyond the former limit.</p>`;
+    }).join('');
+    await route.fulfill({
+      contentType: 'text/html; charset=utf-8',
+      body: `<!doctype html>
+        <html>
+          <head><title>Pi Translator Long Bilingual Article</title></head>
+          <body style="margin:0;font:17px/1.6 Georgia,serif;color:#1f2937;background:#fff">
+            <main style="max-width:760px;margin:0 auto;padding:40px 28px 100px">
+              <article>${paragraphs}</article>
             </main>
           </body>
         </html>`,
@@ -2443,6 +2464,142 @@ test('completes bilingual article translation without scrolling and keeps contro
     await sidePanel.close().catch(() => undefined);
     await popup.close().catch(() => undefined);
     await page.goto(OVERLEAF_FIXTURE_URL);
+  }
+});
+
+test('translates a 520-paragraph webpage and exposes a later safety limit without false completion', async () => {
+  test.setTimeout(90_000);
+  const popup = await context.newPage();
+  let bridge: Page | undefined;
+  let originalTargetLanguage = 'zh-CN';
+  try {
+    await page.goto(LONG_ARTICLE_FIXTURE_URL);
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    await popup.reload();
+    originalTargetLanguage = await popup.locator('#target-language').inputValue();
+    if (originalTargetLanguage !== 'zh-CN') {
+      await popup.locator('#target-language').selectOption('zh-CN');
+      await expect(popup.locator('#status')).toContainText('目标语言已更新');
+    }
+    const tabId = await popup.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { tabs: { query(query: object): Promise<Array<{ id?: number }>> } };
+      }).chrome;
+      return (await api.tabs.query({ active: true, currentWindow: true }))[0]?.id;
+    });
+    expect(tabId).toBeDefined();
+    await popup.evaluate(() => {
+      document.querySelector<HTMLButtonElement>('#translate-page')?.click();
+    });
+
+    const pageControl = page.locator('#pi-translator-bilingual-page-control');
+    await expect(pageControl).toBeVisible();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(520, {
+      timeout: 90_000,
+    });
+    await expect(pageControl.locator('output')).toContainText('已完成 520/520');
+    await expect(page.locator(
+      '#long-paragraph-0520 + [data-pi-bilingual-translation]',
+    )).toBeVisible();
+
+    bridge = await context.newPage();
+    await bridge.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    const completeExport = await bridge.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'GET_BILINGUAL_PAGE_EXPORT',
+        payload: { tabId: id },
+      });
+    }, tabId!) as {
+      ok: true;
+      data: { export: {
+        blockCount: number;
+        totalBlockCount: number;
+        contentTruncated: boolean;
+        complete: boolean;
+      } };
+    };
+    expect(completeExport.data.export).toMatchObject({
+      blockCount: 520,
+      totalBlockCount: 520,
+      contentTruncated: false,
+      complete: true,
+    });
+
+    const overflowRequestStarted = new Promise<void>((resolve) => {
+      bilingualRequestStarted = resolve;
+    });
+    heldBilingualRequestGate = new Promise<void>((resolve) => {
+      releaseHeldBilingualRequest = resolve;
+    });
+    holdNextBilingualRequest = true;
+    await page.locator('article').evaluate((article) => {
+      const fragment = document.createDocumentFragment();
+      for (let index = 1; index <= 685; index += 1) {
+        const paragraph = document.createElement('p');
+        paragraph.textContent = `Overflow article paragraph ${String(index).padStart(4, '0')} contains enough prose to verify that the safety limit is visible.`;
+        fragment.append(paragraph);
+      }
+      article.append(fragment);
+    });
+    await overflowRequestStarted;
+    await expect(pageControl.locator('button[data-action="scope"]')).toHaveText('范围 1200+');
+    await expect(pageControl.locator('output')).toContainText('页面仍有后续正文');
+
+    const partialExport = await bridge.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'GET_BILINGUAL_PAGE_EXPORT',
+        payload: { tabId: id },
+      });
+    }, tabId!) as {
+      ok: true;
+      data: { export: {
+        blockCount: number;
+        totalBlockCount: number;
+        contentTruncated: boolean;
+        complete: boolean;
+        translationMarkdown: string;
+      } };
+    };
+    expect(partialExport.data.export).toMatchObject({
+      blockCount: 520,
+      totalBlockCount: 1_200,
+      contentTruncated: true,
+      complete: false,
+    });
+    expect(partialExport.data.export.translationMarkdown)
+      .toContain('页面仍有后续正文超出安全上限');
+
+    await pageControl.locator('details.more > summary').click();
+    await pageControl.locator('button[data-action="stop"]').click();
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
+    releaseHeldBilingualRequest = undefined;
+    await expect(pageControl.locator('output')).toContainText('已停止');
+    await pageControl.locator('details.more > summary').click();
+    await pageControl.locator('button[data-action="clear"]').click();
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0, {
+      timeout: 30_000,
+    });
+  } finally {
+    (releaseHeldBilingualRequest as (() => void) | undefined)?.();
+    releaseHeldBilingualRequest = undefined;
+    holdNextBilingualRequest = false;
+    if (originalTargetLanguage !== 'zh-CN') {
+      const settingsPage = popup.isClosed() ? await context.newPage() : popup;
+      if (popup.isClosed()) await settingsPage.goto(`chrome-extension://${extensionId}/popup.html`);
+      await settingsPage.locator('#target-language').selectOption(originalTargetLanguage)
+        .catch(() => undefined);
+      if (settingsPage !== popup) await settingsPage.close().catch(() => undefined);
+    }
+    await bridge?.close().catch(() => undefined);
+    await popup.close().catch(() => undefined);
+    await page.goto(OVERLEAF_FIXTURE_URL).catch(() => undefined);
   }
 });
 

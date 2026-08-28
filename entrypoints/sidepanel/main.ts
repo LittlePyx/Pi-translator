@@ -737,9 +737,10 @@ function syncBilingualPageControl(): void {
   const progressPercent = state.total
     ? Math.min(100, Math.round((state.translated / state.total) * 100))
     : 0;
+  const pendingCount = Math.max(0, state.total - state.translated - state.failed);
   bilingualPageControl.dataset.phase = state.phase === 'error'
     ? 'error'
-    : state.failed
+    : state.failed || (state.phase === 'complete' && state.contentTruncated)
       ? 'warning'
       : state.phase;
   bilingualPageControl.style.setProperty('--bilingual-progress', `${progressPercent}%`);
@@ -747,7 +748,9 @@ function syncBilingualPageControl(): void {
   bilingualPageProgress.setAttribute('aria-valuenow', String(progressPercent));
   bilingualPageProgress.setAttribute(
     'aria-valuetext',
-    state.total ? `已翻译 ${state.translated}/${state.total} 段` : '尚未开始',
+    state.total
+      ? `已翻译 ${state.translated} 段，待处理 ${pendingCount} 段，共发现 ${state.total} 段${state.contentTruncated ? '，页面仍有后续正文' : ''}`
+      : '尚未开始',
   );
   if (
     state.phase === 'idle' ||
@@ -768,17 +771,19 @@ function syncBilingualPageControl(): void {
     ? `${state.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${state.restored} 段 · `
     : '';
   bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'running'
-    ? `已翻译 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
+    ? `已翻译 ${state.translated} · 待处理 ${pendingCount} · 共发现 ${state.total}${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
     : state.phase === 'paused'
       ? state.pauseReason === 'interactive'
         ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
-        : `已暂停 · ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+        : `已暂停 · ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
       : state.phase === 'stopped'
-        ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+        ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
         : state.phase === 'complete'
           ? state.failed
             ? `已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
-            : `已完成 ${state.translated}/${state.total} 段`
+            : state.contentTruncated
+              ? `已完成已识别的 ${state.translated} 段 · 页面仍有后续正文`
+              : `已完成 ${state.translated}/${state.total} 段`
           : state.phase === 'error'
             ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
             : '在原段落下方渐进显示译文');
@@ -858,7 +863,9 @@ async function handleBilingualPageExport(action: BilingualPageExportAction): Pro
     const result = response.data.export;
     const partialLabel = result.complete
       ? ''
-      : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+      : result.contentTruncated
+        ? ` · 部分结果 · 页面仍有后续正文`
+        : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
     let message: string;
     if (action === 'copy-translation' || action === 'copy-bilingual') {
       const text = action === 'copy-translation'
