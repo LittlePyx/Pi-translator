@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  BILINGUAL_PAGE_CONFIRMATION_THRESHOLD,
   bilingualPageDisplayMode,
+  bilingualPageNeedsStartConfirmation,
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
@@ -12,6 +14,11 @@ import {
 } from '../core/translation/bilingual-page';
 
 describe('bilingual webpage reading', () => {
+  it('only asks for confirmation when the selected page is genuinely long', () => {
+    expect(bilingualPageNeedsStartConfirmation(BILINGUAL_PAGE_CONFIRMATION_THRESHOLD)).toBe(false);
+    expect(bilingualPageNeedsStartConfirmation(BILINGUAL_PAGE_CONFIRMATION_THRESHOLD + 1)).toBe(true);
+  });
+
   it('keeps readable prose while rejecting tiny labels and link-heavy navigation', () => {
     expect(normalizeBilingualPageText('  A readable\n article   paragraph. '))
       .toBe('A readable article paragraph.');
@@ -66,6 +73,25 @@ describe('bilingual webpage reading', () => {
       translationsHidden: false,
       targetLanguage: 'zh-CN',
     })).toBe(true);
+    expect(isBilingualPageState({
+      phase: 'preview',
+      total: 520,
+      translated: 0,
+      failed: 0,
+      estimatedBatchCount: 87,
+      contentTruncated: false,
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    })).toBe(true);
+    expect(isBilingualPageState({
+      phase: 'preview',
+      total: 520,
+      translated: 0,
+      failed: 0,
+      estimatedBatchCount: -1,
+      translationsHidden: false,
+      targetLanguage: 'zh-CN',
+    })).toBe(false);
     expect(isBilingualPageState({
       phase: 'complete',
       total: 1_200,

@@ -7,6 +7,7 @@ import type { TranslationErrorCode } from '../messaging/errors';
 
 export type BilingualPagePhase =
   | 'idle'
+  | 'preview'
   | 'running'
   | 'paused'
   | 'stopped'
@@ -14,6 +15,8 @@ export type BilingualPagePhase =
   | 'error';
 
 export type BilingualPageAction =
+  | 'confirm-start'
+  | 'adjust-scope'
   | 'pause'
   | 'resume'
   | 'stop'
@@ -32,6 +35,8 @@ export interface BilingualPageState {
   total: number;
   translated: number;
   failed: number;
+  /** Approximate provider-sized batch requests needed for the currently selected blocks. */
+  estimatedBatchCount?: number;
   /** The page contains more eligible content blocks than the explicit safety limit. */
   contentTruncated?: boolean;
   /** Completed paragraphs restored from the current browser session or explicit local retention. */
@@ -57,6 +62,13 @@ export const EMPTY_BILINGUAL_PAGE_STATE: BilingualPageState = {
   displayMode: 'bilingual',
   translationsHidden: false,
 };
+
+/** Long pages require explicit confirmation before the first provider request. */
+export const BILINGUAL_PAGE_CONFIRMATION_THRESHOLD = 100;
+
+export function bilingualPageNeedsStartConfirmation(blockCount: number): boolean {
+  return Number.isSafeInteger(blockCount) && blockCount > BILINGUAL_PAGE_CONFIRMATION_THRESHOLD;
+}
 
 export function bilingualPageDisplayMode(
   state: Pick<BilingualPageState, 'displayMode' | 'translationsHidden'>,
@@ -209,12 +221,13 @@ export function isBilingualPageState(value: unknown): value is BilingualPageStat
   const state = value as Record<string, unknown>;
   const validCount = (count: unknown) => Number.isSafeInteger(count) && (count as number) >= 0;
   return (
-    ['idle', 'running', 'paused', 'stopped', 'complete', 'error'].includes(
+    ['idle', 'preview', 'running', 'paused', 'stopped', 'complete', 'error'].includes(
       typeof state.phase === 'string' ? state.phase : '',
     ) &&
     validCount(state.total) &&
     validCount(state.translated) &&
     validCount(state.failed) &&
+    (state.estimatedBatchCount === undefined || validCount(state.estimatedBatchCount)) &&
     (state.contentTruncated === undefined || typeof state.contentTruncated === 'boolean') &&
     (state.restored === undefined || validCount(state.restored)) &&
     (state.restoredFrom === undefined || ['session', 'local'].includes(

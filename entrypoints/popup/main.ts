@@ -440,6 +440,7 @@ function bilingualPageAvailable(): boolean {
 }
 
 function bilingualPageAction(): 'start' | BilingualPageAction {
+  if (bilingualPageState.phase === 'preview') return 'confirm-start';
   if (bilingualPageState.phase === 'running') return 'pause';
   if (
     bilingualPageState.phase === 'paused' ||
@@ -474,19 +475,21 @@ function renderBilingualPageAction(): void {
   translatePage.dataset.phase = bilingualPageState.phase;
   translatePage.textContent = bilingualPageState.phase === 'running'
     ? `暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-    : bilingualPageState.phase === 'paused'
-      ? bilingualPageState.pauseReason === 'interactive'
-        ? '划词翻译中 · 正文稍后继续'
-        : `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-      : bilingualPageState.phase === 'stopped'
-        ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-        : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
-          ? `重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-          : bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0
-            ? `重试 ${bilingualPageState.failed} 段 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-            : bilingualPageState.phase === 'complete'
-              ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-              : '翻译网页正文';
+    : bilingualPageState.phase === 'preview'
+      ? `确认翻译 ${bilingualPageState.total} 段`
+      : bilingualPageState.phase === 'paused'
+        ? bilingualPageState.pauseReason === 'interactive'
+          ? '划词翻译中 · 正文稍后继续'
+          : `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+        : bilingualPageState.phase === 'stopped'
+          ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+          : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
+            ? `重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+            : bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0
+              ? `重试 ${bilingualPageState.failed} 段 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+              : bilingualPageState.phase === 'complete'
+                ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+                : '翻译网页正文';
   const restoredHint = bilingualPageState.restored
     ? bilingualPageState.restoredFrom === 'local'
       ? `已从本机恢复 ${bilingualPageState.restored} 段译文。`

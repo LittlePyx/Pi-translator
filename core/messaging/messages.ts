@@ -680,7 +680,9 @@ function validTabId(value: unknown): value is number {
 }
 
 function validBilingualPageAction(value: unknown): value is BilingualPageAction {
-  return value === 'pause' ||
+  return value === 'confirm-start' ||
+    value === 'adjust-scope' ||
+    value === 'pause' ||
     value === 'resume' ||
     value === 'stop' ||
     value === 'clear' ||

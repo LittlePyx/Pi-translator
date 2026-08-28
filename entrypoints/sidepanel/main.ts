@@ -110,6 +110,7 @@ const bilingualPageRetentionStatus = element<HTMLElement>('bilingual-page-retent
 const bilingualPageRetentionManage = element<HTMLButtonElement>('bilingual-page-retention-manage');
 const bilingualPageRetentionToggle = element<HTMLInputElement>('bilingual-page-retention-toggle');
 const bilingualPagePrimary = element<HTMLButtonElement>('bilingual-page-primary');
+const bilingualPageScope = element<HTMLButtonElement>('bilingual-page-scope');
 const bilingualPageDisplayControl = element<HTMLElement>('bilingual-page-display-control');
 const bilingualPageDisplay = element<HTMLSelectElement>('bilingual-page-display');
 const bilingualPageCopyMenu = element<HTMLDetailsElement>('bilingual-page-copy-menu');
@@ -744,7 +745,7 @@ function syncBilingualPageControl(): void {
       ? 'warning'
       : state.phase;
   bilingualPageControl.style.setProperty('--bilingual-progress', `${progressPercent}%`);
-  bilingualPageProgress.hidden = state.phase === 'idle';
+  bilingualPageProgress.hidden = state.phase === 'idle' || state.phase === 'preview';
   bilingualPageProgress.setAttribute('aria-valuenow', String(progressPercent));
   bilingualPageProgress.setAttribute(
     'aria-valuetext',
@@ -770,38 +771,44 @@ function syncBilingualPageControl(): void {
   const restoredPrefix = state.restored
     ? `${state.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${state.restored} 段 · `
     : '';
-  bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'running'
-    ? `已翻译 ${state.translated} · 待处理 ${pendingCount} · 共发现 ${state.total}${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
-    : state.phase === 'paused'
-      ? state.pauseReason === 'interactive'
-        ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
-        : `已暂停 · ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
-      : state.phase === 'stopped'
-        ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
-        : state.phase === 'complete'
-          ? state.failed
-            ? `已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
-            : state.contentTruncated
-              ? `已完成已识别的 ${state.translated} 段 · 页面仍有后续正文`
-              : `已完成 ${state.translated}/${state.total} 段`
-          : state.phase === 'error'
-            ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
-            : '在原段落下方渐进显示译文');
+  bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'preview'
+    ? `发现 ${state.total} 段 · 预计约 ${state.estimatedBatchCount ?? 0} 次批量请求 · 确认前不会调用接口`
+    : state.phase === 'running'
+      ? `已翻译 ${state.translated} · 待处理 ${pendingCount} · 共发现 ${state.total}${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
+      : state.phase === 'paused'
+        ? state.pauseReason === 'interactive'
+          ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
+          : `已暂停 · ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+        : state.phase === 'stopped'
+          ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+          : state.phase === 'complete'
+            ? state.failed
+              ? `已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
+              : state.contentTruncated
+                ? `已完成已识别的 ${state.translated} 段 · 页面仍有后续正文`
+                : `已完成 ${state.translated}/${state.total} 段`
+            : state.phase === 'error'
+              ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
+              : '在原段落下方渐进显示译文');
   bilingualPagePrimary.textContent = bilingualPagePending
     ? '稍候…'
     : state.pauseReason === 'interactive'
       ? '稍后继续'
-      : state.phase === 'running'
-        ? '暂停'
-        : state.phase === 'paused' || state.phase === 'stopped'
-          ? '继续'
-          : state.phase === 'error' && state.total > 0
-            ? '重试'
-            : state.phase === 'complete' && state.failed > 0
-              ? `重试 ${state.failed} 段`
-              : '开始';
+      : state.phase === 'preview'
+        ? '翻译全部'
+        : state.phase === 'running'
+          ? '暂停'
+          : state.phase === 'paused' || state.phase === 'stopped'
+            ? '继续'
+            : state.phase === 'error' && state.total > 0
+              ? '重试'
+              : state.phase === 'complete' && state.failed > 0
+                ? `重试 ${state.failed} 段`
+                : '开始';
   bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
   bilingualPagePrimary.disabled = bilingualPagePending || state.pauseReason === 'interactive';
+  bilingualPageScope.hidden = state.phase !== 'preview';
+  bilingualPageScope.disabled = bilingualPagePending;
   bilingualPageDisplay.value = bilingualPageDisplayMode(state);
   bilingualPageDisplayControl.hidden = state.phase === 'idle' || state.translated === 0;
   bilingualPageDisplay.disabled = bilingualPagePending || state.pauseReason === 'interactive';
@@ -813,7 +820,7 @@ function syncBilingualPageControl(): void {
     bilingualPageDownloadBilingual,
     bilingualPageDownloadHtml,
   ]) button.disabled = bilingualPageCopyPending;
-  bilingualPageRetention.hidden = state.phase === 'idle';
+  bilingualPageRetention.hidden = state.phase === 'idle' || state.phase === 'preview';
   bilingualPageRetention.dataset.tone = state.retentionError ? 'error' : 'normal';
   if (!bilingualPagePending) {
     bilingualPageRetentionToggle.checked = state.retainedLocally === true;
@@ -826,6 +833,10 @@ function syncBilingualPageControl(): void {
       : '默认只保留在当前 Edge 会话';
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
+  bilingualPageClear.textContent = state.phase === 'preview' ? '取消' : '清除';
+  bilingualPageClear.title = state.phase === 'preview'
+    ? '取消本次网页全文翻译'
+    : '清除当前网页的全文译文';
 }
 
 function setBilingualPageCopyFeedback(message: string, error = false): void {
@@ -902,6 +913,7 @@ async function handleBilingualPageExport(action: BilingualPageExportAction): Pro
 }
 
 function bilingualPagePrimaryAction(): 'start' | BilingualPageAction {
+  if (bilingualPageState.phase === 'preview') return 'confirm-start';
   if (bilingualPageState.phase === 'running') return 'pause';
   if (
     bilingualPageState.phase === 'paused' ||
@@ -2533,6 +2545,9 @@ continuousTranslationToggle.addEventListener('click', () => {
 });
 bilingualPagePrimary.addEventListener('click', () => {
   void updateBilingualPage(bilingualPagePrimaryAction());
+});
+bilingualPageScope.addEventListener('click', () => {
+  void updateBilingualPage('adjust-scope');
 });
 bilingualPageDisplay.addEventListener('change', () => {
   const mode = bilingualPageDisplay.value as BilingualPageDisplayMode;

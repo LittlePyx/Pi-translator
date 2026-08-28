@@ -380,6 +380,10 @@ main {
   color: #4f46d8;
   background: #f0f0fa;
 }
+.bilingual-page-actions #bilingual-page-scope {
+  color: #626b7b;
+  background: transparent;
+}
 .bilingual-page-actions button:hover:not(:disabled),
 .bilingual-page-footer button:hover:not(:disabled) { color: #4f46e5; background: #f4f4fa; }
 .bilingual-page-actions #bilingual-page-primary:hover:not(:disabled) {

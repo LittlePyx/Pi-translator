@@ -114,6 +114,14 @@ describe('runtime message guard', () => {
     })).toBe(true);
     expect(isRuntimeMessage({
       type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'confirm-start' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
+      payload: { tabId: 7, action: 'adjust-scope' },
+    })).toBe(true);
+    expect(isRuntimeMessage({
+      type: 'CONTROL_BILINGUAL_PAGE',
       payload: { tabId: 7, action: 'toggle-translations' },
     })).toBe(true);
     expect(isRuntimeMessage({

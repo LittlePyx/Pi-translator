@@ -2489,12 +2489,50 @@ test('translates a 520-paragraph webpage and exposes a later safety limit withou
       return (await api.tabs.query({ active: true, currentWindow: true }))[0]?.id;
     });
     expect(tabId).toBeDefined();
+    const requestCountBeforePreview = textRequests.length;
     await popup.evaluate(() => {
       document.querySelector<HTMLButtonElement>('#translate-page')?.click();
     });
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl).toBeVisible();
+    await expect(pageControl.locator('.control-title')).toHaveText('确认全文翻译');
+    await expect(pageControl.locator('output')).toContainText('已识别 520 段');
+    await expect(pageControl.locator('output')).toContainText('预计约 87 次批量请求');
+    await expect(pageControl.locator('.start-confirmation')).toContainText(
+      '确认前不会调用翻译接口',
+    );
+    await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    bridge = await context.newPage();
+    await bridge.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await bridge.reload();
+    await expect(bridge.locator('#bilingual-page-control')).toHaveAttribute(
+      'data-phase',
+      'preview',
+    );
+    await expect(bridge.locator('#bilingual-page-status')).toContainText('发现 520 段');
+    await expect(bridge.locator('#bilingual-page-status')).toContainText('预计约 87 次批量请求');
+    await expect(bridge.locator('#bilingual-page-primary')).toHaveText('翻译全部');
+    await expect(bridge.locator('#bilingual-page-scope')).toBeVisible();
+    await expect(bridge.locator('#bilingual-page-progress')).toBeHidden();
+    await expect(bridge.locator('#bilingual-page-retention')).toBeHidden();
+    await expect(bridge.locator('#bilingual-page-clear')).toHaveText('取消');
+
+    await bridge.locator('#bilingual-page-scope').click();
+    await expect(page.locator('[data-pi-bilingual-scope-preview]')).toHaveCount(520);
+    await expect(pageControl.locator('.control-title')).toHaveText('选择翻译范围');
+    await expect(pageControl.locator('output')).toContainText('预计约 87 次批量请求');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+    await pageControl.locator('button[data-action="cancel-scope"]').click();
+    await expect(page.locator('[data-pi-bilingual-scope-preview]')).toHaveCount(0);
+    await expect(pageControl.locator('.control-title')).toHaveText('确认全文翻译');
+    await expect(bridge.locator('#bilingual-page-primary')).toHaveText('翻译全部');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await bridge.locator('#bilingual-page-primary').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(520, {
       timeout: 90_000,
     });
@@ -2503,8 +2541,6 @@ test('translates a 520-paragraph webpage and exposes a later safety limit withou
       '#long-paragraph-0520 + [data-pi-bilingual-translation]',
     )).toBeVisible();
 
-    bridge = await context.newPage();
-    await bridge.goto(`chrome-extension://${extensionId}/sidepanel.html`);
     const completeExport = await bridge.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {
         chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };

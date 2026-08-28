@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  estimateDocumentTranslationBatchCount,
   takeDocumentTranslationBatch,
   validTranslationBatchItems,
 } from '../core/translation/document-batch';
@@ -23,6 +24,18 @@ describe('document translation batching', () => {
       { value: 'retry', text: 'retry', urgent: true },
       { value: 'background', text: 'background' },
     ]).map((item) => item.value)).toEqual(['retry']);
+  });
+
+  it('estimates provider-sized calls without splitting semantic blocks', () => {
+    expect(estimateDocumentTranslationBatchCount([])).toBe(0);
+    expect(estimateDocumentTranslationBatchCount(Array.from({ length: 7 }, () => 'short block')))
+      .toBe(2);
+    expect(estimateDocumentTranslationBatchCount([
+      'a'.repeat(1_900),
+      'b'.repeat(1_900),
+      'c'.repeat(1_900),
+      'd'.repeat(50),
+    ])).toBe(2);
   });
 
   it('rejects duplicate ids, unknown fields, empty text, and oversized batches', () => {

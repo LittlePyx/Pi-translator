@@ -45,6 +45,21 @@ export function takeDocumentTranslationBatch<T>(
   return batch;
 }
 
+/** Estimates normal provider calls using the same item and text limits as live batching. */
+export function estimateDocumentTranslationBatchCount(texts: readonly string[]): number {
+  let remaining = texts
+    .map((text, index) => ({ value: index, text }))
+    .filter((candidate) => candidate.text.trim());
+  let count = 0;
+  while (remaining.length) {
+    const batch = takeDocumentTranslationBatch(remaining);
+    if (!batch.length) break;
+    remaining = remaining.slice(batch.length);
+    count += 1;
+  }
+  return count;
+}
+
 export function validTranslationBatchItems(
   value: unknown,
 ): value is TranslationBatchItem[] {

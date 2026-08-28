@@ -21,7 +21,10 @@ import type {
   TranslationContentMode,
   TranslationStyle,
 } from '../translation/types';
-import { takeDocumentTranslationBatch } from '../translation/document-batch';
+import {
+  estimateDocumentTranslationBatchCount,
+  takeDocumentTranslationBatch,
+} from '../translation/document-batch';
 import {
   buildDocumentTranslationExport,
   documentTranslationDownload,
@@ -32,6 +35,7 @@ import {
 import {
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageDisplayMode,
+  bilingualPageNeedsStartConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
@@ -1750,7 +1754,7 @@ export function createBilingualPageTranslator(
         block.sessionSignature
       ) sessionExcludedSignatures.add(block.sessionSignature);
     }
-    const shouldStart = currentState.phase === 'idle';
+    const shouldStart = currentState.phase === 'idle' || currentState.phase === 'preview';
     if (!shouldStart && articleContainer?.isConnected && currentState.targetLanguage) {
       const activeBlock = blocks.find((block) => block.status === 'translating');
       if (activeBlock && scopeExcludedElements.has(activeBlock.element)) cancelActiveRequest();
@@ -1767,7 +1771,15 @@ export function createBilingualPageTranslator(
     }
     finishScopePreview(!shouldStart);
     scheduleSessionStatePersistence();
-    if (shouldStart) void start(options.preferredTargetLanguage());
+    if (shouldStart) {
+      const targetLanguage = isSupportedTargetLanguage(currentState.targetLanguage)
+        ? currentState.targetLanguage
+        : options.preferredTargetLanguage();
+      currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+      articleContainer = undefined;
+      sourcePageIdentity = '';
+      void begin(targetLanguage, false, true);
+    }
   };
 
   const clear = (notify = true): void => {
@@ -2217,7 +2229,13 @@ export function createBilingualPageTranslator(
           .scope-panel[hidden] { display:none; }
           .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 5px 18px rgba(0,0,0,.25)} .mark{filter:brightness(0) invert(1)} .control-title{color:#e5e9f0} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#c7c3ff;background:transparent}select:hover{background:#2a3140}button{color:#b7bfcc;background:transparent}button:hover{color:#c7c3ff;background:#2a3140}button[data-action="pause"]{color:#c7c3ff;background:#30334f}button[data-action="pause"]:hover{color:#dedbff;background:#3a3d5d} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#2a3140}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel{color:#cbd2dd;border-top-color:#3b4352} }
+          .start-confirmation { order:20;display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          .start-confirmation[hidden] { display:none; }
+          .start-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
+          .start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"] { color:#657084;background:transparent; }
+          .start-confirmation button[data-action="confirm-start"] { color:#fff;background:#5650db; }
+          .start-confirmation button[data-action="confirm-start"]:hover { color:#fff;background:#4842c9; }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 5px 18px rgba(0,0,0,.25)} .mark{filter:brightness(0) invert(1)} .control-title{color:#e5e9f0} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#c7c3ff;background:transparent}select:hover{background:#2a3140}button{color:#b7bfcc;background:transparent}button:hover{color:#c7c3ff;background:#2a3140}button[data-action="pause"]{color:#c7c3ff;background:#30334f}button[data-action="pause"]:hover{color:#dedbff;background:#3a3d5d} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"],.start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#2a3140}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel,.start-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
         </style>
         <div class="bar">
@@ -2254,6 +2272,12 @@ export function createBilingualPageTranslator(
             <button type="button" data-action="reset-scope">全部恢复</button>
             <button type="button" data-action="cancel-scope">取消</button>
             <button type="button" data-action="apply-scope">应用范围</button>
+          </div>
+          <div class="start-confirmation" role="alert" hidden>
+            <span></span>
+            <button type="button" data-action="cancel-start">取消</button>
+            <button type="button" data-action="adjust-start">调整范围</button>
+            <button type="button" data-action="confirm-start">翻译全部</button>
           </div>
         </div>`;
       shadow.querySelectorAll<HTMLButtonElement>('button').forEach((button) => {
@@ -2301,6 +2325,12 @@ export function createBilingualPageTranslator(
             finishScopePreview(true);
           } else if (action === 'apply-scope') {
             applyScopePreview();
+          } else if (action === 'cancel-start') {
+            void control('clear');
+          } else if (action === 'adjust-start') {
+            void control('adjust-scope');
+          } else if (action === 'confirm-start') {
+            void control('confirm-start');
           } else if (action === 'cancel-language') {
             pendingLanguageSwitch = undefined;
             renderControl();
@@ -2368,11 +2398,14 @@ export function createBilingualPageTranslator(
     const languageControl = shadow?.querySelector<HTMLElement>('.language');
     const languageConfirmation = shadow?.querySelector<HTMLElement>('.language-confirmation');
     const scopePanel = shadow?.querySelector<HTMLElement>('.scope-panel');
+    const startConfirmation = shadow?.querySelector<HTMLElement>('.start-confirmation');
     if (bar) {
       const progressPercent = scopePreviewActive
         ? Math.round((scopeSelectedCount() / Math.max(1, scopePreviewBlocks.length)) * 100)
         : Math.round((currentState.translated / Math.max(1, currentState.total)) * 100);
-      bar.dataset.collapsed = String(controlCollapsed && !scopePreviewActive);
+      bar.dataset.collapsed = String(
+        controlCollapsed && !scopePreviewActive && currentState.phase !== 'preview',
+      );
       bar.dataset.phase = scopePreviewActive
         ? 'scope'
         : currentState.phase === 'error'
@@ -2395,8 +2428,15 @@ export function createBilingualPageTranslator(
     if (scopePreviewActive) {
       const selected = scopeSelectedCount();
       const translatedRemoval = scopeTranslatedRemovalCount();
+      const estimatedBatchCount = estimateDocumentTranslationBatchCount(
+        scopePreviewBlocks
+          .filter((block) => !scopeDraftExcludedElements.has(block.element))
+          .map((block) => block.text),
+      );
       if (output) {
-        output.textContent = `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
+        output.textContent = currentState.phase === 'preview'
+          ? `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 预计约 ${estimatedBatchCount} 次批量请求`
+          : `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
       }
       if (controlTitle) controlTitle.textContent = '选择翻译范围';
       if (languageControl) languageControl.hidden = true;
@@ -2425,16 +2465,49 @@ export function createBilingualPageTranslator(
         if (reset) reset.disabled = scopeDraftExcludedElements.size === 0;
         if (apply) {
           apply.disabled = selected === 0;
-          apply.textContent = currentState.phase === 'idle'
+          apply.textContent = currentState.phase === 'idle' || currentState.phase === 'preview'
             ? '按此范围翻译'
             : translatedRemoval
               ? `清除 ${translatedRemoval} 段并应用`
               : '应用范围';
         }
       }
+      if (startConfirmation) startConfirmation.hidden = true;
+      return;
+    }
+    if (currentState.phase === 'preview') {
+      if (controlTitle) controlTitle.textContent = '确认全文翻译';
+      if (output) {
+        output.textContent = `已识别 ${currentState.total} 段 · 预计约 ${currentState.estimatedBatchCount ?? 0} 次批量请求`;
+      }
+      if (progress) progress.hidden = true;
+      if (languageControl) languageControl.hidden = false;
+      if (displayControl) displayControl.hidden = true;
+      if (pause) pause.hidden = true;
+      if (stop) stop.hidden = true;
+      if (scope) scope.hidden = true;
+      if (retention) retention.hidden = true;
+      if (clearButton) clearButton.hidden = true;
+      if (copyTranslation) copyTranslation.hidden = true;
+      if (copyBilingual) copyBilingual.hidden = true;
+      downloadButtons.forEach((button) => { button.hidden = true; });
+      if (compact) compact.hidden = true;
+      if (more) more.hidden = true;
+      if (languageConfirmation) languageConfirmation.hidden = true;
+      if (scopePanel) scopePanel.hidden = true;
+      if (startConfirmation) {
+        startConfirmation.hidden = false;
+        const message = startConfirmation.querySelector('span');
+        if (message) message.textContent = '确认前不会调用翻译接口。';
+      }
+      if (language && isSupportedTargetLanguage(currentState.targetLanguage)) {
+        language.value = currentState.targetLanguage;
+        language.disabled = false;
+      }
       return;
     }
     if (controlTitle) controlTitle.textContent = '网页全文翻译';
+    if (progress) progress.hidden = false;
     if (languageControl) languageControl.hidden = false;
     if (displayControl) displayControl.hidden = currentState.translated === 0;
     if (compact) {
@@ -2446,6 +2519,7 @@ export function createBilingualPageTranslator(
     }
     if (more) more.hidden = false;
     if (scopePanel) scopePanel.hidden = true;
+    if (startConfirmation) startConfirmation.hidden = true;
     if (scope) {
       scope.hidden = currentState.total === 0;
       scope.disabled = currentState.pauseReason === 'interactive';
@@ -3283,6 +3357,7 @@ export function createBilingualPageTranslator(
   const begin = async (
     targetLanguage: SupportedTargetLanguage,
     requireStoredSession: boolean,
+    skipLongPageConfirmation = false,
   ): Promise<BilingualPageState | undefined> => {
     if (disposed) return snapshot();
     destroyLauncher();
@@ -3348,6 +3423,38 @@ export function createBilingualPageTranslator(
         .map((block) => block.sessionSignature)
         .filter((signature): signature is string => Boolean(signature)),
     );
+    const selectedBlocks = selection.blocks.filter(
+      (block) => !scopeExcludedElements.has(block.element),
+    );
+    if (
+      !requireStoredSession &&
+      !presentation &&
+      !skipLongPageConfirmation &&
+      bilingualPageNeedsStartConfirmation(selectedBlocks.length)
+    ) {
+      const estimatedBatchCount = estimateDocumentTranslationBatchCount(
+        selectedBlocks.map((block) => block.text),
+      );
+      articleContainer = selection.root;
+      sourcePageIdentity = pageIdentity(options.pageUrl());
+      sessionExcludedSignatures = selectedScopeSignatures;
+      currentState = {
+        phase: 'preview',
+        total: selectedBlocks.length,
+        translated: 0,
+        failed: 0,
+        estimatedBatchCount,
+        contentTruncated: selection.truncated,
+        displayMode: 'bilingual',
+        translationsHidden: false,
+        targetLanguage,
+        message: `已识别 ${selectedBlocks.length} 段，预计约 ${estimatedBatchCount} 次批量请求；确认前不会调用翻译接口。`,
+      };
+      controlCollapsed = false;
+      controlCollapseUserSet = false;
+      publishState();
+      return snapshot();
+    }
     activeSessionDescriptor = descriptor;
     sessionDocumentSignatures = documentSignatures;
     sessionExcludedSignatures = new Set(
@@ -3482,6 +3589,21 @@ export function createBilingualPageTranslator(
     }
     if (action === 'enable-retention' || action === 'disable-retention') {
       return setRetention(action === 'enable-retention');
+    }
+    if (action === 'adjust-scope') {
+      if (currentState.phase === 'preview') beginScopePreview();
+      return snapshot();
+    }
+    if (action === 'confirm-start') {
+      if (
+        currentState.phase !== 'preview' ||
+        !isSupportedTargetLanguage(currentState.targetLanguage)
+      ) return snapshot();
+      const targetLanguage = currentState.targetLanguage;
+      currentState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+      articleContainer = undefined;
+      sourcePageIdentity = '';
+      return await begin(targetLanguage, false, true) ?? snapshot();
     }
     if (action === 'toggle-translations') {
       if (currentState.phase !== 'idle' && currentState.translated > 0) {
