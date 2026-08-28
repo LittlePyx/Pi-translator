@@ -35,7 +35,9 @@ import {
 import {
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageDisplayMode,
+  bilingualPageCurrentChapterRange,
   bilingualPageNeedsStartConfirmation,
+  bilingualPageReadingAnchorIndex,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
   EMPTY_BILINGUAL_PAGE_STATE,
@@ -126,6 +128,7 @@ const EXCLUDED_ANCESTOR_SELECTOR = [
 ].join(',');
 
 type BlockStatus = 'idle' | 'queued' | 'translating' | 'done' | 'error';
+type ScopePreset = 'all' | 'chapter' | 'from-here' | 'custom';
 
 interface BilingualBlock {
   element: HTMLElement;
@@ -946,6 +949,7 @@ export function createBilingualPageTranslator(
   let resumeAfterScopePreview = false;
   let scopePreviewBlocks: BilingualBlock[] = [];
   let scopeDraftExcludedElements = new Set<HTMLElement>();
+  let scopeActivePreset: ScopePreset = 'custom';
   const scopeExcludedElements = new Set<HTMLElement>();
   let activeSessionDescriptor: BilingualPageSessionDescriptor | undefined;
   let sessionDocumentSignatures: string[] = [];
@@ -1645,9 +1649,56 @@ export function createBilingualPageTranslator(
     event.stopImmediatePropagation();
     if (scopeDraftExcludedElements.has(element)) scopeDraftExcludedElements.delete(element);
     else scopeDraftExcludedElements.add(element);
+    scopeActivePreset = 'custom';
     renderScopePreviewBlocks();
     renderControl();
   }
+
+  const applyScopeRange = (
+    startIndex: number,
+    endIndex: number,
+    preset: Exclude<ScopePreset, 'custom'>,
+  ): void => {
+    const safeStart = Math.max(0, Math.min(scopePreviewBlocks.length, startIndex));
+    const safeEnd = Math.max(safeStart, Math.min(scopePreviewBlocks.length, endIndex));
+    scopeDraftExcludedElements = new Set(
+      scopePreviewBlocks.flatMap((block, index) => (
+        index >= safeStart && index < safeEnd ? [] : [block.element]
+      )),
+    );
+    scopeActivePreset = preset;
+    renderScopePreviewBlocks();
+    renderControl();
+  };
+
+  const applyScopePreset = (preset: Exclude<ScopePreset, 'custom'>): void => {
+    if (!scopePreviewActive || !scopePreviewBlocks.length) return;
+    if (preset === 'all') {
+      applyScopeRange(0, scopePreviewBlocks.length, preset);
+      return;
+    }
+    const activeBlocksByElement = new Map(blocks.map((block) => [block.element, block]));
+    const currentIndex = bilingualPageReadingAnchorIndex(
+      scopePreviewBlocks.map((block) => {
+        if (block.element.getClientRects().length) return block.element.getBoundingClientRect();
+        const translation = activeBlocksByElement.get(block.element)?.translation;
+        return translation?.isConnected
+          ? translation.getBoundingClientRect()
+          : block.element.getBoundingClientRect();
+      }),
+      window.innerHeight || document.documentElement.clientHeight,
+    );
+    if (currentIndex === undefined) return;
+    if (preset === 'from-here') {
+      applyScopeRange(currentIndex, scopePreviewBlocks.length, preset);
+      return;
+    }
+    const chapter = bilingualPageCurrentChapterRange(
+      scopePreviewBlocks.map((block) => block.element.tagName),
+      currentIndex,
+    );
+    if (chapter) applyScopeRange(chapter.startIndex, chapter.endIndex, preset);
+  };
 
   function handleScopePreviewKeydown(event: KeyboardEvent): void {
     if (!scopePreviewActive || event.key !== 'Escape') return;
@@ -1702,6 +1753,7 @@ export function createBilingualPageTranslator(
           sessionExcludedSignatures.has(selection.blocks[index]?.sessionSignature ?? '')
         )),
     );
+    scopeActivePreset = scopeDraftExcludedElements.size ? 'custom' : 'all';
     resumeAfterScopePreview = currentState.phase === 'running';
     scopePreviewActive = true;
     if (resumeAfterScopePreview) {
@@ -1727,6 +1779,7 @@ export function createBilingualPageTranslator(
     scopePreviewActive = false;
     scopePreviewBlocks = [];
     scopeDraftExcludedElements = new Set();
+    scopeActivePreset = 'custom';
     const shouldResume = resumePreviousState && resumeAfterScopePreview;
     resumeAfterScopePreview = false;
     if (
@@ -1789,6 +1842,7 @@ export function createBilingualPageTranslator(
       resumeAfterScopePreview = false;
       scopePreviewBlocks = [];
       scopeDraftExcludedElements = new Set();
+      scopeActivePreset = 'custom';
     }
     taskRevision += 1;
     cancelActiveRequest();
@@ -2225,18 +2279,23 @@ export function createBilingualPageTranslator(
           .language-confirmation[hidden] { display:none; }
           .language-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .language-confirmation button[data-action="cancel-language"] { color:#657084;background:transparent; }
-          .scope-panel { order:20;display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
+          .scope-panel { order:20;display:flex;flex:1 0 100%;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:5px 6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
           .scope-panel[hidden] { display:none; }
-          .scope-panel span { min-width:0;flex:1 1 auto;line-height:1.45; }
-          .scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
+          .scope-message { min-width:0;flex:1 0 100%;line-height:1.45; }
+          .scope-presets,.scope-actions { display:flex;align-items:center;gap:3px; }
+          .scope-presets { min-width:0;flex:1 1 auto; }
+          .scope-actions { flex:0 0 auto; }
+          .scope-presets button { min-width:0;padding-inline:6px;color:#657084;background:transparent; }
+          .scope-presets button[aria-pressed="true"] { color:#4f46d8;background:#f0efff; }
+          .scope-panel button[data-action="cancel-scope"] { color:#657084;background:transparent; }
           .start-confirmation { order:20;display:flex;flex:1 0 100%;align-items:center;justify-content:flex-end;gap:6px;border-top:1px solid rgba(99,102,241,.16);padding-top:6px;color:#566176; }
           .start-confirmation[hidden] { display:none; }
           .start-confirmation span { min-width:0;flex:1 1 auto;line-height:1.45; }
           .start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"] { color:#657084;background:transparent; }
           .start-confirmation button[data-action="confirm-start"] { color:#fff;background:#5650db; }
           .start-confirmation button[data-action="confirm-start"]:hover { color:#fff;background:#4842c9; }
-          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 5px 18px rgba(0,0,0,.25)} .mark{filter:brightness(0) invert(1)} .control-title{color:#e5e9f0} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#c7c3ff;background:transparent}select:hover{background:#2a3140}button{color:#b7bfcc;background:transparent}button:hover{color:#c7c3ff;background:#2a3140}button[data-action="pause"]{color:#c7c3ff;background:#30334f}button[data-action="pause"]:hover{color:#dedbff;background:#3a3d5d} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="reset-scope"],.scope-panel button[data-action="cancel-scope"],.start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"]{color:#aab3c2;background:transparent}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#2a3140}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel,.start-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
-          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)} }
+          @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 5px 18px rgba(0,0,0,.25)} .mark{filter:brightness(0) invert(1)} .control-title{color:#e5e9f0} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#c7c3ff;background:transparent}select:hover{background:#2a3140}button{color:#b7bfcc;background:transparent}button:hover{color:#c7c3ff;background:#2a3140}button[data-action="pause"]{color:#c7c3ff;background:#30334f}button[data-action="pause"]:hover{color:#dedbff;background:#3a3d5d} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="cancel-scope"],.scope-presets button,.start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"]{color:#aab3c2;background:transparent}.scope-presets button[aria-pressed="true"]{color:#cbc7ff;background:#30334f}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#2a3140}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel,.start-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
+          @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.scope-presets{flex:1 0 100%;justify-content:flex-start}.scope-actions{margin-left:auto} }
         </style>
         <div class="bar">
           <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
@@ -2268,10 +2327,16 @@ export function createBilingualPageTranslator(
             <button type="button" data-action="confirm-language">清除并改译</button>
           </div>
           <div class="scope-panel" hidden>
-            <span></span>
-            <button type="button" data-action="reset-scope">全部恢复</button>
-            <button type="button" data-action="cancel-scope">取消</button>
-            <button type="button" data-action="apply-scope">应用范围</button>
+            <span class="scope-message"></span>
+            <div class="scope-presets" role="group" aria-label="正文范围预设">
+              <button type="button" data-action="scope-all" aria-pressed="false">全部正文</button>
+              <button type="button" data-action="scope-chapter" aria-pressed="false">当前章节</button>
+              <button type="button" data-action="scope-from-here" aria-pressed="false">从当前位置</button>
+            </div>
+            <div class="scope-actions">
+              <button type="button" data-action="cancel-scope">取消</button>
+              <button type="button" data-action="apply-scope">应用范围</button>
+            </div>
           </div>
           <div class="start-confirmation" role="alert" hidden>
             <span></span>
@@ -2317,10 +2382,12 @@ export function createBilingualPageTranslator(
             beginScopePreview();
           } else if (action === 'retention') {
             void setRetention(currentState.retainedLocally !== true);
-          } else if (action === 'reset-scope') {
-            scopeDraftExcludedElements.clear();
-            renderScopePreviewBlocks();
-            renderControl();
+          } else if (action === 'scope-all') {
+            applyScopePreset('all');
+          } else if (action === 'scope-chapter') {
+            applyScopePreset('chapter');
+          } else if (action === 'scope-from-here') {
+            applyScopePreset('from-here');
           } else if (action === 'cancel-scope') {
             finishScopePreview(true);
           } else if (action === 'apply-scope') {
@@ -2454,15 +2521,31 @@ export function createBilingualPageTranslator(
       if (languageConfirmation) languageConfirmation.hidden = true;
       if (scopePanel) {
         scopePanel.hidden = false;
-        const message = scopePanel.querySelector('span');
+        const message = scopePanel.querySelector('.scope-message');
         if (message) {
           message.textContent = translatedRemoval
             ? `将清除已译 ${translatedRemoval} 段；不会重译其余内容。`
-            : '紫色为保留，灰色虚线为排除；预览不会调用接口。';
+            : scopeActivePreset === 'chapter'
+              ? '已选择当前章节；仍可点击正文微调。'
+              : scopeActivePreset === 'from-here'
+                ? '已选择当前位置以下正文；仍可点击正文微调。'
+                : scopeActivePreset === 'all'
+                  ? '已选择全部正文；仍可点击正文排除。'
+                  : '紫色为保留，灰色虚线为排除；预览不会调用接口。';
         }
-        const reset = scopePanel.querySelector<HTMLButtonElement>('[data-action="reset-scope"]');
+        const hasChapterHeading = scopePreviewBlocks.some((block) => (
+          /^H[1-4]$/u.test(block.element.tagName)
+        ));
+        scopePanel.querySelectorAll<HTMLButtonElement>('.scope-presets button')
+          .forEach((button) => {
+            const preset = button.dataset.action?.replace('scope-', '') as ScopePreset;
+            button.setAttribute('aria-pressed', String(scopeActivePreset === preset));
+            button.disabled = preset === 'chapter' && !hasChapterHeading;
+            button.title = button.disabled
+              ? '当前正文没有可识别的章节标题'
+              : '只修改本地预览，应用前不会调用接口';
+          });
         const apply = scopePanel.querySelector<HTMLButtonElement>('[data-action="apply-scope"]');
-        if (reset) reset.disabled = scopeDraftExcludedElements.size === 0;
         if (apply) {
           apply.disabled = selected === 0;
           apply.textContent = currentState.phase === 'idle' || currentState.phase === 'preview'

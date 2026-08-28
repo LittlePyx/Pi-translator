@@ -101,6 +101,11 @@ export interface BilingualPageViewportBounds {
   bottom: number;
 }
 
+export interface BilingualPageScopeRange {
+  startIndex: number;
+  endIndex: number;
+}
+
 export interface BilingualPageViewportPriority {
   tier: 0 | 1 | 2 | 3;
   distance: number;
@@ -144,6 +149,62 @@ export function bilingualPageViewportPriority(
     return { tier: 1, distance: bounds.top - height };
   }
   return { tier: 2, distance: Math.max(0, -bounds.bottom) };
+}
+
+/** Uses a stable reading line near the upper third of the viewport. */
+export function bilingualPageReadingAnchorIndex(
+  bounds: readonly BilingualPageViewportBounds[],
+  viewportHeight: number,
+): number | undefined {
+  if (!bounds.length) return undefined;
+  const height = Math.max(1, Number.isFinite(viewportHeight) ? viewportHeight : 1);
+  const readingLine = height * .3;
+  const containing = bounds.findIndex((item) => (
+    Number.isFinite(item.top) &&
+    Number.isFinite(item.bottom) &&
+    item.top <= readingLine &&
+    item.bottom >= readingLine
+  ));
+  if (containing >= 0) return containing;
+  const upcoming = bounds.findIndex((item) => (
+    Number.isFinite(item.bottom) && item.bottom >= readingLine
+  ));
+  return upcoming >= 0 ? upcoming : bounds.length - 1;
+}
+
+/** Finds the current heading section without inferring headings from typography. */
+export function bilingualPageCurrentChapterRange(
+  tagNames: readonly string[],
+  currentIndex: number,
+): BilingualPageScopeRange | undefined {
+  if (!tagNames.length || !Number.isSafeInteger(currentIndex)) return undefined;
+  const safeIndex = Math.max(0, Math.min(tagNames.length - 1, currentIndex));
+  const headingLevel = (tagName: string): number | undefined => {
+    const match = /^H([1-4])$/u.exec(tagName.toUpperCase());
+    return match ? Number(match[1]) : undefined;
+  };
+  let startIndex = -1;
+  let level: number | undefined;
+  for (let index = safeIndex; index >= 0; index -= 1) {
+    const candidateLevel = headingLevel(tagNames[index] ?? '');
+    if (candidateLevel === undefined) continue;
+    startIndex = index;
+    level = candidateLevel;
+    break;
+  }
+  if (startIndex < 0 || level === undefined) {
+    const firstHeading = tagNames.findIndex((tagName) => headingLevel(tagName) !== undefined);
+    return firstHeading > 0 ? { startIndex: 0, endIndex: firstHeading } : undefined;
+  }
+  let endIndex = tagNames.length;
+  for (let index = startIndex + 1; index < tagNames.length; index += 1) {
+    const candidateLevel = headingLevel(tagNames[index] ?? '');
+    if (candidateLevel !== undefined && candidateLevel <= level) {
+      endIndex = index;
+      break;
+    }
+  }
+  return { startIndex, endIndex };
 }
 
 export function buildBilingualPageReferenceContext(

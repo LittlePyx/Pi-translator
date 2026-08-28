@@ -1010,7 +1010,12 @@ test.beforeAll(async () => {
   await page.route(LONG_ARTICLE_FIXTURE_URL, async (route) => {
     const paragraphs = Array.from({ length: 520 }, (_, index) => {
       const number = String(index + 1).padStart(4, '0');
-      return `<p id="long-paragraph-${number}">Long article paragraph ${number} contains enough natural-language prose to verify complete translation beyond the former limit.</p>`;
+      const sectionHeading = index % 120 === 0 && index > 0;
+      const tagName = sectionHeading ? 'h2' : 'p';
+      const text = sectionHeading
+        ? `Long article section ${number} introduces the next part of this complete translation fixture.`
+        : `Long article paragraph ${number} contains enough natural-language prose to verify complete translation beyond the former limit.`;
+      return `<${tagName} id="long-paragraph-${number}">${text}</${tagName}>`;
     }).join('');
     await route.fulfill({
       contentType: 'text/html; charset=utf-8',
@@ -2525,6 +2530,59 @@ test('translates a 520-paragraph webpage and exposes a later safety limit withou
     await expect(page.locator('[data-pi-bilingual-scope-preview]')).toHaveCount(520);
     await expect(pageControl.locator('.control-title')).toHaveText('选择翻译范围');
     await expect(pageControl.locator('output')).toContainText('预计约 87 次批量请求');
+    const scopePanel = pageControl.locator('.scope-panel');
+    const allScope = scopePanel.locator('button[data-action="scope-all"]');
+    const chapterScope = scopePanel.locator('button[data-action="scope-chapter"]');
+    const fromHereScope = scopePanel.locator('button[data-action="scope-from-here"]');
+    await expect(allScope).toHaveAttribute('aria-pressed', 'true');
+    await expect(chapterScope).toBeEnabled();
+    await expect(fromHereScope).toBeEnabled();
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await page.locator('#long-paragraph-0401').evaluate((element) => {
+      element.scrollIntoView({ block: 'start' });
+    });
+    await fromHereScope.click();
+    await expect(fromHereScope).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#long-paragraph-0400')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await expect(page.locator('#long-paragraph-0420')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'included',
+    );
+    await expect(scopePanel.locator('.scope-message')).toContainText('当前位置以下正文');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await chapterScope.click();
+    await expect(chapterScope).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('#long-paragraph-0360')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await expect(page.locator('#long-paragraph-0361')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'included',
+    );
+    await expect(page.locator('#long-paragraph-0480')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'included',
+    );
+    await expect(page.locator('#long-paragraph-0481')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await expect(pageControl.locator('output')).toContainText('正文范围 120/520 段');
+    await expect(pageControl.locator('output')).toContainText('预计约 20 次批量请求');
+    await expect(scopePanel.locator('.scope-message')).toContainText('当前章节');
+    expect(textRequests.length).toBe(requestCountBeforePreview);
+
+    await allScope.click();
+    await expect(allScope).toHaveAttribute('aria-pressed', 'true');
+    await expect(pageControl.locator('output')).toContainText('正文范围 520/520 段');
+    await expect(pageControl.locator('output')).toContainText('预计约 87 次批量请求');
+    await expect(page.locator('[data-pi-bilingual-scope-preview="included"]')).toHaveCount(520);
     expect(textRequests.length).toBe(requestCountBeforePreview);
     await pageControl.locator('button[data-action="cancel-scope"]').click();
     await expect(page.locator('[data-pi-bilingual-scope-preview]')).toHaveCount(0);
@@ -2540,6 +2598,47 @@ test('translates a 520-paragraph webpage and exposes a later safety limit withou
     await expect(page.locator(
       '#long-paragraph-0520 + [data-pi-bilingual-translation]',
     )).toBeVisible();
+
+    await bridge.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'CONTROL_BILINGUAL_PAGE',
+        payload: { tabId: id, action: 'display-translation' },
+      });
+    }, tabId!);
+    await expect(page.locator('#long-paragraph-0401')).toHaveAttribute(
+      'data-pi-bilingual-source-hidden',
+      'block',
+    );
+    await page.locator(
+      '#long-paragraph-0401 + [data-pi-bilingual-translation]',
+    ).evaluate((element) => element.scrollIntoView({ block: 'start' }));
+    const requestsBeforeTranslationOnlyScope = textRequests.length;
+    await pageControl.locator('button[data-action="scope"]').evaluate((button) => {
+      (button as HTMLButtonElement).click();
+    });
+    await pageControl.locator('button[data-action="scope-from-here"]').click();
+    await expect(page.locator('#long-paragraph-0400')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'excluded',
+    );
+    await expect(page.locator('#long-paragraph-0420')).toHaveAttribute(
+      'data-pi-bilingual-scope-preview',
+      'included',
+    );
+    expect(textRequests.length).toBe(requestsBeforeTranslationOnlyScope);
+    await pageControl.locator('button[data-action="cancel-scope"]').click();
+    await bridge.evaluate(async (id) => {
+      const api = (globalThis as typeof globalThis & {
+        chrome: { runtime: { sendMessage(message: object): Promise<unknown> } };
+      }).chrome;
+      return api.runtime.sendMessage({
+        type: 'CONTROL_BILINGUAL_PAGE',
+        payload: { tabId: id, action: 'display-bilingual' },
+      });
+    }, tabId!);
 
     const completeExport = await bridge.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {

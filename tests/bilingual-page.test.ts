@@ -2,8 +2,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   BILINGUAL_PAGE_CONFIRMATION_THRESHOLD,
+  bilingualPageCurrentChapterRange,
   bilingualPageDisplayMode,
   bilingualPageNeedsStartConfirmation,
+  bilingualPageReadingAnchorIndex,
   bilingualPageLanguageSwitchConfirmation,
   bilingualPageViewportPriority,
   buildBilingualPageReferenceContext,
@@ -61,6 +63,37 @@ describe('bilingual webpage reading', () => {
       { top: Number.NaN, bottom: Number.NaN },
       viewportHeight,
     )).toEqual({ tier: 3, distance: Number.MAX_SAFE_INTEGER });
+  });
+
+  it('anchors a range near the upper third of the reading viewport', () => {
+    expect(bilingualPageReadingAnchorIndex([
+      { top: -120, bottom: -20 },
+      { top: 100, bottom: 180 },
+      { top: 220, bottom: 300 },
+      { top: 330, bottom: 410 },
+    ], 800)).toBe(2);
+    expect(bilingualPageReadingAnchorIndex([
+      { top: -300, bottom: -200 },
+      { top: -180, bottom: -80 },
+    ], 800)).toBe(1);
+    expect(bilingualPageReadingAnchorIndex([], 800)).toBeUndefined();
+  });
+
+  it('uses explicit heading levels to bound the current chapter', () => {
+    const tags = ['P', 'P', 'H2', 'P', 'H3', 'P', 'H2', 'P', 'H1', 'P'];
+    expect(bilingualPageCurrentChapterRange(tags, 1)).toEqual({
+      startIndex: 0,
+      endIndex: 2,
+    });
+    expect(bilingualPageCurrentChapterRange(tags, 5)).toEqual({
+      startIndex: 4,
+      endIndex: 6,
+    });
+    expect(bilingualPageCurrentChapterRange(tags, 7)).toEqual({
+      startIndex: 6,
+      endIndex: 8,
+    });
+    expect(bilingualPageCurrentChapterRange(['P', 'P'], 1)).toBeUndefined();
   });
 
   it('validates tab state updates without accepting arbitrary languages or counts', () => {
