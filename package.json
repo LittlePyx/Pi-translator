@@ -15,7 +15,7 @@
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build:edge && npm run test:e2e:built",
-    "test:e2e:built": "playwright test tests/e2e/selection-overlay.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
+    "test:e2e:built": "playwright test tests/e2e/web-reading.spec.ts tests/e2e/web-selection.spec.ts tests/e2e/pdf-document.spec.ts tests/e2e/pdf-region-ocr.spec.ts tests/e2e/translation-surfaces.spec.ts tests/e2e/browser-sidebar.spec.ts tests/e2e/settings-integration.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
     "test:live-formula": "vite-node tools/live-formula-acceptance.ts",
     "test:marketing": "npm run build:edge && playwright test tests/e2e/marketing-screenshots.spec.ts",
     "check:secrets": "node tools/check-secrets.mjs",
