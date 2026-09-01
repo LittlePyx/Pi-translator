@@ -7,13 +7,13 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 仓库 | `F:\research-papers\2026\July\Pi_translate` |
-| 分支 | `main`；发布准备和随后发现的 CI 稳定性修复均已推送 |
-| 功能基线 | `55e247a docs: prepare v0.14.0 release candidate`；其后为交接、v0.15.0 发布元数据和两项 CI 稳定性修复 |
+| 分支 | `main`；发布准备和随后发现的 Edge CI 交互稳定性修复均已推送 |
+| 功能基线 | `55e247a docs: prepare v0.14.0 release candidate`；其后为交接、v0.15.0 发布元数据和发布门禁稳定性修复 |
 | 当前版本 | `0.15.0` |
 | 最终发布候选 | `.output/final-ci/tex-selection-translator-0.15.0-edge.zip`（来自 GitHub Actions） |
-| 最终 ZIP 大小 | 1,149,132 bytes |
-| 最终 SHA-256 | `F59C7CDC983A12CABAC8E7C8DF25C22CE77DBBF4004F7B07FDE2A40A181604AB` |
-| 本地复现包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,149,297 bytes；`8104ED255115B23BA415000A2F83B2CE83E3246D8CDD81219023A39516DB3D41` |
+| 最终 ZIP 大小 | 1,150,261 bytes |
+| 最终 SHA-256 | `2BF94E9E787B462772284B37180142BAC3D8442F115348B8983C73965A3BD372` |
+| 本地复现包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,150,427 bytes；`4846AB38EAA54230E6FB6F357BDBE356828268EDB29C2B0696C2A89B55EDFF19` |
 | ZIP 内容 | 33 项，Manifest V3；CI 包已通过云端逐文件一致性门禁 |
 | 发布状态 | 当前代码已通过云端 CI；未创建 `v0.15.0` tag、GitHub Release 或 Edge 商店提交 |
 
@@ -23,7 +23,7 @@
 
 GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`，其 ZIP 为较早的 1,112,382-byte 候选。后续本地 19 个功能提交加入了 PDF 全文翻译、扫描页 OCR、范围控制、暂停继续、导出、结果保留和超长网页完整翻译，因此当前候选按 minor release 调整为 `v0.15.0`。不得移动、覆盖或复用既有 `v0.14.0` tag。
 
-发布准备首先只调整了版本、发布说明、验收记录和三个开发工具链传递依赖。第一次云端 CI 随后暴露两个 Windows Edge 差异：划词关闭按钮的装饰星标会在 hover 动画中抢占指针，以及 PDF 侧栏的 14px 断言没有容纳半像素字体舍入。最终候选修正了关闭按钮的真实命中层级，并把测试舍入余量放宽 1px；没有改变翻译、请求或隐私规则。
+发布准备首先只调整了版本、发布说明、验收记录和三个开发工具链传递依赖。连续的真实 Windows Edge CI 随后暴露并固定了六处测试或交互竞态：划词关闭按钮的装饰星标与外层容器命中竞争、PDF 侧栏半像素字体舍入、设置页同 URL 导航被新导航中断、拖动卡片时 Edge 提前触发 `lostpointercapture`、PDF 懒加载重绘后持久标记状态滞后，以及适宽重绘的等待条件不够精确。最终候选只加固这些真实交互边界和对应断言，没有改变翻译、请求或隐私规则。
 
 ## 3. 已完成能力与必须保留的产品规则
 
@@ -44,7 +44,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 - Microsoft Edge E2E：124/124，通过，Edge `151.0.4129.101`。
 - Edge MV3 生产构建：通过，约 3.77 MB。
 - 发布包一致性：通过；33 项，与生产构建逐文件一致。
-- GitHub Actions：通过；云端再次完成密钥扫描、类型检查、666/666 单元测试、构建、124/124 真实 Edge E2E、打包、逐文件一致性和已验证 artifact 上传。
+- GitHub Actions：代码候选 `13422d7` 的运行 `33472574136` 通过；云端再次完成密钥扫描、类型检查、666/666 单元测试、构建、124/124 真实 Edge E2E、打包、逐文件一致性和已验证 artifact 上传。
 - 生产依赖在线安全审计：0 个漏洞。
 - 开发工具链在线安全审计：非破坏性更新已修复 3 项；剩余 10 项位于 WXT / web-ext-run 等开发依赖，不进入扩展包。需要 WXT 破坏性升级的部分留待发布后单独分支验证。
 
@@ -60,7 +60,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 
 ## 5. 下一步
 
-1. 检查当前候选提交不包含 `.output/`、广告素材或凭证，并确认文档收尾后的 HEAD GitHub Actions 仍为绿色。
+1. 确认文档收尾提交不包含 `.output/`、广告素材或凭证，并确认其 HEAD GitHub Actions 仍为绿色；若新运行生成的 artifact 字节与上表不同，先重新核对该精确文件，不得直接替换。
 2. 再次取得用户授权后，创建签名 `v0.15.0` tag、GitHub Release，并上传 `.output/final-ci/` 中的标准文件名 ZIP；旧 `0d0428c` 和第一次 v0.15.0 失败运行不能作为发布依据。
 3. 上传前再次核对 Release 资产的大小和 SHA-256 与本文一致。
 4. 最后按审核材料提交 Edge 商店；真实审核 Key 只能填写到 Partner Center，不得保存进仓库。
@@ -73,7 +73,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 Set-Location 'F:\research-papers\2026\July\Pi_translate'
 Get-Content docs/development-handoff-v0.15.0.md
 git status --short --branch
-git log -4 --oneline
+git log -7 --oneline
 node -p "require('./package.json').version"
 npm run check:release-artifact
 npm run check:secrets

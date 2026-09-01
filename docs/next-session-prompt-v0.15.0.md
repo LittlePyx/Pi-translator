@@ -5,7 +5,7 @@
 ```text
 继续维护 Pi Translator。项目位于 F:\research-papers\2026\July\Pi_translate，当前分支 main。请先完整阅读 docs/development-handoff-v0.15.0.md，再检查 git status、最近提交、package 版本和候选包，不要直接新增功能。
 
-当前功能基线为 55e247a，其后为交接、v0.15.0 发布元数据和两项 CI 稳定性修复。package 版本为 0.15.0；最终候选包是 GitHub Actions 生成的 .output/final-ci/tex-selection-translator-0.15.0-edge.zip，大小 1,149,132 bytes，SHA-256 为 F59C7CDC983A12CABAC8E7C8DF25C22CE77DBBF4004F7B07FDE2A40A181604AB。本地 check:release-artifact 会复现一个内容等价但受 Windows checkout 换行格式影响的 .output/tex-selection-translator-0.15.0-edge.zip（1,149,297 bytes，SHA-256 8104ED255115B23BA415000A2F83B2CE83E3246D8CDD81219023A39516DB3D41），不能误拿它覆盖云端最终包。最终候选已通过 Node 24、TypeScript、666/666 单元测试、124/124 Edge E2E、生产构建、密钥扫描、生产依赖在线审计、发布包逐文件一致性和精确 ZIP 的真实 Edge 安装级烟测。
+当前功能基线为 55e247a，其后为交接、v0.15.0 发布元数据和真实 Edge CI 交互稳定性修复；代码候选为 13422d7。package 版本为 0.15.0；最终候选包是 GitHub Actions 运行 33472574136 生成的 .output/final-ci/tex-selection-translator-0.15.0-edge.zip，大小 1,150,261 bytes，SHA-256 为 2BF94E9E787B462772284B37180142BAC3D8442F115348B8983C73965A3BD372。本地 check:release-artifact 会复现一个内容等价但受 Windows checkout 换行格式影响的 .output/tex-selection-translator-0.15.0-edge.zip（1,150,427 bytes，SHA-256 4846AB38EAA54230E6FB6F357BDBE356828268EDB29C2B0696C2A89B55EDFF19），不能误拿它覆盖云端最终包。最终候选已通过 Node 24、TypeScript、666/666 单元测试、124/124 Edge E2E、生产构建、密钥扫描、生产依赖在线审计、发布包逐文件一致性和精确 ZIP 的真实 Edge 安装级烟测。
 
 GitHub 已存在公开 v0.14.0 tag 和 Release，指向旧提交 0d0428c；不得移动或覆盖。v0.15.0 的代码候选已经云端 CI 全绿，但尚未创建 tag、GitHub Release 或提交 Edge 商店。下一步是确认文档收尾后的 HEAD 仍为绿灯，再单独取得授权完成 tag、Release 和商店提交。
 
