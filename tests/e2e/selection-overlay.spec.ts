@@ -11504,8 +11504,10 @@ test('keeps long native PDF source text compact and expandable', async ({}, test
   expect(shortViewportLayout.translationHeadingBottom!)
     .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 8);
   expect(shortViewportLayout.translationTextTop).toBeDefined();
+  // Windows Edge can place text on a half-pixel; preserve the intended gap
+  // while allowing one pixel of platform-specific font rounding.
   expect(shortViewportLayout.translationTextTop!)
-    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 14);
+    .toBeLessThanOrEqual(shortViewportLayout.footerTop! - 13);
   if (process.env.PI_VISUAL_QA) {
     await sidePanel.screenshot({ path: testInfo.outputPath('native-pdf-long-source-360x420.png') });
     await sidePanel.emulateMedia({ colorScheme: 'dark' });
