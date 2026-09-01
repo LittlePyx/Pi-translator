@@ -89,6 +89,7 @@ const LAUNCHER_HOST_ID = 'pi-translator-bilingual-page-launcher';
 const STYLE_ID = 'pi-translator-bilingual-page-style';
 const SCOPE_STYLE_ID = 'pi-translator-bilingual-page-scope-style';
 const SCOPE_PREVIEW_ATTRIBUTE = 'data-pi-bilingual-scope-preview';
+const sourceSurfaceColorCache = new WeakMap<HTMLElement, string>();
 const MIN_LAUNCHER_BLOCKS = 4;
 const MIN_LAUNCHER_TEXT_LENGTH = 480;
 const BLOCK_SELECTOR = 'h1, h2, h3, h4, p, blockquote, figcaption, li';
@@ -491,6 +492,10 @@ function applySourceTypography(
   const sourceStyle = getComputedStyle(block.element);
   const sourceFontSize = Number.parseFloat(sourceStyle.fontSize);
   target.style.setProperty('--pi-bilingual-color', sourceStyle.color);
+  target.style.setProperty(
+    '--pi-bilingual-surface',
+    sourceSurfaceColor(block.element, sourceStyle.backgroundColor),
+  );
   target.style.setProperty('--pi-bilingual-font', sourceStyle.fontFamily);
   target.style.setProperty(
     '--pi-bilingual-size',
@@ -501,6 +506,29 @@ function applySourceTypography(
   if (sourceHiddenMode !== null) {
     block.element.setAttribute(SOURCE_HIDDEN_ATTRIBUTE, sourceHiddenMode);
   }
+}
+
+function sourceSurfaceColor(element: HTMLElement, knownColor?: string): string {
+  const cached = sourceSurfaceColorCache.get(element);
+  if (cached) return cached;
+  const ownColor = knownColor ?? getComputedStyle(element).backgroundColor;
+  const color = cssColorAlpha(ownColor) >= .82
+    ? ownColor
+    : element.parentElement
+      ? sourceSurfaceColor(element.parentElement)
+      : '#fff';
+  sourceSurfaceColorCache.set(element, color);
+  return color;
+}
+
+function cssColorAlpha(value: string): number {
+  if (!value || value === 'transparent') return 0;
+  const legacy = value.match(/^rgba\([^)]*,\s*([\d.]+)\s*\)$/iu);
+  if (legacy) return Number.parseFloat(legacy[1] ?? '0');
+  const modern = value.match(/\/\s*([\d.]+)(%)?\s*\)$/u);
+  if (!modern) return 1;
+  const alpha = Number.parseFloat(modern[1] ?? '0');
+  return modern[2] ? alpha / 100 : alpha;
 }
 
 function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
@@ -588,6 +616,7 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ATTRIBUTE}] {
       all: initial !important;
       display: block !important;
+      position: relative !important;
       box-sizing: border-box !important;
       width: auto !important;
       margin: .32em 0 .9em !important;
@@ -739,18 +768,29 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       all: initial !important;
       display: flex !important;
+      position: absolute !important;
+      z-index: 2 !important;
+      top: 0 !important;
+      right: 0 !important;
       box-sizing: border-box !important;
-      max-height: 0 !important;
-      margin-top: 0 !important;
+      width: max-content !important;
+      max-width: 100% !important;
+      max-height: 32px !important;
+      margin: 0 !important;
       align-items: center !important;
       justify-content: flex-end !important;
       gap: 4px !important;
+      border: 1px solid color-mix(in srgb, var(--pi-bilingual-color) 14%, transparent) !important;
+      border-radius: 8px !important;
+      padding: 1px 2px !important;
       overflow: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
       transform: translateY(-2px) !important;
-      transition: opacity 120ms ease, transform 120ms ease, margin 120ms ease !important;
+      transition: opacity 120ms ease, transform 120ms ease !important;
       color: color-mix(in srgb, var(--pi-bilingual-color) 70%, #4f46e5 30%) !important;
+      background: color-mix(in srgb, var(--pi-bilingual-surface) 96%, #6558d9 4%) !important;
+      box-shadow: 0 3px 12px color-mix(in srgb, var(--pi-bilingual-color) 14%, transparent) !important;
       font: 500 11px/1.2 var(--pi-bilingual-font) !important;
     }
     [${TRANSLATION_ATTRIBUTE}]:hover > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
@@ -758,8 +798,6 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_BUSY_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HINT_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
-      max-height: 32px !important;
-      margin-top: .28em !important;
       opacity: .9 !important;
       pointer-events: auto !important;
       transform: translateY(0) !important;
@@ -800,6 +838,16 @@ function installTranslationStyle(): void {
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[hidden] { display: none !important; }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] { display: none !important; }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+      position: relative !important;
+      inset: auto !important;
+      width: 100% !important;
+      margin-top: .28em !important;
+      border: 0 !important;
+      padding: 0 !important;
+      background: transparent !important;
+      box-shadow: none !important;
+    }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_TEXT_ATTRIBUTE}] {
       display: none !important;
     }
@@ -809,11 +857,18 @@ function installTranslationStyle(): void {
     }
     @media (any-hover: none) {
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+        position: relative !important;
+        inset: auto !important;
+        width: 100% !important;
         max-height: 32px !important;
         margin-top: .28em !important;
+        border: 0 !important;
+        padding: 0 !important;
         opacity: .72 !important;
         pointer-events: auto !important;
         transform: translateY(0) !important;
+        background: transparent !important;
+        box-shadow: none !important;
       }
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],

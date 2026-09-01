@@ -894,10 +894,45 @@ test('completes bilingual article translation without scrolling and keeps contro
     const introActions = introTranslation.locator('[data-pi-bilingual-actions]');
     await expect(introActions).toHaveAttribute('role', 'toolbar');
     expect(await introActions.evaluate((element) => getComputedStyle(element).opacity)).toBe('0');
+    const layoutBeforeHover = await page.evaluate(() => {
+      const translation = document.querySelector<HTMLElement>(
+        '#article-intro + [data-pi-bilingual-translation]',
+      )!;
+      const laterSource = document.querySelector<HTMLElement>('#article-method')!;
+      return {
+        translationHeight: translation.getBoundingClientRect().height,
+        laterSourceTop: laterSource.getBoundingClientRect().top + window.scrollY,
+        pageHeight: document.documentElement.scrollHeight,
+      };
+    });
     await introTranslation.hover();
     await expect.poll(() => introActions.evaluate(
       (element) => Number.parseFloat(getComputedStyle(element).opacity),
     )).toBeGreaterThan(0);
+    await page.waitForTimeout(160);
+    const layoutAfterHover = await page.evaluate(() => {
+      const translation = document.querySelector<HTMLElement>(
+        '#article-intro + [data-pi-bilingual-translation]',
+      )!;
+      const laterSource = document.querySelector<HTMLElement>('#article-method')!;
+      return {
+        translationHeight: translation.getBoundingClientRect().height,
+        laterSourceTop: laterSource.getBoundingClientRect().top + window.scrollY,
+        pageHeight: document.documentElement.scrollHeight,
+      };
+    });
+    expect(layoutAfterHover.translationHeight).toBeCloseTo(
+      layoutBeforeHover.translationHeight,
+      1,
+    );
+    expect(layoutAfterHover.laterSourceTop).toBeCloseTo(layoutBeforeHover.laterSourceTop, 1);
+    expect(layoutAfterHover.pageHeight).toBe(layoutBeforeHover.pageHeight);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await page.screenshot({
+        path: testInfo.outputPath('bilingual-paragraph-actions-hover.png'),
+        fullPage: false,
+      });
+    }
     const copyTranslation = introActions.getByRole('button', { name: '复制' });
     const retranslateBlock = introActions.getByRole('button', { name: '重译本段' });
     const toggleTranslation = introActions.getByRole('button', { name: '隐藏' });
