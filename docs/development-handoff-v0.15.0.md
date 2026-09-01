@@ -7,7 +7,7 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 仓库 | `F:\research-papers\2026\July\Pi_translate` |
-| 分支 | `main`；发布准备和随后发现的 Edge CI 交互稳定性修复均已推送 |
+| 分支 | `main`；发布准备、Edge CI 交互稳定性修复和发布交接均已推送 |
 | 功能基线 | `55e247a docs: prepare v0.14.0 release candidate`；其后为交接、v0.15.0 发布元数据和发布门禁稳定性修复 |
 | 当前版本 | `0.15.0` |
 | 最终发布候选 | `.output/final-ci/tex-selection-translator-0.15.0-edge.zip`（来自 GitHub Actions） |
@@ -15,7 +15,7 @@
 | 最终 SHA-256 | `2BF94E9E787B462772284B37180142BAC3D8442F115348B8983C73965A3BD372` |
 | 本地复现包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,150,427 bytes；`4846AB38EAA54230E6FB6F357BDBE356828268EDB29C2B0696C2A89B55EDFF19` |
 | ZIP 内容 | 33 项，Manifest V3；CI 包已通过云端逐文件一致性门禁 |
-| 发布状态 | 当前代码已通过云端 CI；未创建 `v0.15.0` tag、GitHub Release 或 Edge 商店提交 |
+| 发布状态 | GitHub 已发布签名且验证有效的 `v0.15.0` tag 和 Release；尚未提交 Edge 商店 |
 
 `store-assets/ads/` 下仍有用户的未跟踪广告素材。它们不属于本轮代码或发布提交，禁止删除、移动、修改或加入暂存区。
 
@@ -45,6 +45,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 - Edge MV3 生产构建：通过，约 3.77 MB。
 - 发布包一致性：通过；33 项，与生产构建逐文件一致。
 - GitHub Actions：代码候选 `13422d7` 的运行 `33472574136` 通过；云端再次完成密钥扫描、类型检查、666/666 单元测试、构建、124/124 真实 Edge E2E、打包、逐文件一致性和已验证 artifact 上传。
+- GitHub 发布：SSH 签名 tag `v0.15.0` 指向 `40a51bf`，GitHub 验证结果为 `valid`；Release 资产下载后与已验收候选逐字节一致。
 - 生产依赖在线安全审计：0 个漏洞。
 - 开发工具链在线安全审计：非破坏性更新已修复 3 项；剩余 10 项位于 WXT / web-ext-run 等开发依赖，不进入扩展包。需要 WXT 破坏性升级的部分留待发布后单独分支验证。
 
@@ -60,12 +61,11 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 
 ## 5. 下一步
 
-1. 确认文档收尾提交不包含 `.output/`、广告素材或凭证，并确认其 HEAD GitHub Actions 仍为绿色；若新运行生成的 artifact 字节与上表不同，先重新核对该精确文件，不得直接替换。
-2. 再次取得用户授权后，创建签名 `v0.15.0` tag、GitHub Release，并上传 `.output/final-ci/` 中的标准文件名 ZIP；旧 `0d0428c` 和第一次 v0.15.0 失败运行不能作为发布依据。
-3. 上传前再次核对 Release 资产的大小和 SHA-256 与本文一致。
-4. 最后按审核材料提交 Edge 商店；真实审核 Key 只能填写到 Partner Center，不得保存进仓库。
+1. GitHub 发布已经完成，不要移动或覆盖 `v0.15.0` tag，也不要替换现有 Release 资产。
+2. 下一项发布工作是按审核材料提交 Edge 商店；执行前仍需单独取得用户授权，真实审核 Key 只能填写到 Partner Center，不得保存进仓库。
+3. 商店提交完成后记录提交时间、商店包版本和审核结果；等待审核期间不要混入与审核无关的新功能。
 
-发布前不要开始架构重构、国际化或新功能。发布完成后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
+GitHub 发布已完成。Edge 商店审核稳定后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
 
 ## 6. 新会话检查顺序
 
