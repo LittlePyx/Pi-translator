@@ -3706,6 +3706,7 @@ test('dismisses one passive trigger and can pause the current site in place', as
   const overlay = page.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   const triggerShell = overlay.locator('.trigger-shell');
+  const trigger = overlay.getByRole('button', { name: '翻译选中的文本' });
   const dismiss = overlay.getByRole('button', { name: '隐藏本次划词提示' });
   expect(await dismiss.evaluate((button) => {
     const style = getComputedStyle(button);
@@ -3713,8 +3714,8 @@ test('dismisses one passive trigger and can pause the current site in place', as
   })).toEqual({ opacity: '0', pointerEvents: 'none' });
   await expect.poll(async () => {
     // Selection stabilization may replace the trigger once; re-hover the live
-    // shell so this assertion does not depend on the old node retaining :hover.
-    await triggerShell.hover();
+    // button so this assertion does not depend on the old node retaining :hover.
+    await trigger.hover();
     return dismiss.evaluate((button) => getComputedStyle(button).opacity);
   }).toBe('1');
   await expect.poll(() => triggerShell.locator('img').evaluate((image) => (
