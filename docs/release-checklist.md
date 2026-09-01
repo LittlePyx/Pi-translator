@@ -29,6 +29,8 @@ npm run check:release
 
 `check:release` 会重新生成 `$packagePath`，并核对源码版本、构建清单、Manifest V3、ZIP 路径、文件清单、内容及 SHA-256。任何一步失败都不能创建 tag 或上传商店。
 
+如果最终 Release 资产取自 GitHub Actions，应下载 artifact 内层的 `$packagePath`，单独记录其大小和 SHA-256，并对该精确 ZIP 重复结构检查与 Edge 加载烟测。不同 checkout 生成的静态 HTML 或 locale 文件可能只有换行格式差异；只有条目清单一致、可执行内容一致、静态文本归一化后内容一致且两侧门禁都通过时，才可采用 CI 产物。Release 上传时不得用本地重建包覆盖已经验收的 CI 文件。
+
 ## 2. 网页、Overleaf 与网页全文翻译
 
 1. 在 Overleaf 选中一句英文，确认小型 Pi 按钮出现，取消选区后按钮消失。

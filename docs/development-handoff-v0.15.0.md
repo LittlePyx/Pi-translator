@@ -7,14 +7,15 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 仓库 | `F:\research-papers\2026\July\Pi_translate` |
-| 分支 | `main`；发布准备已推送，当前候选还包含随后发现的 CI 稳定性修复 |
+| 分支 | `main`；发布准备和随后发现的 CI 稳定性修复均已推送 |
 | 功能基线 | `55e247a docs: prepare v0.14.0 release candidate`；其后为交接、v0.15.0 发布元数据和两项 CI 稳定性修复 |
 | 当前版本 | `0.15.0` |
-| 发布候选 | `.output/tex-selection-translator-0.15.0-edge.zip` |
-| ZIP 大小 | 1,149,297 bytes |
-| SHA-256 | `8104ED255115B23BA415000A2F83B2CE83E3246D8CDD81219023A39516DB3D41` |
-| ZIP 内容 | 33 项，Manifest V3；与生产构建逐文件一致 |
-| 发布状态 | `main` 已用于云端 CI；未创建 `v0.15.0` tag、GitHub Release 或 Edge 商店提交 |
+| 最终发布候选 | `.output/final-ci/tex-selection-translator-0.15.0-edge.zip`（来自 GitHub Actions） |
+| 最终 ZIP 大小 | 1,149,132 bytes |
+| 最终 SHA-256 | `F59C7CDC983A12CABAC8E7C8DF25C22CE77DBBF4004F7B07FDE2A40A181604AB` |
+| 本地复现包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,149,297 bytes；`8104ED255115B23BA415000A2F83B2CE83E3246D8CDD81219023A39516DB3D41` |
+| ZIP 内容 | 33 项，Manifest V3；CI 包已通过云端逐文件一致性门禁 |
+| 发布状态 | 当前代码已通过云端 CI；未创建 `v0.15.0` tag、GitHub Release 或 Edge 商店提交 |
 
 `store-assets/ads/` 下仍有用户的未跟踪广告素材。它们不属于本轮代码或发布提交，禁止删除、移动、修改或加入暂存区。
 
@@ -43,10 +44,13 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 - Microsoft Edge E2E：124/124，通过，Edge `151.0.4129.101`。
 - Edge MV3 生产构建：通过，约 3.77 MB。
 - 发布包一致性：通过；33 项，与生产构建逐文件一致。
+- GitHub Actions：通过；云端再次完成密钥扫描、类型检查、666/666 单元测试、构建、124/124 真实 Edge E2E、打包、逐文件一致性和已验证 artifact 上传。
 - 生产依赖在线安全审计：0 个漏洞。
 - 开发工具链在线安全审计：非破坏性更新已修复 3 项；剩余 10 项位于 WXT / web-ext-run 等开发依赖，不进入扩展包。需要 WXT 破坏性升级的部分留待发布后单独分支验证。
 
-最终 ZIP 还从解压目录直接加载到真实 Edge：Manifest V3、版本 `0.15.0`，设置页、快捷面板和 Pi PDF 均正常，页面错误为 0。完整实机验收已覆盖：
+本地复现包与云端最终包的 33 个条目、路径和 Manifest 完全一致；27 个可执行、样式和运行时条目字节完全一致。其余 6 个静态文本条目只受 Windows checkout 的换行和空行格式影响，忽略这些格式后逐行内容完全一致。最终采用云端通过门禁并上传的 artifact，避免把未经云端验证的本地字节作为 Release 资产。
+
+云端最终 ZIP 还从解压目录直接加载到真实 Edge：Manifest V3、版本 `0.15.0`，设置页 API 配置控件、快捷面板和 Pi PDF 均正常，页面错误为 0。完整实机验收已覆盖：
 
 1. 普通网页划词和纯代码被动过滤。
 2. 网页框选渲染公式并确认走多模态、无文字接口回退。
@@ -56,9 +60,9 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 
 ## 5. 下一步
 
-1. 检查当前候选提交不包含 `.output/`、广告素材或凭证。
-2. 确认当前候选提交的 GitHub Actions 全部绿色；旧 `0d0428c` 和第一次 v0.15.0 失败运行不能替代最终候选的云端验证。
-3. 云端绿灯后再次取得用户授权，再创建签名 `v0.15.0` tag、GitHub Release 并上传上述 ZIP。
+1. 检查当前候选提交不包含 `.output/`、广告素材或凭证，并确认文档收尾后的 HEAD GitHub Actions 仍为绿色。
+2. 再次取得用户授权后，创建签名 `v0.15.0` tag、GitHub Release，并上传 `.output/final-ci/` 中的标准文件名 ZIP；旧 `0d0428c` 和第一次 v0.15.0 失败运行不能作为发布依据。
+3. 上传前再次核对 Release 资产的大小和 SHA-256 与本文一致。
 4. 最后按审核材料提交 Edge 商店；真实审核 Key 只能填写到 Partner Center，不得保存进仓库。
 
 发布前不要开始架构重构、国际化或新功能。发布完成后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
@@ -73,6 +77,7 @@ git log -4 --oneline
 node -p "require('./package.json').version"
 npm run check:release-artifact
 npm run check:secrets
+Get-FileHash -Algorithm SHA256 .output/final-ci/tex-selection-translator-0.15.0-edge.zip
 ```
 
-任何 HEAD、工作区、ZIP 大小或哈希不一致都应先查明原因，不得重置或覆盖用户内容。
+`check:release-artifact` 验证本机重新构建的复现包；真正用于 Release 的是上表云端最终包。任何 HEAD、工作区、ZIP 大小或哈希不一致都应先查明原因，不得重置或覆盖用户内容。
