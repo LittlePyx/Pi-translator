@@ -8,6 +8,15 @@ import {
   type PerformancePhase,
 } from '../core/diagnostics/event-log';
 import { buildLocalDiagnosticReport } from '../core/diagnostics/local-report';
+import { bilingualSessionMessageHandlers } from '../core/background/bilingual-session-message-handlers';
+import { createPdfSessionMessageHandlers } from '../core/background/pdf-session-message-handlers';
+import { preferenceMessageHandlers } from '../core/background/preference-message-handlers';
+import {
+  routeRuntimeMessage,
+  type RuntimeMessageHandlers,
+} from '../core/background/runtime-message-router';
+import { errorResponse } from '../core/background/runtime-response';
+import { createUtilityMessageHandlers } from '../core/background/utility-message-handlers';
 import { toTranslationError, TranslationError } from '../core/messaging/errors';
 import {
   isRuntimeMessage,
@@ -19,7 +28,6 @@ import {
   type ModelListResponse,
   type PdfSidePanelSession,
   type PublicSettings,
-  type PublicSettingsResponse,
   type RecognizePdfPageResponse,
   type RuntimeMessage,
   type RuntimeResponse,
@@ -50,7 +58,6 @@ import {
   ConfigurationRevisionMismatchError,
   configurationRevisionFromStorageChange,
 } from '../core/settings/configuration-revision';
-import { translationBehaviorFingerprint } from '../core/settings/translation-configuration';
 import { apiOriginPattern } from '../core/settings/api-access';
 import {
   getAutoInjectionPatterns,
@@ -58,7 +65,7 @@ import {
   isOverleafProjectUrl,
   VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../core/settings/site-access';
-import { getPausedSiteHosts, setSitePaused, siteHostFromUrl } from '../core/settings/site-pause';
+import { getPausedSiteHosts, siteHostFromUrl } from '../core/settings/site-pause';
 import {
   isContinuousTranslationPaused,
   setContinuousTranslationPaused,
@@ -105,15 +112,7 @@ import { splitLongTranslationText } from '../core/translation/text-chunker';
 import { validTranslationBatchItems } from '../core/translation/document-batch';
 import type { SupportedTargetLanguage } from '../core/language/supported-target-languages';
 import type { BilingualPageAction } from '../core/translation/bilingual-page';
-import {
-  bilingualPageSessionBehaviorKey,
-  clearBilingualPageSession,
-  clearRetainedBilingualPageSession,
-  getBilingualPageSession,
-  getRetainedBilingualPageSession,
-  saveBilingualPageSession,
-  saveRetainedBilingualPageSession,
-} from '../core/translation/bilingual-page-session';
+import { clearBilingualPageSession } from '../core/translation/bilingual-page-session';
 import { isLexicalLookupCandidate } from '../core/translation/lexical-lookup';
 import { findGlossaryTermEvidence } from '../core/translation/applied-glossary';
 import {
@@ -377,18 +376,6 @@ function toPublicSettings(
     pdfRegionShortcutKey: settings.pdfRegionShortcutKey,
     activeApiProfileId: settings.activeApiProfileId,
     apiProfiles: settings.apiProfiles.map(({ id, name, model }) => ({ id, name, model })),
-  };
-}
-
-function errorResponse<T = never>(error: unknown): RuntimeResponse<T> {
-  const normalized = toTranslationError(error);
-  return {
-    ok: false,
-    error: {
-      code: normalized.code,
-      message: normalized.message,
-      retryable: normalized.retryable,
-    },
   };
 }
 
@@ -3878,12 +3865,6 @@ async function bilingualPageTab(tabId: number): Promise<{
   return { id: tab.id, url: tab.url };
 }
 
-async function currentBilingualPageSessionBehaviorKey(): Promise<string> {
-  return bilingualPageSessionBehaviorKey(
-    translationBehaviorFingerprint(await getSettings()),
-  );
-}
-
 async function startBilingualPage(
   tabId: number,
   targetLanguage: SupportedTargetLanguage,
@@ -4492,128 +4473,33 @@ export default defineBackground(() => {
     });
   });
 
+  const lowRiskMessageHandlers = {
+    ...bilingualSessionMessageHandlers,
+    ...createUtilityMessageHandlers({
+      getPublicSettings: async () => {
+        const [settings, pausedSiteHosts] = await Promise.all([
+          getSettings(),
+          getPausedSiteHosts(),
+        ]);
+        return toPublicSettings(settings, pausedSiteHosts);
+      },
+      recordLocalPerformance: recordLocalPerformanceSample,
+      getLocalDiagnosticReport: localDiagnosticReport,
+    }),
+    ...createPdfSessionMessageHandlers({
+      getSession: async (tabId) => {
+        await initializePdfSidePanelSessions();
+        return pdfSidePanelSessions.get(tabId) ?? null;
+      },
+    }),
+    ...preferenceMessageHandlers,
+  } satisfies RuntimeMessageHandlers;
+
   browser.runtime.onMessage.addListener(
     (message: unknown, sender): Promise<unknown> | undefined => {
       if (!isRuntimeMessage(message)) return undefined;
-
-      if (
-        message.type === 'GET_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'SAVE_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'CLEAR_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'GET_RETAINED_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION' ||
-        message.type === 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION'
-      ) {
-        const tabId = sender.tab?.id;
-        const sourceUrl = sender.url ?? sender.tab?.url;
-        if (
-          tabId === undefined ||
-          (sender.frameId ?? 0) !== 0 ||
-          !sourceUrl ||
-          !isInjectableWebUrl(sourceUrl) ||
-          isOverleafProjectUrl(sourceUrl)
-        ) {
-          return Promise.resolve(errorResponse(new TranslationError(
-            'UNSUPPORTED_PAGE',
-            '正文会话只能由当前普通网页恢复。',
-            false,
-          )));
-        }
-        return (async () => {
-          try {
-            const behaviorKey = await currentBilingualPageSessionBehaviorKey();
-            if (message.type === 'GET_BILINGUAL_PAGE_SESSION') {
-              const session = await getBilingualPageSession(
-                tabId,
-                message.payload.descriptor,
-                behaviorKey,
-              );
-              return {
-                ok: true as const,
-                data: { ...(session ? { session } : {}) },
-              };
-            }
-            if (message.type === 'GET_RETAINED_BILINGUAL_PAGE_SESSION') {
-              const session = await getRetainedBilingualPageSession(
-                message.payload.descriptor,
-                behaviorKey,
-              );
-              return {
-                ok: true as const,
-                data: { ...(session ? { session } : {}) },
-              };
-            }
-            if (message.type === 'SAVE_BILINGUAL_PAGE_SESSION') {
-              await saveBilingualPageSession(
-                tabId,
-                message.payload,
-                behaviorKey,
-              );
-              return { ok: true as const, data: {} };
-            }
-            if (message.type === 'SAVE_RETAINED_BILINGUAL_PAGE_SESSION') {
-              await saveRetainedBilingualPageSession(message.payload, behaviorKey);
-              return { ok: true as const, data: {} };
-            }
-            if (message.type === 'CLEAR_RETAINED_BILINGUAL_PAGE_SESSION') {
-              await clearRetainedBilingualPageSession(message.payload.descriptor);
-              return { ok: true as const, data: {} };
-            }
-            await clearBilingualPageSession(tabId, message.payload.descriptor);
-            return { ok: true as const, data: {} };
-          } catch (error) {
-            return errorResponse(error);
-          }
-        })();
-      }
-
-      if (message.type === 'GET_PUBLIC_SETTINGS') {
-        return Promise.all([getSettings(), getPausedSiteHosts()]).then(
-          ([settings, pausedSiteHosts]): PublicSettingsResponse => ({
-            ok: true,
-            data: toPublicSettings(settings, pausedSiteHosts),
-          }),
-        );
-      }
-
-      if (message.type === 'RENDER_LATEX_MATHML') {
-        const tex = message.payload.tex.trim();
-        if (!tex || tex.length > 10_000) {
-          return Promise.resolve({ ok: true as const, data: {} });
-        }
-        return import('../core/translation/latex-mathml').then(({ renderLatexMathMl }) => {
-          const html = renderLatexMathMl(tex, message.payload.displayMode);
-          return { ok: true as const, data: { ...(html ? { html } : {}) } };
-        }).catch(() => ({ ok: true as const, data: {} }));
-      }
-
-      if (message.type === 'RENDER_LATEX_MATHML_BATCH') {
-        const items = message.payload.items.slice(0, 64);
-        return import('../core/translation/latex-mathml').then(({ renderLatexMathMl }) => ({
-          ok: true as const,
-          data: {
-            html: items.map((item) => {
-              const tex = item.tex.trim();
-              if (!tex || tex.length > 10_000) return null;
-              return renderLatexMathMl(tex, item.displayMode) ?? null;
-            }),
-          },
-        })).catch(() => ({
-          ok: true as const,
-          data: { html: items.map(() => null) },
-        }));
-      }
-
-      if (message.type === 'RECORD_LOCAL_PERFORMANCE') {
-        return recordLocalPerformanceSample(message.payload)
-          .then(() => ({ ok: true as const, data: { recorded: true as const } }));
-      }
-
-      if (message.type === 'GET_LOCAL_DIAGNOSTIC_REPORT') {
-        return localDiagnosticReport()
-          .then((report) => ({ ok: true as const, data: { report } }))
-          .catch((error: unknown) => errorResponse(error));
-      }
+      const routed = routeRuntimeMessage(lowRiskMessageHandlers, message, sender);
+      if (routed !== undefined) return routed;
 
       if (message.type === 'OPEN_OPTIONS_PAGE') {
         const focus = message.payload?.focus;
@@ -4820,15 +4706,6 @@ export default defineBackground(() => {
           await completeFeatureDiscovery('pdf-reader').catch(() => undefined);
           return { ok: true as const, data: { opened: true } };
         })().catch((error: unknown) => errorResponse(error));
-      }
-
-      if (message.type === 'GET_PDF_SIDE_PANEL_SESSION') {
-        return initializePdfSidePanelSessions().then(() => ({
-          ok: true as const,
-          data: {
-            session: pdfSidePanelSessions.get(message.payload.tabId) ?? null,
-          },
-        }));
       }
 
       if (message.type === 'RETRY_PDF_SIDE_PANEL_TRANSLATION') {
@@ -5100,22 +4977,6 @@ export default defineBackground(() => {
             return { ok: true as const, data: { started: true as const } };
           })
           .catch((error: unknown) => errorResponse(error));
-      }
-
-      if (message.type === 'SET_SIDEBAR_WIDTH') {
-        const width = Math.min(640, Math.max(320, Math.round(message.payload.width)));
-        return mutateSettings((settings) => ({
-          nextSettings: { ...settings, sidebarWidth: width },
-          value: undefined,
-        }))
-          .then(() => ({ ok: true as const, data: { width } }));
-      }
-
-      if (message.type === 'PAUSE_CURRENT_SITE') {
-        return setSitePaused(message.payload.pageUrl, true).then((hostname) => ({
-          ok: true as const,
-          data: { hostname },
-        }));
       }
 
       if (message.type === 'GET_DOCUMENT_MEMORY') {
