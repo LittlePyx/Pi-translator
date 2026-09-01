@@ -1428,6 +1428,78 @@ test('returns to the same Pi PDF selection after text API configuration recovery
   }
 });
 
+test('keeps the PDF selection sidebar and full-document panel mutually exclusive', async () => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.setViewportSize({ width: 1200, height: 800 });
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'exclusive-pdf-sidebars.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTextPdf(
+        'A focused translation result remains available while document translation is previewed.',
+      ),
+    });
+    const firstPage = pdfPage.locator('.pdf-page').first();
+    const textSpan = firstPage.locator('.textLayer span').first();
+    await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+    const selectPdfText = async (): Promise<void> => {
+      await textSpan.evaluate((span) => {
+        const range = document.createRange();
+        range.selectNodeContents(span);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        document.dispatchEvent(new Event('selectionchange'));
+      });
+    };
+
+    await selectPdfText();
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await overlay.getByTitle('在页面侧栏中显示').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    const requestsAfterSelection = textRequests.length;
+
+    const documentPanel = pdfPage.locator('#pdf-document-translation');
+    await pdfPage.locator('#translate-document').click();
+    await expect(documentPanel).toBeVisible();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 1 段，等待确认');
+    expect(textRequests).toHaveLength(requestsAfterSelection);
+    await expect.poll(() => pdfPage.locator('#document-stage').evaluate((stage) => ({
+      selectionSidebar: stage.style.getPropertyValue('--pdf-sidebar-right'),
+      documentSidebar: stage.style.getPropertyValue('--pdf-document-sidebar-right'),
+    }))).toEqual({ selectionSidebar: '0px', documentSidebar: '390px' });
+
+    await selectPdfText();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
+    await overlay.locator('.trigger').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+    await expect(documentPanel).toBeVisible();
+    await overlay.getByTitle('在页面侧栏中显示').click();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+    await expect(documentPanel).toBeHidden();
+    await expect(pdfPage.locator('#translate-document')).toHaveAttribute('aria-expanded', 'false');
+    await expect.poll(() => pdfPage.locator('#document-stage').evaluate((stage) => ({
+      selectionSidebar: stage.style.getPropertyValue('--pdf-sidebar-right'),
+      documentSidebar: stage.style.getPropertyValue('--pdf-document-sidebar-right'),
+    }))).toEqual({ selectionSidebar: '410px', documentSidebar: '0px' });
+
+    await pdfPage.locator('#translate-document').click();
+    await expect(documentPanel).toBeVisible();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 1 段，等待确认');
+    expect(textRequests).toHaveLength(requestsAfterSelection);
+  } finally {
+    if (!pdfPage.isClosed()) await pdfPage.close();
+  }
+});
+
 test('centers a fit-width PDF inside the space left by the translation sidebar', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.setViewportSize({ width: 1200, height: 800 });

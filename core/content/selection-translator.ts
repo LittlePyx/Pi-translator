@@ -183,6 +183,7 @@ export interface SelectionTranslatorController {
   translateImageRegion(capture: ImageRegionTranslationCapture): Promise<void>;
   translatePdfRegionText(capture: PdfRegionTextTranslationCapture): Promise<void>;
   openSidebar(): void;
+  deactivateSidebar(): void;
   cancelActiveTranslation(): void;
   refreshPersistentMarkers(): Promise<void>;
   reset(): void;
@@ -2630,6 +2631,7 @@ async function startSelectionTranslatorInstance(
         overlay.showResult(firstPersisted, undefined, combinedOverlayHistory(), false);
       }
     },
+    deactivateSidebar: () => overlay.deactivateSidebar(),
     cancelActiveTranslation: () => {
       activeWebRegionSelection?.cancel();
       activeWebRegionSelection = undefined;

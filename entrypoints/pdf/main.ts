@@ -1996,17 +1996,21 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
 
 async function openPdfDocumentTranslation(): Promise<void> {
   if (!pdfDocument) return;
+  const controller = await selectionTranslator;
+  controller.deactivateSidebar();
   documentTranslationPanel.hidden = false;
   updatePdfDocumentTranslationInset();
   syncPdfDocumentTranslationUi();
   if (pdfDocumentTranslationPhase === 'idle') await preparePdfDocumentTranslation();
 }
 
-function closePdfDocumentTranslation(): void {
+function closePdfDocumentTranslation(
+  options: { restoreFocus?: boolean } = {},
+): void {
   documentTranslationPanel.hidden = true;
   updatePdfDocumentTranslationInset();
   syncPdfDocumentTranslationUi();
-  translateDocument.focus({ preventScroll: true });
+  if (options.restoreFocus !== false) translateDocument.focus({ preventScroll: true });
 }
 
 function startOrTogglePdfDocumentTranslation(): void {
@@ -5756,7 +5760,7 @@ translateDocument.addEventListener('click', () => {
   if (documentTranslationPanel.hidden) void openPdfDocumentTranslation();
   else closePdfDocumentTranslation();
 });
-documentTranslationClose.addEventListener('click', closePdfDocumentTranslation);
+documentTranslationClose.addEventListener('click', () => closePdfDocumentTranslation());
 documentTranslationPrimary.addEventListener('click', startOrTogglePdfDocumentTranslation);
 documentTranslationStop.addEventListener('click', stopPdfDocumentTranslation);
 documentTranslationClear.addEventListener('click', () => {
@@ -5859,7 +5863,12 @@ const selectionTranslator = startSelectionTranslator(
       (selection.focusNode && documentTranslationPanel.contains(selection.focusNode)),
     ),
     onSidebarLayoutChange: applyPdfSidebarLayout,
-    onSidebarActiveChange: (active) => { continuousSidebarActive = active; },
+    onSidebarActiveChange: (active) => {
+      continuousSidebarActive = active;
+      if (active && !documentTranslationPanel.hidden) {
+        closePdfDocumentTranslation({ restoreFocus: false });
+      }
+    },
     selectionPreview: pdfSelectionPreview,
     onAdjustPdfRegion: restorePdfRegionSelection,
     onNavigateToPdfRegion: navigateToPdfRegion,
