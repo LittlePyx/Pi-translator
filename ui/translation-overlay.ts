@@ -364,6 +364,7 @@ export class TranslationOverlay {
   private sidebarActive = false;
   private sidebarCollapsed = false;
   private markerNavigatorActive = false;
+  private markerLocationSignature = '';
   private historyNavigatorActive = false;
   private documentMemoryActive = false;
   private documentMemory?: DocumentMemorySnapshot;
@@ -756,6 +757,26 @@ export class TranslationOverlay {
   resetCardPosition():void { this.cardPosition=undefined; }
   keepCardInViewport():void { this.reflowVisibleSurface(); }
   updateViewportInsets():void { this.refreshViewportInsets();this.scheduleReflow(); }
+  refreshSourceMarkLocations():void {
+    if(!this.markerNavigatorActive||this.sidebarCollapsed||!this.isShowingCard())return;
+    const summaries=this.actions.getSourceMarkSummaries?.()??[];
+    const signature=summaries
+      .map(summary=>`${summary.markerId}:${summary.locationState}`).join('|');
+    if(signature===this.markerLocationSignature)return;
+    const items=[...this.root.querySelectorAll<HTMLElement>('.marker-note')];
+    const byId=new Map(items.map(item=>[item.dataset.markerId,item]));
+    if(items.length!==summaries.length||summaries.some(summary=>!byId.has(summary.markerId))){this.renderMarkerNavigator();return}
+    for(const summary of summaries){
+      const item=byId.get(summary.markerId)!;item.classList.toggle('missing',summary.locationState==='missing');
+      const main=item.querySelector<HTMLButtonElement>('.marker-note-main');
+      if(main){const label=summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文';main.ariaLabel=label;main.title=label}
+      const meta=item.querySelector<HTMLElement>('.marker-note-meta');if(!meta)continue;
+      let status=meta.querySelector<HTMLElement>('.marker-note-status');
+      const statusText=summary.locationState==='missing'?'原文位置已变化':summary.locationState==='pending'?'点击定位':'';
+      if(statusText){if(!status){status=document.createElement('span');status.className='marker-note-status';meta.append(status)}status.textContent=statusText}else status?.remove();
+    }
+    this.markerLocationSignature=signature;
+  }
   refreshSourceMarkState():void {
     if(!this.currentResult||this.progressState||!this.isShowingCard())return;
     if(this.historyNavigatorActive){this.renderHistoryNavigator();return}
@@ -829,6 +850,8 @@ export class TranslationOverlay {
 
   private renderMarkerNavigator():void {
     const summaries=this.actions.getSourceMarkSummaries?.()??[];
+    this.markerLocationSignature=summaries
+      .map(summary=>`${summary.markerId}:${summary.locationState}`).join('|');
     const surface=this.surface('本文标记');
     const toolbar=document.createElement('div');toolbar.className='marker-notes-toolbar';const count=document.createElement('span');count.textContent=`${summaries.length} 条 · 按页码排列`;toolbar.append(count);
     if(summaries.length&&this.actions.onCopyMarkedNotes){const copyAll=this.button('复制全部','','复制本文标记为 Markdown');copyAll.addEventListener('click',()=>{void this.actions.onCopyMarkedNotes?.().then((copied)=>{copyAll.textContent=`已复制 ${copied} 条`})});toolbar.append(copyAll)}
@@ -837,6 +860,7 @@ export class TranslationOverlay {
     const list=document.createElement('div');list.className='marker-notes-list';
     for(const [index,summary] of summaries.entries()){
       const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;
+      item.dataset.markerId=summary.markerId;
       const main=this.button('','marker-note-main',summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文');
       const meta=document.createElement('div');meta.className='marker-note-meta';
       const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);
@@ -1621,7 +1645,9 @@ export class TranslationOverlay {
       const rect=surface.getBoundingClientRect();id=event.pointerId;dx=event.clientX-rect.left;dy=event.clientY-rect.top;surface.classList.add('dragging');handle.setPointerCapture(event.pointerId);
       window.addEventListener('pointermove',move,true);window.addEventListener('pointerup',end,true);window.addEventListener('pointercancel',end,true);window.addEventListener('blur',stop);event.preventDefault();
     });
-    handle.addEventListener('lostpointercapture',event=>{if(id===event.pointerId&&event.buttons===0)stop()});
+    // Window-level pointerup/pointercancel/blur listeners own the drag lifecycle.
+    // Edge can report buttons=0 in lostpointercapture while a synthetic or fast
+    // diagonal drag is still active; stopping there truncates a valid gesture.
   }
   private makeResizable(surface:HTMLDivElement):void {
     const handle=document.createElement('div');handle.className='sidebar-resizer';surface.append(handle);let id:number|undefined;

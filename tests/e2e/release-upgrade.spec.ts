@@ -45,7 +45,16 @@ async function optionsPage(
   extensionId: string,
 ): Promise<Page> {
   const page = context.pages()[0] ?? await context.newPage();
-  await page.goto(`chrome-extension://${extensionId}/options.html`);
+  const url = `chrome-extension://${extensionId}/options.html`;
+  try {
+    await page.goto(url);
+  } catch (error) {
+    const interruptedBySamePage = error instanceof Error &&
+      error.message.includes('interrupted by another navigation') &&
+      error.message.includes(url);
+    if (!interruptedBySamePage) throw error;
+    await page.waitForURL(url);
+  }
   await page.waitForLoadState('domcontentloaded');
   return page;
 }

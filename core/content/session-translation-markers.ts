@@ -81,6 +81,7 @@ export interface SessionTranslationMarkerOptions {
   resolvePdfRegionRects?: (sourceLocation: PdfSourceLocation) => ViewportRect[];
   onActivate?: (result: TranslateResult, rect?: ViewportRect) => void;
   onChange?: (entries: TranslationMarkerEntry[]) => void;
+  onLocationStateChange?: () => void;
   onTooltipUnmark?: (markerId: string) => void;
 }
 
@@ -644,7 +645,12 @@ export class SessionTranslationMarkerManager {
     window.addEventListener('pointerdown', this.onMarkerPointerDown, true);
     window.addEventListener('resize', this.onViewportChange, { passive: true });
     window.addEventListener('scroll', this.onViewportChange, true);
-    this.mutationObserver = new MutationObserver(this.scheduleRender);
+    this.mutationObserver = new MutationObserver((mutations) => {
+      this.scheduleRender();
+      if (mutations.some((mutation) => (
+        mutation.type === 'attributes' && mutation.attributeName === 'data-rendered'
+      ))) this.options.onLocationStateChange?.();
+    });
     this.mutationObserver.observe(document.documentElement, {
       attributes: true,
       // PDF text markers can be restored before the lazily rendered page is
@@ -693,6 +699,14 @@ export class SessionTranslationMarkerManager {
   locationState(markerId: string): TranslationMarkerLocationState {
     const record = this.records.get(markerId);
     if (!record) return 'missing';
+    return this.recordLocationState(record);
+  }
+
+  locationStateForEntry(entry: TranslationMarkerEntry): TranslationMarkerLocationState {
+    return this.recordLocationState(entry);
+  }
+
+  private recordLocationState(record: TranslationMarkerRecord): TranslationMarkerLocationState {
     if (record.anchor.kind === 'pdf-region') {
       return document.querySelector(
         `.pdf-page[data-page-number="${record.anchor.sourceLocation.pageNumber}"]`,

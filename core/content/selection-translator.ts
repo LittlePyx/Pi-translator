@@ -789,6 +789,7 @@ async function startSelectionTranslatorInstance(
       persistedMarkerHistory = markerHistoryFromEntries(entries);
       queuePersistentMarkerSave(entries);
     },
+    onLocationStateChange: () => overlay.refreshSourceMarkLocations(),
     onTooltipUnmark: () => overlay.refreshSourceMarkState(),
   });
 
@@ -984,7 +985,7 @@ async function startSelectionTranslatorInstance(
         markerId: entry.markerId,
         ...entry.content,
         createdAt: entry.result.completedAt ?? 0,
-        locationState: 'pending' as const,
+        locationState: markerManager?.locationStateForEntry(entry) ?? 'pending' as const,
       })
       .sort((left, right) => (
         (left.pageNumber ?? Number.MAX_SAFE_INTEGER) -

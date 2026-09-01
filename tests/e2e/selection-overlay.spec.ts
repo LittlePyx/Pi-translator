@@ -7426,7 +7426,11 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await reader.goto(readerUrl.href);
     await expect(reader.locator('.pdf-page[data-page-number="1"]'))
       .toHaveAttribute('data-rendered', 'ready');
+    const initialZoom = await reader.locator('#zoom-value').textContent();
     await reader.locator('#fit-width').click();
+    await expect(reader.locator('#zoom-value')).not.toHaveText(initialZoom ?? '');
+    await expect(reader.locator('.pdf-page[data-page-number="1"]'))
+      .toHaveAttribute('data-rendered', 'ready');
     const markerLayer = reader.locator('#pi-translation-marker-layer');
     const sourceMarker = markerLayer.locator('.marker').first();
     await expect(sourceMarker).toBeVisible();
