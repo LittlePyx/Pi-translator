@@ -154,6 +154,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     });
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     const requestsBeforePreview = textRequests.length;
+    const visionRequestsBeforePreview = visionRequests.length;
     await pdfPage.locator('#translate-document').click();
     const panel = pdfPage.locator('#pdf-document-translation');
     await expect(panel).toBeVisible();
@@ -175,6 +176,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
+    expect(visionRequests).toHaveLength(visionRequestsBeforePreview);
     const requestsBeforeCopy = textRequests.length;
     const visionRequestsBeforeCopy = visionRequests.length;
     await pdfPage.evaluate(() => {
@@ -299,7 +301,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
   }
 });
 
-test('uses the full-translation confirmation as smart multimodal consent for scanned pages and formulas', async ({}, testInfo) => {
+test('uses one authorized vision model for every block in a PDF containing formulas', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.addInitScript(() => {
     const scope = globalThis as typeof globalThis & { __documentOcrRequests?: number };
@@ -400,6 +402,12 @@ test('uses the full-translation confirmation as smart multimodal consent for sca
     await expect(pdfPage.locator('#pdf-document-translation-primary')).toBeEnabled();
     await expect(pdfPage.locator('[data-pi-ocr-block="document-ocr-text"]'))
       .toContainText('Scanned full-document paragraph');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('当前范围 2 段统一使用视觉模型');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('预计 2 次视觉请求');
+    await expect(pdfPage.locator('#pdf-document-translation-primary'))
+      .toHaveText('开始多模态全文翻译');
     const panelLayout = await panel.evaluate((element) => ({
       clientWidth: element.clientWidth,
       scrollWidth: element.scrollWidth,
@@ -408,15 +416,18 @@ test('uses the full-translation confirmation as smart multimodal consent for sca
 
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
-    expect(textRequests).toHaveLength(requestStart + 1);
-    expect(visionRequests).toHaveLength(visionRequestStart + 1);
-    const request = textRequests.at(-1)!;
-    const messages = request.messages as Array<{ role?: string; content?: string }>;
-    const content = messages.find((message) => message.role === 'user')?.content;
-    const payload = JSON.parse(content!) as { segments: Array<{ text: string }> };
-    expect(payload.segments[0]?.text).toContain('Scanned full-document paragraph');
-    expect(payload.segments.map((segment) => segment.text).join('\n')).not.toContain('E=mc^2');
-    await expect(panel.locator('[data-translation-mode="vision"]')).toContainText('能量关系式');
+    expect(textRequests).toHaveLength(requestStart);
+    expect(visionRequests).toHaveLength(visionRequestStart + 2);
+    const unifiedVisionPrompts = visionRequests.slice(visionRequestStart).map((request) => (
+      (request.messages as Array<{
+        content?: Array<{ type?: string; text?: string }>;
+      }> | undefined)?.[0]?.content?.find((item) => item.type === 'text')?.text ?? ''
+    ));
+    expect(unifiedVisionPrompts.join('\n')).toContain('Scanned full-document paragraph');
+    expect(unifiedVisionPrompts.join('\n')).toContain('E=mc^2');
+    expect(unifiedVisionPrompts.some((prompt) => prompt.includes('相邻段落上下文'))).toBe(true);
+    await expect(panel.locator('[data-translation-mode="vision"]')).toHaveCount(2);
+    await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({
         path: testInfo.outputPath('pdf-full-document-ocr-360.png'),

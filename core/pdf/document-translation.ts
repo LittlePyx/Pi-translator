@@ -355,6 +355,12 @@ export function pdfDocumentTranslationBlockKind(
   return 'text';
 }
 
+export function pdfDocumentTranslationBlockContainsFormula(
+  block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
+): boolean {
+  return block.kind === 'formula' || shouldUseVisionForPdfFormula(block.text);
+}
+
 function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {
   const text = line.text.replace(/\s+/gu, ' ').trim();
   if (!text || text.length > 150 || HEADING_SENTENCE_END.test(text)) return false;

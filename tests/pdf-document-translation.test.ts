@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
   pdfDocumentTranslationItemsFromOcr,
   pdfDocumentTranslationBlocks,
@@ -209,6 +210,12 @@ describe('PDF document translation', () => {
     expect(pdfDocumentTranslationBlockKind(
       'The loss L = reconstruction + regularization is minimized during training.',
     )).toBe('text');
+    expect(pdfDocumentTranslationBlockContainsFormula({
+      text: 'The loss $L = D + R$ is minimized during training.',
+    })).toBe(true);
+    expect(pdfDocumentTranslationBlockContainsFormula({
+      text: 'The evaluation remains stable during training.',
+    })).toBe(false);
   });
 
   it('does not mistake ordinary Korean prose for mathematical alphanumeric symbols', () => {

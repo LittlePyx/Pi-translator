@@ -63,6 +63,7 @@ import {
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationItemsFromOcr,
   preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationBlock,
@@ -708,8 +709,17 @@ function scopedPdfDocumentTranslationBlocks(): PdfDocumentTranslationRuntimeBloc
   return pdfDocumentTranslationBlocksState.filter((block) => block.included);
 }
 
+function pdfDocumentTranslationFormulaBlocks(): PdfDocumentTranslationRuntimeBlock[] {
+  return pdfDocumentTranslationBlocksState.filter(pdfDocumentTranslationBlockContainsFormula);
+}
+
 function pdfDocumentTranslationFormulaBlocksInScope(): PdfDocumentTranslationRuntimeBlock[] {
-  return scopedPdfDocumentTranslationBlocks().filter((block) => block.kind === 'formula');
+  return scopedPdfDocumentTranslationBlocks().filter(pdfDocumentTranslationBlockContainsFormula);
+}
+
+function pdfDocumentTranslationUsesUnifiedVision(): boolean {
+  return pdfDocumentTranslationMultimodalEnabled &&
+    pdfDocumentTranslationFormulaBlocks().length > 0;
 }
 
 function pdfDocumentTranslationCounts(): {
@@ -770,7 +780,8 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-smart-vision-v1',
+      'pdf-unified-vision-v2',
+      pdfDocumentTranslationUsesUnifiedVision() ? 'unified-vision' : 'text',
       pdfDocumentTranslationSettings.activeApiProfileId,
       activeProfile?.model ?? '',
       pdfDocumentTranslationSettings.visionApiProfileId ?? '',
@@ -1002,9 +1013,10 @@ function syncPdfDocumentTranslationUi(): void {
     : 0;
   const hasPreparedBlocks = pdfDocumentTranslationBlocksState.length > 0;
   const unreadablePagesInScope = pdfDocumentTranslationUnreadablePagesInScope();
+  const documentFormulaBlocks = pdfDocumentTranslationFormulaBlocks();
   const formulaBlocksInScope = pdfDocumentTranslationFormulaBlocksInScope();
-  const visualFormulaCount = formulaBlocksInScope.filter((block) => block.sourceAnchor).length;
-  const visualFallbackCount = formulaBlocksInScope.filter(
+  const usesUnifiedVision = pdfDocumentTranslationUsesUnifiedVision();
+  const visualFallbackCount = scopedPdfDocumentTranslationBlocks().filter(
     (block) => Boolean(block.visualFallbackMessage),
   ).length;
   const scopeEnabled = (
@@ -1054,15 +1066,13 @@ function syncPdfDocumentTranslationUi(): void {
     pdfDocumentTranslationOcrRunning ||
     pdfDocumentTranslationPhase === 'running' ||
     translated > 0;
-  const visualTargets = [
-    visualFormulaCount ? `${visualFormulaCount} 个公式区域` : '',
-    unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页` : '',
-  ].filter(Boolean).join('和');
   documentTranslationMultimodalStatus.textContent = pdfDocumentTranslationMultimodalEnabled
-    ? visualTargets
-      ? `点击开始即授权本次任务发送${visualTargets}；普通正文仍使用文字接口`
-      : '未发现必须发送图像的内容；普通正文仍使用文字接口'
-    : `${formulaBlocksInScope.length ? `${formulaBlocksInScope.length} 个公式块将原样保留；` : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}普通正文只使用文字接口`;
+    ? usesUnifiedVision
+      ? `文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${total} 段统一使用视觉模型，预计 ${total} 次视觉请求`
+      : unreadablePagesInScope.length
+        ? `点击开始后识别 ${unreadablePagesInScope.length} 个扫描页；若发现公式，当前范围全部段落改用视觉模型`
+        : '文档未检测到公式；普通正文使用文字接口'
+    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口`;
   const defaultStatus = pdfDocumentTranslationPhase === 'idle'
     ? '尚未读取正文'
     : pdfDocumentTranslationPhase === 'preparing'
@@ -1099,8 +1109,10 @@ function syncPdfDocumentTranslationUi(): void {
             ? '开始识别并翻译'
             : translated > 0 && pending > 0
             ? '继续翻译'
-            : pdfDocumentTranslationMultimodalEnabled && visualTargets
-              ? '开始智能翻译'
+            : usesUnifiedVision
+              ? '开始多模态全文翻译'
+              : pdfDocumentTranslationMultimodalEnabled && unreadablePagesInScope.length
+                ? '开始智能翻译'
               : '开始翻译';
   documentTranslationStop.hidden = ![
     'running',
@@ -1159,12 +1171,14 @@ function syncPdfDocumentTranslationUi(): void {
   const retentionNote = pdfDocumentTranslationRetainedLocally
     ? '已完成译文会保留在本机；不会保存原文、PDF 文件或页面图像。'
     : '已完成译文默认只保留在当前 Edge 会话中。';
-  const formulaFallbackNote = visualFallbackCount
-    ? ` ${visualFallbackCount} 个公式视觉结果未通过校验，已安全保留原式。`
+  const visualFallbackNote = visualFallbackCount
+    ? ` ${visualFallbackCount} 段视觉结果未通过校验，已安全保留原文。`
     : '';
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和智能多模态处理。${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${formulaFallbackNote} 原始 PDF 始终保留。`
-    : `点击开始即确认当前范围；正文走文字接口，公式区域按需走视觉接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${formulaFallbackNote} 译文按页排列，点击可返回原文。`;
+    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部段落统一使用视觉模型。${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
+    : usesUnifiedVision
+      ? `文档含公式，当前范围全部段落统一使用视觉模型，以保持术语、语气和公式处理一致。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
+      : `文档未检测到公式，普通正文使用文字接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
 }
 
 function setPdfDocumentTranslationCopyFeedback(message: string, error = false): void {
@@ -1419,13 +1433,28 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     container.removeAttribute('aria-label');
     container.removeAttribute('title');
   }
-  if (block.visualProcessed) container.dataset.translationMode = 'vision';
-  else if (block.visualFallbackMessage) container.dataset.translationMode = 'preserved';
-  else delete container.dataset.translationMode;
+  if (block.visualProcessed) {
+    container.dataset.translationMode = 'vision';
+    container.dataset.visualRole = pdfDocumentTranslationBlockContainsFormula(block)
+      ? 'formula'
+      : 'document';
+  } else if (block.visualFallbackMessage) {
+    container.dataset.translationMode = 'preserved';
+    container.dataset.visualRole = pdfDocumentTranslationBlockContainsFormula(block)
+      ? 'formula'
+      : 'document';
+  } else {
+    delete container.dataset.translationMode;
+    delete container.dataset.visualRole;
+  }
   if (sourceAvailable && block.visualProcessed) {
-    container.title = '公式区域已通过视觉模型识别；点击返回并高亮 PDF 原文';
+    container.title = pdfDocumentTranslationBlockContainsFormula(block)
+      ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
+      : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
   } else if (sourceAvailable && block.visualFallbackMessage) {
-    container.title = `${block.visualFallbackMessage}；已保留原式，点击可返回 PDF 原文`;
+    container.title = `${block.visualFallbackMessage}；已保留${
+      pdfDocumentTranslationBlockContainsFormula(block) ? '原式' : '原文'
+    }，点击可返回 PDF 原文`;
   }
   if (block.status === 'done' && block.translatedText) {
     void renderTranslationContent(
@@ -1653,6 +1682,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         if (!translatedText) continue;
         block.status = 'done';
         block.translatedText = translatedText;
+        if (pdfDocumentTranslationUsesUnifiedVision()) block.visualProcessed = true;
         restoredCount += 1;
         if (!fromSession && fromLocal) restoredFromLocalCount += 1;
         renderPdfDocumentTranslationBlock(block);
@@ -1737,7 +1767,7 @@ async function capturePdfDocumentTranslationVisualBlock(
   captureMs: number;
 }> {
   const anchor = block.sourceAnchor;
-  if (!anchor) throw new Error('这个公式没有可靠的原文位置，已保留原式。');
+  if (!anchor) throw new Error('这个段落没有可靠的视觉定位。');
   const startedAt = performance.now();
   const page = await pdf.getPage(block.pageNumber);
   const baseViewport = page.getViewport({ scale: 1 });
@@ -1750,7 +1780,7 @@ async function capturePdfDocumentTranslationVisualBlock(
   canvas.width = Math.max(1, Math.ceil(viewport.width));
   canvas.height = Math.max(1, Math.ceil(viewport.height));
   const context = canvas.getContext('2d', { alpha: false });
-  if (!context) throw new Error('当前浏览器无法生成公式区域图像，已保留原式。');
+  if (!context) throw new Error('当前浏览器无法生成段落区域图像。');
   context.fillStyle = '#fff';
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvas, canvasContext: context, viewport }).promise;
@@ -1859,6 +1889,7 @@ async function restorePdfDocumentTranslationIdleBlocks(): Promise<{
       if (!translatedText) continue;
       block.status = 'done';
       block.translatedText = translatedText;
+      if (pdfDocumentTranslationUsesUnifiedVision()) block.visualProcessed = true;
       restored += 1;
       if (!currentSessionText && localText) fromLocal += 1;
       renderPdfDocumentTranslationBlock(block);
@@ -1996,6 +2027,22 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
   }
   if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
   pdfDocumentTranslationOcrRunning = false;
+  const nextSessionContext = currentPdfDocumentTranslationSessionContext();
+  if (!samePdfDocumentTranslationSessionContext(
+    pdfDocumentTranslationSessionContext,
+    nextSessionContext,
+  )) {
+    for (const block of pdfDocumentTranslationBlocksState) {
+      if (block.status !== 'done') continue;
+      block.status = 'idle';
+      delete block.translatedText;
+      delete block.visualProcessed;
+      delete block.visualFallbackMessage;
+    }
+    pdfDocumentTranslationSessionContext = nextSessionContext;
+    pdfDocumentTranslationRetainedLocally = false;
+    rebuildPdfDocumentTranslationResults();
+  }
   const restoredAfterOcr = await restorePdfDocumentTranslationIdleBlocks();
   if (revision !== pdfDocumentTranslationOcrRevision || epoch !== documentEpoch) return;
   settlePdfDocumentTranslationAfterOcr(previousPhase);
@@ -2019,11 +2066,20 @@ async function processPdfDocumentTranslationVisualBlock(
   revision: number,
 ): Promise<boolean> {
   const pdf = pdfDocument;
+  const containsFormula = pdfDocumentTranslationBlockContainsFormula(block);
   if (!pdf || !block.sourceAnchor) {
-    block.status = 'done';
-    block.translatedText = block.text;
-    block.visualFallbackMessage = '公式缺少可靠的原文位置';
+    if (containsFormula) {
+      block.status = 'done';
+      block.translatedText = block.text;
+      block.visualFallbackMessage = '含公式段落缺少可靠的原文位置';
+    } else {
+      block.status = 'error';
+      block.errorMessage = '本段缺少可靠的视觉定位，未改用文字接口。';
+    }
+    delete block.visualProcessed;
     renderPdfDocumentTranslationBlock(block);
+    syncPdfDocumentTranslationUi();
+    if (block.status === 'done') await persistPdfDocumentTranslationSession([block]);
     return true;
   }
   const requestId = crypto.randomUUID();
@@ -2041,6 +2097,7 @@ async function processPdfDocumentTranslationVisualBlock(
       pdfDocumentTranslationRequestId !== requestId
     ) return false;
     const sourceLocation = pdfDocumentTranslationSourceLocation(block);
+    const contextText = pdfDocumentTranslationContext(block);
     response = await browser.runtime.sendMessage({
       type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK',
       payload: {
@@ -2050,6 +2107,7 @@ async function processPdfDocumentTranslationVisualBlock(
         imageWidth: capture.imageWidth,
         imageHeight: capture.imageHeight,
         recognizedTextHint: block.text,
+        ...(contextText ? { contextText } : {}),
         pageUrl: currentSourceUrl,
         ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
         targetLanguage: pdfDocumentTranslationSettings.targetLanguage,
@@ -2064,7 +2122,7 @@ async function processPdfDocumentTranslationVisualBlock(
       ok: false,
       error: {
         code: 'NETWORK_ERROR',
-        message: error instanceof Error ? error.message : '公式视觉翻译请求失败。',
+        message: error instanceof Error ? error.message : 'PDF 多模态翻译请求失败。',
         retryable: true,
       },
     };
@@ -2082,22 +2140,33 @@ async function processPdfDocumentTranslationVisualBlock(
     syncPdfDocumentTranslationUi();
     return false;
   }
-  if (
-    response.ok &&
-    response.data.result.translatedText.trim() &&
-    response.data.result.formulaLatex?.length &&
-    !response.data.result.formulaNeedsReview
-  ) {
+  if (!response.ok) {
+    block.status = 'idle';
+    renderPdfDocumentTranslationBlock(block);
+    pdfDocumentTranslationPhase = 'error';
+    pdfDocumentTranslationMessage = translationErrorMessage(
+      response.error.code,
+      response.error.message,
+    );
+    syncPdfDocumentTranslationUi();
+    return false;
+  }
+  const result = response.data.result;
+  const translatedText = result.translatedText.trim();
+  const structurallySafe = !result.formulaNeedsReview && (
+    !containsFormula || Boolean(result.formulaLatex?.length)
+  );
+  if (translatedText && structurallySafe) {
     block.status = 'done';
-    block.translatedText = response.data.result.translatedText.trim();
+    block.translatedText = translatedText;
     block.visualProcessed = true;
     delete block.visualFallbackMessage;
   } else {
     block.status = 'done';
     block.translatedText = block.text;
-    block.visualFallbackMessage = response.ok
-      ? '公式视觉结果未通过结构校验'
-      : translationErrorMessage(response.error.code, response.error.message);
+    block.visualFallbackMessage = containsFormula
+      ? '含公式段落的视觉结果未通过结构校验'
+      : '视觉模型没有返回可靠译文';
     delete block.visualProcessed;
   }
   delete block.errorMessage;
@@ -2105,7 +2174,7 @@ async function processPdfDocumentTranslationVisualBlock(
   renderPdfDocumentTranslationBlock(block);
   await persistPdfDocumentTranslationSession([block]);
   pdfDocumentTranslationMessage = block.visualFallbackMessage
-    ? '部分公式视觉结果未通过校验，已保留原式并继续翻译。'
+    ? '部分多模态结果未通过校验，已保留原文并继续翻译。'
     : undefined;
   syncPdfDocumentTranslationUi();
   return true;
@@ -2139,6 +2208,12 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
         .sort((left, right) => comparePdfDocumentTranslationPriority(left, right, currentPage));
       const first = pending[0];
       if (!first) break;
+      const unifiedVision = pdfDocumentTranslationUsesUnifiedVision() &&
+        pdfDocumentTranslationMultimodalAuthorized;
+      if (unifiedVision) {
+        if (!await processPdfDocumentTranslationVisualBlock(first, revision)) return;
+        continue;
+      }
       if (first.kind === 'formula') {
         if (
           pdfDocumentTranslationMultimodalEnabled &&
@@ -6105,6 +6180,8 @@ documentTranslationMultimodalToggle.addEventListener('change', () => {
   if (documentTranslationMultimodalToggle.disabled) return;
   pdfDocumentTranslationMultimodalEnabled = documentTranslationMultimodalToggle.checked;
   pdfDocumentTranslationMultimodalAuthorized = false;
+  pdfDocumentTranslationSessionContext = currentPdfDocumentTranslationSessionContext();
+  pdfDocumentTranslationRetainedLocally = false;
   pdfDocumentTranslationMessage = undefined;
   syncPdfDocumentTranslationUi();
 });

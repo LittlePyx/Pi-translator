@@ -1770,13 +1770,13 @@ test('keeps narrow PDF document memory readable with long terms', async ({}, tes
     await pdfPage.locator('#file-input').setInputFiles({
       name: `${'a'.repeat(120)}.pdf`,
       mimeType: 'application/pdf',
-      buffer: createTextPdf('The adaptive sensing policy is stable in this document.'),
+      buffer: createTextPdf('The adaptive policy E = mc^2 is stable.'),
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#fit-width').click();
     const textSpan = firstPage.locator('.textLayer span')
-      .filter({ hasText: 'The adaptive sensing policy is stable in this document.' });
+      .filter({ hasText: 'The adaptive policy E = mc^2 is stable.' });
     await expect(textSpan).toBeVisible();
     await textSpan.evaluate((element) => {
       const range = document.createRange();

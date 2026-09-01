@@ -68,6 +68,9 @@ describe('rendered formula detection', () => {
     expect(shouldUseVisionForPdfFormula(
       'The proposed method improves reconstruction quality on three datasets.',
     )).toBe(false);
+    expect(shouldUseVisionForPdfFormula(
+      'The evaluation remains stable during training.',
+    )).toBe(false);
     expect(shouldUseVisionForPdfFormula('We log every result for later inspection.')).toBe(false);
     expect(shouldUseVisionForPdfFormula('The experiment finishes in 10 min.')).toBe(false);
   });

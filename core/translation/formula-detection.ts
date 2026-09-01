@@ -9,7 +9,7 @@ const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 const REPEATED_DECIMAL_RUN = /(?:^|[^\d.])(\d{1,6}\.\d{1,6})(?:\1)+(?![\d.])/u;
 const EQUATION = /(?:^|[\s(])(?:[A-Za-zΑ-Ωα-ω][\wΑ-Ωα-ω]*(?:\([^)]{1,80}\))?)\s*(?:=|≈|≠|≤|≥|<|>)\s*\S/u;
 const MATH_OPERATOR = /[=+\-−*/×÷^_<>≤≥≈≠]/gu;
-const STRUCTURED_RENDERED_MATH = /(?:\barg\s*(?:min|max)\b|\bKL\s*\([^\n)]{1,120}\)|\bd[A-Za-zΑ-Ωα-ω]\s*\/\s*d[A-Za-zΑ-Ωα-ω]\b|\bs\.?\s*t\.?\s*[:.]?\s*[A-Za-zΑ-Ωα-ω])/iu;
+const STRUCTURED_RENDERED_MATH = /(?:\barg\s*(?:min|max)\b|\bKL\s*\([^\n)]{1,120}\)|\bd[A-Za-zΑ-Ωα-ω]\s*\/\s*d[A-Za-zΑ-Ωα-ω]\b|\bs(?:\.\s*t\.?|\s+t)\s*[:.]?\s*[A-Za-zΑ-Ωα-ω])/iu;
 const URL_LIKE = /(?:\b(?:https?|ftp):\/\/|\/\/(?:www\.)?|www\.)[^\s<>"']+/giu;
 const PDF_MATH_LETTER = 'A-Za-zΑ-Ωα-ωℙℚ𝔼Ππ';
 const PDF_SPACED_EQUATION = new RegExp(

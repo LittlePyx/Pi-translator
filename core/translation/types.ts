@@ -150,6 +150,8 @@ export interface TranslateImageRegionRequest {
   imageWidth: number;
   imageHeight: number;
   recognizedTextHint?: string;
+  /** Nearby document text used only for terminology and tone consistency. */
+  contextText?: string;
   pageUrl: string;
   sourceLabel?: string;
   targetLanguage: string;
@@ -217,6 +219,7 @@ export interface ImageTranslationInput {
   imageWidth: number;
   imageHeight: number;
   recognizedTextHint?: string;
+  contextText?: string;
 }
 
 export interface ImageTranslationOptions {

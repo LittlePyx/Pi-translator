@@ -3450,6 +3450,7 @@ async function translateImageRegion(
             ...(request.recognizedTextHint
               ? { recognizedTextHint: request.recognizedTextHint }
               : {}),
+            ...(request.contextText ? { contextText: request.contextText } : {}),
           },
           {
             model: visionModel,

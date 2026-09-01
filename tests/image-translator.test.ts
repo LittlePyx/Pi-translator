@@ -220,7 +220,10 @@ describe('image region translator', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await new OpenAiCompatibleTranslator().translateImageRegion(
-      input,
+      {
+        ...input,
+        contextText: 'Previous translation uses the term robust alignment.',
+      },
       options,
       {
         apiKey: 'test-key',
@@ -265,6 +268,8 @@ describe('image region translator', () => {
     expect(promptText).toContain('可见的 ℙ、ℚ、𝔼 降级为普通字母');
     expect(promptText).toContain('\\operatorname*{arg\\,min}_{约束}');
     expect(promptText).toContain('视觉上独立成行或较长的公式必须使用 \\[...\\]');
+    expect(promptText).toContain('相邻段落上下文');
+    expect(promptText).toContain('robust alignment');
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 

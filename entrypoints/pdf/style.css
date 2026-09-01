@@ -577,9 +577,15 @@ button { color: inherit; font: inherit; cursor: pointer; }
   line-height: 1.35;
   letter-spacing: .04em;
 }
-.pdf-document-translation-block[data-translation-mode="vision"]::before { content: "视觉公式"; }
+.pdf-document-translation-block[data-translation-mode="vision"]::before { content: "多模态译文"; }
+.pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="formula"]::before {
+  content: "多模态公式";
+}
 .pdf-document-translation-block[data-translation-mode="preserved"]::before {
   color: #9a6416;
+  content: "已保留原文";
+}
+.pdf-document-translation-block[data-translation-mode="preserved"][data-visual-role="formula"]::before {
   content: "已保留原式";
 }
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
