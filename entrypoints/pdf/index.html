@@ -130,7 +130,7 @@
               <span role="separator"></span>
               <button id="pdf-document-translation-download-translation" type="button">下载纯译文 .md</button>
               <button id="pdf-document-translation-download-bilingual" type="button">下载双语 .md</button>
-              <button id="pdf-document-translation-download-html" type="button">下载可打印 HTML</button>
+              <button id="pdf-document-translation-download-html" type="button">下载带原页图的 HTML</button>
             </div>
           </details>
           <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
@@ -191,6 +191,25 @@
         <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
       </section>
       <section
+        id="pdf-document-translation-multimodal"
+        class="pdf-document-translation-multimodal"
+        aria-label="全文翻译视觉处理方式"
+      >
+        <label>
+          <input
+            id="pdf-document-translation-multimodal-toggle"
+            type="checkbox"
+            checked
+          />
+          <span>
+            <strong>智能多模态（推荐）</strong>
+            <small id="pdf-document-translation-multimodal-status" aria-live="polite">
+              开始后只发送需要视觉识别的公式区域和扫描页
+            </small>
+          </span>
+        </label>
+      </section>
+      <section
         id="pdf-document-translation-ocr"
         class="pdf-document-translation-ocr"
         aria-label="扫描页文字识别"
@@ -204,7 +223,7 @@
         <button id="pdf-document-translation-ocr-action" type="button"></button>
       </section>
       <p id="pdf-document-translation-note" class="pdf-document-translation-note">
-        先在本地读取文字层；确认开始后才会批量发送正文。扫描页会保留原页并标记为未识别。
+        预览和范围调整只在本地完成；点击开始即授权当前范围在本次任务中按上方方式发送。
       </p>
       <div
         id="pdf-document-translation-pages"

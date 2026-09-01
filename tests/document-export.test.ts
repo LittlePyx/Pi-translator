@@ -72,6 +72,27 @@ describe('document translation export', () => {
     expect(result.printableHtml).toContain('完整结果 · 3 段');
   });
 
+  it('embeds trusted local PDF page images beside bilingual printable content', () => {
+    const result = buildDocumentTranslationExport([{
+      pageNumber: 2,
+      sourceText: 'Formula E = mc^2.',
+      translatedText: '公式 E = mc^2。',
+    }], {
+      pageImages: [
+        { pageNumber: 2, dataUrl: 'data:image/jpeg;base64,AA==' },
+        { pageNumber: 3, dataUrl: 'data:image/svg+xml,<svg onload=alert(1)>' },
+      ],
+    });
+
+    expect(result.printableHtml).toContain(
+      '<img src="data:image/jpeg;base64,AA==" alt="原 PDF 第 2 页">',
+    );
+    expect(result.printableHtml).toContain('class="page-layout"');
+    expect(result.printableHtml).toContain('.page-bundle:first-of-type{break-before:auto}');
+    expect(result.printableHtml).not.toContain('svg+xml');
+    expect(result.printableHtml).not.toContain('onload');
+  });
+
   it('returns an empty export when no translation is complete', () => {
     expect(buildDocumentTranslationExport([
       { sourceText: 'Pending.' },

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   comparePdfDocumentTranslationPriority,
+  pdfDocumentTranslationBlockKind,
   pdfDocumentTranslationItemsFromOcr,
   pdfDocumentTranslationBlocks,
   preparePdfDocumentTranslationPages,
@@ -38,10 +39,12 @@ describe('PDF document translation OCR input', () => {
       {
         str: 'Scanned paragraph.', hasEOL: true,
         left: 60, top: 160, width: 420, height: 40,
+        kind: 'text',
       },
       {
         str: String.raw`E=mc^2`, hasEOL: true,
         left: 120, top: 240, width: 180, height: 32,
+        kind: 'formula',
       },
     ]);
   });
@@ -192,6 +195,20 @@ describe('PDF document translation', () => {
       'const score = model(x);',
       'The evaluation then continues.',
     ]);
+    expect(prepared.blocks.map((block) => block.kind ?? 'text')).toEqual([
+      'text',
+      'formula',
+      'code',
+      'text',
+    ]);
+  });
+
+  it('reserves visual handling for standalone formulas while keeping mixed prose translatable', () => {
+    expect(pdfDocumentTranslationBlockKind('E = mc² + λ')).toBe('formula');
+    expect(pdfDocumentTranslationBlockKind('const score = model(x);')).toBe('code');
+    expect(pdfDocumentTranslationBlockKind(
+      'The loss L = reconstruction + regularization is minimized during training.',
+    )).toBe('text');
   });
 
   it('does not mistake ordinary Korean prose for mathematical alphanumeric symbols', () => {

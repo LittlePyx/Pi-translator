@@ -110,6 +110,8 @@ export interface PublicSettings {
   pdfKeyboardShortcutsEnabled: boolean;
   pdfRegionShortcutKey: string;
   activeApiProfileId: string;
+  visionApiProfileId?: string;
+  visionModel?: string;
   apiProfiles: Array<{ id: string; name: string; model: string }>;
 }
 
@@ -181,6 +183,7 @@ export type RuntimeMessage =
   | { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR'; payload: TranslateRequest }
   | { type: 'TRANSLATE_BILINGUAL_PAGE_SEGMENT'; payload: TranslateRequest }
   | { type: 'TRANSLATE_DOCUMENT_BATCH'; payload: TranslateBatchRequest }
+  | { type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK'; payload: TranslateImageRegionRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
   | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
@@ -960,6 +963,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR' ||
     type === 'TRANSLATE_BILINGUAL_PAGE_SEGMENT' ||
+    type === 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK' ||
     type === 'TRANSLATE_IMAGE_REGION' ||
     type === 'RECOGNIZE_PDF_PAGE' ||
     type === 'CAPTURE_VISIBLE_TAB' ||

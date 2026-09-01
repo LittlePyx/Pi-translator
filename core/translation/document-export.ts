@@ -34,6 +34,12 @@ export interface DocumentTranslationDownload {
 export interface DocumentTranslationExportOptions {
   unavailablePageCount?: number;
   contentTruncated?: boolean;
+  pageImages?: readonly DocumentTranslationExportPageImage[];
+}
+
+export interface DocumentTranslationExportPageImage {
+  pageNumber: number;
+  dataUrl: string;
 }
 
 function cleanExportText(value: string): string {
@@ -87,17 +93,43 @@ function buildPrintableHtml(
   total: number,
   unavailablePages: number,
   contentTruncated: boolean,
+  pageImages: readonly DocumentTranslationExportPageImage[],
 ): string {
   const complete = total > 0 && completed === total && unavailablePages === 0 && !contentTruncated;
+  const imageByPage = new Map(pageImages.flatMap((image) => (
+    Number.isSafeInteger(image.pageNumber) && image.pageNumber > 0 &&
+    /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/u.test(image.dataUrl)
+      ? [[image.pageNumber, image.dataUrl] as const]
+      : []
+  )));
   const content: string[] = [];
   let previousPage: number | undefined;
+  let pageOpen = false;
+  const closePage = (): void => {
+    if (!pageOpen) return;
+    content.push('</div></div></section>');
+    pageOpen = false;
+  };
   for (const block of blocks) {
     if (block.pageNumber !== undefined && block.pageNumber !== previousPage) {
-      content.push(`<h2>第 ${block.pageNumber} 页</h2>`);
+      closePage();
+      const pageImage = imageByPage.get(block.pageNumber);
+      content.push(
+        `<section class="page-bundle"><h2>第 ${block.pageNumber} 页</h2><div class="page-layout${pageImage ? '' : ' text-only'}">`,
+      );
+      if (pageImage) {
+        content.push(`<figure class="source-page"><img src="${pageImage}" alt="原 PDF 第 ${block.pageNumber} 页"><figcaption>原 PDF 第 ${block.pageNumber} 页 · 本地图像</figcaption></figure>`);
+      }
+      content.push('<div class="page-translations">');
+      pageOpen = true;
       previousPage = block.pageNumber;
+    } else if (block.pageNumber === undefined && pageOpen) {
+      closePage();
+      previousPage = undefined;
     }
     content.push(`<section class="pair"><div class="source">${escapeHtml(block.sourceText)}</div><div class="translation">${escapeHtml(block.translatedText)}</div></section>`);
   }
+  closePage();
   const status = complete
     ? `完整结果 · ${completed} 段`
     : `部分结果 · ${partialResultDescription(
@@ -115,14 +147,14 @@ function buildPrintableHtml(
   <title>Pi Translator 双语译文</title>
   <style>
     :root{font-family:Inter,"Segoe UI","Microsoft YaHei",sans-serif;color:#263247;background:#fff}
-    *{box-sizing:border-box}body{max-width:860px;margin:0 auto;padding:48px 42px 72px;background:#fff}
+    *{box-sizing:border-box}body{max-width:1180px;margin:0 auto;padding:48px 42px 72px;background:#fff}
     header{margin-bottom:34px;padding-bottom:18px;border-bottom:1px solid #dfe4ec}
     h1{margin:0;color:#302d85;font-size:26px;letter-spacing:-.02em}header p{margin:8px 0 0;color:${complete ? '#667085' : '#9a6416'};font-size:13px}
-    h2{margin:34px 0 12px;color:#6764cc;font-size:14px}.pair{break-inside:avoid;margin:0 0 24px;padding:0 0 0 15px;border-left:2px solid #716de0}
+    h2{margin:34px 0 12px;color:#6764cc;font-size:14px}.page-bundle{break-before:page}.page-bundle:first-of-type{break-before:auto}.page-layout{display:grid;grid-template-columns:minmax(280px,.88fr) minmax(0,1.12fr);align-items:start;gap:28px}.page-layout.text-only{display:block}.source-page{position:sticky;top:18px;margin:0;padding:10px;border:1px solid #dfe4ec;border-radius:10px;background:#f7f8fb}.source-page img{display:block;width:100%;height:auto}.source-page figcaption{margin-top:7px;color:#7b8494;font-size:10px;text-align:center}.pair{break-inside:avoid;margin:0 0 24px;padding:0 0 0 15px;border-left:2px solid #716de0}
     .source,.translation{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.72}.source{color:#667085;font-size:13px}.translation{margin-top:7px;color:#1f2937;font-size:15px}
     footer{margin-top:42px;padding-top:14px;border-top:1px solid #e5e8ee;color:#8a94a3;font-size:11px}
-    @media(max-width:600px){body{padding:28px 20px 48px}.pair{padding-left:11px}}
-    @media print{body{max-width:none;padding:0}header{margin-bottom:24px}.pair{break-inside:avoid}footer{color:#6b7280}}
+    @media(max-width:820px){body{padding:28px 20px 48px}.page-layout{display:block}.source-page{position:static;margin-bottom:22px}.pair{padding-left:11px}}
+    @media print{body{max-width:none;padding:0}header{margin-bottom:24px}.page-layout{grid-template-columns:minmax(0,42fr) minmax(0,58fr);gap:18px}.source-page{position:static;padding:6px}.pair{break-inside:avoid}footer{color:#6b7280}}
   </style>
 </head>
 <body>
@@ -198,6 +230,7 @@ export function buildDocumentTranslationExport(
       totalBlockCount,
       unavailablePageCount,
       contentTruncated,
+      options.pageImages ?? [],
     ),
     blockCount: completed.length,
     totalBlockCount,

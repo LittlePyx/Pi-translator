@@ -982,7 +982,9 @@ export function installEdgeExtensionHooks(): void {
     const imagePrompt = (body.messages as Array<{
       content?: Array<{ type?: string; text?: string }>;
     }> | undefined)?.[0]?.content?.find((item) => item.type === 'text')?.text ?? '';
-    const isEnergyFormula = imagePrompt.includes('Energy E = mc^2');
+    const isEnergyFormula = imagePrompt.includes('Energy E = mc^2') ||
+      imagePrompt.includes('E=mc^2') ||
+      imagePrompt.includes('E = mc^2');
     const isEscapedFormula = imagePrompt.includes('Escaped distribution');
     const isRenderedFormula = imagePrompt.includes('∑ᵢ xᵢ²');
     const formulaLatex = isEscapedFormula

@@ -375,6 +375,8 @@ function toPublicSettings(
     pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
     pdfRegionShortcutKey: settings.pdfRegionShortcutKey,
     activeApiProfileId: settings.activeApiProfileId,
+    visionApiProfileId: settings.visionApiProfileId,
+    visionModel: settings.visionModel,
     apiProfiles: settings.apiProfiles.map(({ id, name, model }) => ({ id, name, model })),
   };
 }
@@ -3267,6 +3269,7 @@ async function translateImageRegion(
   request: TranslateImageRegionRequest,
   tabId: number,
   progressTarget: TranslationProgressTarget,
+  transientDocumentTask = false,
 ): Promise<TranslateRuntimeResponse> {
   const performanceStartedAt = performance.now();
   const performanceTimings: Partial<Record<PerformancePhase, number>> = {};
@@ -3316,7 +3319,7 @@ async function translateImageRegion(
     validateImageRegionRequest(request);
     // A region request represents different source content and cannot resume a
     // text checkpoint. Clear it without ever storing the captured image.
-    await clearTranslationCheckpoint(tabId);
+    if (!transientDocumentTask) await clearTranslationCheckpoint(tabId);
     assertActiveRequest(tabId, request.requestId, controller);
     const settings = await getSettings();
     assertActiveRequest(tabId, request.requestId, controller);
@@ -3351,7 +3354,12 @@ async function translateImageRegion(
       glossary,
     });
     assertActiveRequest(tabId, request.requestId, controller);
-    if (settings.enableSessionCache && !request.bypassCache && !request.revision) {
+    if (
+      !transientDocumentTask &&
+      settings.enableSessionCache &&
+      !request.bypassCache &&
+      !request.revision
+    ) {
       const cached = await getCachedImageRegionTranslation(
         tabId,
         cacheKey,
@@ -3536,6 +3544,10 @@ async function translateImageRegion(
           }
         : {}),
     }, scopedGlossary);
+    if (transientDocumentTask) {
+      assertActiveRequest(tabId, request.requestId, controller);
+      return { ok: true, data: { result, history: [] } };
+    }
     queueProgress({
       requestId: request.requestId,
       completedChunks: 1,
@@ -5187,6 +5199,21 @@ export default defineBackground(() => {
           'text',
           translateSelectionInBrowserSidePanel(message.payload, tabId),
         );
+      }
+
+      if (message.type === 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK') {
+        const tabId = sender.tab?.id;
+        if (
+          tabId === undefined ||
+          !isExtensionPdfReaderUrl(sender.url ?? sender.tab?.url, PI_PDF_READER_URL)
+        ) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            'PDF 全文视觉翻译请求必须来自 Pi PDF。',
+            false,
+          )));
+        }
+        return translateImageRegion(message.payload, tabId, 'none', true);
       }
 
       if (message.type === 'TRANSLATE_IMAGE_REGION') {

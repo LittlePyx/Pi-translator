@@ -145,6 +145,20 @@ describe('runtime message guard', () => {
     };
     expect(isRuntimeMessage(documentBatch)).toBe(true);
     expect(isRuntimeMessage({
+      type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK',
+      payload: {
+        requestId: 'visual-block-1',
+        imageDataUrl: 'data:image/png;base64,AA==',
+        imageWidth: 64,
+        imageHeight: 32,
+        recognizedTextHint: 'E = mc^2',
+        pageUrl: 'chrome-extension://test/pdf.html',
+        targetLanguage: 'zh-CN',
+        sourceLanguage: 'auto',
+        style: 'academic',
+      },
+    })).toBe(true);
+    expect(isRuntimeMessage({
       ...documentBatch,
       payload: {
         ...documentBatch.payload,

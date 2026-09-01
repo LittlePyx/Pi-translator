@@ -429,6 +429,30 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-document-translation-section-options label:has(input:disabled) { opacity: .55; cursor: default; }
 .pdf-document-translation-scope > small { color: var(--muted); font-size: 9px; line-height: 1.5; }
 .pdf-document-translation-scope > small[data-tone="error"] { color: #b42336; }
+.pdf-document-translation-multimodal {
+  margin: 10px 14px 0;
+  padding: 10px;
+  border: 1px solid #dedff1;
+  border-radius: 10px;
+  background: #f8f8ff;
+}
+.pdf-document-translation-multimodal label {
+  display: flex;
+  align-items: flex-start;
+  gap: 9px;
+  cursor: pointer;
+}
+.pdf-document-translation-multimodal input {
+  width: 15px;
+  height: 15px;
+  margin: 1px 0 0;
+  flex: 0 0 auto;
+  accent-color: #5659df;
+}
+.pdf-document-translation-multimodal span { display: grid; min-width: 0; gap: 2px; }
+.pdf-document-translation-multimodal strong { color: #3c4659; font-size: 10.5px; }
+.pdf-document-translation-multimodal small { color: var(--muted); font-size: 9px; line-height: 1.45; }
+.pdf-document-translation-multimodal:has(input:disabled) { opacity: .65; }
 .pdf-document-translation-ocr {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -543,6 +567,21 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
 .pdf-document-translation-block[data-status="error"] { color: #b42336; }
+.pdf-document-translation-block[data-translation-mode]::before {
+  display: block;
+  width: max-content;
+  margin: 0 0 3px;
+  color: #6561cf;
+  font-size: 8px;
+  font-weight: 800;
+  line-height: 1.35;
+  letter-spacing: .04em;
+}
+.pdf-document-translation-block[data-translation-mode="vision"]::before { content: "视觉公式"; }
+.pdf-document-translation-block[data-translation-mode="preserved"]::before {
+  color: #9a6416;
+  content: "已保留原式";
+}
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
 .pdf-document-translation-empty { margin: 22px 6px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }
 .pdf-outline > header {
@@ -1344,6 +1383,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-document-translation-scope form button { color: #c7d2fe; }
   .pdf-document-translation-section-options label { color: #cbd5e1; }
   .pdf-document-translation-scope > small[data-tone="error"] { color: #ff9cab; }
+  .pdf-document-translation-multimodal { border-color: #454a68; background: #25263c; }
+  .pdf-document-translation-multimodal strong { color: #e1e4f2; }
   .pdf-document-translation-ocr { border-color: #3b4658; background: #1d2634; }
   .pdf-document-translation-ocr-badge { color: #c7c3ff; background: #292943; }
   .pdf-document-translation-ocr-copy strong { color: #dce3ed; }
@@ -1361,6 +1402,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-document-translation-page[data-current] { border-color: #565a91; }
   .pdf-document-translation-block { color: #dde4ef; }
   .pdf-document-translation-block[data-status="error"] { color: #ff9cab; }
+  .pdf-document-translation-block[data-translation-mode]::before { color: #aaa7ff; }
+  .pdf-document-translation-block[data-translation-mode="preserved"]::before { color: #f7c873; }
   .pdf-link-return { color: #d4d9e5; border-color: #4b5568; background: rgba(31, 40, 55, .96); }
   .pdf-link-return:hover { color: #c7d2fe; border-color: #656b96; background: #272c42; }
   .pdf-navigation-tabs button[aria-selected="true"] { color: #c7d2fe; }

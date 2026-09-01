@@ -43,6 +43,7 @@ import type {
   RecognizePdfPageResponse,
   RuntimeMessage,
   RuntimeResponse,
+  TranslateRuntimeResponse,
   TranslationBatchRuntimeResponse,
 } from '../../core/messaging/messages';
 import {
@@ -57,6 +58,7 @@ import {
   documentTranslationDownload,
   triggerDocumentTranslationDownload,
   type DocumentTranslationExportFormat,
+  type DocumentTranslationExportPageImage,
 } from '../../core/translation/document-export';
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
@@ -265,6 +267,15 @@ const documentTranslationSkipAppendix = element<HTMLInputElement>(
 const documentTranslationRangeFeedback = element<HTMLElement>(
   'pdf-document-translation-range-feedback',
 );
+const documentTranslationMultimodal = element<HTMLElement>(
+  'pdf-document-translation-multimodal',
+);
+const documentTranslationMultimodalToggle = element<HTMLInputElement>(
+  'pdf-document-translation-multimodal-toggle',
+);
+const documentTranslationMultimodalStatus = element<HTMLElement>(
+  'pdf-document-translation-multimodal-status',
+);
 const documentTranslationOcr = element<HTMLElement>('pdf-document-translation-ocr');
 const documentTranslationOcrStatus = element<HTMLElement>(
   'pdf-document-translation-ocr-status',
@@ -386,6 +397,8 @@ interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock
   translatedText?: string;
   errorMessage?: string;
   singleRetry?: boolean;
+  visualFallbackMessage?: string;
+  visualProcessed?: boolean;
 }
 
 let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
@@ -417,6 +430,8 @@ let pdfDocumentTranslationRangeSummary = '';
 let pdfDocumentTranslationRangeError: string | undefined;
 let pdfDocumentTranslationSkipReferencesEnabled = false;
 let pdfDocumentTranslationSkipAppendixEnabled = false;
+let pdfDocumentTranslationMultimodalEnabled = true;
+let pdfDocumentTranslationMultimodalAuthorized = false;
 interface PdfDocumentTranslationSessionContext {
   descriptor: PdfDocumentTranslationSessionDescriptor;
   behaviorKey: string;
@@ -430,6 +445,8 @@ let pdfDocumentTranslationSettings: Pick<
   | 'contentMode'
   | 'autoRenderLatex'
   | 'activeApiProfileId'
+  | 'visionApiProfileId'
+  | 'visionModel'
   | 'apiProfiles'
 > = {
   sourceLanguage: 'auto',
@@ -438,6 +455,8 @@ let pdfDocumentTranslationSettings: Pick<
   contentMode: 'auto',
   autoRenderLatex: true,
   activeApiProfileId: 'default',
+  visionApiProfileId: '',
+  visionModel: '',
   apiProfiles: [],
 };
 
@@ -689,6 +708,10 @@ function scopedPdfDocumentTranslationBlocks(): PdfDocumentTranslationRuntimeBloc
   return pdfDocumentTranslationBlocksState.filter((block) => block.included);
 }
 
+function pdfDocumentTranslationFormulaBlocksInScope(): PdfDocumentTranslationRuntimeBlock[] {
+  return scopedPdfDocumentTranslationBlocks().filter((block) => block.kind === 'formula');
+}
+
 function pdfDocumentTranslationCounts(): {
   translated: number;
   failed: number;
@@ -747,8 +770,11 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
+      'pdf-smart-vision-v1',
       pdfDocumentTranslationSettings.activeApiProfileId,
       activeProfile?.model ?? '',
+      pdfDocumentTranslationSettings.visionApiProfileId ?? '',
+      pdfDocumentTranslationSettings.visionModel ?? '',
     ].join('\n')),
   };
 }
@@ -893,6 +919,7 @@ function applyPdfDocumentTranslationScope(): boolean {
   pdfDocumentTranslationBlocksState.forEach((block, index) => {
     block.included = included[index] ?? false;
   });
+  if (changed) pdfDocumentTranslationMultimodalAuthorized = false;
   pdfDocumentTranslationRangeError = undefined;
   rebuildPdfDocumentTranslationResults();
   if (!pdfDocumentTranslationBlocksState.length) {
@@ -975,6 +1002,11 @@ function syncPdfDocumentTranslationUi(): void {
     : 0;
   const hasPreparedBlocks = pdfDocumentTranslationBlocksState.length > 0;
   const unreadablePagesInScope = pdfDocumentTranslationUnreadablePagesInScope();
+  const formulaBlocksInScope = pdfDocumentTranslationFormulaBlocksInScope();
+  const visualFormulaCount = formulaBlocksInScope.filter((block) => block.sourceAnchor).length;
+  const visualFallbackCount = formulaBlocksInScope.filter(
+    (block) => Boolean(block.visualFallbackMessage),
+  ).length;
   const scopeEnabled = (
     hasPreparedBlocks || pdfDocumentTranslationUnreadablePageNumbers.length > 0
   ) && pdfDocumentTranslationPhase !== 'preparing' && !pdfDocumentTranslationOcrRunning;
@@ -1014,6 +1046,23 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationRangeFeedback.dataset.tone = pdfDocumentTranslationRangeError
     ? 'error'
     : 'info';
+  documentTranslationMultimodal.dataset.mode = pdfDocumentTranslationMultimodalEnabled
+    ? 'smart'
+    : 'text';
+  documentTranslationMultimodalToggle.checked = pdfDocumentTranslationMultimodalEnabled;
+  documentTranslationMultimodalToggle.disabled = pdfDocumentTranslationPhase === 'preparing' ||
+    pdfDocumentTranslationOcrRunning ||
+    pdfDocumentTranslationPhase === 'running' ||
+    translated > 0;
+  const visualTargets = [
+    visualFormulaCount ? `${visualFormulaCount} 个公式区域` : '',
+    unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页` : '',
+  ].filter(Boolean).join('和');
+  documentTranslationMultimodalStatus.textContent = pdfDocumentTranslationMultimodalEnabled
+    ? visualTargets
+      ? `点击开始即授权本次任务发送${visualTargets}；普通正文仍使用文字接口`
+      : '未发现必须发送图像的内容；普通正文仍使用文字接口'
+    : `${formulaBlocksInScope.length ? `${formulaBlocksInScope.length} 个公式块将原样保留；` : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}普通正文只使用文字接口`;
   const defaultStatus = pdfDocumentTranslationPhase === 'idle'
     ? '尚未读取正文'
     : pdfDocumentTranslationPhase === 'preparing'
@@ -1032,8 +1081,11 @@ function syncPdfDocumentTranslationUi(): void {
                   : `已完成 ${translated}/${total}`
                 : `翻译中断 · ${translated}/${total}`;
   documentTranslationStatus.textContent = pdfDocumentTranslationMessage ?? defaultStatus;
+  const canStartVisionOnly = pdfDocumentTranslationMultimodalEnabled &&
+    !pdfDocumentTranslationMultimodalAuthorized &&
+    unreadablePagesInScope.length > 0;
   documentTranslationPrimary.disabled = pdfDocumentTranslationPhase === 'preparing' ||
-    pdfDocumentTranslationOcrRunning || total === 0;
+    pdfDocumentTranslationOcrRunning || (total === 0 && !canStartVisionOnly);
   documentTranslationPrimary.hidden = pdfDocumentTranslationPhase === 'complete' && failed === 0;
   documentTranslationPrimary.textContent = pdfDocumentTranslationPhase === 'running'
     ? '暂停'
@@ -1043,9 +1095,13 @@ function syncPdfDocumentTranslationUi(): void {
         ? `重试 ${failed} 段`
         : pdfDocumentTranslationPhase === 'error'
           ? '继续'
-          : translated > 0 && pending > 0
+          : canStartVisionOnly && total === 0
+            ? '开始识别并翻译'
+            : translated > 0 && pending > 0
             ? '继续翻译'
-            : '开始翻译';
+            : pdfDocumentTranslationMultimodalEnabled && visualTargets
+              ? '开始智能翻译'
+              : '开始翻译';
   documentTranslationStop.hidden = ![
     'running',
     'paused',
@@ -1087,7 +1143,7 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationOcrStatus.textContent = pdfDocumentTranslationOcrRunning
     ? `正在逐页识别 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
     : pdfDocumentTranslationOcrMessage ??
-      `${unreadablePagesInScope.length} 页没有文字层；点击后才会逐页发送页面图像`;
+      `${unreadablePagesInScope.length} 页没有文字层；智能多模态开启时将在开始后自动识别`;
   translateDocument.setAttribute('aria-expanded', String(!documentTranslationPanel.hidden));
   translateDocument.title = total
     ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
@@ -1103,9 +1159,12 @@ function syncPdfDocumentTranslationUi(): void {
   const retentionNote = pdfDocumentTranslationRetainedLocally
     ? '已完成译文会保留在本机；不会保存原文、PDF 文件或页面图像。'
     : '已完成译文默认只保留在当前 Edge 会话中。';
+  const formulaFallbackNote = visualFallbackCount
+    ? ` ${visualFallbackCount} 个公式视觉结果未通过校验，已安全保留原式。`
+    : '';
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `正文与扫描页图像只在你分别确认后发送；${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 原始 PDF 始终保留。`
-    : `正文只在确认后批量发送；${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''} 译文按页排列，点击可返回原文。`;
+    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和智能多模态处理。${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${formulaFallbackNote} 原始 PDF 始终保留。`
+    : `点击开始即确认当前范围；正文走文字接口，公式区域按需走视觉接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${formulaFallbackNote} 译文按页排列，点击可返回原文。`;
 }
 
 function setPdfDocumentTranslationCopyFeedback(message: string, error = false): void {
@@ -1121,7 +1180,9 @@ function setPdfDocumentTranslationCopyFeedback(message: string, error = false): 
   }, 2_800);
 }
 
-function pdfDocumentTranslationExportResult() {
+function pdfDocumentTranslationExportResult(
+  pageImages: readonly DocumentTranslationExportPageImage[] = [],
+) {
   return buildDocumentTranslationExport(
     pdfDocumentTranslationBlocksState.flatMap((block) => block.included
       ? [{
@@ -1132,8 +1193,52 @@ function pdfDocumentTranslationExportResult() {
           pageNumber: block.pageNumber,
         }]
       : []),
-    { unavailablePageCount: pdfDocumentTranslationUnreadablePagesInScope().length },
+    {
+      unavailablePageCount: pdfDocumentTranslationUnreadablePagesInScope().length,
+      pageImages,
+    },
   );
+}
+
+async function capturePdfDocumentTranslationExportPageImages(): Promise<
+  DocumentTranslationExportPageImage[]
+> {
+  const pdf = pdfDocument;
+  if (!pdf) return [];
+  const epoch = documentEpoch;
+  const pages = [...new Set(pdfDocumentTranslationBlocksState.flatMap((block) => (
+    block.included && block.status === 'done' ? [block.pageNumber] : []
+  )))].sort((left, right) => left - right);
+  const images: DocumentTranslationExportPageImage[] = [];
+  for (const pageNumber of pages) {
+    if (documentEpoch !== epoch || pdfDocument !== pdf) break;
+    try {
+      const page = await pdf.getPage(pageNumber);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(1.8, Math.max(
+        .75,
+        1_400 / Math.max(baseViewport.width, baseViewport.height, 1),
+      ));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.ceil(viewport.width));
+      canvas.height = Math.max(1, Math.ceil(viewport.height));
+      const context = canvas.getContext('2d', { alpha: false });
+      if (!context) continue;
+      context.fillStyle = '#fff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvas, canvasContext: context, viewport }).promise;
+      if (documentEpoch !== epoch || pdfDocument !== pdf) break;
+      images.push({
+        pageNumber,
+        dataUrl: canvas.toDataURL('image/jpeg', .78),
+      });
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
+    } catch {
+      // A page-image failure must not prevent exporting the completed text.
+    }
+  }
+  return images;
 }
 
 type PdfDocumentTranslationExportAction =
@@ -1145,11 +1250,17 @@ async function handlePdfDocumentTranslationExport(
   action: PdfDocumentTranslationExportAction,
 ): Promise<void> {
   if (pdfDocumentTranslationCopyPending) return;
-  const result = pdfDocumentTranslationExportResult();
+  let result = pdfDocumentTranslationExportResult();
   if (!result.blockCount) return;
   pdfDocumentTranslationCopyPending = true;
   syncPdfDocumentTranslationUi();
   try {
+    if (action === 'printable-html') {
+      setPdfDocumentTranslationCopyFeedback('正在本地生成带原页图的双语 HTML…');
+      result = pdfDocumentTranslationExportResult(
+        await capturePdfDocumentTranslationExportPageImages(),
+      );
+    }
     const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
     const partialLabel = result.complete
       ? ''
@@ -1169,7 +1280,7 @@ async function handlePdfDocumentTranslationExport(
         ? '已下载纯译文 Markdown'
         : action === 'bilingual-markdown'
           ? '已下载双语 Markdown'
-          : '已下载可打印 HTML';
+          : '已下载带原页图的可打印 HTML';
       message += pageLabel;
     }
     documentTranslationCopyMenu.open = false;
@@ -1308,6 +1419,14 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     container.removeAttribute('aria-label');
     container.removeAttribute('title');
   }
+  if (block.visualProcessed) container.dataset.translationMode = 'vision';
+  else if (block.visualFallbackMessage) container.dataset.translationMode = 'preserved';
+  else delete container.dataset.translationMode;
+  if (sourceAvailable && block.visualProcessed) {
+    container.title = '公式区域已通过视觉模型识别；点击返回并高亮 PDF 原文';
+  } else if (sourceAvailable && block.visualFallbackMessage) {
+    container.title = `${block.visualFallbackMessage}；已保留原式，点击可返回 PDF 原文`;
+  }
   if (block.status === 'done' && block.translatedText) {
     void renderTranslationContent(
       container,
@@ -1372,6 +1491,9 @@ function resetPdfDocumentTranslation(closePanel = false): void {
   pdfDocumentTranslationOcrProgress = { completed: 0, total: 0 };
   pdfDocumentTranslationOcrMessage = undefined;
   pdfDocumentTranslationOcrError = false;
+  pdfDocumentTranslationMultimodalEnabled = true;
+  pdfDocumentTranslationMultimodalAuthorized = false;
+  documentTranslationMultimodalToggle.checked = true;
   pdfDocumentTranslationRetainedLocally = false;
   pdfDocumentTranslationRetentionPending = false;
   pdfDocumentTranslationRetentionMessage = undefined;
@@ -1601,6 +1723,59 @@ async function capturePdfDocumentTranslationOcrPage(
     imageHeight: canvas.height,
     pageWidth: baseViewport.width,
     pageHeight: baseViewport.height,
+    captureMs: Math.max(0, performance.now() - startedAt),
+  };
+}
+
+async function capturePdfDocumentTranslationVisualBlock(
+  pdf: PDFDocumentProxy,
+  block: PdfDocumentTranslationRuntimeBlock,
+): Promise<{
+  imageDataUrl: string;
+  imageWidth: number;
+  imageHeight: number;
+  captureMs: number;
+}> {
+  const anchor = block.sourceAnchor;
+  if (!anchor) throw new Error('这个公式没有可靠的原文位置，已保留原式。');
+  const startedAt = performance.now();
+  const page = await pdf.getPage(block.pageNumber);
+  const baseViewport = page.getViewport({ scale: 1 });
+  const scale = Math.min(2.4, Math.max(
+    1,
+    1_800 / Math.max(baseViewport.width, baseViewport.height, 1),
+  ));
+  const viewport = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.ceil(viewport.width));
+  canvas.height = Math.max(1, Math.ceil(viewport.height));
+  const context = canvas.getContext('2d', { alpha: false });
+  if (!context) throw new Error('当前浏览器无法生成公式区域图像，已保留原式。');
+  context.fillStyle = '#fff';
+  context.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvas, canvasContext: context, viewport }).promise;
+  const paddingX = Math.max(6, baseViewport.width * .012);
+  const paddingY = Math.max(5, baseViewport.height * .008);
+  const region = normalizeRegion(
+    {
+      x: anchor.leftRatio * baseViewport.width - paddingX,
+      y: anchor.topRatio * baseViewport.height - paddingY,
+    },
+    {
+      x: (anchor.leftRatio + anchor.widthRatio) * baseViewport.width + paddingX,
+      y: (anchor.topRatio + anchor.heightRatio) * baseViewport.height + paddingY,
+    },
+    { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
+  );
+  const capture = await captureCanvasRegion(
+    canvas,
+    { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
+    region,
+  );
+  return {
+    imageDataUrl: capture.dataUrl,
+    imageWidth: capture.width,
+    imageHeight: capture.height,
     captureMs: Math.max(0, performance.now() - startedAt),
   };
 }
@@ -1839,6 +2014,103 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
   );
 }
 
+async function processPdfDocumentTranslationVisualBlock(
+  block: PdfDocumentTranslationRuntimeBlock,
+  revision: number,
+): Promise<boolean> {
+  const pdf = pdfDocument;
+  if (!pdf || !block.sourceAnchor) {
+    block.status = 'done';
+    block.translatedText = block.text;
+    block.visualFallbackMessage = '公式缺少可靠的原文位置';
+    renderPdfDocumentTranslationBlock(block);
+    return true;
+  }
+  const requestId = crypto.randomUUID();
+  pdfDocumentTranslationRequestId = requestId;
+  block.status = 'translating';
+  delete block.visualFallbackMessage;
+  delete block.visualProcessed;
+  renderPdfDocumentTranslationBlock(block);
+  syncPdfDocumentTranslationUi();
+  let response: TranslateRuntimeResponse;
+  try {
+    const capture = await capturePdfDocumentTranslationVisualBlock(pdf, block);
+    if (
+      revision !== pdfDocumentTranslationRevision ||
+      pdfDocumentTranslationRequestId !== requestId
+    ) return false;
+    const sourceLocation = pdfDocumentTranslationSourceLocation(block);
+    response = await browser.runtime.sendMessage({
+      type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK',
+      payload: {
+        requestId,
+        documentId: currentReadingIdentity ?? currentDocumentSessionId,
+        imageDataUrl: capture.imageDataUrl,
+        imageWidth: capture.imageWidth,
+        imageHeight: capture.imageHeight,
+        recognizedTextHint: block.text,
+        pageUrl: currentSourceUrl,
+        ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
+        targetLanguage: pdfDocumentTranslationSettings.targetLanguage,
+        sourceLanguage: pdfDocumentTranslationSettings.sourceLanguage,
+        style: pdfDocumentTranslationSettings.style,
+        ...(sourceLocation ? { sourceLocation } : {}),
+        clientPerformance: { captureMs: capture.captureMs },
+      },
+    } satisfies RuntimeMessage) as TranslateRuntimeResponse;
+  } catch (error) {
+    response = {
+      ok: false,
+      error: {
+        code: 'NETWORK_ERROR',
+        message: error instanceof Error ? error.message : '公式视觉翻译请求失败。',
+        retryable: true,
+      },
+    };
+  }
+  if (
+    revision !== pdfDocumentTranslationRevision ||
+    pdfDocumentTranslationRequestId !== requestId
+  ) return false;
+  pdfDocumentTranslationRequestId = undefined;
+  if (!response.ok && response.error.code === 'REQUEST_ABORTED') {
+    block.status = 'idle';
+    renderPdfDocumentTranslationBlock(block);
+    pdfDocumentTranslationPhase = 'paused';
+    pdfDocumentTranslationMessage = '其他划词或框选翻译已优先处理，全文翻译可继续。';
+    syncPdfDocumentTranslationUi();
+    return false;
+  }
+  if (
+    response.ok &&
+    response.data.result.translatedText.trim() &&
+    response.data.result.formulaLatex?.length &&
+    !response.data.result.formulaNeedsReview
+  ) {
+    block.status = 'done';
+    block.translatedText = response.data.result.translatedText.trim();
+    block.visualProcessed = true;
+    delete block.visualFallbackMessage;
+  } else {
+    block.status = 'done';
+    block.translatedText = block.text;
+    block.visualFallbackMessage = response.ok
+      ? '公式视觉结果未通过结构校验'
+      : translationErrorMessage(response.error.code, response.error.message);
+    delete block.visualProcessed;
+  }
+  delete block.errorMessage;
+  delete block.singleRetry;
+  renderPdfDocumentTranslationBlock(block);
+  await persistPdfDocumentTranslationSession([block]);
+  pdfDocumentTranslationMessage = block.visualFallbackMessage
+    ? '部分公式视觉结果未通过校验，已保留原式并继续翻译。'
+    : undefined;
+  syncPdfDocumentTranslationUi();
+  return true;
+}
+
 function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock): string | undefined {
   const index = pdfDocumentTranslationBlocksState.indexOf(block);
   const previous = index > 0 && pdfDocumentTranslationBlocksState[index - 1]?.included
@@ -1867,8 +2139,26 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
         .sort((left, right) => comparePdfDocumentTranslationPriority(left, right, currentPage));
       const first = pending[0];
       if (!first) break;
+      if (first.kind === 'formula') {
+        if (
+          pdfDocumentTranslationMultimodalEnabled &&
+          pdfDocumentTranslationMultimodalAuthorized
+        ) {
+          if (!await processPdfDocumentTranslationVisualBlock(first, revision)) return;
+        } else {
+          first.status = 'done';
+          first.translatedText = first.text;
+          first.visualFallbackMessage = '纯文本模式下公式保持原样';
+          delete first.visualProcessed;
+          renderPdfDocumentTranslationBlock(first);
+          await persistPdfDocumentTranslationSession([first]);
+          syncPdfDocumentTranslationUi();
+        }
+        continue;
+      }
+      const textPending = pending.filter((block) => block.kind !== 'formula');
       const selected = takeDocumentTranslationBatch(
-        pending.map((block) => ({
+        textPending.map((block) => ({
           value: block,
           text: block.text,
           urgent: Boolean(block.singleRetry),
@@ -2013,7 +2303,7 @@ function closePdfDocumentTranslation(
   if (options.restoreFocus !== false) translateDocument.focus({ preventScroll: true });
 }
 
-function startOrTogglePdfDocumentTranslation(): void {
+async function startOrTogglePdfDocumentTranslation(): Promise<void> {
   if (pdfDocumentTranslationOcrRunning) return;
   if (pdfDocumentTranslationPhase === 'running') {
     pdfDocumentTranslationPhase = 'paused';
@@ -2029,6 +2319,21 @@ function startOrTogglePdfDocumentTranslation(): void {
       block.singleRetry = true;
       delete block.errorMessage;
       renderPdfDocumentTranslationBlock(block);
+    }
+  }
+  if (
+    pdfDocumentTranslationMultimodalEnabled &&
+    !pdfDocumentTranslationMultimodalAuthorized
+  ) {
+    pdfDocumentTranslationMultimodalAuthorized = true;
+    const unreadablePages = pdfDocumentTranslationUnreadablePagesInScope();
+    if (unreadablePages.length) {
+      pdfDocumentTranslationMessage = `已确认智能多模态 · 正在识别 ${unreadablePages.length} 个扫描页…`;
+      syncPdfDocumentTranslationUi();
+      const ocrRevisionBefore = pdfDocumentTranslationOcrRevision;
+      await recognizePdfDocumentTranslationPages();
+      if (pdfDocumentTranslationOcrRevision !== ocrRevisionBefore + 1) return;
+      if (!scopedPdfDocumentTranslationBlocks().length) return;
     }
   }
   pdfDocumentTranslationPhase = 'running';
@@ -2064,6 +2369,8 @@ async function restartPdfDocumentTranslation(): Promise<void> {
     delete block.translatedText;
     delete block.errorMessage;
     delete block.singleRetry;
+    delete block.visualFallbackMessage;
+    delete block.visualProcessed;
   }
   pdfDocumentTranslationPhase = 'preparing';
   pdfDocumentTranslationMessage = '正在清除已保存进度…';
@@ -2079,12 +2386,14 @@ async function restartPdfDocumentTranslation(): Promise<void> {
     true,
   );
   if (revision !== pdfDocumentTranslationRevision) return;
-  pdfDocumentTranslationPhase = scopedPdfDocumentTranslationBlocks().length
-    ? 'running'
+  pdfDocumentTranslationPhase = scopedPdfDocumentTranslationBlocks().length ||
+    pdfDocumentTranslationUnreadablePagesInScope().length
+    ? 'ready'
     : 'idle';
+  pdfDocumentTranslationMultimodalAuthorized = false;
   pdfDocumentTranslationMessage = undefined;
   syncPdfDocumentTranslationUi();
-  void processPdfDocumentTranslationQueue();
+  await startOrTogglePdfDocumentTranslation();
 }
 
 function isRegionModeActive(): boolean {
@@ -5761,7 +6070,9 @@ translateDocument.addEventListener('click', () => {
   else closePdfDocumentTranslation();
 });
 documentTranslationClose.addEventListener('click', () => closePdfDocumentTranslation());
-documentTranslationPrimary.addEventListener('click', startOrTogglePdfDocumentTranslation);
+documentTranslationPrimary.addEventListener('click', () => {
+  void startOrTogglePdfDocumentTranslation();
+});
 documentTranslationStop.addEventListener('click', stopPdfDocumentTranslation);
 documentTranslationClear.addEventListener('click', () => {
   void restartPdfDocumentTranslation();
@@ -5789,6 +6100,13 @@ documentTranslationRetentionManage.addEventListener('click', () => {
 });
 documentTranslationOcrAction.addEventListener('click', () => {
   void recognizePdfDocumentTranslationPages();
+});
+documentTranslationMultimodalToggle.addEventListener('change', () => {
+  if (documentTranslationMultimodalToggle.disabled) return;
+  pdfDocumentTranslationMultimodalEnabled = documentTranslationMultimodalToggle.checked;
+  pdfDocumentTranslationMultimodalAuthorized = false;
+  pdfDocumentTranslationMessage = undefined;
+  syncPdfDocumentTranslationUi();
 });
 documentTranslationRange.addEventListener('change', () => {
   pdfDocumentTranslationRangeError = undefined;
@@ -5906,6 +6224,8 @@ const selectionTranslator = startSelectionTranslator(
         contentMode: settings.contentMode,
         autoRenderLatex: settings.autoRenderLatex,
         activeApiProfileId: settings.activeApiProfileId,
+        visionApiProfileId: settings.visionApiProfileId ?? '',
+        visionModel: settings.visionModel ?? '',
         apiProfiles: settings.apiProfiles,
       };
       if (

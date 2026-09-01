@@ -1,12 +1,17 @@
 import { buildPdfSearchPageIndex, type PdfSearchTextItem } from './search';
 import { splitLongTranslationText } from '../translation/text-chunker';
 import type { CoordinateOcrPage } from './ocr-text-layer';
+import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
+
+export type PdfDocumentTranslationBlockKind = 'text' | 'formula' | 'code' | 'table';
 
 export interface PdfDocumentTranslationBlock {
   id: string;
   pageNumber: number;
   blockIndex: number;
   text: string;
+  /** Ordinary prose omits this field to keep existing session plans compact. */
+  kind?: Exclude<PdfDocumentTranslationBlockKind, 'text'>;
   sourceAnchor?: PdfDocumentTranslationSourceAnchor;
 }
 
@@ -23,6 +28,7 @@ export interface PdfDocumentTranslationTextItem extends PdfSearchTextItem {
   top?: number;
   width?: number;
   height?: number;
+  kind?: PdfDocumentTranslationBlockKind;
 }
 
 export interface PdfDocumentTranslationPageInput {
@@ -58,6 +64,7 @@ export function pdfDocumentTranslationItemsFromOcr(
     top: block.box.top * pageHeight,
     width: block.box.width * pageWidth,
     height: block.box.height * pageHeight,
+    kind: block.kind,
   }));
 }
 
@@ -68,6 +75,7 @@ interface VisualAtom {
   top: number;
   bottom: number;
   height: number;
+  kind?: PdfDocumentTranslationBlockKind;
 }
 
 type VisualLineRegion = 'left' | 'right' | 'spanning';
@@ -80,6 +88,7 @@ interface VisualLine {
   bottom: number;
   height: number;
   structured: boolean;
+  kind?: PdfDocumentTranslationBlockKind;
   region?: VisualLineRegion;
   breakBefore?: boolean;
 }
@@ -172,6 +181,7 @@ function visualAtoms(page: PdfDocumentTranslationPageInput): VisualAtom[] | unde
       top,
       bottom: Math.min(page.pageHeight, top + item.height!),
       height: item.height!,
+      ...(item.kind ? { kind: item.kind } : {}),
     };
   });
 }
@@ -212,6 +222,13 @@ function joinAtoms(atoms: readonly VisualAtom[]): string {
 }
 
 function lineFromAtoms(atoms: readonly VisualAtom[], structured = false): VisualLine {
+  const kind = atoms.some((atom) => atom.kind === 'formula')
+    ? 'formula'
+    : atoms.some((atom) => atom.kind === 'table')
+      ? 'table'
+      : atoms.some((atom) => atom.kind === 'code')
+        ? 'code'
+        : undefined;
   return {
     text: joinAtoms(atoms),
     left: Math.min(...atoms.map((atom) => atom.left)),
@@ -220,6 +237,7 @@ function lineFromAtoms(atoms: readonly VisualAtom[], structured = false): Visual
     bottom: Math.max(...atoms.map((atom) => atom.bottom)),
     height: median(atoms.map((atom) => atom.height)),
     structured,
+    ...(kind ? { kind } : {}),
   };
 }
 
@@ -268,6 +286,7 @@ function visualLines(page: PdfDocumentTranslationPageInput): VisualLine[] | unde
         bottom: Math.max(...cells.map((cell) => cell.bottom)),
         height: median(cells.map((cell) => cell.height)),
         structured: true,
+        kind: cells.some((cell) => cell.kind === 'formula') ? 'formula' : 'table',
       });
       continue;
     }
@@ -281,6 +300,7 @@ function visualLines(page: PdfDocumentTranslationPageInput): VisualLine[] | unde
           right: second.right,
           bottom: Math.max(first.bottom, second.bottom),
           structured: true,
+          kind: 'formula',
         });
         continue;
       }
@@ -300,6 +320,39 @@ function looksMathDominant(text: string): boolean {
 
 function looksProtectedStructure(text: string): boolean {
   return text.includes('\t') || looksMathDominant(text) || CODE_LINE.test(text.trim());
+}
+
+/**
+ * Classifies only high-confidence standalone structures. Mixed prose remains
+ * text so its surrounding language is still translated; explicit OCR kinds
+ * take precedence over heuristics derived from a PDF text layer.
+ */
+export function pdfDocumentTranslationBlockKind(
+  text: string,
+  sourceKinds: readonly PdfDocumentTranslationBlockKind[] = [],
+): PdfDocumentTranslationBlockKind {
+  const trimmed = text.trim();
+  if (sourceKinds.includes('formula')) return 'formula';
+  if (sourceKinds.includes('table')) return 'table';
+  if (
+    sourceKinds.includes('code') ||
+    /^(?:[$>#]\s|const\b|let\b|var\b|function\b|class\b|def\b|import\b|from\b|return\b|if\b|for\b|while\b)/u.test(trimmed)
+  ) return 'code';
+  const withoutEquationNumber = trimmed.replace(
+    /\s*\t\s*(?:\(?\d{1,4}[a-z]?\)?|\[\d{1,4}\])\s*$/iu,
+    '',
+  );
+  if (
+    looksMathDominant(withoutEquationNumber) ||
+    (
+      withoutEquationNumber.length <= 280 &&
+      !SENTENCE_END.test(withoutEquationNumber) &&
+      shouldUseVisionForPdfFormula(withoutEquationNumber)
+    )
+  ) return 'formula';
+  if (CODE_LINE.test(trimmed)) return 'code';
+  if (trimmed.includes('\t')) return 'table';
+  return 'text';
 }
 
 function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {
@@ -576,11 +629,18 @@ function blocksFromText(
   return chunks.map((chunk, blockIndex) => {
     const { text: block, start, end } = chunk;
     const sourceAnchor = sourceAnchorForBlock(start, end, layout, pageSize);
+    const kind = pdfDocumentTranslationBlockKind(
+      block,
+      layout?.lines
+        .filter((entry) => entry.end > start && entry.start < end)
+        .flatMap((entry) => entry.line.kind ? [entry.line.kind] : []) ?? [],
+    );
     return {
       id: `P${safePageNumber}B${blockIndex + 1}`,
       pageNumber: safePageNumber,
       blockIndex,
       text: block,
+      ...(kind === 'text' ? {} : { kind }),
       ...(sourceAnchor ? { sourceAnchor } : {}),
     };
   });

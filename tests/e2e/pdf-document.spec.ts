@@ -176,6 +176,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
     const requestsBeforeCopy = textRequests.length;
+    const visionRequestsBeforeCopy = visionRequests.length;
     await pdfPage.evaluate(() => {
       const scope = globalThis as typeof globalThis & { __piCopiedText?: string };
       scope.__piCopiedText = '';
@@ -222,7 +223,32 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     expect(downloadedMarkdown).not.toContain('full-document-translation.pdf');
     await expect(panel.locator('#pdf-document-translation-copy-feedback'))
       .toContainText('已下载纯译文 Markdown');
+    await copyMenu.locator(':scope > summary').click();
+    const htmlDownloadPromise = pdfPage.waitForEvent('download');
+    await panel.locator('#pdf-document-translation-download-html').click();
+    const htmlDownload = await htmlDownloadPromise;
+    expect(htmlDownload.suggestedFilename()).toBe('pi-translator-pdf-bilingual.html');
+    const htmlDownloadPath = await htmlDownload.path();
+    expect(htmlDownloadPath).toBeTruthy();
+    const downloadedHtml = await readFile(htmlDownloadPath!, 'utf8');
+    expect(downloadedHtml).toContain('data:image/jpeg;base64,');
+    expect(downloadedHtml).toContain('原 PDF 第 1 页');
+    expect(downloadedHtml).toContain('The first PDF page explains');
+    expect(downloadedHtml).toContain('批量生成的学术译文');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      const exportPreview = await context.newPage();
+      await exportPreview.setViewportSize({ width: 1200, height: 800 });
+      await exportPreview.setContent(downloadedHtml, { waitUntil: 'load' });
+      await exportPreview.screenshot({
+        path: testInfo.outputPath('pdf-bilingual-html.png'),
+        fullPage: false,
+      });
+      await exportPreview.close();
+    }
+    await expect(panel.locator('#pdf-document-translation-copy-feedback'))
+      .toContainText('带原页图的可打印 HTML');
     expect(textRequests.length).toBe(requestsBeforeCopy);
+    expect(visionRequests.length).toBe(visionRequestsBeforeCopy);
     const firstTranslation = panel.locator(
       '.pdf-document-translation-page[data-page-number="1"] [data-source-anchor]',
     );
@@ -273,7 +299,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
   }
 });
 
-test('adds scanned pages to PDF full translation only after explicit OCR confirmation', async ({}, testInfo) => {
+test('uses the full-translation confirmation as smart multimodal consent for scanned pages and formulas', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.addInitScript(() => {
     const scope = globalThis as typeof globalThis & { __documentOcrRequests?: number };
@@ -327,6 +353,7 @@ test('adds scanned pages to PDF full translation only after explicit OCR confirm
     };
   });
   const requestStart = textRequests.length;
+  const visionRequestStart = visionRequests.length;
   try {
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
@@ -345,15 +372,18 @@ test('adds scanned pages to PDF full translation only after explicit OCR confirm
       .toContainText('没有读取到文字层');
     await expect(ocr).toBeVisible();
     await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
-      .toContainText('点击后才会逐页发送页面图像');
+      .toContainText('将在开始后自动识别');
     await expect(ocrAction).toHaveText('识别 1 页');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-toggle')).toBeChecked();
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('1 个扫描页');
     await expect(pdfPage.locator('#pdf-document-translation-range')).toBeEnabled();
     expect(await pdfPage.evaluate(() => (
       globalThis as typeof globalThis & { __documentOcrRequests?: number }
     ).__documentOcrRequests)).toBe(0);
     expect(textRequests).toHaveLength(requestStart);
 
-    await ocrAction.click();
+    await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(ocr).toHaveAttribute('data-tone', 'error');
     await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
       .toContainText('1 页未识别');
@@ -379,12 +409,14 @@ test('adds scanned pages to PDF full translation only after explicit OCR confirm
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
     expect(textRequests).toHaveLength(requestStart + 1);
+    expect(visionRequests).toHaveLength(visionRequestStart + 1);
     const request = textRequests.at(-1)!;
     const messages = request.messages as Array<{ role?: string; content?: string }>;
     const content = messages.find((message) => message.role === 'user')?.content;
     const payload = JSON.parse(content!) as { segments: Array<{ text: string }> };
     expect(payload.segments[0]?.text).toContain('Scanned full-document paragraph');
-    expect(payload.segments.map((segment) => segment.text).join('\n')).toContain('E=mc^2');
+    expect(payload.segments.map((segment) => segment.text).join('\n')).not.toContain('E=mc^2');
+    await expect(panel.locator('[data-translation-mode="vision"]')).toContainText('能量关系式');
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({
         path: testInfo.outputPath('pdf-full-document-ocr-360.png'),
@@ -396,7 +428,7 @@ test('adds scanned pages to PDF full translation only after explicit OCR confirm
   }
 });
 
-test('stops PDF full-document OCR while keeping recognized-page consent explicit', async () => {
+test('stops automatically authorized PDF full-document OCR', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.addInitScript(() => {
     const runtime = (globalThis as typeof globalThis & {
@@ -421,7 +453,7 @@ test('stops PDF full-document OCR while keeping recognized-page consent explicit
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
     const action = pdfPage.locator('#pdf-document-translation-ocr-action');
-    await action.click();
+    await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(action).toHaveText('停止识别');
     await action.click();
     await expect(action).toHaveText('识别 1 页');
