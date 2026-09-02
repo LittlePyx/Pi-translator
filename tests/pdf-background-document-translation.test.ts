@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isPdfBackgroundDocumentMessage,
   isPdfBackgroundProxyMessage,
+  pdfBackgroundVisualFallbackMessage,
   pdfBackgroundVisualResultIsStructurallySafe,
 } from '../core/pdf/background-document-translation';
 
@@ -56,6 +57,62 @@ describe('PDF background translation message guards', () => {
     }, {
       formulaLatex: [],
     })).toBe(false);
+  });
+
+  it('accepts a simple inline equation when extraction, recognition, and translation agree', () => {
+    const block = {
+      containsFormula: true,
+      visualPurpose: 'formula' as const,
+      text: 'We set the sampling matrix Φ in Eq. (1) to Φ = PF, where P is under-sampling.',
+    };
+    expect(pdfBackgroundVisualResultIsStructurallySafe(block, {
+      recognizedText: 'We set the sampling matrix Φ in Eq. (1) to Φ = PF.',
+      translatedText: '我们将式（1）中的采样矩阵 Φ 设置为 Φ = PF。',
+      formulaLatex: [],
+    })).toBe(true);
+    expect(pdfBackgroundVisualResultIsStructurallySafe(block, {
+      recognizedText: 'We set the sampling matrix Φ in Eq. (1) to Φ = PF.',
+      translatedText: '我们将式（1）中的采样矩阵设置为 PF。',
+      formulaLatex: [],
+    })).toBe(false);
+    expect(pdfBackgroundVisualResultIsStructurallySafe(block, {
+      recognizedText: 'We set the sampling matrix Φ in Eq. (1) to Φ = PF.',
+      translatedText: '我们将式（1）中的采样矩阵 Φ 设置为 Φ = PF。',
+      formulaLatex: [],
+      formulaNeedsReview: true,
+    })).toBe(false);
+    expect(pdfBackgroundVisualResultIsStructurallySafe({
+      ...block,
+      text: 'We use Φ = PF and reconstruct with y = Ax.',
+    }, {
+      recognizedText: 'We use Φ = PF and reconstruct with y = Ax.',
+      translatedText: '我们使用 Φ = PF 进行重建。',
+      formulaLatex: [],
+    })).toBe(false);
+    expect(pdfBackgroundVisualResultIsStructurallySafe({
+      ...block,
+      text: 'See https://example.test/read?mode=a=b for details.',
+    }, {
+      recognizedText: 'See https://example.test/read?mode=a=b for details.',
+      translatedText: '详情参见 https://example.test/read?mode=a=b。',
+      formulaLatex: [],
+    })).toBe(false);
+  });
+
+  it('reports the concrete formula fallback reason', () => {
+    const block = {
+      containsFormula: true,
+      visualPurpose: 'formula' as const,
+      text: 'The result is E = mc^2.',
+    };
+    expect(pdfBackgroundVisualFallbackMessage(block, {
+      formulaLatex: [],
+    })).toBe('模型未返回可核对的公式结构');
+    expect(pdfBackgroundVisualFallbackMessage(block, {
+      formulaLatex: ['E=mc^2'],
+      formulaNeedsReview: true,
+      uncertainSpans: ['公式 LaTeX 未通过自动校验：识别原文与译文中的公式不一致'],
+    })).toBe('公式结构未通过校验：识别原文与译文中的公式不一致');
   });
 
   it('accepts complete start, control, snapshot, and tab cleanup messages', () => {

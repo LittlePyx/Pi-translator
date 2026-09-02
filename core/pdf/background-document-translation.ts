@@ -46,19 +46,77 @@ export interface PdfBackgroundTranslationSnapshot {
   errorMessage?: string;
 }
 
+interface PdfVisualStructureBlock {
+  containsFormula: boolean;
+  visualPurpose: ImageTranslationPurpose;
+  text?: string;
+}
+
+interface PdfVisualStructureResult {
+  formulaNeedsReview?: boolean;
+  formulaLatex?: readonly string[];
+  recognizedText?: string;
+  translatedText?: string;
+  uncertainSpans?: readonly string[];
+}
+
+const URL_LIKE = /(?:\b(?:https?|ftp):\/\/|\/\/(?:www\.)?|www\.)[^\s<>"']+/giu;
+const SIMPLE_PLAIN_EQUATION = /(?:^|[^\p{L}\p{N}])([\p{L}][\p{L}\p{N}]*(?:\s*\([^\n)]{1,24}\))?\s*(?:=|≈|≠|≤|≥|<|>)\s*[\p{L}\p{N}]+(?:\s*[+\-−*/×÷^]\s*[\p{L}\p{N}]+)*)(?=$|[^\p{L}\p{N}])/gu;
+
+function compactPlainFormula(value: string): string {
+  return value.normalize('NFKC').replace(/\s+/gu, '').replaceAll('−', '-');
+}
+
+function simplePlainFormulae(value: string): string[] {
+  const withoutUrls = value.replace(URL_LIKE, ' ');
+  return [...new Set([...withoutUrls.matchAll(SIMPLE_PLAIN_EQUATION)].flatMap((match) => {
+    const formula = compactPlainFormula(match[1] ?? '');
+    return formula.length >= 3 ? [formula] : [];
+  }))];
+}
+
+function preservesEverySimplePlainFormula(
+  block: PdfVisualStructureBlock,
+  result: PdfVisualStructureResult,
+): boolean {
+  if (!block.text || !result.recognizedText || !result.translatedText) return false;
+  const formulae = simplePlainFormulae(block.text);
+  if (!formulae.length) return false;
+  const recognized = compactPlainFormula(result.recognizedText);
+  const translated = compactPlainFormula(result.translatedText);
+  return formulae.every((formula) => (
+    recognized.includes(formula) && translated.includes(formula)
+  ));
+}
+
 /**
  * Figure and table results are object translations, not standalone formula
  * transcriptions. Their captions may contain symbols such as F(k), but a
  * provider is not required to duplicate every such token in formulaLatex.
  */
 export function pdfBackgroundVisualResultIsStructurallySafe(
-  block: Pick<PdfBackgroundTranslationBlock, 'containsFormula' | 'visualPurpose'>,
-  result: { formulaNeedsReview?: boolean; formulaLatex?: readonly string[] },
+  block: PdfVisualStructureBlock,
+  result: PdfVisualStructureResult,
 ): boolean {
   if (block.visualPurpose === 'figure' || block.visualPurpose === 'table') return true;
   return !result.formulaNeedsReview && (
-    !block.containsFormula || Boolean(result.formulaLatex?.length)
+    !block.containsFormula || Boolean(result.formulaLatex?.length) ||
+    preservesEverySimplePlainFormula(block, result)
   );
+}
+
+export function pdfBackgroundVisualFallbackMessage(
+  block: PdfVisualStructureBlock,
+  result: PdfVisualStructureResult,
+): string {
+  if (!block.containsFormula) return '视觉模型没有返回可靠译文';
+  if (!result.formulaLatex?.length) return '模型未返回可核对的公式结构';
+  const validationIssue = result.uncertainSpans?.find((issue) => (
+    issue.startsWith('公式 LaTeX 未通过自动校验：')
+  ));
+  return validationIssue
+    ? validationIssue.replace('公式 LaTeX 未通过自动校验：', '公式结构未通过校验：')
+    : '含公式段落的视觉结果未通过结构校验';
 }
 
 export type PdfBackgroundDocumentMessage =

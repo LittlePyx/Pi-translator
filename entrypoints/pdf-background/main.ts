@@ -4,6 +4,7 @@ import { browser } from 'wxt/browser';
 
 import {
   isPdfBackgroundDocumentMessage,
+  pdfBackgroundVisualFallbackMessage,
   pdfBackgroundVisualResultIsStructurallySafe,
   PDF_BACKGROUND_CACHE_NAME,
   type PdfBackgroundDocumentMessage,
@@ -185,9 +186,7 @@ async function processVisualBlock(
     blockId: block.id,
     translatedText: block.text,
     visualProcessed: false,
-    visualFallbackMessage: block.containsFormula
-      ? '含公式段落的视觉结果未通过结构校验'
-      : '视觉模型没有返回可靠译文',
+    visualFallbackMessage: pdfBackgroundVisualFallbackMessage(block, result),
   };
 }
 

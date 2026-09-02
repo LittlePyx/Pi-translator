@@ -80,6 +80,7 @@ import {
 } from '../../core/pdf/document-translation';
 import {
   isPdfBackgroundDocumentMessage,
+  pdfBackgroundVisualFallbackMessage,
   pdfBackgroundVisualResultIsStructurallySafe,
   PDF_BACKGROUND_CACHE_NAME,
   type PdfBackgroundDocumentMessage,
@@ -854,7 +855,7 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-semantic-visual-objects-v5',
+      'pdf-semantic-visual-objects-v6',
       pdfDocumentTranslationUsesUnifiedVision()
         ? 'unified-vision'
         : pdfDocumentTranslationMultimodalEnabled &&
@@ -2930,6 +2931,7 @@ async function processPdfDocumentTranslationVisualBlock(
   const structurallySafe = pdfBackgroundVisualResultIsStructurallySafe({
     containsFormula,
     visualPurpose: pdfDocumentTranslationVisualPurpose(block),
+    text: block.text,
   }, result);
   if (translatedText && structurallySafe) {
     block.status = 'done';
@@ -2939,9 +2941,11 @@ async function processPdfDocumentTranslationVisualBlock(
   } else {
     block.status = 'done';
     block.translatedText = block.text;
-    block.visualFallbackMessage = containsFormula
-      ? '含公式段落的视觉结果未通过结构校验'
-      : '视觉模型没有返回可靠译文';
+    block.visualFallbackMessage = pdfBackgroundVisualFallbackMessage({
+      containsFormula,
+      visualPurpose: pdfDocumentTranslationVisualPurpose(block),
+      text: block.text,
+    }, result);
     delete block.visualProcessed;
   }
   delete block.errorMessage;
