@@ -1,21 +1,21 @@
 # Pi Translator v0.15.0 开发交接
 
-更新时间：2026-09-01
+更新时间：2026-09-02
 
 ## 1. 当前状态
 
 | 项目 | 当前值 |
 | --- | --- |
 | 仓库 | `F:\research-papers\2026\July\Pi_translate` |
-| 分支 | `main`；发布准备、Edge CI 交互稳定性修复和发布交接均已推送 |
-| 功能基线 | `55e247a docs: prepare v0.14.0 release candidate`；其后为交接、v0.15.0 发布元数据和发布门禁稳定性修复 |
+| 分支 | `main`；公开 v0.15.0 已发布，当前实现基线 `b3fce7f` 尚未推送或发布，其后可以只有交接文档提交 |
+| 功能基线 | 已发布 `v0.15.0` 指向 `40a51bf`；当前发布后修复基线为 `b3fce7f fix: translate PDF figures and tables as objects` |
 | 当前版本 | `0.15.0` |
 | 最终发布候选 | `.output/final-ci/tex-selection-translator-0.15.0-edge.zip`（来自 GitHub Actions） |
 | 最终 ZIP 大小 | 1,150,261 bytes |
 | 最终 SHA-256 | `2BF94E9E787B462772284B37180142BAC3D8442F115348B8983C73965A3BD372` |
-| 本地复现包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,150,427 bytes；`4846AB38EAA54230E6FB6F357BDBE356828268EDB29C2B0696C2A89B55EDFF19` |
-| ZIP 内容 | 33 项，Manifest V3；CI 包已通过云端逐文件一致性门禁 |
-| 发布状态 | GitHub 已发布签名且验证有效的 `v0.15.0` tag 和 Release；尚未提交 Edge 商店 |
+| 本地发布后验证包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,175,980 bytes；`2EDF6B197A6A947068506F97E1C985EF84407A0CAC368800D7579FBE801AF088` |
+| ZIP 内容 | 公开 Release 包 33 项；当前本地发布后验证包 36 项，Manifest V3，已通过逐文件一致性门禁 |
+| 发布状态 | GitHub 已发布签名且验证有效的 `v0.15.0` tag 和 Release；当前修复未推送、未打 tag、未建 Release、未提交 Edge 商店 |
 
 `store-assets/ads/` 下仍有用户的未跟踪广告素材。它们不属于本轮代码或发布提交，禁止删除、移动、修改或加入暂存区。
 
@@ -24,6 +24,8 @@
 GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`，其 ZIP 为较早的 1,112,382-byte 候选。后续本地 19 个功能提交加入了 PDF 全文翻译、扫描页 OCR、范围控制、暂停继续、导出、结果保留和超长网页完整翻译，因此当前候选按 minor release 调整为 `v0.15.0`。不得移动、覆盖或复用既有 `v0.14.0` tag。
 
 发布准备首先只调整了版本、发布说明、验收记录和三个开发工具链传递依赖。连续的真实 Windows Edge CI 随后暴露并固定了六处测试或交互竞态：划词关闭按钮的装饰星标与外层容器命中竞争、PDF 侧栏半像素字体舍入、设置页同 URL 导航被新导航中断、拖动卡片时 Edge 提前触发 `lostpointercapture`、PDF 懒加载重绘后持久标记状态滞后，以及适宽重绘的等待条件不够精确。最终候选只加固这些真实交互边界和对应断言，没有改变翻译、请求或隐私规则。
+
+公开发布后又完成三组本地修复：`9c7976b` 将用户已经启动的 PDF 文字和多模态队列移到扩展后台文档，解决切屏后页面被冻结、翻译停滞的问题；`fe47ebf` 区分正文中的 Figure 引用与真正图注，修复第 5 页正文被错误切碎并并入公式的问题；`b3fce7f` 将图和表按完整语义对象分组，加入正文文字 + 图表视觉的混合后台队列、整对象高亮、真实 Markdown 表格渲染以及保留原图表的导出策略。三组修复均未改变扫描页授权边界，也不会在预览阶段发送请求。
 
 ## 3. 已完成能力与必须保留的产品规则
 
@@ -35,7 +37,18 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 - PDF 全文预览只在本地读取文字层；扫描页不自动 OCR，只有用户明确启动后才发送页面图像，并可中途停止。
 - 不自动替换网页、Overleaf 或 PDF 原文；不引入 Pi 账号、自有后端或遥测。
 
-## 4. v0.15.0 验证结果
+## 4. 发布后本地修复验证（未发布）
+
+- TypeScript 类型检查：通过。
+- Vitest：699/699，通过，共 102 个测试文件。
+- Microsoft Edge E2E：132/132，通过；覆盖纯文字、统一多模态和图表混合任务在 PDF 标签页被冻结后的后台继续执行。
+- 真实 `CVPR-2018-ISTA-Net- Interpretable...Deep Network for Image Compressive Sensing.pdf`：第 5 页 Figure 引用正文保持连续；第 6 页 Figure 4 合并为一个图对象；第 7 页 Figure 5、Table 1 和 Table 2 各形成一个完整对象，未生成刻度或单元格碎片，也未吞入后续正文和 `5.3` 标题。
+- Edge MV3 生产构建：通过，约 3.86 MB；密钥扫描通过。
+- 本地 ZIP：36 项，与生产构建逐文件一致；大小 1,175,980 bytes，SHA-256 为 `2EDF6B197A6A947068506F97E1C985EF84407A0CAC368800D7579FBE801AF088`。
+
+这个 ZIP 的版本字段仍为 `0.15.0`，但内容晚于公开的 v0.15.0 Release，只能用于本地 Edge 实机验收。不得用它覆盖现有 Release 资产或直接提交 Edge 商店；如需发布这些修复，必须先明确新版本号并重新走 tag、Release 和候选包门禁。
+
+## 5. v0.15.0 正式发布验证结果
 
 - Node.js：官方 Windows x64 `v24.19.0`，下载包 SHA-256 与 Node 官方清单一致。
 - 密钥和私钥模式扫描：通过。
@@ -59,15 +72,15 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 4. PDF 全文预览、页码范围、暂停/继续、返回原文和导出。
 5. 扫描 PDF 不自动 OCR，明确启动后才发送图像，并可停止。
 
-## 5. 下一步
+## 6. 下一步
 
 1. GitHub 发布已经完成，不要移动或覆盖 `v0.15.0` tag，也不要替换现有 Release 资产。
-2. 下一项发布工作是按审核材料提交 Edge 商店；执行前仍需单独取得用户授权，真实审核 Key 只能填写到 Partner Center，不得保存进仓库。
-3. 商店提交完成后记录提交时间、商店包版本和审核结果；等待审核期间不要混入与审核无关的新功能。
+2. 先用当前本地 ZIP 在真实 Edge 中验收目标论文第 6—7 页：检查整图/整表边界、视觉模型实际输出、整对象高亮、切屏后台继续和导出结果。
+3. 验收无阻塞后，由用户决定这些发布后修复的新版本号（建议补丁版）；提升版本并生成新的候选包后，才可考虑新 tag、GitHub Release 或 Edge 商店提交，所有发布动作仍需单独授权。
 
-GitHub 发布已完成。Edge 商店审核稳定后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
+当前优先级仍是图表语义对象的真实模型实机验收，不是新增低价值功能。验收和后续发布稳定后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
 
-## 6. 新会话检查顺序
+## 7. 新会话检查顺序
 
 ```powershell
 Set-Location 'F:\research-papers\2026\July\Pi_translate'
@@ -75,9 +88,9 @@ Get-Content docs/development-handoff-v0.15.0.md
 git status --short --branch
 git log -7 --oneline
 node -p "require('./package.json').version"
-npm run check:release-artifact
+npm run check:release
 npm run check:secrets
-Get-FileHash -Algorithm SHA256 .output/final-ci/tex-selection-translator-0.15.0-edge.zip
+Get-FileHash -Algorithm SHA256 .output/tex-selection-translator-0.15.0-edge.zip
 ```
 
-`check:release-artifact` 验证本机重新构建的复现包；真正用于 Release 的是上表云端最终包。任何 HEAD、工作区、ZIP 大小或哈希不一致都应先查明原因，不得重置或覆盖用户内容。
+`check:release` 验证并重新生成当前本地发布后验证包；已经公开发布的 v0.15.0 Release 资产仍是上表云端最终包。任何 HEAD、工作区、ZIP 大小或哈希不一致都应先查明原因，不得重置或覆盖用户内容。
