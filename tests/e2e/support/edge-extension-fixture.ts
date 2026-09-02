@@ -927,6 +927,8 @@ export function installEdgeExtensionHooks(): void {
           : `修改扩展后请运行 \`npm run build:edge\`，并保留公式 ${segment.text.match(/⟦[^⟧]+⟧/gu)?.join(' ') ?? ''}。`
         : segment.text.includes('MediaWiki keeps accessible MathML')
           ? `MediaWiki 会保留公式 ${segment.text.match(/⟦[^⟧]+⟧/gu)?.join(' ') ?? ''}。`
+          : segment.text.includes('Layout export density paragraph')
+            ? '这是用于验证原页对照译文分页的完整学术段落，内容应保持清晰、连续，并在空间不足时移动到下一张对应译文页。'.repeat(20)
           : '批量生成的学术译文。',
     }));
     if (mockControl.omitNextDocumentBatchItem && returnedDocumentSegments.length > 1) {

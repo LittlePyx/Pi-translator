@@ -301,30 +301,31 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     });
     await expect(layoutPreview.locator('#pi-layout-print')).toHaveText('保存为 PDF…');
     await expect(layoutPreview.locator('[data-layout-source-page]')).toHaveCount(2);
-    await expect(layoutPreview.locator('[data-layout-overlay]')).toHaveCount(2);
+    await expect(layoutPreview.locator('[data-layout-translation-page]')).toHaveCount(2);
+    await expect(layoutPreview.locator('[data-layout-overlay]')).toHaveCount(0);
     await expect(layoutPreview.locator('[data-layout-source-page="1"] .pdf-layout-source'))
       .toHaveAttribute('src', /^data:image\/jpeg;base64,/u);
-    await expect(layoutPreview.locator('[data-layout-source-page="1"] [data-layout-overlay]'))
+    await expect(layoutPreview.locator('[data-layout-translation-page="1"]'))
       .toContainText('批量生成的学术译文');
     const layoutGeometry = await layoutPreview.locator('[data-layout-source-page="1"]')
       .evaluate((page) => {
-        const overlay = page.querySelector<HTMLElement>('[data-layout-overlay]')!;
+        const image = page.querySelector<HTMLElement>('.pdf-layout-source')!;
         const pageBounds = page.getBoundingClientRect();
-        const overlayBounds = overlay.getBoundingClientRect();
+        const imageBounds = image.getBoundingClientRect();
         return {
           pageWidth: pageBounds.width,
           pageHeight: pageBounds.height,
-          overlayInside: overlayBounds.left >= pageBounds.left &&
-            overlayBounds.right <= pageBounds.right &&
-            overlayBounds.top >= pageBounds.top &&
-            overlayBounds.bottom <= pageBounds.bottom,
-          fitted: overlay.dataset.layoutFitted,
+          imageFillsPage: Math.abs(imageBounds.left - pageBounds.left) < .5 &&
+            Math.abs(imageBounds.right - pageBounds.right) < .5 &&
+            Math.abs(imageBounds.top - pageBounds.top) < .5 &&
+            Math.abs(imageBounds.bottom - pageBounds.bottom) < .5,
+          hasOverlay: Boolean(page.querySelector('[data-layout-overlay]')),
         };
       });
     expect(layoutGeometry.pageWidth).toBeGreaterThan(500);
     expect(layoutGeometry.pageHeight).toBeGreaterThan(layoutGeometry.pageWidth);
-    expect(layoutGeometry.overlayInside).toBe(true);
-    expect(layoutGeometry.fitted).toBe('true');
+    expect(layoutGeometry.imageFillsPage).toBe(true);
+    expect(layoutGeometry.hasOverlay).toBe(false);
     await layoutPreview.setViewportSize({ width: 360, height: 700 });
     const narrowLayout = await layoutPreview.locator('.pi-layout-toolbar').evaluate((toolbar) => {
       const button = toolbar.querySelector<HTMLElement>('#pi-layout-print')!;
@@ -343,7 +344,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
         fullPage: false,
       });
       await layoutPreview.emulateMedia({ media: 'print' });
-      await layoutPreview.locator('[data-layout-source-page="1"]').screenshot({
+      await layoutPreview.locator('[data-layout-translation-page="1"]').screenshot({
         path: testInfo.outputPath('pdf-layout-translation-print-page.png'),
       });
       await layoutPreview.emulateMedia({ media: 'screen' });
@@ -605,7 +606,7 @@ test('uses one authorized vision model for every block in a PDF containing formu
         fullPage: false,
       });
       await layoutPreview.emulateMedia({ media: 'print' });
-      await layoutPreview.locator('[data-layout-source-page="1"]').screenshot({
+      await layoutPreview.locator('[data-layout-translation-page="1"]').screenshot({
         path: testInfo.outputPath('pdf-layout-translation-formula-print-page.png'),
       });
       await layoutPreview.emulateMedia({ media: 'screen' });
@@ -617,6 +618,56 @@ test('uses one authorized vision model for every block in a PDF containing formu
         fullPage: false,
       });
     }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('paginates dense source-page translations without covering or clipping the original', async () => {
+  const pdfPage = await context.newPage();
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'dense-source-page-export.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoColumnTextPdf(
+        Array.from(
+          { length: 9 },
+          (_, index) => `Layout export density paragraph L${index + 1}.`,
+        ),
+        Array.from(
+          { length: 9 },
+          (_, index) => `Layout export density paragraph R${index + 1}.`,
+        ),
+      ),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成');
+    const translatedBlocks = pdfPage.locator('[data-translation-block]');
+    expect(await translatedBlocks.count()).toBeGreaterThan(1);
+    await pdfPage.locator('#pdf-document-translation-copy-menu > summary').click();
+    const previewPromise = context.waitForEvent('page');
+    await pdfPage.locator('#pdf-document-translation-print-layout').click();
+    const preview = await previewPromise;
+    await expect(preview.locator('body')).toHaveAttribute('data-pi-layout-ready', 'true', {
+      timeout: 20_000,
+    });
+    await expect(preview.locator('[data-layout-source-page="1"] [data-layout-overlay]'))
+      .toHaveCount(0);
+    const translationPages = preview.locator('[data-layout-translation-page="1"]');
+    expect(await translationPages.count()).toBeGreaterThan(1);
+    const pageOverflows = await translationPages.evaluateAll((pages) => pages.map((page) => ({
+      vertical: page.scrollHeight > page.clientHeight + 1,
+      horizontal: page.scrollWidth > page.clientWidth + 1,
+    })));
+    expect(pageOverflows).toEqual(pageOverflows.map(() => ({
+      vertical: false,
+      horizontal: false,
+    })));
+    await preview.close();
   } finally {
     await pdfPage.close();
   }

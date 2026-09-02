@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { buildPdfLayoutTranslationExport } from '../core/translation/pdf-layout-export';
 
 describe('PDF layout translation export', () => {
-  it('places translated blocks over trusted local page images at their source coordinates', () => {
+  it('keeps each trusted source page intact and follows it with a readable translation page', () => {
     const result = buildPdfLayoutTranslationExport([{
       id: 'P2B1',
       pageNumber: 2,
@@ -24,20 +24,20 @@ describe('PDF layout translation export', () => {
     expect(result).toMatchObject({
       pageCount: 1,
       blockCount: 1,
-      positionedBlockCount: 1,
-      fallbackBlockCount: 0,
       complete: true,
     });
     expect(result.html).toContain('@page pi-layout-page-2{size:612pt 792pt;margin:0}');
     expect(result.html).toContain('data-layout-source-page="2"');
     expect(result.html).toContain('data:image/jpeg;base64,AA==');
+    expect(result.html).toContain('class="pdf-layout-page pdf-layout-source-page"');
+    expect(result.html).toContain('data-layout-translation-page="2"');
     expect(result.html).toContain('data-layout-role="formula"');
-    expect(result.html).toContain('class="pdf-layout-mask"');
-    expect(result.html).toContain('left:10%;top:20%;width:70%;height:12%');
+    expect(result.html).not.toContain('data-layout-overlay');
+    expect(result.html).not.toContain('pdf-layout-mask');
     expect(result.html).toContain('该方法保持公式 $E=mc^2$。');
   });
 
-  it('keeps unpositioned translations on a printable continuation page', () => {
+  it('uses the same page-pair layout when source coordinates are unavailable', () => {
     const result = buildPdfLayoutTranslationExport([{
       id: 'missing-anchor',
       pageNumber: 1,
@@ -49,16 +49,13 @@ describe('PDF layout translation export', () => {
       pageHeight: 842,
     }]);
 
-    expect(result).toMatchObject({
-      positionedBlockCount: 0,
-      fallbackBlockCount: 1,
-    });
+    expect(result).toMatchObject({ pageCount: 1, blockCount: 1 });
     expect(result.html).toContain('data-layout-overflow-page="1"');
-    expect(result.html).toContain('无法安全放回原位置或排版后溢出的译文');
+    expect(result.html).toContain('上一页完整保留原始版式');
     expect(result.html).toContain('这段译文不能安全覆盖原文。');
   });
 
-  it('keeps translated footnotes at their source position with compact typography', () => {
+  it('styles translated footnotes compactly on the matching translation page', () => {
     const result = buildPdfLayoutTranslationExport([{
       id: 'P6-footnote-1',
       pageNumber: 6,
@@ -77,16 +74,12 @@ describe('PDF layout translation export', () => {
       pageHeight: 792,
     }]);
 
-    expect(result).toMatchObject({
-      positionedBlockCount: 1,
-      fallbackBlockCount: 0,
-    });
     expect(result.html).toContain('data-layout-role="footnote"');
     expect(result.html).toContain('[data-layout-role="footnote"]');
-    expect(result.html).toContain('font-size:8pt');
+    expect(result.html).toContain('font-size:8.5pt');
   });
 
-  it('keeps code, tables, and figures visible and moves their translations to a continuation', () => {
+  it('keeps code, tables, and figures visible on the source page and translates their descriptions', () => {
     const sourceAnchor = {
       leftRatio: .15,
       topRatio: .25,
@@ -113,13 +106,11 @@ describe('PDF layout translation export', () => {
       pageHeight: 792,
     }]);
 
-    expect(result).toMatchObject({
-      positionedBlockCount: 0,
-      fallbackBlockCount: 3,
-    });
-    expect(result.html).not.toContain('data-layout-role="code" style=');
-    expect(result.html).not.toContain('data-layout-role="table" style=');
-    expect(result.html).not.toContain('data-layout-role="figure" style=');
+    expect(result).toMatchObject({ pageCount: 1, blockCount: 3 });
+    expect(result.html).toContain('data-layout-role="code"');
+    expect(result.html).toContain('data-layout-role="table"');
+    expect(result.html).toContain('data-layout-role="figure"');
+    expect(result.html).not.toContain('data-layout-overlay');
     expect(result.html).toContain('const answer = 42;');
     expect(result.html).toContain('图 1：收敛曲线。');
   });
@@ -159,8 +150,7 @@ describe('PDF layout translation export', () => {
 
     expect(result).toMatchObject({
       pageCount: 1,
-      positionedBlockCount: 0,
-      fallbackBlockCount: 1,
+      blockCount: 1,
     });
     expect(result.html).not.toContain('<script>alert(1)</script>');
     expect(result.html).not.toContain('svg+xml');
