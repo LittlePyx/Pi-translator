@@ -111,7 +111,8 @@ interface AnalyzedPage {
   geometryTrusted: boolean;
 }
 
-export const PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH = 1_100;
+/** Keeps ordinary academic abstracts intact while staying below the 5,200-character batch cap. */
+export const PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH = 2_400;
 
 const LATIN_OR_DIGIT_END = /[\p{L}\p{N}]$/u;
 const LATIN_OR_DIGIT_START = /^[\p{L}\p{N}]/u;
@@ -122,6 +123,8 @@ const LIST_ITEM_LINE = /^(?:[-*\u2022\u2023\u25aa\u25e6\u2013\u2014]\s+|\d{1,3}[
 const SECTION_HEADING_LINE = /^(?:(?:\d+(?:\.\d+){0,4}|[IVXLC]+)\.?\s+)[\p{Lu}\d]/u;
 const SENTENCE_END = /[.!?。！？:：][\])}\u201d\u2019'"]?$/u;
 const HEADING_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
+const CONTINUITY_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
+const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*[A-Z]?\d+(?:[.:-]|\s)/iu;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',
   'acknowledgments',
@@ -359,6 +362,94 @@ export function pdfDocumentTranslationBlockContainsFormula(
   block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
 ): boolean {
   return block.kind === 'formula' || shouldUseVisionForPdfFormula(block.text);
+}
+
+export interface PdfDocumentTranslationContinuity {
+  previousIndex?: number;
+  nextIndex?: number;
+  continuesPrevious: boolean;
+  continuesNext: boolean;
+  skippedBefore: number;
+  skippedAfter: number;
+}
+
+function pdfDocumentTranslationBlockLooksHeading(
+  block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
+): boolean {
+  if (block.kind) return false;
+  const text = block.text.replace(/\s+/gu, ' ').trim();
+  if (!text || text.length > 160 || CONTINUITY_SENTENCE_END.test(text)) return false;
+  const normalized = text.replace(/\s*[:：]\s*$/u, '').toLocaleLowerCase('en-US');
+  return KNOWN_SECTION_HEADINGS.has(normalized) || SECTION_HEADING_LINE.test(text);
+}
+
+function pdfDocumentTranslationBlockIsSkippableInterruption(
+  block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
+): boolean {
+  return block.kind === 'code' || block.kind === 'table' || CAPTION_BLOCK.test(block.text.trim());
+}
+
+function pdfDocumentTranslationContextNeighborIndex(
+  blocks: readonly Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>[],
+  index: number,
+  direction: -1 | 1,
+): number | undefined {
+  for (let cursor = index + direction; cursor >= 0 && cursor < blocks.length; cursor += direction) {
+    const candidate = blocks[cursor]!;
+    if (pdfDocumentTranslationBlockLooksHeading(candidate)) return undefined;
+    if (pdfDocumentTranslationBlockIsSkippableInterruption(candidate)) continue;
+    return cursor;
+  }
+  return undefined;
+}
+
+function pdfDocumentTranslationBlocksContinueSentence(
+  previous: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
+  current: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
+): boolean {
+  if (
+    pdfDocumentTranslationBlockLooksHeading(previous) ||
+    pdfDocumentTranslationBlockLooksHeading(current) ||
+    pdfDocumentTranslationBlockIsSkippableInterruption(previous) ||
+    pdfDocumentTranslationBlockIsSkippableInterruption(current)
+  ) return false;
+  const previousText = previous.text.trim();
+  return Boolean(previousText) && !CONTINUITY_SENTENCE_END.test(previousText);
+}
+
+/**
+ * Locates the semantic reading neighbors of one block. Captions, tables, and
+ * code may interrupt the page visually without ending an unfinished prose
+ * sentence; headings remain hard boundaries. No OCR or provider request is
+ * involved in this local continuity graph.
+ */
+export function pdfDocumentTranslationContinuity(
+  blocks: readonly Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>[],
+  index: number,
+): PdfDocumentTranslationContinuity {
+  const current = blocks[index];
+  if (!current || pdfDocumentTranslationBlockIsSkippableInterruption(current)) {
+    return {
+      continuesPrevious: false,
+      continuesNext: false,
+      skippedBefore: 0,
+      skippedAfter: 0,
+    };
+  }
+  const previousIndex = pdfDocumentTranslationContextNeighborIndex(blocks, index, -1);
+  const nextIndex = pdfDocumentTranslationContextNeighborIndex(blocks, index, 1);
+  return {
+    ...(previousIndex === undefined ? {} : { previousIndex }),
+    ...(nextIndex === undefined ? {} : { nextIndex }),
+    continuesPrevious: previousIndex === undefined
+      ? false
+      : pdfDocumentTranslationBlocksContinueSentence(blocks[previousIndex]!, current),
+    continuesNext: nextIndex === undefined
+      ? false
+      : pdfDocumentTranslationBlocksContinueSentence(current, blocks[nextIndex]!),
+    skippedBefore: previousIndex === undefined ? 0 : Math.max(0, index - previousIndex - 1),
+    skippedAfter: nextIndex === undefined ? 0 : Math.max(0, nextIndex - index - 1),
+  };
 }
 
 function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {

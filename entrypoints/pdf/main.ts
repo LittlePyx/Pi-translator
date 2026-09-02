@@ -69,6 +69,7 @@ import { isSupportedTargetLanguage } from '../../core/language/supported-target-
 import {
   comparePdfDocumentTranslationPriority,
   pdfDocumentTranslationBlockContainsFormula,
+  pdfDocumentTranslationContinuity,
   pdfDocumentTranslationItemsFromOcr,
   preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationBlock,
@@ -791,7 +792,7 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-unified-vision-v2',
+      'pdf-unified-vision-v3-continuity',
       pdfDocumentTranslationUsesUnifiedVision() ? 'unified-vision' : 'text',
       pdfDocumentTranslationSettings.activeApiProfileId,
       activeProfile?.model ?? '',
@@ -2421,20 +2422,55 @@ async function processPdfDocumentTranslationVisualBlock(
 
 function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock): string | undefined {
   const index = pdfDocumentTranslationBlocksState.indexOf(block);
-  const previous = index > 0 && pdfDocumentTranslationBlocksState[index - 1]?.included
-    ? pdfDocumentTranslationBlocksState[index - 1]
-    : undefined;
-  const next = index >= 0 && pdfDocumentTranslationBlocksState[index + 1]?.included
-    ? pdfDocumentTranslationBlocksState[index + 1]
-    : undefined;
+  const continuity = pdfDocumentTranslationContinuity(pdfDocumentTranslationBlocksState, index);
+  const previous = continuity.previousIndex === undefined
+    ? undefined
+    : pdfDocumentTranslationBlocksState[continuity.previousIndex];
+  const next = continuity.nextIndex === undefined
+    ? undefined
+    : pdfDocumentTranslationBlocksState[continuity.nextIndex];
+  const relationship = [
+    continuity.continuesPrevious
+      ? '本块承接上一连续块中尚未结束的句子；只翻译当前块，不得重复上一块。'
+      : '',
+    continuity.continuesNext
+      ? '当前句在下一连续块中继续；不得提前补写下一块。'
+      : '',
+    continuity.skippedBefore || continuity.skippedAfter
+      ? '连续正文之间夹有图注、表格或代码等版式结构；这些结构不代表句子自动结束。'
+      : '',
+  ].filter(Boolean).join(' ');
   const parts = [
-    documentName.textContent ? `文档：${documentName.textContent.slice(0, 160)}` : '',
-    previous?.text ? `上一段原文：${previous.text.slice(-320)}` : '',
-    previous?.translatedText ? `上一段译文：${previous.translatedText.slice(-400)}` : '',
-    next?.text ? `下一段原文：${next.text.slice(0, 320)}` : '',
+    documentName.textContent ? `文档：${documentName.textContent.slice(0, 120)}` : '',
+    relationship ? `阅读衔接：${relationship}` : '',
+    previous?.text ? `上一连续块原文：${previous.text.slice(-280)}` : '',
+    previous?.translatedText ? `上一连续块译文：${previous.translatedText.slice(-340)}` : '',
+    next?.text ? `下一连续块原文：${next.text.slice(0, 280)}` : '',
   ].filter(Boolean);
   const context = parts.join('\n').slice(-1_200).trim();
   return context || undefined;
+}
+
+function pdfDocumentTranslationContinuityPrerequisite(
+  preferred: PdfDocumentTranslationRuntimeBlock,
+): PdfDocumentTranslationRuntimeBlock {
+  let target = preferred;
+  const visited = new Set<PdfDocumentTranslationRuntimeBlock>();
+  while (!visited.has(target)) {
+    visited.add(target);
+    const index = pdfDocumentTranslationBlocksState.indexOf(target);
+    const continuity = pdfDocumentTranslationContinuity(pdfDocumentTranslationBlocksState, index);
+    if (!continuity.continuesPrevious || continuity.previousIndex === undefined) break;
+    const previous = pdfDocumentTranslationBlocksState[continuity.previousIndex];
+    if (
+      !previous ||
+      !previous.included ||
+      previous.status !== 'idle' ||
+      !previous.sourceAnchor
+    ) break;
+    target = previous;
+  }
+  return target;
 }
 
 async function processPdfDocumentTranslationQueue(): Promise<void> {
@@ -2454,7 +2490,8 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
       const unifiedVision = pdfDocumentTranslationUsesUnifiedVision() &&
         pdfDocumentTranslationMultimodalAuthorized;
       if (unifiedVision) {
-        if (!await processPdfDocumentTranslationVisualBlock(first, revision)) return;
+        const visualTarget = pdfDocumentTranslationContinuityPrerequisite(first);
+        if (!await processPdfDocumentTranslationVisualBlock(visualTarget, revision)) return;
         continue;
       }
       if (first.kind === 'formula') {

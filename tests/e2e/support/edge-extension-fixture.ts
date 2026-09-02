@@ -147,12 +147,17 @@ export function createTextPdf(text: string): Buffer {
   return Buffer.from(body);
 }
 
-export function createMultilineTextPdf(lines: string[]): Buffer {
+export function createMultilineTextPdf(
+  lines: string[],
+  options: { fontSize?: number; lineStep?: number } = {},
+): Buffer {
+  const fontSize = options.fontSize ?? 18;
+  const lineStep = options.lineStep ?? 24;
   const commands = lines.map((line, index) => {
     const escaped = line.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
-    return `${index ? '0 -24 Td\n' : ''}(${escaped}) Tj`;
+    return `${index ? `0 -${lineStep} Td\n` : ''}(${escaped}) Tj`;
   }).join('\n');
-  const stream = `BT\n/F1 18 Tf\n72 720 Td\n${commands}\nET`;
+  const stream = `BT\n/F1 ${fontSize} Tf\n72 720 Td\n${commands}\nET`;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
     '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',

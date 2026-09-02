@@ -488,8 +488,8 @@ test('uses one authorized vision model for every block in a PDF containing formu
     expect(unifiedVisionPrompts.join('\n')).toContain('Scanned full-document paragraph');
     expect(unifiedVisionPrompts.join('\n')).toContain('E=mc^2');
     expect(unifiedVisionPrompts.some((prompt) => prompt.includes('相邻段落上下文'))).toBe(true);
-    expect(unifiedVisionPrompts[0]).toContain('下一段原文');
-    expect(unifiedVisionPrompts[1]).toContain('上一段原文');
+    expect(unifiedVisionPrompts[0]).toContain('下一连续块原文');
+    expect(unifiedVisionPrompts[1]).toContain('上一连续块原文');
     await expect(panel.locator('[data-translation-mode="vision"]')).toHaveCount(2);
     await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
     const requestsBeforeLayoutExport = {
@@ -536,15 +536,17 @@ test('uses one authorized vision model for every block in a PDF containing formu
 test('splits a long multimodal PDF paragraph into non-overlapping line-aligned crops', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   const visionRequestStart = visionRequests.length;
-  const lines = Array.from({ length: 24 }, (_, index) => index === 11
-    ? 'Abstract line 12 keeps E = mc^2 in its visual context.'
-    : `Abstract line ${String(index + 1).padStart(2, '0')} keeps distinct visual context.`);
+  const lines = Array.from({ length: 52 }, (_, index) => index === 11
+    ? 'abstract line 12 keeps E = mc^2 inside the unfinished sentence'
+    : index === 51
+      ? 'and abstract line 52 finally completes the same sentence.'
+      : `abstract line ${String(index + 1).padStart(2, '0')} continues the same unfinished sentence`);
   try {
     await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
     await pdfPage.locator('#file-input').setInputFiles({
       name: 'long-multimodal-block.pdf',
       mimeType: 'application/pdf',
-      buffer: createMultilineTextPdf(lines),
+      buffer: createMultilineTextPdf(lines, { fontSize: 10, lineStep: 13 }),
     });
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
@@ -573,6 +575,9 @@ test('splits a long multimodal PDF paragraph into non-overlapping line-aligned c
       const serialized = prompt.slice(markerIndex + hintMarker.length).split('\n', 1)[0]!;
       return JSON.parse(serialized) as string;
     });
+    expect(promptAndImages[0]!.prompt).toContain('当前句在下一连续块中继续');
+    expect(promptAndImages[1]!.prompt).toContain('本块承接上一连续块中尚未结束的句子');
+    expect(promptAndImages[1]!.prompt).toContain('上一连续块译文');
     for (const line of lines) {
       expect(recognizedHints.filter((hint) => hint.includes(line))).toHaveLength(1);
     }
@@ -598,6 +603,50 @@ test('splits a long multimodal PDF paragraph into non-overlapping line-aligned c
     }
   } finally {
     await pdfPage.close();
+  }
+});
+
+test('translates a cross-page unfinished sentence before the visible continuation', async () => {
+  const sourceUrl = 'https://www.overleaf.com/cross-page-continuity.pdf';
+  const firstText = 'The cross-page sentence defines energy E = mc^2 while';
+  const secondText = 'preserving its terminology across the following page boundary.';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createTwoPageTextPdf(firstText, secondText),
+    });
+  });
+  const pdfPage = await context.newPage();
+  const visionRequestStart = visionRequests.length;
+  try {
+    const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+    readerUrl.searchParams.set('url', sourceUrl);
+    readerUrl.searchParams.set('page', '2');
+    await pdfPage.goto(readerUrl.href);
+    await expect(pdfPage.locator('#page-number')).toHaveValue('2');
+    await expect(pdfPage.locator('.pdf-page[data-page-number="2"]'))
+      .toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 2 段，等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+
+    const prompts = visionRequests.slice(visionRequestStart).map((request) => (
+      (request.messages as Array<{
+        content?: Array<{ type?: string; text?: string }>;
+      }> | undefined)?.[0]?.content?.find((item) => item.type === 'text')?.text ?? ''
+    ));
+    expect(prompts).toHaveLength(2);
+    expect(prompts[0]).toContain(JSON.stringify(firstText));
+    expect(prompts[0]).toContain('当前句在下一连续块中继续');
+    expect(prompts[1]).toContain(JSON.stringify(secondText));
+    expect(prompts[1]).toContain('本块承接上一连续块中尚未结束的句子');
+    expect(prompts[1]).toContain('上一连续块译文');
+  } finally {
+    await pdfPage.close();
+    await context.unroute(sourceUrl);
   }
 });
 

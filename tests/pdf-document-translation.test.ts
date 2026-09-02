@@ -4,6 +4,7 @@ import {
   comparePdfDocumentTranslationPriority,
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
+  pdfDocumentTranslationContinuity,
   pdfDocumentTranslationItemsFromOcr,
   pdfDocumentTranslationBlocks,
   preparePdfDocumentTranslationPages,
@@ -243,6 +244,35 @@ describe('PDF document translation', () => {
     })).toBe(false);
   });
 
+  it('tracks unfinished sentences across captions, formulas, and full-width prose', () => {
+    const blocks = [
+      { text: 'The reconstruction remains stable while' },
+      { text: 'Figure 2. Network overview.' },
+      { text: 'the full-width discussion defines the loss as' },
+      { text: 'L = ||Ax-b||²', kind: 'formula' as const },
+      { text: 'where b denotes the measured signal.' },
+      { text: '2 Methods' },
+      { text: 'A new section starts independently.' },
+    ];
+    expect(pdfDocumentTranslationContinuity(blocks, 2)).toMatchObject({
+      previousIndex: 0,
+      nextIndex: 3,
+      continuesPrevious: true,
+      continuesNext: true,
+      skippedBefore: 1,
+    });
+    expect(pdfDocumentTranslationContinuity(blocks, 3)).toMatchObject({
+      previousIndex: 2,
+      nextIndex: 4,
+      continuesPrevious: true,
+      continuesNext: true,
+    });
+    expect(pdfDocumentTranslationContinuity(blocks, 6)).toMatchObject({
+      continuesPrevious: false,
+      continuesNext: false,
+    });
+  });
+
   it('does not mistake ordinary Korean prose for mathematical alphanumeric symbols', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned('한국어 문장은 일반 본문입니다.', 54, 100, 210),
@@ -251,6 +281,20 @@ describe('PDF document translation', () => {
     expect(prepared.blocks[0]!.text).toBe(
       '한국어 문장은 일반 본문입니다. 다음 줄은 같은 문단으로 이어집니다.',
     );
+  });
+
+  it('keeps a typical academic abstract in one visual translation block', () => {
+    const abstractLines = Array.from({ length: 20 }, (_, index) => (
+      index === 19
+        ? 'and the final abstract line completes the result.'
+        : `academic abstract line ${index + 1} continues the same coherent discussion`
+    ));
+    const prepared = preparePdfDocumentTranslationPages([page(1,
+      abstractLines.map((text, index) => positioned(text, 54, 70 + index * 13, 460, 10)),
+    )]);
+    expect(abstractLines.join(' ').length).toBeGreaterThan(1_100);
+    expect(prepared.blocks).toHaveLength(1);
+    expect(prepared.blocks[0]!.text).toBe(abstractLines.join(' '));
   });
 
   it('anchors every visual line in long blocks instead of cropping after four lines', () => {
@@ -290,7 +334,7 @@ describe('PDF document translation', () => {
   });
 
   it('does not split one indivisible visual line into overlapping image blocks', () => {
-    const longVisualLine = Array.from({ length: 170 }, (_, index) => `token${index + 1}`).join(' ');
+    const longVisualLine = Array.from({ length: 400 }, (_, index) => `token${index + 1}`).join(' ');
     expect(longVisualLine.length).toBeGreaterThan(PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH);
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned(longVisualLine, 54, 100, 500),
