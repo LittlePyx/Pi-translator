@@ -29,6 +29,7 @@ import {
 } from '../../core/pdf/source';
 import {
   captureCanvasRegion,
+  captureCanvasRegions,
   isUsableRegion,
   moveRegion,
   normalizeRegion,
@@ -71,6 +72,7 @@ import {
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationContinuity,
   pdfDocumentTranslationItemsFromOcr,
+  pdfDocumentTranslationSourceRegions,
   preparePdfDocumentTranslationPages,
   type PdfDocumentTranslationBlock,
   type PdfDocumentTranslationPageInput,
@@ -792,7 +794,7 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-unified-vision-v3-continuity',
+      'pdf-unified-vision-v4-semantic-regions',
       pdfDocumentTranslationUsesUnifiedVision() ? 'unified-vision' : 'text',
       pdfDocumentTranslationSettings.activeApiProfileId,
       activeProfile?.model ?? '',
@@ -1602,11 +1604,12 @@ function updatePdfDocumentTranslationPageProgress(pageNumber: number): void {
 function pdfDocumentTranslationSourceLocation(
   block: PdfDocumentTranslationRuntimeBlock,
 ): PdfSourceLocation | undefined {
-  if (!block.sourceAnchor) return undefined;
+  const region = pdfDocumentTranslationSourceRegions(block)[0];
+  if (!region) return undefined;
   return {
     documentId: currentDocumentSessionId,
-    pageNumber: block.pageNumber,
-    ...block.sourceAnchor,
+    pageNumber: region.pageNumber,
+    ...region.sourceAnchor,
   };
 }
 
@@ -1636,7 +1639,7 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     container = document.createElement('article');
     container.className = 'pdf-document-translation-block';
     container.dataset.translationBlock = block.id;
-    if (block.sourceAnchor) {
+    if (pdfDocumentTranslationSourceRegions(block).length) {
       container.addEventListener('click', (event) => {
         if ((event.target as Element | null)?.closest('button')) return;
         const selection = window.getSelection();
@@ -1662,7 +1665,9 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     section.insertBefore(container, next ?? null);
   }
   container.dataset.status = block.status;
-  const sourceAvailable = Boolean(block.sourceAnchor && block.status === 'done');
+  const sourceAvailable = Boolean(
+    pdfDocumentTranslationSourceRegions(block).length && block.status === 'done',
+  );
   container.toggleAttribute('data-source-anchor', sourceAvailable);
   if (sourceAvailable) {
     container.tabIndex = 0;
@@ -2008,8 +2013,11 @@ async function capturePdfDocumentTranslationVisualBlock(
   imageHeight: number;
   captureMs: number;
 }> {
-  const anchor = block.sourceAnchor;
-  if (!anchor) throw new Error('这个段落没有可靠的视觉定位。');
+  const sourceRegions = pdfDocumentTranslationSourceRegions(block);
+  if (!sourceRegions.length) throw new Error('这个段落没有可靠的视觉定位。');
+  if (sourceRegions.some((region) => region.pageNumber !== block.pageNumber)) {
+    throw new Error('跨页连续段落需要分页面处理。');
+  }
   const startedAt = performance.now();
   const page = await pdf.getPage(block.pageNumber);
   const baseViewport = page.getViewport({ scale: 1 });
@@ -2026,21 +2034,18 @@ async function capturePdfDocumentTranslationVisualBlock(
   context.fillStyle = '#fff';
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvas, canvasContext: context, viewport }).promise;
-  const region = normalizeRegion(
-    {
-      x: anchor.leftRatio * baseViewport.width,
-      y: anchor.topRatio * baseViewport.height,
-    },
+  const regions = sourceRegions.map(({ sourceAnchor: anchor }) => normalizeRegion(
+    { x: anchor.leftRatio * baseViewport.width, y: anchor.topRatio * baseViewport.height },
     {
       x: (anchor.leftRatio + anchor.widthRatio) * baseViewport.width,
       y: (anchor.topRatio + anchor.heightRatio) * baseViewport.height,
     },
     { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
-  );
-  const capture = await captureCanvasRegion(
+  ));
+  const capture = await captureCanvasRegions(
     canvas,
     { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
-    region,
+    regions,
   );
   return {
     imageDataUrl: capture.dataUrl,
@@ -2307,7 +2312,7 @@ async function processPdfDocumentTranslationVisualBlock(
 ): Promise<boolean> {
   const pdf = pdfDocument;
   const containsFormula = pdfDocumentTranslationBlockContainsFormula(block);
-  if (!pdf || !block.sourceAnchor) {
+  if (!pdf || !pdfDocumentTranslationSourceRegions(block).length) {
     if (containsFormula) {
       block.status = 'done';
       block.translatedText = block.text;
@@ -2466,7 +2471,7 @@ function pdfDocumentTranslationContinuityPrerequisite(
       !previous ||
       !previous.included ||
       previous.status !== 'idle' ||
-      !previous.sourceAnchor
+      !pdfDocumentTranslationSourceRegions(previous).length
     ) break;
     target = previous;
   }

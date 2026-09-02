@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH,
   comparePdfDocumentTranslationPriority,
+  mergePdfDocumentTranslationContinuationBlocks,
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
   pdfDocumentTranslationContinuity,
@@ -71,6 +72,73 @@ function page(
 }
 
 describe('PDF document translation', () => {
+  it('translates one sentence split across layout regions as one visual unit', () => {
+    const sourceAnchor = (topRatio: number) => ({
+      leftRatio: .08,
+      topRatio,
+      widthRatio: .72,
+      heightRatio: .05,
+    });
+    const merged = mergePdfDocumentTranslationContinuationBlocks([
+      {
+        id: 'P1B1', pageNumber: 1, blockIndex: 0,
+        text: 'Furthermore, by drawing more insights', sourceAnchor: sourceAnchor(.1),
+      },
+      {
+        id: 'P1B2', pageNumber: 1, blockIndex: 1,
+        text: 'from the compression domain, an enhanced version, dubbed',
+        sourceAnchor: sourceAnchor(.28),
+      },
+      {
+        id: 'P1B3', pageNumber: 1, blockIndex: 2,
+        text: 'ISTA-Net+, is derived from ISTA-Net by sparsifying natural images to',
+        sourceAnchor: sourceAnchor(.48),
+      },
+      {
+        id: 'P1B4', pageNumber: 1, blockIndex: 3,
+        text: 'improve compression sensing performance. Therefore, ISTA-Nets are fast.',
+        sourceAnchor: sourceAnchor(.66),
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: 'P1B1',
+      pageNumber: 1,
+      blockIndex: 0,
+      text: 'Furthermore, by drawing more insights from the compression domain, ' +
+        'an enhanced version, dubbed ISTA-Net+, is derived from ISTA-Net by ' +
+        'sparsifying natural images to improve compression sensing performance. ' +
+        'Therefore, ISTA-Nets are fast.',
+    });
+    expect(merged[0]!.sourceAnchor).toBeUndefined();
+    expect(merged[0]!.sourceRegions).toHaveLength(4);
+  });
+
+  it('does not merge an unpunctuated paper title into the following body', () => {
+    const anchor = {
+      leftRatio: .1, topRatio: .1, widthRatio: .8, heightRatio: .06,
+    };
+    const merged = mergePdfDocumentTranslationContinuationBlocks([
+      {
+        id: 'P1B1', pageNumber: 1, blockIndex: 0,
+        text: 'ISTA-Net: Interpretable Optimization-Inspired Deep Network',
+        sourceAnchor: anchor,
+      },
+      {
+        id: 'P1B2', pageNumber: 1, blockIndex: 1,
+        text: 'Compressed sensing reconstructs natural images.',
+        sourceAnchor: { ...anchor, topRatio: .2 },
+      },
+    ]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged.map((block) => block.text)).toEqual([
+      'ISTA-Net: Interpretable Optimization-Inspired Deep Network',
+      'Compressed sensing reconstructs natural images.',
+    ]);
+  });
+
   it('creates stable page-scoped blocks from PDF text items', () => {
     const blocks = pdfDocumentTranslationBlocks(3, [
       { str: 'A reliable', hasEOL: false },

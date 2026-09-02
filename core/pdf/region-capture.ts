@@ -260,3 +260,105 @@ export async function captureCanvasRegion(
     bytes: blob.size,
   };
 }
+
+/**
+ * Stacks several tight crops in reading order without capturing the unrelated
+ * page area between them. This is used when one sentence crosses a figure,
+ * full-width block, or column/layout boundary.
+ */
+export async function captureCanvasRegions(
+  source: HTMLCanvasElement,
+  pageBounds: RectLike,
+  regions: readonly RegionRect[],
+  options: { maxEdge?: number; maxBytes?: number } = {},
+): Promise<EncodedImageRegion> {
+  if (!regions.length) throw new Error('没有可用的视觉片段。');
+  if (regions.length === 1) {
+    return captureCanvasRegion(source, pageBounds, regions[0]!, options);
+  }
+  const mappedRegions = regions.map((region) => mapRegionToCanvas(
+    region,
+    pageBounds,
+    source.width,
+    source.height,
+  ));
+  if (mappedRegions.some((mapped) => mapped.sw < 11 || mapped.sh < 11)) {
+    throw new Error('视觉片段太小，无法可靠识别。');
+  }
+  if (mappedRegions.some((mapped) => Math.max(mapped.sw / mapped.sh, mapped.sh / mapped.sw) > 200)) {
+    throw new Error('视觉片段过于狭长，无法可靠识别。');
+  }
+
+  const naturalGap = Math.max(12, Math.round(Math.min(source.width, source.height) * 0.012));
+  const naturalWidth = Math.max(...mappedRegions.map((mapped) => mapped.sw));
+  const naturalHeight = mappedRegions.reduce((sum, mapped) => sum + mapped.sh, 0) +
+    naturalGap * (mappedRegions.length - 1);
+  const maxEdge = Math.max(256, options.maxEdge ?? DEFAULT_MAX_EDGE);
+  const maxBytes = Math.max(64 * 1024, options.maxBytes ?? DEFAULT_MAX_BYTES);
+  let dimensions = scaledImageDimensions(naturalWidth, naturalHeight, maxEdge);
+  const output = document.createElement('canvas');
+  const context = output.getContext('2d', { alpha: false });
+  if (!context) throw new Error('浏览器无法创建连续视觉图像。');
+
+  const draw = (): void => {
+    output.width = dimensions.width;
+    output.height = dimensions.height;
+    context.fillStyle = '#ffffff';
+    context.fillRect(0, 0, output.width, output.height);
+    context.imageSmoothingEnabled = true;
+    context.imageSmoothingQuality = 'high';
+    const scale = Math.min(output.width / naturalWidth, output.height / naturalHeight);
+    let top = 0;
+    for (const [index, mapped] of mappedRegions.entries()) {
+      const width = Math.max(1, Math.round(mapped.sw * scale));
+      const height = Math.max(1, Math.round(mapped.sh * scale));
+      const left = Math.max(0, Math.round((output.width - width) / 2));
+      context.drawImage(
+        source,
+        mapped.sx,
+        mapped.sy,
+        mapped.sw,
+        mapped.sh,
+        left,
+        top,
+        width,
+        height,
+      );
+      top += height;
+      if (index < mappedRegions.length - 1) {
+        const gap = Math.max(2, Math.round(naturalGap * scale));
+        context.fillStyle = '#d8dbe3';
+        context.fillRect(0, top + Math.floor(gap / 2), output.width, 1);
+        top += gap;
+      }
+    }
+  };
+
+  draw();
+  let mimeType: 'image/png' | 'image/jpeg' = 'image/png';
+  let blob = await encodeCanvas(output, mimeType);
+  if (blob.size > maxBytes) {
+    mimeType = 'image/jpeg';
+    for (const quality of [0.92, 0.84, 0.76]) {
+      blob = await encodeCanvas(output, mimeType, quality);
+      if (blob.size <= maxBytes) break;
+    }
+  }
+  for (let attempt = 0; blob.size > maxBytes && attempt < 3; attempt += 1) {
+    dimensions = {
+      width: Math.max(11, Math.round(dimensions.width * 0.78)),
+      height: Math.max(11, Math.round(dimensions.height * 0.78)),
+    };
+    draw();
+    blob = await encodeCanvas(output, 'image/jpeg', 0.8);
+    mimeType = 'image/jpeg';
+  }
+  if (blob.size > maxBytes) throw new Error('连续视觉图像仍然过大，无法安全发送。');
+  return {
+    dataUrl: await blobToDataUrl(blob),
+    mimeType,
+    width: output.width,
+    height: output.height,
+    bytes: blob.size,
+  };
+}

@@ -13,6 +13,12 @@ export interface PdfDocumentTranslationBlock {
   /** Ordinary prose omits this field to keep existing session plans compact. */
   kind?: Exclude<PdfDocumentTranslationBlockKind, 'text'>;
   sourceAnchor?: PdfDocumentTranslationSourceAnchor;
+  /**
+   * A semantic block can continue through a layout break, figure, or full-width
+   * interruption. In that case every tight source crop is retained in reading
+   * order instead of replacing them with one large, ambiguous bounding box.
+   */
+  sourceRegions?: readonly PdfDocumentTranslationSourceRegion[];
 }
 
 export interface PdfDocumentTranslationSourceAnchor {
@@ -20,6 +26,11 @@ export interface PdfDocumentTranslationSourceAnchor {
   topRatio: number;
   widthRatio: number;
   heightRatio: number;
+}
+
+export interface PdfDocumentTranslationSourceRegion {
+  pageNumber: number;
+  sourceAnchor: PdfDocumentTranslationSourceAnchor;
 }
 
 /** Coordinates use a top-left origin in the scale-1 PDF viewport. */
@@ -113,6 +124,8 @@ interface AnalyzedPage {
 
 /** Keeps ordinary academic abstracts intact while staying below the 5,200-character batch cap. */
 export const PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH = 2_400;
+export const PDF_DOCUMENT_TRANSLATION_CONTINUATION_LENGTH = 4_800;
+const PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS = 8;
 
 const LATIN_OR_DIGIT_END = /[\p{L}\p{N}]$/u;
 const LATIN_OR_DIGIT_START = /^[\p{L}\p{N}]/u;
@@ -364,6 +377,23 @@ export function pdfDocumentTranslationBlockContainsFormula(
   return block.kind === 'formula' || shouldUseVisionForPdfFormula(block.text);
 }
 
+export function pdfDocumentTranslationSourceRegions(
+  block: Pick<
+    PdfDocumentTranslationBlock,
+    'pageNumber' | 'sourceAnchor' | 'sourceRegions'
+  >,
+): PdfDocumentTranslationSourceRegion[] {
+  if (block.sourceRegions?.length) {
+    return block.sourceRegions.map((region) => ({
+      pageNumber: region.pageNumber,
+      sourceAnchor: { ...region.sourceAnchor },
+    }));
+  }
+  return block.sourceAnchor
+    ? [{ pageNumber: block.pageNumber, sourceAnchor: { ...block.sourceAnchor } }]
+    : [];
+}
+
 export interface PdfDocumentTranslationContinuity {
   previousIndex?: number;
   nextIndex?: number;
@@ -450,6 +480,109 @@ export function pdfDocumentTranslationContinuity(
     skippedBefore: previousIndex === undefined ? 0 : Math.max(0, index - previousIndex - 1),
     skippedAfter: nextIndex === undefined ? 0 : Math.max(0, nextIndex - index - 1),
   };
+}
+
+const CONTINUATION_TRAILING_WORD = /(?:\b(?:a|an|and|are|as|be|because|been|being|but|by|called|defined|denoted|dubbed|for|from|given|if|including|is|named|nor|of|or|such|than|that|the|termed|to|unless|using|via|was|were|when|where|which|while|who|whose|with)|[,;:([{=+\-\u2013\u2014/])\s*$/iu;
+const LOWERCASE_CONTINUATION_START = /^\s*[\p{Ll}\p{M}]/u;
+
+/**
+ * Uses stronger evidence than the context-only continuity graph before
+ * changing block identity. This avoids folding an unpunctuated paper title
+ * into the following abstract while still joining lower-case continuations,
+ * equations, and phrases such as "dubbed / ISTA-Net+".
+ */
+function pdfDocumentTranslationBlocksStronglyContinue(
+  previous: PdfDocumentTranslationBlock,
+  current: PdfDocumentTranslationBlock,
+): boolean {
+  if (!pdfDocumentTranslationBlocksContinueSentence(previous, current)) return false;
+  const previousText = previous.text.trim();
+  const currentText = current.text.trim();
+  if (!currentText) return false;
+  if (current.kind === 'formula') return true;
+  if (LOWERCASE_CONTINUATION_START.test(currentText)) return true;
+  if (/^[,.;:!?%)\]}\u201d\u2019]/u.test(currentText)) return true;
+  if (previous.kind === 'formula') return false;
+  if (CONTINUATION_TRAILING_WORD.test(previousText)) return true;
+  return CJK_BOUNDARY.test(previousText.at(-1) ?? '') &&
+    CJK_BOUNDARY.test(currentText[0] ?? '');
+}
+
+function joinPdfDocumentTranslationContinuationText(left: string, right: string): string {
+  const leftText = left.trimEnd();
+  const rightText = right.trimStart();
+  if (!leftText) return rightText;
+  if (!rightText) return leftText;
+  const omitSpace =
+    (CJK_BOUNDARY.test(leftText.at(-1) ?? '') && CJK_BOUNDARY.test(rightText[0] ?? '')) ||
+    /^[,.;:!?%)\]}\u201d\u2019]/u.test(rightText) ||
+    /[(\[{\u201c\u2018/]$/u.test(leftText);
+  return `${leftText}${omitSpace ? '' : ' '}${rightText}`;
+}
+
+/**
+ * Coalesces only high-confidence, same-page semantic continuations. Skipped
+ * captions/tables/code remain independent blocks, while the prose on either
+ * side is translated from tight, ordered image crops in one provider request.
+ */
+export function mergePdfDocumentTranslationContinuationBlocks(
+  blocks: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  const removed = new Set<number>();
+  const replacement = new Map<number, PdfDocumentTranslationBlock>();
+  for (let index = 0; index < blocks.length; index += 1) {
+    if (removed.has(index) || pdfDocumentTranslationBlockIsSkippableInterruption(blocks[index]!)) {
+      continue;
+    }
+    const members = [index];
+    let text = blocks[index]!.text;
+    let cursor = index;
+    let regions = pdfDocumentTranslationSourceRegions(blocks[index]!);
+    if (!regions.length) continue;
+    while (members.length < PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS) {
+      const continuity = pdfDocumentTranslationContinuity(blocks, cursor);
+      const nextIndex = continuity.nextIndex;
+      if (!continuity.continuesNext || nextIndex === undefined || nextIndex <= cursor) break;
+      const previous = blocks[cursor]!;
+      const next = blocks[nextIndex]!;
+      const nextRegions = pdfDocumentTranslationSourceRegions(next);
+      if (
+        next.pageNumber !== blocks[index]!.pageNumber ||
+        !nextRegions.length ||
+        nextRegions.some((region) => region.pageNumber !== blocks[index]!.pageNumber) ||
+        !pdfDocumentTranslationBlocksStronglyContinue(previous, next)
+      ) break;
+      const joined = joinPdfDocumentTranslationContinuationText(text, next.text);
+      if (joined.length > PDF_DOCUMENT_TRANSLATION_CONTINUATION_LENGTH) break;
+      const joinedRegions = [...regions, ...nextRegions];
+      if (joinedRegions.length > PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS) break;
+      text = joined;
+      regions = joinedRegions;
+      members.push(nextIndex);
+      cursor = nextIndex;
+    }
+    if (members.length < 2) continue;
+    const first = blocks[index]!;
+    const sourceKinds = members.map((memberIndex) => blocks[memberIndex]!.kind ?? 'text');
+    const kind = pdfDocumentTranslationBlockKind(text, sourceKinds);
+    replacement.set(index, {
+      id: first.id,
+      pageNumber: first.pageNumber,
+      blockIndex: first.blockIndex,
+      text,
+      ...(kind === 'text' ? {} : { kind }),
+      sourceRegions: regions,
+    });
+    for (const memberIndex of members.slice(1)) removed.add(memberIndex);
+  }
+  const pageIndexes = new Map<number, number>();
+  return blocks.flatMap((block, index) => {
+    if (removed.has(index)) return [];
+    const resolved = replacement.get(index) ?? block;
+    const blockIndex = pageIndexes.get(resolved.pageNumber) ?? 0;
+    pageIndexes.set(resolved.pageNumber, blockIndex + 1);
+    return [{ ...resolved, blockIndex }];
+  });
 }
 
 function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {
@@ -893,7 +1026,7 @@ export function preparePdfDocumentTranslationPages(
     blocks.push(...pageBlocks);
   }
   return {
-    blocks,
+    blocks: mergePdfDocumentTranslationContinuationBlocks(blocks),
     unreadablePages,
     layoutAwarePages,
     multiColumnPages,

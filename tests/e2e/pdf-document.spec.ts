@@ -533,7 +533,7 @@ test('uses one authorized vision model for every block in a PDF containing formu
   }
 });
 
-test('splits a long multimodal PDF paragraph into non-overlapping line-aligned crops', async ({}, testInfo) => {
+test('joins long paragraph chunks into one non-overlapping multimodal crop', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   const visionRequestStart = visionRequests.length;
   const lines = Array.from({ length: 52 }, (_, index) => index === 11
@@ -551,12 +551,12 @@ test('splits a long multimodal PDF paragraph into non-overlapping line-aligned c
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
     await expect(pdfPage.locator('#pdf-document-translation-status'))
-      .toContainText('已识别 2 段，等待确认');
+      .toContainText('已识别 1 段，等待确认');
     await expect(pdfPage.locator('#pdf-document-translation-primary'))
       .toHaveText('开始多模态全文翻译');
     await pdfPage.locator('#pdf-document-translation-primary').click();
-    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
-    expect(visionRequests).toHaveLength(visionRequestStart + 2);
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
+    expect(visionRequests).toHaveLength(visionRequestStart + 1);
 
     const requests = visionRequests.slice(visionRequestStart);
     const promptAndImages = requests.map((request) => {
@@ -575,9 +575,6 @@ test('splits a long multimodal PDF paragraph into non-overlapping line-aligned c
       const serialized = prompt.slice(markerIndex + hintMarker.length).split('\n', 1)[0]!;
       return JSON.parse(serialized) as string;
     });
-    expect(promptAndImages[0]!.prompt).toContain('当前句在下一连续块中继续');
-    expect(promptAndImages[1]!.prompt).toContain('本块承接上一连续块中尚未结束的句子');
-    expect(promptAndImages[1]!.prompt).toContain('上一连续块译文');
     for (const line of lines) {
       expect(recognizedHints.filter((hint) => hint.includes(line))).toHaveLength(1);
     }
@@ -592,8 +589,7 @@ test('splits a long multimodal PDF paragraph into non-overlapping line-aligned c
       return { width: image.naturalWidth, height: image.naturalHeight };
     })), imageDataUrls);
     expect(dimensions[0]!.width).toBeGreaterThan(600);
-    expect(dimensions[0]!.height).toBeGreaterThan(800);
-    expect(dimensions[1]!.height).toBeGreaterThan(100);
+    expect(dimensions[0]!.height).toBeGreaterThan(900);
 
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await Promise.all(imageDataUrls.map((imageDataUrl, index) => writeFile(
@@ -708,6 +704,88 @@ test('groups a full-width paragraph into one multimodal crop on a two-column PDF
         testInfo.outputPath('pdf-two-column-full-width-visual-crop.png'),
         Buffer.from(imageDataUrl!.split(',', 2)[1]!, 'base64'),
       );
+    }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('joins a sentence that crosses columns and a full-width region into one visual card', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  const visionRequestStart = visionRequests.length;
+  const leftLines = [
+    'This paper develops ISTA reconstruction',
+    'with interpretable optimization stages',
+    'and learned nonlinear transforms',
+    'to recover sparse natural images',
+    'and retain measurement consistency',
+    'with all parameters learned end to end',
+    'and draws additional insights',
+  ];
+  const rightLines = [
+    'using compression theory for this design',
+    'through sparse natural image residuals',
+    'that remain clear at every stage',
+    'and preserve measurement constraints',
+    'with one visual evidence path',
+    'so no fragment is translated alone',
+    'and the resulting enhanced version is dubbed',
+  ];
+  const fullWidthLines = [
+    'ISTA-Net+, the resulting enhanced architecture, extends the original ISTA-Net to',
+    'improve reconstruction accuracy while preserving E = mc^2 in the explanation.',
+  ];
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'semantic-continuation-regions.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoColumnTextPdf(
+        leftLines,
+        rightLines,
+        fullWidthLines.map((text, index) => ({ text, x: 54, y: 500 - index * 22 })),
+      ),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 1 段，等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
+
+    const requests = visionRequests.slice(visionRequestStart);
+    expect(requests).toHaveLength(1);
+    const content = (requests[0]!.messages as Array<{
+      content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+    }> | undefined)?.[0]?.content;
+    const prompt = content?.find((item) => item.type === 'text')?.text ?? '';
+    expect(prompt).toContain(JSON.stringify(
+      [...leftLines, ...rightLines, ...fullWidthLines].join(' '),
+    ));
+    expect(prompt).toContain('多个不相邻的紧凑裁剪区域按阅读顺序自上而下拼接');
+    const imageDataUrl = content?.find((item) => item.type === 'image_url')?.image_url?.url;
+    expect(imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    const dimensions = await pdfPage.evaluate(async (url) => {
+      const image = new Image();
+      image.src = url!;
+      await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    }, imageDataUrl);
+    expect(dimensions.width).toBeGreaterThan(700);
+    expect(dimensions.height).toBeGreaterThan(700);
+    const cards = pdfPage.locator('#pdf-document-translation-pages [data-translation-block]');
+    await expect(cards).toHaveCount(1);
+    await expect(cards).toHaveAttribute('data-translation-mode', 'vision');
+
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await writeFile(
+        testInfo.outputPath('pdf-semantic-continuation-composite.png'),
+        Buffer.from(imageDataUrl!.split(',', 2)[1]!, 'base64'),
+      );
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-semantic-continuation-result.png'),
+        fullPage: false,
+      });
     }
   } finally {
     await pdfPage.close();
