@@ -20,7 +20,7 @@ interface BackgroundJob {
   jobId: string;
   documentSessionId: string;
   sourceTabId: number;
-  mode: 'text' | 'vision';
+  mode: 'text' | 'vision' | 'hybrid';
   blocks: PdfBackgroundTranslationBlock[];
   settings: Extract<
     PdfBackgroundDocumentMessage,
@@ -151,6 +151,7 @@ async function processVisualBlock(
         imageDataUrl: capture.imageDataUrl,
         imageWidth: capture.imageWidth,
         imageHeight: capture.imageHeight,
+        visualPurpose: block.visualPurpose,
         recognizedTextHint: block.text,
         ...(contextText ? { contextText } : {}),
         pageUrl: job.settings.pageUrl,
@@ -260,7 +261,7 @@ async function processTextBlocks(
 function runJob(job: BackgroundJob): void {
   if (
     job.run || job.phase !== 'running' ||
-    (job.mode === 'vision' && !job.pdf)
+    (job.mode !== 'text' && !job.pdf)
   ) return;
   job.run = (async () => {
     const completedIds = new Set(job.completed.map((outcome) => outcome.blockId));
@@ -272,9 +273,17 @@ function runJob(job: BackgroundJob): void {
       job.activeBlockId = block.id;
       publish(job);
       try {
-        const outcomes = job.mode === 'vision'
+        const useVision = job.mode === 'vision' || (
+          job.mode === 'hybrid' && block.visualPurpose !== 'document'
+        );
+        const textBatch = useVision
+          ? []
+          : pending.slice(0, 6).filter((candidate) => (
+              job.mode !== 'hybrid' || candidate.visualPurpose === 'document'
+            ));
+        const outcomes = useVision
           ? [await processVisualBlock(job, block)]
-          : await processTextBlocks(job, pending.slice(0, 6));
+          : await processTextBlocks(job, textBatch);
         if (job.phase !== 'running') break;
         job.completed.push(...outcomes);
         outcomes.forEach((outcome) => completedIds.add(outcome.blockId));
@@ -401,7 +410,7 @@ browser.runtime.onMessage.addListener((value: unknown, sender): Promise<unknown>
     completed: [],
   };
   jobs.set(job.jobId, job);
-  if (job.mode === 'vision') void initializeJob(job, message.payload.pdfResourceUrl!);
+  if (job.mode !== 'text') void initializeJob(job, message.payload.pdfResourceUrl!);
   else runJob(job);
   return Promise.resolve({ ok: true, snapshot: snapshot(job) });
 });

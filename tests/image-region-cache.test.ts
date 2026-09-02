@@ -41,6 +41,10 @@ describe('image region translation cache', () => {
     expect(key).not.toContain('QUJDRA');
     await expect(imageRegionCacheKey({ ...request, requestId: 'two' }, provider)).resolves.toBe(key);
     await expect(imageRegionCacheKey({ ...request, targetLanguage: 'ja' }, provider)).resolves.not.toBe(key);
+    await expect(imageRegionCacheKey({
+      ...request,
+      visualPurpose: 'table',
+    }, provider)).resolves.not.toBe(key);
     await expect(imageRegionCacheKey(request, {
       ...provider,
       glossary: [{ source: 'ROI', target: '感兴趣区域' }],

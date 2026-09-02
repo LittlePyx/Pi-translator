@@ -3239,6 +3239,12 @@ function validateImagePayload(
 
 function validateImageRegionRequest(request: TranslateImageRegionRequest): void {
   validateImagePayload(request);
+  if (
+    request.visualPurpose !== undefined &&
+    !['document', 'formula', 'figure', 'table'].includes(request.visualPurpose)
+  ) {
+    throw new TranslationError('IMAGE_REGION_INVALID', 'The visual translation purpose is invalid.');
+  }
 }
 
 async function recognizePdfPage(
@@ -3496,6 +3502,7 @@ async function translateImageRegion(
             imageDataUrl: request.imageDataUrl,
             imageWidth: request.imageWidth,
             imageHeight: request.imageHeight,
+            ...(request.visualPurpose ? { visualPurpose: request.visualPurpose } : {}),
             ...(request.recognizedTextHint
               ? { recognizedTextHint: request.recognizedTextHint }
               : {}),

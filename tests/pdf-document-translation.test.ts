@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH,
   comparePdfDocumentTranslationPriority,
+  groupPdfDocumentTranslationVisualObjects,
   mergePdfDocumentTranslationContinuationBlocks,
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
@@ -337,9 +338,145 @@ describe('PDF document translation', () => {
     ])]);
     expect(prepared.multiColumnPages).toBe(0);
     expect(prepared.blocks.map((block) => block.text)).toEqual([
-      'Model\tScore\tTime',
-      'Pi\t98\t1.2 s',
+      'Model\tScore\tTime\nPi\t98\t1.2 s',
     ]);
+    expect(prepared.blocks[0]!.kind).toBe('table');
+  });
+
+  it('collapses a vector chart and its caption into one whole-figure block', () => {
+    const anchor = (
+      leftRatio: number,
+      topRatio: number,
+      widthRatio: number,
+      heightRatio = .018,
+    ) => ({ leftRatio, topRatio, widthRatio, heightRatio });
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P6B1', pageNumber: 6, blockIndex: 0, text: '32.5 32 31.5',
+        sourceAnchor: anchor(.075, .103, .06),
+      },
+      {
+        id: 'P6B2', pageNumber: 6, blockIndex: 1, text: 'PSNR (dB)\t31\tISTA-Net+',
+        kind: 'table', sourceAnchor: anchor(.08, .125, .33),
+      },
+      {
+        id: 'P6B3', pageNumber: 6, blockIndex: 2, text: '30.5\tISTA-Net',
+        kind: 'table', sourceAnchor: anchor(.08, .15, .31),
+      },
+      {
+        id: 'P6B4', pageNumber: 6, blockIndex: 3, text: '5\t10\t15',
+        kind: 'formula', sourceAnchor: anchor(.13, .19, .24),
+      },
+      {
+        id: 'P6B5', pageNumber: 6, blockIndex: 4, text: 'Phase Number Np',
+        sourceAnchor: anchor(.18, .215, .18),
+      },
+      {
+        id: 'P6B6', pageNumber: 6, blockIndex: 5, text: '0\t50\t100\t150\t200',
+        kind: 'formula', sourceAnchor: anchor(.13, .255, .28),
+      },
+      {
+        id: 'P6B7', pageNumber: 6, blockIndex: 6,
+        text: 'Epoch Number in Training Figure 4. PSNR comparison between ISTA-Net and ISTA-Net+.',
+        sourceAnchor: anchor(.075, .285, .398, .026),
+      },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({
+      id: 'P6B1',
+      pageNumber: 6,
+      blockIndex: 0,
+      kind: 'figure',
+      text: 'Figure 4. PSNR comparison between ISTA-Net and ISTA-Net+.',
+    });
+    expect(grouped[0]!.sourceAnchor!.topRatio).toBeLessThan(.1);
+    expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.2);
+  });
+
+  it('keeps a table caption and all adjacent rows in one table object', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P7B1', pageNumber: 7, blockIndex: 0,
+        text: 'Table 1. Average PSNR performance.',
+        sourceAnchor: { leftRatio: .075, topRatio: .30, widthRatio: .82, heightRatio: .05 },
+      },
+      {
+        id: 'P7B2', pageNumber: 7, blockIndex: 1,
+        text: 'Algorithm\tCS Ratio', kind: 'table',
+        sourceAnchor: { leftRatio: .15, topRatio: .35, widthRatio: .33, heightRatio: .026 },
+      },
+      {
+        id: 'P7B3', pageNumber: 7, blockIndex: 2,
+        text: '50%\t40%\t30%\tTime\tFPS', kind: 'table',
+        sourceAnchor: { leftRatio: .14, topRatio: .345, widthRatio: .68, heightRatio: .085 },
+      },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({
+      kind: 'table',
+      text: 'Table 1. Average PSNR performance.\n' +
+        'Algorithm\tCS Ratio\n50%\t40%\t30%\tTime\tFPS',
+    });
+  });
+
+  it('keeps a raster figure caption wrap together and expands to the image above', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P7B1', pageNumber: 7, blockIndex: 0,
+        text: 'Figure 5. Comparison of seven reconstruction methods applied to the image',
+        sourceAnchor: { leftRatio: .075, topRatio: .269, widthRatio: .82, heightRatio: .02 },
+      },
+      {
+        id: 'P7B2', pageNumber: 7, blockIndex: 1,
+        text: 'in Set11 (CS ratio is 25%).',
+        sourceAnchor: { leftRatio: .075, topRatio: .284, widthRatio: .17, heightRatio: .019 },
+      },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({
+      kind: 'figure',
+      text: 'Figure 5. Comparison of seven reconstruction methods applied to the image ' +
+        'in Set11 (CS ratio is 25%).',
+    });
+    expect(grouped[0]!.sourceAnchor!.topRatio).toBe(0);
+    expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.3);
+  });
+
+  it('stops a table object before following prose and a numbered section', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P7B1', pageNumber: 7, blockIndex: 0,
+        text: 'Table 2. Average performance.',
+        sourceAnchor: { leftRatio: .5, topRatio: .49, widthRatio: .4, heightRatio: .03 },
+      },
+      {
+        id: 'P7B2', pageNumber: 7, blockIndex: 1,
+        text: 'Algorithm\tCS Ratio', kind: 'table',
+        sourceAnchor: { leftRatio: .51, topRatio: .52, widthRatio: .32, heightRatio: .02 },
+      },
+      {
+        id: 'P7B3', pageNumber: 7, blockIndex: 2,
+        text: 'ISTA-Net+\t34.01\t32.21', kind: 'table',
+        sourceAnchor: { leftRatio: .51, topRatio: .56, widthRatio: .36, heightRatio: .02 },
+      },
+      {
+        id: 'P7B4', pageNumber: 7, blockIndex: 3,
+        text: 'The measurement matrix usually takes less than 1 second.',
+        sourceAnchor: { leftRatio: .5, topRatio: .60, widthRatio: .4, heightRatio: .03 },
+      },
+      {
+        id: 'P7B5', pageNumber: 7, blockIndex: 4,
+        text: '5.3. Comparison with ADMM-Net',
+        sourceAnchor: { leftRatio: .5, topRatio: .65, widthRatio: .37, heightRatio: .02 },
+      },
+    ]);
+
+    expect(grouped.map((block) => block.kind ?? 'text')).toEqual(['table', 'text', 'text']);
+    expect(grouped[0]!.text).not.toContain('measurement matrix');
+    expect(grouped[0]!.text).not.toContain('5.3.');
   });
 
   it('removes only repeated headers and page-number footers across pages', () => {

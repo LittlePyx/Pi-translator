@@ -84,7 +84,7 @@ function percent(value: number): string {
 }
 
 function safeRole(value: PdfDocumentTranslationBlockKind | undefined): string {
-  return value === 'formula' || value === 'code' || value === 'table'
+  return value === 'formula' || value === 'code' || value === 'table' || value === 'figure'
     ? value
     : 'text';
 }
@@ -140,11 +140,13 @@ export function buildPdfLayoutTranslationExport(
     const pageBlocks = blocks.filter((block) => block.pageNumber === pageNumber);
     const positioned = image
       ? pageBlocks.filter((block) => (
-          block.sourceAnchor && block.role !== 'code' && block.role !== 'table'
+          block.sourceAnchor && block.role !== 'code' && block.role !== 'table' &&
+          block.role !== 'figure'
         ))
       : [];
     const fallback = pageBlocks.filter((block) => (
-      !image || !block.sourceAnchor || block.role === 'code' || block.role === 'table'
+      !image || !block.sourceAnchor || block.role === 'code' || block.role === 'table' ||
+      block.role === 'figure'
     ));
     positionedBlockCount += positioned.length;
     fallbackBlockCount += fallback.length;

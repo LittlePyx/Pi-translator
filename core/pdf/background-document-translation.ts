@@ -1,5 +1,6 @@
 import type { PdfDocumentTranslationSourceRegion } from './document-translation';
 import type {
+  ImageTranslationPurpose,
   TranslateBatchRequest,
   TranslateImageRegionRequest,
 } from '../translation/types';
@@ -13,6 +14,7 @@ export interface PdfBackgroundTranslationBlock {
   text: string;
   containsFormula: boolean;
   preserveInTextMode: boolean;
+  visualPurpose: ImageTranslationPurpose;
   sourceRegions: PdfDocumentTranslationSourceRegion[];
   previousBlockId?: string;
   contextText?: string;
@@ -51,7 +53,7 @@ export type PdfBackgroundDocumentMessage =
       payload: {
         jobId: string;
         documentSessionId: string;
-        mode: 'text' | 'vision';
+        mode: 'text' | 'vision' | 'hybrid';
         pdfResourceUrl?: string;
         blocks: PdfBackgroundTranslationBlock[];
         settings: PdfBackgroundTranslationSettings;
@@ -109,6 +111,19 @@ function nonEmptyString(value: unknown, maximum = 4_000): value is string {
   return typeof value === 'string' && value.trim().length > 0 && value.length <= maximum;
 }
 
+function validBackgroundTranslationBlock(value: unknown): boolean {
+  const block = record(value);
+  return Boolean(
+    block && nonEmptyString(block.id, 256) &&
+    Number.isSafeInteger(block.pageNumber) && (block.pageNumber as number) > 0 &&
+    nonEmptyString(block.text, 12_000) &&
+    typeof block.containsFormula === 'boolean' &&
+    typeof block.preserveInTextMode === 'boolean' &&
+    ['document', 'formula', 'figure', 'table'].includes(String(block.visualPurpose)) &&
+    Array.isArray(block.sourceRegions),
+  );
+}
+
 export function isPdfBackgroundProxyMessage(
   value: unknown,
 ): value is PdfBackgroundProxyMessage {
@@ -158,9 +173,10 @@ export function isPdfBackgroundDocumentMessage(
   }
   return message.type === 'START_PDF_BACKGROUND_DOCUMENT_TRANSLATION' && Boolean(
     nonEmptyString(payload.documentSessionId, 256) &&
-    ['text', 'vision'].includes(String(payload.mode)) &&
+    ['text', 'vision', 'hybrid'].includes(String(payload.mode)) &&
     (payload.mode === 'text' || nonEmptyString(payload.pdfResourceUrl, 8_192)) &&
     Array.isArray(payload.blocks) && payload.blocks.length > 0 &&
+    payload.blocks.every(validBackgroundTranslationBlock) &&
     record(payload.settings),
   );
 }

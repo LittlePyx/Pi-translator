@@ -689,6 +689,47 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 .pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
 .pdf-document-translation-block[data-status="error"] { color: #b42336; }
+.pdf-document-translation-block[data-object-role] {
+  padding: 8px 9px;
+  border: 1px solid rgba(99, 102, 241, .14);
+  border-radius: 7px;
+  background: rgba(99, 102, 241, .035);
+}
+.pdf-document-translation-block[data-object-role][data-source-anchor][data-status="done"] {
+  margin-left: 0;
+  border-left: 2px solid rgba(79, 70, 229, .34);
+  border-radius: 7px;
+}
+.pdf-document-table-caption { margin-bottom: 7px; font-weight: 650; line-height: 1.55; }
+.pdf-document-table-scroll {
+  max-width: 100%;
+  overflow-x: auto;
+  border: 1px solid rgba(100, 116, 139, .18);
+  border-radius: 5px;
+  background: #fff;
+}
+.pdf-document-table {
+  width: max-content;
+  min-width: 100%;
+  border-collapse: collapse;
+  font-size: 10px;
+  line-height: 1.45;
+  white-space: normal;
+}
+.pdf-document-table th,
+.pdf-document-table td {
+  min-width: 70px;
+  border-right: 1px solid rgba(100, 116, 139, .16);
+  border-bottom: 1px solid rgba(100, 116, 139, .16);
+  padding: 5px 7px;
+  text-align: left;
+  vertical-align: top;
+}
+.pdf-document-table th { color: #3f438d; background: #f6f6ff; font-weight: 750; }
+.pdf-document-table tr:last-child td { border-bottom: 0; }
+.pdf-document-table th:last-child,
+.pdf-document-table td:last-child { border-right: 0; }
+.pdf-document-table-trailing { margin-top: 7px; color: var(--muted); font-size: 9.5px; }
 .pdf-document-translation-block[data-translation-mode]::before {
   display: block;
   width: max-content;
@@ -702,12 +743,24 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="formula"]::before {
   content: "多模态公式";
 }
+.pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="figure"]::before {
+  content: "图表";
+}
+.pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="table"]::before {
+  content: "表格";
+}
 .pdf-document-translation-block[data-translation-mode="preserved"]::before {
   color: #9a6416;
   content: "已保留原文";
 }
 .pdf-document-translation-block[data-translation-mode="preserved"][data-visual-role="formula"]::before {
   content: "已保留原式";
+}
+.pdf-document-translation-block[data-translation-mode="preserved"][data-visual-role="figure"]::before {
+  content: "已保留原图";
+}
+.pdf-document-translation-block[data-translation-mode="preserved"][data-visual-role="table"]::before {
+  content: "已保留原表";
 }
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
 .pdf-document-translation-empty { margin: 26px 20px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }

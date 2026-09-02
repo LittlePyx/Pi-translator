@@ -142,6 +142,8 @@ export interface TranslationRevision {
   scope?: TranslationRevisionScope;
 }
 
+export type ImageTranslationPurpose = 'document' | 'formula' | 'figure' | 'table';
+
 export interface TranslateImageRegionRequest {
   requestId: string;
   /** Stable local identity for document-scoped memory; never sent to the provider. */
@@ -149,6 +151,8 @@ export interface TranslateImageRegionRequest {
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
+  /** Selects a constrained visual-output contract; omitted for ordinary user selections. */
+  visualPurpose?: ImageTranslationPurpose;
   recognizedTextHint?: string;
   /** Nearby document text used only for terminology and tone consistency. */
   contextText?: string;
@@ -218,6 +222,7 @@ export interface ImageTranslationInput {
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
+  visualPurpose?: ImageTranslationPurpose;
   recognizedTextHint?: string;
   contextText?: string;
 }

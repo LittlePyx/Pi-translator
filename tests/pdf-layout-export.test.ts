@@ -58,19 +58,27 @@ describe('PDF layout translation export', () => {
     expect(result.html).toContain('这段译文不能安全覆盖原文。');
   });
 
-  it('keeps code and tables visible on the source page and moves their translations to a continuation', () => {
-    const result = buildPdfLayoutTranslationExport([{
-      id: 'P1B1',
-      pageNumber: 1,
-      translatedText: 'const answer = 42;',
-      role: 'code',
-      sourceAnchor: {
-        leftRatio: .15,
-        topRatio: .25,
-        widthRatio: .7,
-        heightRatio: .2,
+  it('keeps code, tables, and figures visible and moves their translations to a continuation', () => {
+    const sourceAnchor = {
+      leftRatio: .15,
+      topRatio: .25,
+      widthRatio: .7,
+      heightRatio: .2,
+    };
+    const result = buildPdfLayoutTranslationExport([
+      {
+        id: 'P1B1', pageNumber: 1, translatedText: 'const answer = 42;',
+        role: 'code', sourceAnchor,
       },
-    }], [{
+      {
+        id: 'P1B2', pageNumber: 1, translatedText: '| 模型 | 分数 |',
+        role: 'table', sourceAnchor,
+      },
+      {
+        id: 'P1B3', pageNumber: 1, translatedText: '图 1：收敛曲线。',
+        role: 'figure', sourceAnchor,
+      },
+    ], [{
       pageNumber: 1,
       dataUrl: 'data:image/jpeg;base64,AA==',
       pageWidth: 612,
@@ -79,10 +87,13 @@ describe('PDF layout translation export', () => {
 
     expect(result).toMatchObject({
       positionedBlockCount: 0,
-      fallbackBlockCount: 1,
+      fallbackBlockCount: 3,
     });
     expect(result.html).not.toContain('data-layout-role="code" style=');
+    expect(result.html).not.toContain('data-layout-role="table" style=');
+    expect(result.html).not.toContain('data-layout-role="figure" style=');
     expect(result.html).toContain('const answer = 42;');
+    expect(result.html).toContain('图 1：收敛曲线。');
   });
 
   it('labels an incomplete layout export as partial', () => {

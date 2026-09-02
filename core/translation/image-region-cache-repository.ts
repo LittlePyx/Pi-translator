@@ -39,6 +39,7 @@ export async function imageRegionCacheKey(
     imageDigest,
     imageWidth: request.imageWidth,
     imageHeight: request.imageHeight,
+    visualPurpose: request.visualPurpose,
     sourceLanguage: request.sourceLanguage,
     targetLanguage: request.targetLanguage,
     style: request.style,

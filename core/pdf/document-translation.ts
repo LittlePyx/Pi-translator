@@ -3,7 +3,7 @@ import { splitLongTranslationText } from '../translation/text-chunker';
 import type { CoordinateOcrPage } from './ocr-text-layer';
 import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
 
-export type PdfDocumentTranslationBlockKind = 'text' | 'formula' | 'code' | 'table';
+export type PdfDocumentTranslationBlockKind = 'text' | 'formula' | 'code' | 'table' | 'figure';
 
 export interface PdfDocumentTranslationBlock {
   id: string;
@@ -144,7 +144,9 @@ const CONTINUITY_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
 // caption separator. A prose sentence such as "Figure 2 clearly illustrates"
 // is a semantic paragraph, not a caption; skipping it would let its lower-case
 // continuation lines attach to the preceding equation or paragraph.
-const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*[A-Z]?\d+\s*[.:-](?:\s|$)/iu;
+const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$)/iu;
+const FIGURE_CAPTION = /(?:^|\s)((?:fig(?:ure)?\.?|scheme|图)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
+const TABLE_CAPTION = /(?:^|\s)((?:table|表)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
 const INLINE_SECTION_LEAD = /^[\p{Lu}\d][^.!?。！？:：\t]{2,72}[:：]\s+\p{Lu}/u;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',
@@ -532,6 +534,344 @@ function coalesceAdjacentPdfDocumentTranslationSourceRegions(
   return output;
 }
 
+interface PdfDocumentTranslationAnchorBounds {
+  left: number;
+  top: number;
+  right: number;
+  bottom: number;
+}
+
+function pdfDocumentTranslationBlockBounds(
+  block: PdfDocumentTranslationBlock,
+): PdfDocumentTranslationAnchorBounds | undefined {
+  const regions = pdfDocumentTranslationSourceRegions(block).filter(
+    (region) => region.pageNumber === block.pageNumber,
+  );
+  if (!regions.length) return undefined;
+  return {
+    left: Math.min(...regions.map((region) => region.sourceAnchor.leftRatio)),
+    top: Math.min(...regions.map((region) => region.sourceAnchor.topRatio)),
+    right: Math.max(...regions.map((region) => (
+      region.sourceAnchor.leftRatio + region.sourceAnchor.widthRatio
+    ))),
+    bottom: Math.max(...regions.map((region) => (
+      region.sourceAnchor.topRatio + region.sourceAnchor.heightRatio
+    ))),
+  };
+}
+
+function pdfDocumentTranslationBoundsShareLane(
+  left: PdfDocumentTranslationAnchorBounds,
+  right: PdfDocumentTranslationAnchorBounds,
+): boolean {
+  const overlap = Math.max(0, Math.min(left.right, right.right) - Math.max(left.left, right.left));
+  const minimumWidth = Math.min(left.right - left.left, right.right - right.left);
+  const leftCenter = (left.left + left.right) / 2;
+  const rightCenter = (right.left + right.right) / 2;
+  return overlap >= minimumWidth * .16 ||
+    (leftCenter >= right.left - .02 && leftCenter <= right.right + .02) ||
+    (rightCenter >= left.left - .02 && rightCenter <= left.right + .02);
+}
+
+function pdfDocumentTranslationUnionAnchor(
+  blocks: readonly PdfDocumentTranslationBlock[],
+  padding: { x: number; top: number; bottom: number },
+): PdfDocumentTranslationSourceAnchor | undefined {
+  const bounds = blocks.flatMap((block) => {
+    const value = pdfDocumentTranslationBlockBounds(block);
+    return value ? [value] : [];
+  });
+  if (!bounds.length) return undefined;
+  const left = Math.max(0, Math.min(...bounds.map((bound) => bound.left)) - padding.x);
+  const top = Math.max(0, Math.min(...bounds.map((bound) => bound.top)) - padding.top);
+  const right = Math.min(1, Math.max(...bounds.map((bound) => bound.right)) + padding.x);
+  const bottom = Math.min(1, Math.max(...bounds.map((bound) => bound.bottom)) + padding.bottom);
+  if (right <= left || bottom <= top) return undefined;
+  return {
+    leftRatio: left,
+    topRatio: top,
+    widthRatio: right - left,
+    heightRatio: bottom - top,
+  };
+}
+
+function pdfDocumentTranslationCaptionText(
+  text: string,
+  pattern: RegExp,
+): string | undefined {
+  const match = pattern.exec(text);
+  if (!match?.[1]) return undefined;
+  const captionStart = match.index + match[0].lastIndexOf(match[1]);
+  return text.slice(captionStart).replace(/\s+/gu, ' ').trim() || undefined;
+}
+
+function pdfDocumentTranslationLooksFigureFragment(
+  block: PdfDocumentTranslationBlock,
+): boolean {
+  if (!block.sourceAnchor || block.kind === 'code' || block.kind === 'figure') return false;
+  const text = block.text.replace(/\s+/gu, ' ').trim();
+  if (!text || text.length > 120 || FIGURE_CAPTION.test(text) || TABLE_CAPTION.test(text)) {
+    return false;
+  }
+  const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}+−'’_-]*/gu) ?? [];
+  if (SENTENCE_END.test(text) && words.length > 6) return false;
+  // Numbered display equations sit near prose just like plots do. Never absorb
+  // an equation into a chart merely because a figure caption follows it.
+  if (block.kind === 'formula' && /(?:=|≤|≥|≈|\barg\s*min\b|\barg\s*max\b)/iu.test(text)) {
+    return false;
+  }
+  const numericCharacters = text.match(/[\d.,%+−-]/gu)?.length ?? 0;
+  const axisOrLegend = /\b(?:accuracy|epoch|error|iteration|loss|method|model|number|phase|psnr|ratio|score|ssim|time|training)\b|\bdb\b/iu.test(text);
+  return block.kind === 'table' || block.kind === 'formula' || axisOrLegend ||
+    (text.length <= 28 && numericCharacters >= Math.max(1, text.length * .28));
+}
+
+function reindexPdfDocumentTranslationPageBlocks(
+  blocks: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  return blocks.map((block, blockIndex) => ({
+    ...block,
+    blockIndex,
+    id: `P${block.pageNumber}B${blockIndex + 1}`,
+  }));
+}
+
+function groupPdfDocumentTranslationFigures(
+  input: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  const output = [...input];
+  for (let captionIndex = 0; captionIndex < output.length; captionIndex += 1) {
+    const caption = output[captionIndex]!;
+    const captionText = pdfDocumentTranslationCaptionText(caption.text, FIGURE_CAPTION);
+    const captionBounds = pdfDocumentTranslationBlockBounds(caption);
+    if (!captionText || !captionBounds) continue;
+    const members: number[] = [];
+    let nextTop = captionBounds.top;
+    let structuredEvidence = 0;
+    let numericEvidence = 0;
+    for (
+      let candidateIndex = captionIndex - 1;
+      candidateIndex >= 0 && members.length < 28;
+      candidateIndex -= 1
+    ) {
+      const candidate = output[candidateIndex]!;
+      const bounds = pdfDocumentTranslationBlockBounds(candidate);
+      if (
+        candidate.pageNumber !== caption.pageNumber || !bounds ||
+        !pdfDocumentTranslationLooksFigureFragment(candidate) ||
+        !pdfDocumentTranslationBoundsShareLane(bounds, captionBounds) ||
+        bounds.bottom > captionBounds.bottom + .025 ||
+        nextTop - bounds.bottom > .085 ||
+        captionBounds.bottom - bounds.top > .38
+      ) break;
+      members.unshift(candidateIndex);
+      nextTop = Math.min(nextTop, bounds.top);
+      if (candidate.kind === 'formula' || candidate.kind === 'table') structuredEvidence += 1;
+      if (/\d/u.test(candidate.text)) numericEvidence += 1;
+    }
+    const hasFragmentEvidence = members.length >= 3 && structuredEvidence >= 2 &&
+      (numericEvidence >= 1 || structuredEvidence >= 4);
+    if (hasFragmentEvidence) {
+      const firstIndex = members[0]!;
+      const grouped = [...members.map((index) => output[index]!), caption];
+      const sourceAnchor = pdfDocumentTranslationUnionAnchor(grouped, {
+        x: .012,
+        top: .012,
+        bottom: .006,
+      });
+      if (!sourceAnchor) continue;
+      output.splice(firstIndex, captionIndex - firstIndex + 1, {
+        id: output[firstIndex]!.id,
+        pageNumber: caption.pageNumber,
+        blockIndex: output[firstIndex]!.blockIndex,
+        text: captionText,
+        kind: 'figure',
+        sourceAnchor,
+      });
+      captionIndex = firstIndex;
+      continue;
+    }
+
+    // Raster figures and diagrams often contribute no text-layer atoms at all.
+    // Keep the explicit caption plus its wrapped continuation as one object and
+    // conservatively extend the crop upward to include the visual it describes.
+    const captionMembers = [caption];
+    let completeCaption = captionText;
+    let cursor = captionIndex + 1;
+    let previousBounds = captionBounds;
+    while (!SENTENCE_END.test(completeCaption) && cursor < output.length && captionMembers.length < 4) {
+      const candidate = output[cursor]!;
+      const bounds = pdfDocumentTranslationBlockBounds(candidate);
+      const candidateText = candidate.text.replace(/\s+/gu, ' ').trim();
+      if (
+        candidate.pageNumber !== caption.pageNumber || candidate.kind || !bounds ||
+        CAPTION_BLOCK.test(candidateText) || SECTION_HEADING_LINE.test(candidateText) ||
+        candidateText.length > 260 ||
+        !pdfDocumentTranslationBoundsShareLane(bounds, captionBounds) ||
+        bounds.top - previousBounds.bottom > .035
+      ) break;
+      captionMembers.push(candidate);
+      completeCaption = joinPdfDocumentTranslationContinuationText(
+        completeCaption,
+        candidateText,
+      );
+      previousBounds = bounds;
+      cursor += 1;
+    }
+    const sourceAnchor = pdfDocumentTranslationUnionAnchor(captionMembers, {
+      x: .012,
+      top: .006,
+      bottom: .006,
+    });
+    if (!sourceAnchor) continue;
+    const inferredVisualHeight = Math.min(.3, Math.max(.12, sourceAnchor.widthRatio * .42));
+    const inferredTop = Math.max(0, sourceAnchor.topRatio - inferredVisualHeight);
+    sourceAnchor.heightRatio += sourceAnchor.topRatio - inferredTop;
+    sourceAnchor.topRatio = inferredTop;
+    output.splice(captionIndex, captionMembers.length, {
+      id: caption.id,
+      pageNumber: caption.pageNumber,
+      blockIndex: caption.blockIndex,
+      text: completeCaption,
+      kind: 'figure',
+      sourceAnchor,
+    });
+  }
+  return output;
+}
+
+function groupPdfDocumentTranslationTables(
+  input: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  const output: PdfDocumentTranslationBlock[] = [];
+  for (let index = 0; index < input.length;) {
+    const first = input[index]!;
+    const captionText = pdfDocumentTranslationCaptionText(first.text, TABLE_CAPTION);
+    if (captionText) {
+      const captionBounds = pdfDocumentTranslationBlockBounds(first);
+      const members = [first];
+      let cursor = index + 1;
+      let previousBounds = captionBounds;
+      let strongEvidence = 0;
+      while (cursor < input.length && members.length < 80) {
+        const candidate = input[cursor]!;
+        const bounds = pdfDocumentTranslationBlockBounds(candidate);
+        const text = candidate.text.replace(/\s+/gu, ' ').trim();
+        const words = text.match(/[\p{L}\p{N}][\p{L}\p{N}+−'’_-]*/gu) ?? [];
+        const numericCharacters = text.match(/[\d.%+−-]/gu)?.length ?? 0;
+        const numericRatio = numericCharacters / Math.max(1, text.length);
+        const structured = candidate.kind === 'table' || candidate.kind === 'formula' ||
+          candidate.text.includes('\t');
+        const numericRow = numericCharacters >= 2 && numericRatio >= .08;
+        const heading = SECTION_HEADING_LINE.test(text) && numericRatio < .08;
+        const proseLike = words.length > 12 && !structured && numericRatio < .08;
+        const strong = structured || numericRow;
+        const compactLabel = text.length <= 80 && words.length <= 8 &&
+          !SENTENCE_END.test(text) && !heading;
+        const tableLike = Boolean(text) && !heading && !proseLike &&
+          text.length <= 520 && (strong || compactLabel);
+        if (
+          candidate.pageNumber !== first.pageNumber || !bounds || !captionBounds || !tableLike ||
+          !pdfDocumentTranslationBoundsShareLane(bounds, captionBounds) ||
+          (previousBounds && bounds.top - previousBounds.bottom > .065) ||
+          bounds.bottom - captionBounds.top > .36
+        ) break;
+        members.push(candidate);
+        previousBounds = bounds;
+        if (strong) strongEvidence += 1;
+        cursor += 1;
+      }
+      if (members.length >= 3 && strongEvidence >= 2) {
+        const sourceAnchor = pdfDocumentTranslationUnionAnchor(members, {
+          x: .008,
+          top: .006,
+          bottom: .006,
+        });
+        if (sourceAnchor) {
+          output.push({
+            id: first.id,
+            pageNumber: first.pageNumber,
+            blockIndex: first.blockIndex,
+            text: [
+              captionText,
+              ...members.slice(1).map((block) => block.text.trim()),
+            ].join('\n'),
+            kind: 'table',
+            sourceAnchor,
+          });
+          index = cursor;
+          continue;
+        }
+      }
+      output.push(first);
+      index += 1;
+      continue;
+    }
+    if (first.kind !== 'table') {
+      output.push(first);
+      index += 1;
+      continue;
+    }
+    const members: PdfDocumentTranslationBlock[] = [];
+    let previousBounds: PdfDocumentTranslationAnchorBounds | undefined;
+    let cursor = index;
+    while (cursor < input.length && members.length < 80) {
+      const candidate = input[cursor]!;
+      const bounds = pdfDocumentTranslationBlockBounds(candidate);
+      if (
+        candidate.pageNumber !== first.pageNumber || candidate.kind !== 'table' || !bounds ||
+        (previousBounds && (
+          !pdfDocumentTranslationBoundsShareLane(previousBounds, bounds) ||
+          bounds.top - previousBounds.bottom > .065
+        ))
+      ) break;
+      members.push(candidate);
+      previousBounds = bounds;
+      cursor += 1;
+    }
+    const rowCount = members.filter((block) => block.kind === 'table').length;
+    if (rowCount < 2) {
+      output.push(first);
+      index += 1;
+      continue;
+    }
+    const sourceAnchor = pdfDocumentTranslationUnionAnchor(members, {
+      x: .008,
+      top: .006,
+      bottom: .006,
+    });
+    if (!sourceAnchor) {
+      output.push(first);
+      index += 1;
+      continue;
+    }
+    output.push({
+      id: first.id,
+      pageNumber: first.pageNumber,
+      blockIndex: first.blockIndex,
+      text: members.map((block) => block.text.trim()).join('\n'),
+      kind: 'table',
+      sourceAnchor,
+    });
+    index = cursor;
+  }
+  return output;
+}
+
+/**
+ * Collapses high-confidence chart and table fragments into one semantic object.
+ * This pass is fully local: it neither renders the page nor authorizes a visual
+ * request. The merged anchor is later used for one whole-object crop and one
+ * source highlight instead of a list of ticks, legends, or individual cells.
+ */
+export function groupPdfDocumentTranslationVisualObjects(
+  blocks: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  return reindexPdfDocumentTranslationPageBlocks(
+    groupPdfDocumentTranslationTables(groupPdfDocumentTranslationFigures(blocks)),
+  );
+}
+
 export interface PdfDocumentTranslationContinuity {
   previousIndex?: number;
   nextIndex?: number;
@@ -554,7 +894,8 @@ function pdfDocumentTranslationBlockLooksHeading(
 function pdfDocumentTranslationBlockIsSkippableInterruption(
   block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
 ): boolean {
-  return block.kind === 'code' || block.kind === 'table' || CAPTION_BLOCK.test(block.text.trim());
+  return block.kind === 'code' || block.kind === 'table' || block.kind === 'figure' ||
+    CAPTION_BLOCK.test(block.text.trim());
 }
 
 function pdfDocumentTranslationContextNeighborIndex(
@@ -1167,7 +1508,7 @@ export function preparePdfDocumentTranslationPages(
       height: page.input.pageHeight,
     });
     if (!pageBlocks.length) unreadablePages += 1;
-    blocks.push(...pageBlocks);
+    blocks.push(...groupPdfDocumentTranslationVisualObjects(pageBlocks));
   }
   return {
     blocks: mergePdfDocumentTranslationContinuationBlocks(blocks),

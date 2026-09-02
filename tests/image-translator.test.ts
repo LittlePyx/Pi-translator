@@ -800,6 +800,44 @@ describe('image region translator', () => {
     )).rejects.toMatchObject({ code: 'INVALID_RESPONSE', retryable: false });
   });
 
+  it('uses whole-object contracts for paper figures and tables', async () => {
+    stubCapabilityStorage();
+    const fetchMock = vi.fn().mockImplementation(async () => new Response(JSON.stringify({
+      choices: [{ message: { content: JSON.stringify({
+        translation: '结构化译文',
+        recognizedText: 'Structured source',
+        uncertainSpans: [],
+      }) } }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const translator = new OpenAiCompatibleTranslator();
+    const credentials = { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' };
+
+    await translator.translateImageRegion(
+      { ...input, visualPurpose: 'figure' },
+      options,
+      credentials,
+      new AbortController().signal,
+    );
+    await translator.translateImageRegion(
+      { ...input, visualPurpose: 'table' },
+      options,
+      credentials,
+      new AbortController().signal,
+    );
+
+    const prompts = fetchMock.mock.calls.map(([, init]) => {
+      const body = JSON.parse(String((init as RequestInit).body)) as {
+        messages: Array<{ content: Array<{ type: string; text?: string }> }>;
+      };
+      return body.messages[0]!.content.find((item) => item.type === 'text')?.text ?? '';
+    });
+    expect(prompts[0]).toContain('不得逐条抄写或翻译坐标刻度');
+    expect(prompts[0]).toContain('图内标签');
+    expect(prompts[1]).toContain('使用 Markdown 表格输出');
+    expect(prompts[1]).toContain('不得把单元格拆成零散段落');
+  });
+
   it('keeps ordinary LaTeX and long scientific text while enforcing field limits', () => {
     const scientificText = `R_0=\\frac{a+b}{c_d}\n${'ACGT'.repeat(1_000)}`;
     expect(() => assertSafeImageTranslationText(scientificText)).not.toThrow();

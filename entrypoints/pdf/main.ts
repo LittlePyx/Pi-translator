@@ -18,7 +18,7 @@ import {
   resolvePdfTextSelectionSnap,
   type PdfTextSelectionSnap,
 } from '../../core/pdf/text-selection-snap';
-import type { PdfSourceLocation } from '../../core/translation/types';
+import type { ImageTranslationPurpose, PdfSourceLocation } from '../../core/translation/types';
 import { shouldUseVisionForPdfFormula } from '../../core/translation/formula-detection';
 import {
   parsePdfSourceUrl,
@@ -767,9 +767,32 @@ function pdfDocumentTranslationFormulaBlocksInScope(): PdfDocumentTranslationRun
   return scopedPdfDocumentTranslationBlocks().filter(pdfDocumentTranslationBlockContainsFormula);
 }
 
+function pdfDocumentTranslationVisualPurpose(
+  block: PdfDocumentTranslationRuntimeBlock,
+): ImageTranslationPurpose {
+  if (block.kind === 'figure' || block.kind === 'table') return block.kind;
+  return pdfDocumentTranslationBlockContainsFormula(block) ? 'formula' : 'document';
+}
+
+function pdfDocumentTranslationVisualObjectsInScope(): PdfDocumentTranslationRuntimeBlock[] {
+  return scopedPdfDocumentTranslationBlocks().filter(
+    (block) => block.kind === 'figure' || block.kind === 'table',
+  );
+}
+
 function pdfDocumentTranslationUsesUnifiedVision(): boolean {
   return pdfDocumentTranslationMultimodalEnabled &&
     pdfDocumentTranslationFormulaBlocks().length > 0;
+}
+
+function pdfDocumentTranslationBlockUsesVision(
+  block: PdfDocumentTranslationRuntimeBlock,
+): boolean {
+  return pdfDocumentTranslationMultimodalEnabled &&
+    pdfDocumentTranslationMultimodalAuthorized && (
+      pdfDocumentTranslationUsesUnifiedVision() ||
+      pdfDocumentTranslationVisualPurpose(block) !== 'document'
+    );
 }
 
 function pdfDocumentTranslationCounts(): {
@@ -830,8 +853,13 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-unified-vision-v4-semantic-regions',
-      pdfDocumentTranslationUsesUnifiedVision() ? 'unified-vision' : 'text',
+      'pdf-semantic-visual-objects-v5',
+      pdfDocumentTranslationUsesUnifiedVision()
+        ? 'unified-vision'
+        : pdfDocumentTranslationMultimodalEnabled &&
+            pdfDocumentTranslationVisualObjectsInScope().length
+          ? 'hybrid-vision'
+          : 'text',
       pdfDocumentTranslationSettings.activeApiProfileId,
       activeProfile?.model ?? '',
       pdfDocumentTranslationSettings.visionApiProfileId ?? '',
@@ -1126,6 +1154,9 @@ function syncPdfDocumentTranslationUi(): void {
   const unreadablePagesInScope = pdfDocumentTranslationUnreadablePagesInScope();
   const documentFormulaBlocks = pdfDocumentTranslationFormulaBlocks();
   const formulaBlocksInScope = pdfDocumentTranslationFormulaBlocksInScope();
+  const visualObjectsInScope = pdfDocumentTranslationVisualObjectsInScope();
+  const figureObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'figure');
+  const tableObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'table');
   const usesUnifiedVision = pdfDocumentTranslationUsesUnifiedVision();
   const visualFallbackCount = scopedPdfDocumentTranslationBlocks().filter(
     (block) => Boolean(block.visualFallbackMessage),
@@ -1194,8 +1225,10 @@ function syncPdfDocumentTranslationUi(): void {
       ? `文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${total} 段统一使用视觉模型，预计 ${total} 次视觉请求`
       : unreadablePagesInScope.length
         ? `点击开始后识别 ${unreadablePagesInScope.length} 个扫描页；若发现公式，当前范围全部段落改用视觉模型`
-        : '文档未检测到公式；普通正文使用文字接口'
-    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口`;
+        : visualObjectsInScope.length
+          ? `普通正文使用文字接口；${figureObjectsInScope.length ? `${figureObjectsInScope.length} 个图表` : ''}${figureObjectsInScope.length && tableObjectsInScope.length ? '、' : ''}${tableObjectsInScope.length ? `${tableObjectsInScope.length} 个表格` : ''}将整块使用视觉模型，预计 ${visualObjectsInScope.length} 次视觉请求`
+          : '文档未检测到公式、图表或表格对象；普通正文使用文字接口'
+    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${visualObjectsInScope.length ? '图表与表格不会发送图像，只保留合并后的文字结构；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口`;
   const defaultStatus = pdfDocumentTranslationPhase === 'idle'
     ? '尚未读取正文'
     : pdfDocumentTranslationPhase === 'preparing'
@@ -1234,7 +1267,9 @@ function syncPdfDocumentTranslationUi(): void {
             ? '继续翻译'
             : usesUnifiedVision
               ? '开始多模态全文翻译'
-              : pdfDocumentTranslationMultimodalEnabled && unreadablePagesInScope.length
+              : pdfDocumentTranslationMultimodalEnabled && (
+                  unreadablePagesInScope.length || visualObjectsInScope.length
+                )
                 ? '开始智能翻译'
               : '开始翻译';
   documentTranslationStop.hidden = ![
@@ -1302,7 +1337,9 @@ function syncPdfDocumentTranslationUi(): void {
     ? `预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部段落统一使用视觉模型。${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
     : usesUnifiedVision
       ? `文档含公式，当前范围全部段落统一使用视觉模型，以保持术语、语气和公式处理一致。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
-      : `文档未检测到公式，普通正文使用文字接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
+      : visualObjectsInScope.length && pdfDocumentTranslationMultimodalEnabled
+        ? `普通正文使用文字接口；图表与表格按完整对象各发送一次图像，避免把刻度、图例或单元格拆成零散译文。${retentionNote}原始 PDF 始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 点击对象译文可返回并高亮整块原文。`
+        : `文档未检测到需要整块视觉处理的公式、图表或表格，普通正文使用文字接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
   syncPdfDocumentTranslationCurrentPage();
 }
 
@@ -1418,7 +1455,7 @@ function pdfLayoutTranslationBlocks(): PdfLayoutTranslationBlock[] {
           pageNumber: block.pageNumber,
           translatedText: block.translatedText,
           ...(block.sourceAnchor ? { sourceAnchor: block.sourceAnchor } : {}),
-          role: block.kind === 'code' || block.kind === 'table'
+          role: block.kind === 'code' || block.kind === 'table' || block.kind === 'figure'
             ? block.kind
             : pdfDocumentTranslationBlockContainsFormula(block)
               ? 'formula' as const
@@ -1740,6 +1777,112 @@ function activatePdfDocumentTranslationSource(
   });
 }
 
+interface PdfDocumentMarkdownTable {
+  caption: string;
+  headers: string[];
+  rows: string[][];
+  trailing: string;
+}
+
+function pdfDocumentMarkdownTable(value: string): PdfDocumentMarkdownTable | undefined {
+  const lines = value.replace(/\r\n?/gu, '\n').split('\n');
+  for (let separatorIndex = 1; separatorIndex < lines.length; separatorIndex += 1) {
+    const separator = lines[separatorIndex]!.trim();
+    if (!/^\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?$/u.test(separator)) continue;
+    const splitRow = (line: string): string[] => {
+      const trimmed = line.trim().replace(/^\|/u, '').replace(/\|$/u, '');
+      return trimmed.split('|').map((cell) => cell.trim());
+    };
+    const headers = splitRow(lines[separatorIndex - 1]!);
+    const separators = splitRow(separator);
+    if (headers.length < 2 || separators.length !== headers.length) continue;
+    const rows: string[][] = [];
+    let cursor = separatorIndex + 1;
+    while (cursor < lines.length) {
+      const line = lines[cursor]!.trim();
+      if (!line.includes('|')) break;
+      const cells = splitRow(line);
+      if (cells.length !== headers.length) break;
+      rows.push(cells);
+      cursor += 1;
+    }
+    if (!rows.length) continue;
+    return {
+      caption: lines.slice(0, separatorIndex - 1).join('\n').trim(),
+      headers,
+      rows,
+      trailing: lines.slice(cursor).join('\n').trim(),
+    };
+  }
+  return undefined;
+}
+
+async function renderPdfDocumentTranslationTable(
+  container: HTMLElement,
+  text: string,
+): Promise<boolean> {
+  const parsed = pdfDocumentMarkdownTable(text);
+  if (!parsed) return false;
+  container.replaceChildren();
+  const renderTargets: Array<{ container: HTMLElement; text: string; renderLatex: boolean }> = [];
+  if (parsed.caption) {
+    const caption = document.createElement('div');
+    caption.className = 'pdf-document-table-caption';
+    container.append(caption);
+    renderTargets.push({
+      container: caption,
+      text: parsed.caption,
+      renderLatex: pdfDocumentTranslationSettings.autoRenderLatex,
+    });
+  }
+  const scroll = document.createElement('div');
+  scroll.className = 'pdf-document-table-scroll';
+  const table = document.createElement('table');
+  table.className = 'pdf-document-table';
+  const head = document.createElement('thead');
+  const headRow = document.createElement('tr');
+  for (const text of parsed.headers) {
+    const cell = document.createElement('th');
+    cell.scope = 'col';
+    headRow.append(cell);
+    renderTargets.push({
+      container: cell,
+      text,
+      renderLatex: pdfDocumentTranslationSettings.autoRenderLatex,
+    });
+  }
+  head.append(headRow);
+  const body = document.createElement('tbody');
+  for (const row of parsed.rows) {
+    const rowElement = document.createElement('tr');
+    for (const text of row) {
+      const cell = document.createElement('td');
+      rowElement.append(cell);
+      renderTargets.push({
+        container: cell,
+        text,
+        renderLatex: pdfDocumentTranslationSettings.autoRenderLatex,
+      });
+    }
+    body.append(rowElement);
+  }
+  table.append(head, body);
+  scroll.append(table);
+  container.append(scroll);
+  if (parsed.trailing) {
+    const trailing = document.createElement('div');
+    trailing.className = 'pdf-document-table-trailing';
+    container.append(trailing);
+    renderTargets.push({
+      container: trailing,
+      text: parsed.trailing,
+      renderLatex: pdfDocumentTranslationSettings.autoRenderLatex,
+    });
+  }
+  await renderTranslationContents(renderTargets);
+  return true;
+}
+
 function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeBlock): void {
   if (!block.included || block.status === 'idle') {
     documentTranslationPages.querySelector(`[data-translation-block="${block.id}"]`)?.remove();
@@ -1780,6 +1923,11 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     section.insertBefore(container, next ?? null);
   }
   container.dataset.status = block.status;
+  if (block.kind === 'figure' || block.kind === 'table') {
+    container.dataset.objectRole = block.kind;
+  } else {
+    delete container.dataset.objectRole;
+  }
   const sourceAvailable = Boolean(
     pdfDocumentTranslationSourceRegions(block).length && block.status === 'done',
   );
@@ -1797,33 +1945,45 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
   }
   if (block.visualProcessed) {
     container.dataset.translationMode = 'vision';
-    container.dataset.visualRole = pdfDocumentTranslationBlockContainsFormula(block)
-      ? 'formula'
-      : 'document';
+    container.dataset.visualRole = pdfDocumentTranslationVisualPurpose(block);
   } else if (block.visualFallbackMessage) {
     container.dataset.translationMode = 'preserved';
-    container.dataset.visualRole = pdfDocumentTranslationBlockContainsFormula(block)
-      ? 'formula'
-      : 'document';
+    container.dataset.visualRole = pdfDocumentTranslationVisualPurpose(block);
   } else {
     delete container.dataset.translationMode;
     delete container.dataset.visualRole;
   }
   if (sourceAvailable && block.visualProcessed) {
-    container.title = pdfDocumentTranslationBlockContainsFormula(block)
-      ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
-      : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
+    const purpose = pdfDocumentTranslationVisualPurpose(block);
+    container.title = purpose === 'figure'
+      ? '图表已作为完整对象翻译；点击返回并高亮整张图表'
+      : purpose === 'table'
+        ? '表格已按完整行列结构翻译；点击返回并高亮整张表格'
+        : purpose === 'formula'
+          ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
+          : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
   } else if (sourceAvailable && block.visualFallbackMessage) {
     container.title = `${block.visualFallbackMessage}；已保留${
       pdfDocumentTranslationBlockContainsFormula(block) ? '原式' : '原文'
     }，点击可返回 PDF 原文`;
   }
   if (block.status === 'done' && block.translatedText) {
-    void renderTranslationContent(
-      container,
-      block.translatedText,
-      pdfDocumentTranslationSettings.autoRenderLatex,
-    );
+    if (block.kind === 'table') {
+      void renderPdfDocumentTranslationTable(container, block.translatedText).then((rendered) => {
+        if (rendered) return;
+        return renderTranslationContent(
+          container!,
+          block.translatedText!,
+          pdfDocumentTranslationSettings.autoRenderLatex,
+        );
+      });
+    } else {
+      void renderTranslationContent(
+        container,
+        block.translatedText,
+        pdfDocumentTranslationSettings.autoRenderLatex,
+      );
+    }
   } else if (block.status === 'error') {
     container.replaceChildren(document.createTextNode(block.errorMessage ?? '本段翻译失败。'));
     const retry = document.createElement('button');
@@ -1972,11 +2132,15 @@ async function startPdfDocumentBackgroundTranslation(): Promise<boolean> {
     (block) => block.included && block.status === 'idle',
   );
   if (!pending.length) return false;
-  const mode = pdfDocumentTranslationUsesUnifiedVision() &&
-    pdfDocumentTranslationMultimodalAuthorized
-    ? 'vision'
-    : 'text';
-  if (mode === 'vision' && !backgroundData) return false;
+  const mode: 'text' | 'vision' | 'hybrid' =
+    pdfDocumentTranslationMultimodalEnabled && pdfDocumentTranslationMultimodalAuthorized
+      ? pdfDocumentTranslationUsesUnifiedVision()
+        ? 'vision'
+        : pending.some((block) => pdfDocumentTranslationVisualPurpose(block) !== 'document')
+          ? 'hybrid'
+          : 'text'
+      : 'text';
+  if (mode !== 'text' && !backgroundData) return false;
   const ready = await browser.runtime.sendMessage({
     type: 'ENSURE_PDF_BACKGROUND_DOCUMENT',
   }).catch(() => undefined) as { ok?: boolean } | undefined;
@@ -1986,7 +2150,7 @@ async function startPdfDocumentBackgroundTranslation(): Promise<boolean> {
   ) return false;
   const jobId = crypto.randomUUID();
   pdfDocumentBackgroundJobId = jobId;
-  const pdfResourceUrl = mode === 'vision'
+  const pdfResourceUrl = mode !== 'text'
     ? `https://pi-translator.invalid/__pdf-background/${encodeURIComponent(jobId)}.pdf`
     : undefined;
   if (pdfResourceUrl) {
@@ -2037,6 +2201,7 @@ async function startPdfDocumentBackgroundTranslation(): Promise<boolean> {
           text: block.text,
           containsFormula: pdfDocumentTranslationBlockContainsFormula(block),
           preserveInTextMode: block.kind === 'formula',
+          visualPurpose: pdfDocumentTranslationVisualPurpose(block),
           sourceRegions: pdfDocumentTranslationSourceRegions(block).map((region) => ({
             ...region,
             sourceAnchor: { ...region.sourceAnchor },
@@ -2708,6 +2873,7 @@ async function processPdfDocumentTranslationVisualBlock(
         imageDataUrl: capture.imageDataUrl,
         imageWidth: capture.imageWidth,
         imageHeight: capture.imageHeight,
+        visualPurpose: pdfDocumentTranslationVisualPurpose(block),
         recognizedTextHint: block.text,
         ...(contextText ? { contextText } : {}),
         pageUrl: currentSourceUrl,
@@ -2849,9 +3015,7 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
         .sort((left, right) => comparePdfDocumentTranslationPriority(left, right, currentPage));
       const first = pending[0];
       if (!first) break;
-      const unifiedVision = pdfDocumentTranslationUsesUnifiedVision() &&
-        pdfDocumentTranslationMultimodalAuthorized;
-      if (unifiedVision) {
+      if (pdfDocumentTranslationBlockUsesVision(first)) {
         const visualTarget = pdfDocumentTranslationContinuityPrerequisite(first);
         if (!await processPdfDocumentTranslationVisualBlock(visualTarget, revision)) return;
         continue;
@@ -2873,7 +3037,7 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
         }
         continue;
       }
-      const textPending = pending.filter((block) => block.kind !== 'formula');
+      const textPending = pending.filter((block) => !pdfDocumentTranslationBlockUsesVision(block));
       const selected = takeDocumentTranslationBatch(
         textPending.map((block) => ({
           value: block,

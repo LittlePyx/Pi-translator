@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
 import {
   context,
+  createCaptionedTableAndTextPdf,
   createFileDataTransfer,
   createLinkedPdf,
   createMultilineTextPdf,
@@ -586,6 +587,88 @@ test('uses one authorized vision model for every block in a PDF containing formu
       });
     }
   } finally {
+    await pdfPage.close();
+  }
+});
+
+test('translates a captioned paper table as one visual object beside ordinary text', async () => {
+  const pdfPage = await context.newPage();
+  const lifecycle = await context.newCDPSession(pdfPage);
+  const textRequestStart = textRequests.length;
+  const visionRequestStart = visionRequests.length;
+  let frozen = false;
+  mockControl.heldVisionRequestGate = new Promise<void>((resolve) => {
+    mockControl.releaseHeldVisionRequest = resolve;
+  });
+  mockControl.holdNextVisionRequest = true;
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'semantic-table-object.pdf',
+      mimeType: 'application/pdf',
+      buffer: createCaptionedTableAndTextPdf(
+        'Table 1. Average PSNR comparison on Set11.',
+        [
+          ['Model', 'PSNR', 'Time'],
+          ['ISTA-Net', '31.53', '0.039 s'],
+          ['ISTA-Net+', '32.57', '0.047 s'],
+        ],
+        'The surrounding paragraph remains an ordinary text translation request.',
+      ),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    const panel = pdfPage.locator('#pdf-document-translation');
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 2 段，等待确认');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('1 个表格');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('预计 1 次视觉请求');
+    expect(textRequests).toHaveLength(textRequestStart);
+    expect(visionRequests).toHaveLength(visionRequestStart);
+
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect.poll(() => visionRequests.length).toBe(visionRequestStart + 1);
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'frozen' });
+    frozen = true;
+    mockControl.releaseHeldVisionRequest?.();
+    mockControl.releaseHeldVisionRequest = undefined;
+    await expect.poll(() => textRequests.length, { timeout: 20_000 }).toBe(textRequestStart + 1);
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'active' });
+    frozen = false;
+    await pdfPage.bringToFront();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 2/2');
+    expect(textRequests).toHaveLength(textRequestStart + 1);
+    expect(visionRequests).toHaveLength(visionRequestStart + 1);
+    const prompt = (visionRequests.at(-1)?.messages as Array<{
+      content?: Array<{ type?: string; text?: string }>;
+    }> | undefined)?.[0]?.content?.find((item) => item.type === 'text')?.text ?? '';
+    expect(prompt).toContain('完整表格');
+    expect(prompt).toContain('Table 1. Average PSNR comparison on Set11.');
+
+    const tableCard = panel.locator('[data-object-role="table"]');
+    await expect(tableCard).toHaveCount(1);
+    await expect(tableCard).toHaveAttribute('data-visual-role', 'table');
+    await expect(tableCard.locator('table.pdf-document-table')).toHaveCount(1);
+    await expect(tableCard.locator('thead')).toContainText('PSNR');
+    await expect(tableCard.locator('tbody tr')).toHaveCount(2);
+    const label = await tableCard.evaluate((element) => getComputedStyle(element, '::before').content);
+    expect(label).toContain('表格');
+    expect(label).not.toContain('多模态译文');
+    await tableCard.click();
+    const highlight = pdfPage.locator('.pdf-page[data-page-number="1"] .region-source-highlight');
+    await expect(highlight).toBeVisible();
+    const highlightBounds = await highlight.boundingBox();
+    expect(highlightBounds?.width).toBeGreaterThan(350);
+    expect(highlightBounds?.height).toBeGreaterThan(100);
+  } finally {
+    mockControl.releaseHeldVisionRequest?.();
+    mockControl.releaseHeldVisionRequest = undefined;
+    if (frozen) {
+      await lifecycle.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined);
+    }
     await pdfPage.close();
   }
 });

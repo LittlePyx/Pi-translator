@@ -300,6 +300,61 @@ export function createTableTextPdf(rows: string[][]): Buffer {
   return Buffer.from(body);
 }
 
+export function createCaptionedTableAndTextPdf(
+  caption: string,
+  rows: string[][],
+  bodyText: string,
+): Buffer {
+  const columnEdges = [64, 224, 384, 548];
+  const tableTop = 690;
+  const rowHeight = 38;
+  const command = (text: string, x: number, y: number, fontSize = 12) => {
+    const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
+    return `BT\n/F1 ${fontSize} Tf\n${x} ${y} Td\n(${escaped}) Tj\nET`;
+  };
+  const grid = [
+    'q',
+    '0.65 w',
+    ...Array.from({ length: rows.length + 1 }, (_, index) => {
+      const y = tableTop - index * rowHeight;
+      return `${columnEdges[0]} ${y} m ${columnEdges.at(-1)} ${y} l S`;
+    }),
+    ...columnEdges.map((x) => (
+      `${x} ${tableTop} m ${x} ${tableTop - rows.length * rowHeight} l S`
+    )),
+    'Q',
+  ];
+  const cells = rows.flatMap((row, rowIndex) => row.map((text, columnIndex) => command(
+    text,
+    columnEdges[columnIndex]! + 10,
+    tableTop - rowIndex * rowHeight - 24,
+  )));
+  const stream = [
+    command(caption, 64, 724, 11),
+    ...grid,
+    ...cells,
+    command(bodyText, 64, tableTop - rows.length * rowHeight - 52, 12),
+  ].join('\n');
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 4 0 R >> >> /Contents 5 0 R >>',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+    `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`,
+  ];
+  let body = '%PDF-1.4\n';
+  const offsets = [0];
+  objects.forEach((object, index) => {
+    offsets.push(Buffer.byteLength(body));
+    body += `${index + 1} 0 obj\n${object}\nendobj\n`;
+  });
+  const xrefOffset = Buffer.byteLength(body);
+  body += `xref\n0 ${objects.length + 1}\n0000000000 65535 f \n`;
+  body += offsets.slice(1).map((offset) => `${String(offset).padStart(10, '0')} 00000 n \n`).join('');
+  body += `trailer\n<< /Size ${objects.length + 1} /Root 1 0 R >>\nstartxref\n${xrefOffset}\n%%EOF`;
+  return Buffer.from(body);
+}
+
 export function createTwoPageTextPdf(firstText: string, secondText: string): Buffer {
   const content = (text: string) => {
     const escaped = text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
@@ -1024,6 +1079,7 @@ export function installEdgeExtensionHooks(): void {
       imagePrompt.includes('E = mc^2');
     const isEscapedFormula = imagePrompt.includes('Escaped distribution');
     const isRenderedFormula = imagePrompt.includes('∑ᵢ xᵢ²');
+    const isTableObject = imagePrompt.includes('当前图片是论文中的一张完整表格');
     const formulaLatex = isEscapedFormula
       ? String.raw`\\mathbb{Q}_\\Omega\\`
       : isEnergyFormula
@@ -1049,6 +1105,8 @@ export function installEdgeExtensionHooks(): void {
                 ? '能量关系式 $E=mc^2$ 保持不变。'
                 : isRenderedFormula
                   ? '该量满足 $\\sum_i x_i^2 \\ge 0$。'
+                  : isTableObject
+                    ? '表 1：Set11 上的平均 PSNR 对比。\n\n| 模型 | PSNR | 时间 |\n| --- | ---: | ---: |\n| ISTA-Net | 31.53 | 0.039 s |\n| ISTA-Net+ | 32.57 | 0.047 s |'
                   : shouldReturnRevisedRecognition
                     ? '重新识别后修正的学术翻译结果。'
                   : '图像区域的学术翻译结果。',
@@ -1060,6 +1118,8 @@ export function installEdgeExtensionHooks(): void {
                   ? 'Energy $E=mc^2$ is invariant.'
                   : isRenderedFormula
                     ? 'The quantity $\\sum_i x_i^2 \\ge 0$ is nonnegative.'
+                    : isTableObject
+                      ? 'Table 1. Average PSNR comparison on Set11.\n\n| Model | PSNR | Time |\n| --- | ---: | ---: |\n| ISTA-Net | 31.53 | 0.039 s |\n| ISTA-Net+ | 32.57 | 0.047 s |'
                     : shouldReturnRevisedRecognition
                       ? 'Re-recognized academic source text.'
                       : 'Scanned academic source text.',

@@ -20,6 +20,7 @@ function startMessage() {
         text: 'Energy E = mc^2 remains visible.',
         containsFormula: true,
         preserveInTextMode: false,
+        visualPurpose: 'formula',
         sourceRegions: [],
       }],
       settings: {
@@ -36,6 +37,10 @@ function startMessage() {
 describe('PDF background translation message guards', () => {
   it('accepts complete start, control, snapshot, and tab cleanup messages', () => {
     expect(isPdfBackgroundDocumentMessage(startMessage())).toBe(true);
+    expect(isPdfBackgroundDocumentMessage({
+      ...startMessage(),
+      payload: { ...startMessage().payload, mode: 'hybrid' },
+    })).toBe(true);
     expect(isPdfBackgroundDocumentMessage({
       type: 'CONTROL_PDF_BACKGROUND_DOCUMENT_TRANSLATION',
       target: 'pdf-background',
@@ -61,6 +66,13 @@ describe('PDF background translation message guards', () => {
     expect(isPdfBackgroundDocumentMessage({
       ...startMessage(),
       payload: { ...startMessage().payload, mode: 'automatic' },
+    })).toBe(false);
+    expect(isPdfBackgroundDocumentMessage({
+      ...startMessage(),
+      payload: {
+        ...startMessage().payload,
+        blocks: startMessage().payload.blocks.map(({ visualPurpose: _purpose, ...block }) => block),
+      },
     })).toBe(false);
     expect(isPdfBackgroundDocumentMessage({
       type: 'DISPOSE_PDF_BACKGROUND_TRANSLATIONS_FOR_TAB',
