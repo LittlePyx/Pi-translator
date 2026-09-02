@@ -436,7 +436,7 @@ function orderedLayoutLines(
   const columns = lines.filter((line) => line.region !== 'spanning');
   const output: VisualLine[] = [];
   let bandTop = Number.NEGATIVE_INFINITY;
-  const appendBand = (bandBottom: number) => {
+  const appendBand = (bandBottom: number): number => {
     const band = columns.filter((line) => line.top >= bandTop && line.top < bandBottom);
     const left = band.filter((line) => line.region === 'left').sort(sortTopLeft);
     const right = band.filter((line) => line.region === 'right').sort(sortTopLeft);
@@ -444,10 +444,15 @@ function orderedLayoutLines(
     if (right.length) right[0]!.breakBefore = output.length > 0 || left.length > 0;
     output.push(...left, ...right);
     bandTop = bandBottom;
+    return left.length + right.length;
   };
   for (const line of spanning) {
-    appendBand(line.top - tolerance);
-    line.breakBefore = output.length > 0;
+    const appendedColumns = appendBand(line.top - tolerance);
+    const previous = output.at(-1);
+    const continuesSpanningFlow = appendedColumns === 0 && previous?.region === 'spanning' &&
+      line.top >= previous.top &&
+      line.top - previous.bottom <= Math.max(previous.height, line.height) * 1.5;
+    line.breakBefore = output.length > 0 && !continuesSpanningFlow;
     output.push(line);
     bandTop = Math.max(bandTop, line.bottom - tolerance);
   }

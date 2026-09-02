@@ -588,6 +588,70 @@ test('captures every visual line in a long multimodal PDF block', async ({}, tes
   }
 });
 
+test('groups a full-width paragraph into one multimodal crop on a two-column PDF', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  const visionRequestStart = visionRequests.length;
+  const leftLines = Array.from(
+    { length: 7 },
+    (_, index) => `Left column line ${index + 1} keeps its reading flow`,
+  );
+  const rightLines = Array.from(
+    { length: 7 },
+    (_, index) => `Right column line ${index + 1} keeps its reading flow`,
+  );
+  const fullWidthLines = [
+    'The full-width conclusion starts as one continuous paragraph across the page.',
+    'Its relation E = mc^2 stays with the surrounding explanation and evidence.',
+    'The final full-width line completes the same paragraph without a duplicate crop.',
+  ];
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'two-column-full-width-paragraph.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoColumnTextPdf(leftLines, rightLines, fullWidthLines.map((text, index) => ({
+        text,
+        x: 54,
+        y: 500 - index * 22,
+      }))),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 3 段，等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 3/3');
+
+    const requests = visionRequests.slice(visionRequestStart);
+    expect(requests).toHaveLength(3);
+    const fullWidthRequest = requests.at(-1)!;
+    const content = (fullWidthRequest.messages as Array<{
+      content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+    }> | undefined)?.[0]?.content;
+    const prompt = content?.find((item) => item.type === 'text')?.text ?? '';
+    expect(prompt).toContain(JSON.stringify(fullWidthLines.join(' ')));
+    const imageDataUrl = content?.find((item) => item.type === 'image_url')?.image_url?.url;
+    expect(imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    const dimensions = await pdfPage.evaluate(async (url) => {
+      const image = new Image();
+      image.src = url!;
+      await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    }, imageDataUrl);
+    expect(dimensions.width).toBeGreaterThan(700);
+    expect(dimensions.height).toBeGreaterThan(100);
+
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await writeFile(
+        testInfo.outputPath('pdf-two-column-full-width-visual-crop.png'),
+        Buffer.from(imageDataUrl!.split(',', 2)[1]!, 'base64'),
+      );
+    }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('stops automatically authorized PDF full-document OCR', async () => {
   const pdfPage = await context.newPage();
   await pdfPage.addInitScript(() => {

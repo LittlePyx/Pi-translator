@@ -144,6 +144,30 @@ describe('PDF document translation', () => {
     expect(prepared.blocks[0]!.sourceAnchor!.topRatio).toBeLessThan(0.08);
   });
 
+  it('keeps consecutive full-width lines as one block on a two-column page', () => {
+    const leftLines = Array.from({ length: 7 }, (_, index) => `Left column line ${index + 1}`);
+    const rightLines = Array.from({ length: 7 }, (_, index) => `Right column line ${index + 1}`);
+    const fullWidthLines = [
+      'The full-width abstract begins with a broad statement',
+      'and continues across the entire page width',
+      'before ending with one coherent final line.',
+    ];
+    const prepared = preparePdfDocumentTranslationPages([page(1, [
+      ...leftLines.flatMap((text, index) => [
+        positioned(text, 54, 60 + index * 18, 210),
+        positioned(rightLines[index]!, 330, 60 + index * 18, 210),
+      ]),
+      ...fullWidthLines.map((text, index) => positioned(text, 54, 210 + index * 18, 500)),
+    ])]);
+
+    expect(prepared.multiColumnPages).toBe(1);
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      leftLines.join(' '),
+      rightLines.join(' '),
+      fullWidthLines.join(' '),
+    ]);
+  });
+
   it('preserves table cells by row instead of reading down inferred columns', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned('Model', 64, 100, 60),
