@@ -7,13 +7,13 @@
 | 项目 | 当前值 |
 | --- | --- |
 | 仓库 | `F:\research-papers\2026\July\Pi_translate` |
-| 分支 | `main`；公开 v0.15.0 已发布，当前实现基线 `b3fce7f` 尚未推送或发布，其后可以只有交接文档提交 |
-| 功能基线 | 已发布 `v0.15.0` 指向 `40a51bf`；当前发布后修复基线为 `b3fce7f fix: translate PDF figures and tables as objects` |
+| 分支 | `main`；公开 v0.15.0 已发布，当前实现基线 `838bfec` 尚未推送或发布，其后可以只有交接文档提交 |
+| 功能基线 | 已发布 `v0.15.0` 指向 `40a51bf`；当前发布后修复基线为 `838bfec fix: translate full-width PDF figure captions` |
 | 当前版本 | `0.15.0` |
 | 最终发布候选 | `.output/final-ci/tex-selection-translator-0.15.0-edge.zip`（来自 GitHub Actions） |
 | 最终 ZIP 大小 | 1,150,261 bytes |
 | 最终 SHA-256 | `2BF94E9E787B462772284B37180142BAC3D8442F115348B8983C73965A3BD372` |
-| 本地发布后验证包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,175,980 bytes；`2EDF6B197A6A947068506F97E1C985EF84407A0CAC368800D7579FBE801AF088` |
+| 本地发布后验证包 | `.output/tex-selection-translator-0.15.0-edge.zip`；1,176,073 bytes；`CA0F05728DD57CDFF00CB8B46578082ED2C5722722B93353E7F5DF1CF83C6FBE` |
 | ZIP 内容 | 公开 Release 包 33 项；当前本地发布后验证包 36 项，Manifest V3，已通过逐文件一致性门禁 |
 | 发布状态 | GitHub 已发布签名且验证有效的 `v0.15.0` tag 和 Release；当前修复未推送、未打 tag、未建 Release、未提交 Edge 商店 |
 
@@ -25,7 +25,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 
 发布准备首先只调整了版本、发布说明、验收记录和三个开发工具链传递依赖。连续的真实 Windows Edge CI 随后暴露并固定了六处测试或交互竞态：划词关闭按钮的装饰星标与外层容器命中竞争、PDF 侧栏半像素字体舍入、设置页同 URL 导航被新导航中断、拖动卡片时 Edge 提前触发 `lostpointercapture`、PDF 懒加载重绘后持久标记状态滞后，以及适宽重绘的等待条件不够精确。最终候选只加固这些真实交互边界和对应断言，没有改变翻译、请求或隐私规则。
 
-公开发布后又完成三组本地修复：`9c7976b` 将用户已经启动的 PDF 文字和多模态队列移到扩展后台文档，解决切屏后页面被冻结、翻译停滞的问题；`fe47ebf` 区分正文中的 Figure 引用与真正图注，修复第 5 页正文被错误切碎并并入公式的问题；`b3fce7f` 将图和表按完整语义对象分组，加入正文文字 + 图表视觉的混合后台队列、整对象高亮、真实 Markdown 表格渲染以及保留原图表的导出策略。三组修复均未改变扫描页授权边界，也不会在预览阶段发送请求。
+公开发布后又完成四组本地修复：`9c7976b` 将用户已经启动的 PDF 文字和多模态队列移到扩展后台文档，解决切屏后页面被冻结、翻译停滞的问题；`fe47ebf` 区分正文中的 Figure 引用与真正图注，修复第 5 页正文被错误切碎并并入公式的问题；`b3fce7f` 将图和表按完整语义对象分组，加入正文文字 + 图表视觉的混合后台队列、整对象高亮、真实 Markdown 表格渲染以及保留原图表的导出策略；`838bfec` 保留双栏论文中的通栏图注、阻止栏内 Figure 引用伪装成重复图对象，并允许含公式的完整图注译文在没有独立公式元数据时正常显示。四组修复均未改变扫描页授权边界，也不会在预览阶段发送请求。
 
 ## 3. 已完成能力与必须保留的产品规则
 
@@ -40,11 +40,11 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 ## 4. 发布后本地修复验证（未发布）
 
 - TypeScript 类型检查：通过。
-- Vitest：699/699，通过，共 102 个测试文件。
-- Microsoft Edge E2E：132/132，通过；覆盖纯文字、统一多模态和图表混合任务在 PDF 标签页被冻结后的后台继续执行。
-- 真实 `CVPR-2018-ISTA-Net- Interpretable...Deep Network for Image Compressive Sensing.pdf`：第 5 页 Figure 引用正文保持连续；第 6 页 Figure 4 合并为一个图对象；第 7 页 Figure 5、Table 1 和 Table 2 各形成一个完整对象，未生成刻度或单元格碎片，也未吞入后续正文和 `5.3` 标题。
+- Vitest：701/701，通过，共 102 个测试文件。
+- Microsoft Edge E2E：133/133，通过；覆盖纯文字、统一多模态和图表混合任务在 PDF 标签页被冻结后的后台继续执行，以及含公式通栏图注正常显示译文。
+- 真实 `CVPR-2018-ISTA-Net- Interpretable...Deep Network for Image Compressive Sensing.pdf`：第 2 页 Figure 2 保持为宽约 84.5% 的单一通栏对象，栏内 Figure 2 引用不再形成假图对象；第 5 页 Figure 引用正文保持连续；第 6 页 Figure 4 合并为一个图对象；第 7 页 Figure 5、Table 1 和 Table 2 各形成一个完整对象，未生成刻度或单元格碎片，也未吞入后续正文和 `5.3` 标题。
 - Edge MV3 生产构建：通过，约 3.86 MB；密钥扫描通过。
-- 本地 ZIP：36 项，与生产构建逐文件一致；大小 1,175,980 bytes，SHA-256 为 `2EDF6B197A6A947068506F97E1C985EF84407A0CAC368800D7579FBE801AF088`。
+- 本地 ZIP：36 项，与生产构建逐文件一致；大小 1,176,073 bytes，SHA-256 为 `CA0F05728DD57CDFF00CB8B46578082ED2C5722722B93353E7F5DF1CF83C6FBE`。
 
 这个 ZIP 的版本字段仍为 `0.15.0`，但内容晚于公开的 v0.15.0 Release，只能用于本地 Edge 实机验收。不得用它覆盖现有 Release 资产或直接提交 Edge 商店；如需发布这些修复，必须先明确新版本号并重新走 tag、Release 和候选包门禁。
 
@@ -75,7 +75,7 @@ GitHub 已存在公开 `v0.14.0` tag 和 Release，tag 指向旧提交 `0d0428c`
 ## 6. 下一步
 
 1. GitHub 发布已经完成，不要移动或覆盖 `v0.15.0` tag，也不要替换现有 Release 资产。
-2. 先用当前本地 ZIP 在真实 Edge 中验收目标论文第 6—7 页：检查整图/整表边界、视觉模型实际输出、整对象高亮、切屏后台继续和导出结果。
+2. 先用当前本地 ZIP 在真实 Edge 中验收目标论文第 2、6—7 页：检查 Figure 2 通栏图注译文、整图/整表边界、视觉模型实际输出、整对象高亮、切屏后台继续和导出结果。
 3. 验收无阻塞后，由用户决定这些发布后修复的新版本号（建议补丁版）；提升版本并生成新的候选包后，才可考虑新 tag、GitHub Release 或 Edge 商店提交，所有发布动作仍需单独授权。
 
 当前优先级仍是图表语义对象的真实模型实机验收，不是新增低价值功能。验收和后续发布稳定后，可优先拆分 `entrypoints/pdf/main.ts`、`entrypoints/background.ts`、`core/content/bilingual-page-translator.ts` 和巨型 E2E 文件，并单独验证 WXT 升级。
