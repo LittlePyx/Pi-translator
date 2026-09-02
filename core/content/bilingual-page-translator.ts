@@ -74,8 +74,8 @@ const TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE = 'data-pi-bilingual-touch-expanded';
 const TRANSLATION_PENDING_ATTRIBUTE = 'data-pi-bilingual-pending';
 const ACTIONS_HINT_STORAGE_KEY = 'bilingualParagraphActionsHintSeen';
 const ACTIONS_HINT_DURATION_MS = 3_200;
-const ACTIONS_HINT_MOUSE_MESSAGE = '悬停译文可复制、重译或隐藏';
-const ACTIONS_HINT_TOUCH_MESSAGE = '点“更多”可复制、重译或隐藏';
+const ACTIONS_HINT_MOUSE_MESSAGE = '悬停译文，点“•••”管理本段';
+const ACTIONS_HINT_TOUCH_MESSAGE = '点“•••”可复制、重译或隐藏';
 const BILINGUAL_DISCOVERY_PREVIEW_LIMIT = 240;
 const BILINGUAL_DISCOVERY_BATCH_SIZE = 240;
 const MAX_BILINGUAL_BLOCKS = 1_200;
@@ -467,18 +467,18 @@ function translationElement(
   feedback.setAttribute('role', 'status');
   feedback.setAttribute('aria-live', 'polite');
   toolbar.append(
-    feedback,
     translationActionButton('copy', '复制', actions.copy),
     translationActionButton('retranslate', '重译本段', actions.retranslate),
     translationActionButton('visibility', '隐藏', actions.toggleHidden),
-    translationActionButton('more', '更多', actions.toggleMore),
+    translationActionButton('more', '•••', actions.toggleMore),
   );
-  toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]')
-    ?.setAttribute('aria-expanded', 'false');
-  // Keep the desktop toolbar in the translation's text flow so the first lines
-  // wrap around its reserved area instead of being covered when it appears.
-  translation.append(toolbar, text);
+  const more = toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]');
+  more?.setAttribute('aria-expanded', 'false');
+  more?.setAttribute('aria-label', '展开本段操作');
+  more?.setAttribute('title', '本段操作');
+  translation.append(text);
   if (actions.recognizeFormula) translation.append(formulaRecognitionNotice(actions.recognizeFormula));
+  translation.append(feedback, toolbar);
   applySourceTypography(translation, block, 18);
   return translation;
 }
@@ -620,18 +620,19 @@ function installTranslationStyle(): void {
       position: relative !important;
       box-sizing: border-box !important;
       width: auto !important;
-      margin: .32em 0 .9em !important;
-      border-left: 2px solid color-mix(in srgb, var(--pi-bilingual-color) 28%, #6558d9 72%) !important;
-      padding: .08em 0 .08em .72em !important;
+      margin: .36em 0 .92em !important;
+      border-left: 1.5px solid color-mix(in srgb, var(--pi-bilingual-color) 20%, #6558d9 80%) !important;
+      border-radius: 0 9px 9px 0 !important;
+      padding: .16em .55em .2em .78em !important;
       color: var(--pi-bilingual-color) !important;
-      background: transparent !important;
+      background: linear-gradient(90deg, color-mix(in srgb, var(--pi-bilingual-surface) 95%, #6558d9 5%), transparent 42%) !important;
       font-family: var(--pi-bilingual-font) !important;
       font-size: var(--pi-bilingual-size) !important;
       font-style: normal !important;
       font-weight: 400 !important;
       line-height: 1.65 !important;
       letter-spacing: normal !important;
-      opacity: .82 !important;
+      opacity: .9 !important;
       text-align: left !important;
       text-decoration: none !important;
       text-transform: none !important;
@@ -769,27 +770,27 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       all: initial !important;
       display: flex !important;
-      position: relative !important;
-      float: right !important;
+      position: absolute !important;
+      top: .08em !important;
+      left: -32px !important;
       z-index: 2 !important;
       box-sizing: border-box !important;
-      width: max-content !important;
-      max-width: 100% !important;
-      max-height: 32px !important;
-      margin: 0 0 .18em .65em !important;
+      width: 26px !important;
+      height: 26px !important;
+      margin: 0 !important;
       align-items: center !important;
-      justify-content: flex-end !important;
-      gap: 4px !important;
-      border: 1px solid color-mix(in srgb, var(--pi-bilingual-color) 14%, transparent) !important;
-      border-radius: 8px !important;
-      padding: 1px 2px !important;
-      overflow: hidden !important;
+      justify-content: center !important;
+      gap: 3px !important;
+      border: 0 !important;
+      border-radius: 999px !important;
+      padding: 0 !important;
+      overflow: visible !important;
       opacity: 0 !important;
       pointer-events: none !important;
-      transition: opacity 120ms ease !important;
-      color: color-mix(in srgb, var(--pi-bilingual-color) 70%, #4f46e5 30%) !important;
-      background: color-mix(in srgb, var(--pi-bilingual-surface) 96%, #6558d9 4%) !important;
-      box-shadow: 0 3px 12px color-mix(in srgb, var(--pi-bilingual-color) 14%, transparent) !important;
+      transition: opacity 120ms ease, transform 120ms ease !important;
+      color: color-mix(in srgb, var(--pi-bilingual-color) 64%, #4f46e5 36%) !important;
+      background: transparent !important;
+      box-shadow: none !important;
       font: 500 11px/1.2 var(--pi-bilingual-font) !important;
     }
     [${TRANSLATION_ATTRIBUTE}]:hover > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
@@ -797,34 +798,39 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_BUSY_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}],
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HINT_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
-      opacity: .9 !important;
+      opacity: .78 !important;
       pointer-events: auto !important;
     }
     [${TRANSLATION_FEEDBACK_ATTRIBUTE}] {
       all: initial !important;
-      min-width: 0 !important;
-      margin-right: auto !important;
-      color: inherit !important;
-      font: inherit !important;
+      display: block !important;
+      width: fit-content !important;
+      max-width: 100% !important;
+      min-height: 0 !important;
+      margin-top: .26em !important;
+      color: color-mix(in srgb, var(--pi-bilingual-color) 62%, #64748b 38%) !important;
+      font: 500 max(10px, calc(var(--pi-bilingual-size) * .66))/1.35 var(--pi-bilingual-font) !important;
       overflow: hidden !important;
       text-overflow: ellipsis !important;
       white-space: nowrap !important;
     }
+    [${TRANSLATION_FEEDBACK_ATTRIBUTE}]:empty { display: none !important; }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button {
       all: initial !important;
-      min-height: 28px !important;
+      min-height: 26px !important;
       box-sizing: border-box !important;
       border: 0 !important;
-      border-radius: 6px !important;
-      padding: 4px 7px !important;
+      border-radius: 7px !important;
+      padding: 4px 8px !important;
       color: inherit !important;
-      background: color-mix(in srgb, currentColor 7%, transparent) !important;
-      font: 600 11px/1.2 var(--pi-bilingual-font) !important;
+      background: transparent !important;
+      font: 600 10.5px/1.2 var(--pi-bilingual-font) !important;
       cursor: pointer !important;
       white-space: nowrap !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button:hover {
-      background: color-mix(in srgb, currentColor 13%, transparent) !important;
+      color: color-mix(in srgb, currentColor 76%, #4f46e5 24%) !important;
+      background: color-mix(in srgb, currentColor 9%, transparent) !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button:focus-visible {
       outline: 2px solid #6366f1 !important;
@@ -835,17 +841,70 @@ function installTranslationStyle(): void {
       cursor: default !important;
     }
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[hidden] { display: none !important; }
-    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] { display: none !important; }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+      display: none !important;
+    }
+    [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] {
+      display: grid !important;
+      width: 26px !important;
+      height: 26px !important;
+      min-height: 26px !important;
+      padding: 0 0 4px !important;
+      place-items: center !important;
+      border: 1px solid color-mix(in srgb, currentColor 14%, transparent) !important;
+      border-radius: 999px !important;
+      background: color-mix(in srgb, var(--pi-bilingual-surface) 94%, #6558d9 6%) !important;
+      box-shadow: 0 2px 8px color-mix(in srgb, var(--pi-bilingual-color) 10%, transparent) !important;
+      font-size: 12px !important;
+      letter-spacing: 1px !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
+      position: relative !important;
+      inset: auto !important;
+      width: fit-content !important;
+      height: auto !important;
+      max-width: 100% !important;
+      margin: .36em 0 0 auto !important;
+      justify-content: flex-end !important;
+      border: 1px solid color-mix(in srgb, var(--pi-bilingual-color) 12%, transparent) !important;
+      border-radius: 9px !important;
+      padding: 2px !important;
+      opacity: .92 !important;
+      pointer-events: auto !important;
+      background: color-mix(in srgb, var(--pi-bilingual-surface) 97%, #6558d9 3%) !important;
+      box-shadow: 0 5px 16px color-mix(in srgb, var(--pi-bilingual-color) 10%, transparent) !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+      display: inline-flex !important;
+      align-items: center !important;
+    }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       position: relative !important;
-      float: none !important;
       inset: auto !important;
-      width: 100% !important;
+      width: fit-content !important;
+      height: auto !important;
       margin-top: .28em !important;
       border: 0 !important;
       padding: 0 !important;
       background: transparent !important;
       box-shadow: none !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
+      display: inline-flex !important;
+      align-items: center !important;
+    }
+    [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}]
+      > [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] {
+      display: none !important;
     }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_TEXT_ATTRIBUTE}] {
       display: none !important;
@@ -857,10 +916,9 @@ function installTranslationStyle(): void {
     @media (any-hover: none) {
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
         position: relative !important;
-        float: none !important;
         inset: auto !important;
-        width: 100% !important;
-        max-height: 32px !important;
+        width: fit-content !important;
+        height: auto !important;
         margin-top: .28em !important;
         border: 0 !important;
         padding: 0 !important;
@@ -868,11 +926,6 @@ function installTranslationStyle(): void {
         pointer-events: auto !important;
         background: transparent !important;
         box-shadow: none !important;
-      }
-      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="copy"],
-      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="retranslate"],
-      [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="visibility"] {
-        display: none !important;
       }
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] {
         display: inline-flex !important;
@@ -2054,11 +2107,25 @@ export function createBilingualPageTranslator(
     const translation = block.translation;
     if (!translation) return;
     dismissTranslationActionsHint(block);
+    if (expanded) {
+      for (const candidate of blocks) {
+        if (candidate === block || !candidate.translation) continue;
+        candidate.translation.removeAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE);
+        const candidateMore = candidate.translation.querySelector<HTMLButtonElement>(
+          'button[data-action="more"]',
+        );
+        if (!candidateMore) continue;
+        candidateMore.setAttribute('aria-expanded', 'false');
+        candidateMore.setAttribute('aria-label', '展开本段操作');
+        candidateMore.textContent = '•••';
+      }
+    }
     translation.toggleAttribute(TRANSLATION_TOUCH_EXPANDED_ATTRIBUTE, expanded);
     const more = translation.querySelector<HTMLButtonElement>('button[data-action="more"]');
     if (more) {
       more.setAttribute('aria-expanded', String(expanded));
-      more.textContent = expanded ? '收起' : '更多';
+      more.setAttribute('aria-label', expanded ? '收起本段操作' : '展开本段操作');
+      more.textContent = expanded ? '×' : '•••';
     }
   };
 

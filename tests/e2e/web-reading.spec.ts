@@ -588,8 +588,8 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(hintedTranslation).toBeVisible();
     await expect(hintedTranslation).toHaveAttribute('data-pi-bilingual-hint', '');
     const hintedActions = hintedTranslation.locator('[data-pi-bilingual-actions]');
-    await expect(hintedActions.locator('[data-pi-bilingual-feedback]'))
-      .toHaveText('悬停译文可复制、重译或隐藏');
+    await expect(hintedTranslation.locator('[data-pi-bilingual-feedback]'))
+      .toHaveText('悬停译文，点“•••”管理本段');
     await expect.poll(() => hintedActions.evaluate(
       (element) => Number.parseFloat(getComputedStyle(element).opacity),
     )).toBeGreaterThan(0);
@@ -599,9 +599,10 @@ test('completes bilingual article translation without scrolling and keeps contro
         fullPage: false,
       });
     }
+    await hintedActions.locator('button[data-action="more"]').click();
     await hintedActions.getByRole('button', { name: '复制' }).click();
     await expect(hintedTranslation).not.toHaveAttribute('data-pi-bilingual-hint', '');
-    await expect(hintedActions.locator('[data-pi-bilingual-feedback]'))
+    await expect(hintedTranslation.locator('[data-pi-bilingual-feedback]'))
       .toHaveText('译文已复制');
     // A request already sent before pausing is allowed to finish; no new request
     // should begin once that active paragraph has settled.
@@ -950,12 +951,26 @@ test('completes bilingual article translation without scrolling and keeps contro
     const copyTranslation = introActions.getByRole('button', { name: '复制' });
     const retranslateBlock = introActions.getByRole('button', { name: '重译本段' });
     const toggleTranslation = introActions.getByRole('button', { name: '隐藏' });
+    const moreActions = introActions.locator('button[data-action="more"]');
+    await expect(moreActions).toBeVisible();
+    await expect(copyTranslation).toBeHidden();
+    await moreActions.click();
+    await expect(moreActions).toHaveAttribute('aria-expanded', 'true');
+    await expect(copyTranslation).toBeVisible();
+    const expandedActionsClearText = await introTranslation.evaluate((translation) => {
+      const toolbar = translation.querySelector<HTMLElement>('[data-pi-bilingual-actions]')!;
+      const text = translation.querySelector<HTMLElement>('[data-pi-bilingual-text]')!;
+      return toolbar.getBoundingClientRect().top >= text.getBoundingClientRect().bottom - 1;
+    });
+    expect(expandedActionsClearText).toBe(true);
     await retranslateBlock.focus();
     expect(await retranslateBlock.evaluate((button) => button.getBoundingClientRect().height))
-      .toBeGreaterThan(27.9);
+      .toBeGreaterThan(25.9);
     await copyTranslation.click();
-    await expect(introActions.locator('[data-pi-bilingual-feedback]'))
+    await expect(introTranslation.locator('[data-pi-bilingual-feedback]'))
       .toContainText('译文已复制');
+    await moreActions.click();
+    await expect(toggleTranslation).toBeVisible();
     await toggleTranslation.click();
     await expect(introTranslation).toHaveAttribute('data-pi-bilingual-hidden', '');
     await expect(introTranslation.locator('[data-pi-bilingual-text]')).toBeHidden();
@@ -1038,15 +1053,16 @@ test('completes bilingual article translation without scrolling and keeps contro
         maxTouchPoints: 1,
       });
       expect(await page.evaluate(() => matchMedia('(any-hover: none)').matches)).toBe(true);
-      const moreActions = introActions.locator('button[data-action="more"]');
       await expect(moreActions).toBeVisible();
-      await expect(moreActions).toHaveText('更多');
+      await expect(moreActions).toHaveText('•••');
+      await expect(moreActions).toHaveAttribute('aria-label', '展开本段操作');
       await expect(moreActions).toHaveAttribute('aria-expanded', 'false');
       await expect(copyTranslation).toBeHidden();
       expect(await moreActions.evaluate((button) => button.getBoundingClientRect().height))
-        .toBeGreaterThan(27.9);
+        .toBeGreaterThan(25.9);
       await moreActions.click();
-      await expect(moreActions).toHaveText('收起');
+      await expect(moreActions).toHaveText('×');
+      await expect(moreActions).toHaveAttribute('aria-label', '收起本段操作');
       await expect(moreActions).toHaveAttribute('aria-expanded', 'true');
       await expect(copyTranslation).toBeVisible();
       if (process.env.PI_VISUAL_ARTIFACTS === '1') {
@@ -1068,6 +1084,8 @@ test('completes bilingual article translation without scrolling and keeps contro
 
     mockControl.returnBilingualRetranslationOnce = true;
     const requestsBeforeRetranslation = textRequests.length;
+    await moreActions.click();
+    await expect(retranslateBlock).toBeVisible();
     await retranslateBlock.focus();
     await retranslateBlock.press('Enter');
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeRetranslation);
@@ -1084,11 +1102,12 @@ test('completes bilingual article translation without scrolling and keeps contro
     mockControl.failBilingualFormulaPreservation = true;
     const requestsBeforeFailedRetranslation = textRequests.length;
     await formulaTranslation.hover();
+    await formulaActions.locator('button[data-action="more"]').click();
     const formulaRetranslate = formulaActions.getByRole('button', { name: '重译本段' });
     await formulaRetranslate.focus();
     await formulaRetranslate.press('Enter');
     await expect.poll(() => textRequests.length).toBeGreaterThan(requestsBeforeFailedRetranslation);
-    await expect(formulaActions.locator('[data-pi-bilingual-feedback]'))
+    await expect(formulaTranslation.locator('[data-pi-bilingual-feedback]'))
       .toContainText('重译失败');
     await expect(formulaTranslation.locator('.pi-math-inline math')).toBeVisible();
     await expect(page.locator('#article-inline-code + [data-pi-bilingual-error]')).toHaveCount(0);
