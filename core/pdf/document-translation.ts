@@ -574,30 +574,23 @@ function sourceAnchorForBlock(
   const overlapping = layout.lines.filter((entry) => entry.end > start && entry.start < end);
   const first = overlapping[0];
   if (!first) return undefined;
-  const nearby = [first];
-  for (const candidate of overlapping.slice(1, 4)) {
-    const previous = nearby.at(-1)!.line;
-    const sameFlow = candidate.line.region === first.line.region &&
-      !candidate.line.breakBefore &&
-      candidate.line.top >= previous.top &&
-      candidate.line.top - previous.bottom <= Math.max(
-        previous.height,
-        candidate.line.height,
-      ) * 1.5;
-    if (!sameFlow) break;
-    nearby.push(candidate);
-  }
+  // The block text may span far more than four visual lines. Cropping only the
+  // first few lines makes the extracted-text hint disagree with the pixels the
+  // vision model can see, which truncates long paragraphs and multiline
+  // equations. Paragraph construction already separates columns and visual
+  // flows, so every overlapping line belongs to this translation block.
+  const anchoredLines = overlapping;
   const paddingX = Math.max(3, pageSize.width * 0.006);
   const paddingY = Math.max(2, pageSize.height * 0.004);
-  const left = Math.max(0, Math.min(...nearby.map((entry) => entry.line.left)) - paddingX);
-  const top = Math.max(0, Math.min(...nearby.map((entry) => entry.line.top)) - paddingY);
+  const left = Math.max(0, Math.min(...anchoredLines.map((entry) => entry.line.left)) - paddingX);
+  const top = Math.max(0, Math.min(...anchoredLines.map((entry) => entry.line.top)) - paddingY);
   const right = Math.min(
     pageSize.width,
-    Math.max(...nearby.map((entry) => entry.line.right)) + paddingX,
+    Math.max(...anchoredLines.map((entry) => entry.line.right)) + paddingX,
   );
   const bottom = Math.min(
     pageSize.height,
-    Math.max(...nearby.map((entry) => entry.line.bottom)) + paddingY,
+    Math.max(...anchoredLines.map((entry) => entry.line.bottom)) + paddingY,
   );
   if (right <= left || bottom <= top) return undefined;
   return {

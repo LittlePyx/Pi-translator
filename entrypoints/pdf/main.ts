@@ -2426,12 +2426,16 @@ function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock
   const previous = index > 0 && pdfDocumentTranslationBlocksState[index - 1]?.included
     ? pdfDocumentTranslationBlocksState[index - 1]
     : undefined;
+  const next = index >= 0 && pdfDocumentTranslationBlocksState[index + 1]?.included
+    ? pdfDocumentTranslationBlocksState[index + 1]
+    : undefined;
   const parts = [
-    documentName.textContent ? `文档：${documentName.textContent}` : '',
-    previous?.text ? `上一段：${previous.text}` : '',
-    previous?.translatedText ? `上一段译文：${previous.translatedText}` : '',
+    documentName.textContent ? `文档：${documentName.textContent.slice(0, 160)}` : '',
+    previous?.text ? `上一段原文：${previous.text.slice(-320)}` : '',
+    previous?.translatedText ? `上一段译文：${previous.translatedText.slice(-400)}` : '',
+    next?.text ? `下一段原文：${next.text.slice(0, 320)}` : '',
   ].filter(Boolean);
-  const context = parts.join('\n').slice(-800).trim();
+  const context = parts.join('\n').slice(-1_200).trim();
   return context || undefined;
 }
 

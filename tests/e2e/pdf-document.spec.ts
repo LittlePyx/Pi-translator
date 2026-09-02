@@ -1,6 +1,6 @@
 import type { Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import {
   context,
   createFileDataTransfer,
@@ -488,6 +488,8 @@ test('uses one authorized vision model for every block in a PDF containing formu
     expect(unifiedVisionPrompts.join('\n')).toContain('Scanned full-document paragraph');
     expect(unifiedVisionPrompts.join('\n')).toContain('E=mc^2');
     expect(unifiedVisionPrompts.some((prompt) => prompt.includes('相邻段落上下文'))).toBe(true);
+    expect(unifiedVisionPrompts[0]).toContain('下一段原文');
+    expect(unifiedVisionPrompts[1]).toContain('上一段原文');
     await expect(panel.locator('[data-translation-mode="vision"]')).toHaveCount(2);
     await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
     const requestsBeforeLayoutExport = {
@@ -525,6 +527,61 @@ test('uses one authorized vision model for every block in a PDF containing formu
         path: testInfo.outputPath('pdf-full-document-ocr-360.png'),
         fullPage: false,
       });
+    }
+  } finally {
+    await pdfPage.close();
+  }
+});
+
+test('captures every visual line in a long multimodal PDF block', async ({}, testInfo) => {
+  const pdfPage = await context.newPage();
+  const visionRequestStart = visionRequests.length;
+  const lines = [
+    'A long visual paragraph starts with the full setup.',
+    'The second line continues the same argument.',
+    'The third line keeps every qualifier visible.',
+    'The fourth line introduces the estimator.',
+    'Energy E = mc^2 remains inside the explanation.',
+    'The sixth line retains all assumptions.',
+    'The seventh line records evaluation conditions.',
+    'The final visual line must remain in the screenshot.',
+  ];
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'long-multimodal-block.pdf',
+      mimeType: 'application/pdf',
+      buffer: createMultilineTextPdf(lines),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 1 段，等待确认');
+    await expect(pdfPage.locator('#pdf-document-translation-primary'))
+      .toHaveText('开始多模态全文翻译');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
+    expect(visionRequests).toHaveLength(visionRequestStart + 1);
+
+    const request = visionRequests[visionRequestStart]!;
+    const imageDataUrl = (request.messages as Array<{
+      content?: Array<{ type?: string; image_url?: { url?: string } }>;
+    }> | undefined)?.[0]?.content?.find((item) => item.type === 'image_url')?.image_url?.url;
+    expect(imageDataUrl).toMatch(/^data:image\/png;base64,/);
+    const dimensions = await pdfPage.evaluate(async (url) => {
+      const image = new Image();
+      image.src = url!;
+      await image.decode();
+      return { width: image.naturalWidth, height: image.naturalHeight };
+    }, imageDataUrl);
+    expect(dimensions.width).toBeGreaterThan(600);
+    expect(dimensions.height).toBeGreaterThan(350);
+
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await writeFile(
+        testInfo.outputPath('pdf-full-document-long-visual-crop.png'),
+        Buffer.from(imageDataUrl!.split(',', 2)[1]!, 'base64'),
+      );
     }
   } finally {
     await pdfPage.close();

@@ -228,7 +228,7 @@ describe('PDF document translation', () => {
     );
   });
 
-  it('anchors later long-page blocks near their own source instead of the page top', () => {
+  it('anchors every visual line in long blocks instead of cropping after four lines', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1,
       Array.from({ length: 48 }, (_, index) => positioned(
         `Source line ${index + 1} contains enough prose to exercise stable chunk mapping.`,
@@ -242,8 +242,10 @@ describe('PDF document translation', () => {
     const firstAnchor = prepared.blocks[0]!.sourceAnchor!;
     const secondAnchor = prepared.blocks[1]!.sourceAnchor!;
     expect(firstAnchor.topRatio).toBeLessThan(secondAnchor.topRatio);
-    expect(firstAnchor.heightRatio).toBeLessThan(0.1);
-    expect(secondAnchor.heightRatio).toBeLessThan(0.1);
+    expect(firstAnchor.heightRatio).toBeGreaterThan(0.18);
+    expect(secondAnchor.heightRatio).toBeGreaterThan(0.18);
+    expect(firstAnchor.topRatio + firstAnchor.heightRatio)
+      .toBeGreaterThanOrEqual(secondAnchor.topRatio - 0.03);
   });
 
   it('merges visual line wraps but starts a new block at a first-line indent', () => {
