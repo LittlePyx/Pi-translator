@@ -997,8 +997,8 @@ function pdfDocumentTranslationBlocksStronglyContinue(
   if (current.kind === 'formula') return true;
   if (LOWERCASE_CONTINUATION_START.test(currentText)) return true;
   if (/^[,.;:!?%)\]}\u201d\u2019]/u.test(currentText)) return true;
-  if (previous.kind === 'formula') return false;
   if (CONTINUATION_TRAILING_WORD.test(previousText)) return true;
+  if (previous.kind === 'formula') return false;
   return CJK_BOUNDARY.test(previousText.at(-1) ?? '') &&
     CJK_BOUNDARY.test(currentText[0] ?? '');
 }

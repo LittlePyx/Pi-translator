@@ -146,6 +146,38 @@ describe('PDF document translation', () => {
     expect(merged[0]!.sourceRegions?.[1]?.sourceAnchor.leftRatio).toBe(.52);
   });
 
+  it('keeps an equation constraint together when its numeric range wraps into the next block', () => {
+    const merged = mergePdfDocumentTranslationContinuationBlocks([
+      {
+        id: 'P5B1', pageNumber: 5, blockIndex: 0,
+        text: 'satisfying the symmetry constraint F-tilde(k) o F(k) = I for every k =',
+        kind: 'formula',
+        sourceAnchor: { leftRatio: .5, topRatio: .46, widthRatio: .39, heightRatio: .09 },
+      },
+      {
+        id: 'P5B2', pageNumber: 5, blockIndex: 1,
+        text: '1, ..., Np. Therefore, we design the end-to-end loss function as follows:',
+        sourceAnchor: { leftRatio: .5, topRatio: .55, widthRatio: .39, heightRatio: .05 },
+      },
+      {
+        id: 'P5B3', pageNumber: 5, blockIndex: 2,
+        text: 'Ltotal = Ldiscrepancy + gamma Lconstraint. (13)',
+        kind: 'formula',
+        sourceAnchor: { leftRatio: .56, topRatio: .60, widthRatio: .31, heightRatio: .04 },
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]).toMatchObject({
+      id: 'P5B1',
+      kind: 'formula',
+      text: 'satisfying the symmetry constraint F-tilde(k) o F(k) = I for every k = ' +
+        '1, ..., Np. Therefore, we design the end-to-end loss function as follows: ' +
+        'Ltotal = Ldiscrepancy + gamma Lconstraint. (13)',
+    });
+    expect(merged[0]!.sourceRegions).toHaveLength(1);
+  });
+
   it('does not merge an unpunctuated paper title into the following body', () => {
     const anchor = {
       leftRatio: .1, topRatio: .1, widthRatio: .8, heightRatio: .06,
