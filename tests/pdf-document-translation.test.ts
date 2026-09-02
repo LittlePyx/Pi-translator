@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH,
   comparePdfDocumentTranslationPriority,
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
@@ -253,9 +254,12 @@ describe('PDF document translation', () => {
   });
 
   it('anchors every visual line in long blocks instead of cropping after four lines', () => {
+    const sourceLines = Array.from({ length: 48 }, (_, index) => (
+      `Source line ${index + 1} contains enough prose to exercise stable chunk mapping.`
+    ));
     const prepared = preparePdfDocumentTranslationPages([page(1,
-      Array.from({ length: 48 }, (_, index) => positioned(
-        `Source line ${index + 1} contains enough prose to exercise stable chunk mapping.`,
+      sourceLines.map((text, index) => positioned(
+        text,
         54,
         70 + index * 13,
         360,
@@ -270,6 +274,29 @@ describe('PDF document translation', () => {
     expect(secondAnchor.heightRatio).toBeGreaterThan(0.18);
     expect(firstAnchor.topRatio + firstAnchor.heightRatio)
       .toBeGreaterThanOrEqual(secondAnchor.topRatio - 0.03);
+    for (const sourceLine of sourceLines) {
+      expect(prepared.blocks.filter((block) => block.text.includes(sourceLine))).toHaveLength(1);
+    }
+    const anchorMemberships = sourceLines.map((_, index) => {
+      const lineCenter = 70 + index * 13 + 5;
+      return prepared.blocks.filter((block) => {
+        const anchor = block.sourceAnchor!;
+        const top = anchor.topRatio * 792;
+        const bottom = top + anchor.heightRatio * 792;
+        return lineCenter >= top && lineCenter <= bottom;
+      }).length;
+    });
+    expect(anchorMemberships).toEqual(Array.from({ length: sourceLines.length }, () => 1));
+  });
+
+  it('does not split one indivisible visual line into overlapping image blocks', () => {
+    const longVisualLine = Array.from({ length: 170 }, (_, index) => `token${index + 1}`).join(' ');
+    expect(longVisualLine.length).toBeGreaterThan(PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH);
+    const prepared = preparePdfDocumentTranslationPages([page(1, [
+      positioned(longVisualLine, 54, 100, 500),
+    ])]);
+    expect(prepared.blocks).toHaveLength(1);
+    expect(prepared.blocks[0]!.text).toBe(longVisualLine);
   });
 
   it('merges visual line wraps but starts a new block at a first-line indent', () => {

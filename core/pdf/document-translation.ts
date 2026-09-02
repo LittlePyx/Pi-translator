@@ -585,17 +585,47 @@ function sourceAnchorForBlock(
   // equations. Paragraph construction already separates columns and visual
   // flows, so every overlapping line belongs to this translation block.
   const anchoredLines = overlapping;
+  const rawLeft = Math.min(...anchoredLines.map((entry) => entry.line.left));
+  const rawTop = Math.min(...anchoredLines.map((entry) => entry.line.top));
+  const rawRight = Math.max(...anchoredLines.map((entry) => entry.line.right));
+  const rawBottom = Math.max(...anchoredLines.map((entry) => entry.line.bottom));
   const paddingX = Math.max(3, pageSize.width * 0.006);
-  const paddingY = Math.max(2, pageSize.height * 0.004);
-  const left = Math.max(0, Math.min(...anchoredLines.map((entry) => entry.line.left)) - paddingX);
-  const top = Math.max(0, Math.min(...anchoredLines.map((entry) => entry.line.top)) - paddingY);
+  const defaultPaddingY = Math.max(2, pageSize.height * 0.004);
+  const targetLines = new Set(anchoredLines);
+  const targetRegions = new Set(anchoredLines.map((entry) => entry.line.region));
+  const adjacentLines = layout.lines.filter((entry) => (
+    !targetLines.has(entry) &&
+    targetRegions.has(entry.line.region) &&
+    entry.line.right > rawLeft &&
+    entry.line.left < rawRight
+  ));
+  const previousBottom = Math.max(
+    Number.NEGATIVE_INFINITY,
+    ...adjacentLines
+      .filter((entry) => entry.line.bottom <= rawTop)
+      .map((entry) => entry.line.bottom),
+  );
+  const nextTop = Math.min(
+    Number.POSITIVE_INFINITY,
+    ...adjacentLines
+      .filter((entry) => entry.line.top >= rawBottom)
+      .map((entry) => entry.line.top),
+  );
+  const paddingTop = Number.isFinite(previousBottom)
+    ? Math.min(defaultPaddingY, Math.max(0, (rawTop - previousBottom) / 2))
+    : defaultPaddingY;
+  const paddingBottom = Number.isFinite(nextTop)
+    ? Math.min(defaultPaddingY, Math.max(0, (nextTop - rawBottom) / 2))
+    : defaultPaddingY;
+  const left = Math.max(0, rawLeft - paddingX);
+  const top = Math.max(0, rawTop - paddingTop);
   const right = Math.min(
     pageSize.width,
-    Math.max(...anchoredLines.map((entry) => entry.line.right)) + paddingX,
+    rawRight + paddingX,
   );
   const bottom = Math.min(
     pageSize.height,
-    Math.max(...anchoredLines.map((entry) => entry.line.bottom)) + paddingY,
+    rawBottom + paddingBottom,
   );
   if (right <= left || bottom <= top) return undefined;
   return {
@@ -604,6 +634,53 @@ function sourceAnchorForBlock(
     widthRatio: (right - left) / pageSize.width,
     heightRatio: (bottom - top) / pageSize.height,
   };
+}
+
+function layoutAlignedParagraphChunks(
+  text: string,
+  range: { start: number; end: number },
+  layout: JoinedLayoutText,
+): Array<{ text: string; start: number; end: number }> {
+  const paragraph = text.slice(range.start, range.end).trim();
+  if (!paragraph) return [];
+  const paragraphOffset = text.indexOf(paragraph, range.start);
+  const paragraphStart = Math.max(range.start, paragraphOffset);
+  const paragraphEnd = paragraphStart + paragraph.length;
+  const chunks: Array<{ text: string; start: number; end: number }> = [];
+  let cursor = paragraphStart;
+  while (cursor < paragraphEnd) {
+    const maximumEnd = Math.min(paragraphEnd, cursor + PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH);
+    let chunkEnd = maximumEnd;
+    if (maximumEnd < paragraphEnd) {
+      const minimumEnd = cursor + Math.floor(PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH * 0.55);
+      const lineBoundaries = layout.lines.filter((entry) => (
+        entry.end > cursor && entry.end <= maximumEnd && entry.end <= paragraphEnd
+      ));
+      const preferredBoundaries = lineBoundaries.filter((entry) => entry.end >= minimumEnd);
+      const sentenceBoundary = preferredBoundaries
+        .filter((entry) => SENTENCE_END.test(entry.line.text.trim()))
+        .at(-1);
+      const containingLine = layout.lines.find((entry) => (
+        entry.start < maximumEnd && entry.end > maximumEnd && entry.end <= paragraphEnd
+      ));
+      chunkEnd = (
+        sentenceBoundary ??
+        preferredBoundaries.at(-1) ??
+        lineBoundaries.at(-1) ??
+        containingLine
+      )?.end ?? maximumEnd;
+    }
+    const rawChunk = text.slice(cursor, chunkEnd);
+    const block = rawChunk.trim();
+    if (block) {
+      const leadingWhitespace = rawChunk.indexOf(block);
+      const start = cursor + Math.max(0, leadingWhitespace);
+      chunks.push({ text: block, start, end: start + block.length });
+    }
+    cursor = chunkEnd;
+    while (cursor < paragraphEnd && /\s/u.test(text[cursor]!)) cursor += 1;
+  }
+  return chunks;
 }
 
 function blocksFromText(
@@ -619,6 +696,7 @@ function blocksFromText(
     ? layout.paragraphs
     : [{ start: 0, end: text.length }];
   const chunks = ranges.flatMap((range) => {
+    if (layout) return layoutAlignedParagraphChunks(text, range, layout);
     const paragraph = text.slice(range.start, range.end).trim();
     if (!paragraph) return [];
     const paragraphOffset = text.indexOf(paragraph, range.start);

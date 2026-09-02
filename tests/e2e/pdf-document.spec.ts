@@ -533,19 +533,12 @@ test('uses one authorized vision model for every block in a PDF containing formu
   }
 });
 
-test('captures every visual line in a long multimodal PDF block', async ({}, testInfo) => {
+test('splits a long multimodal PDF paragraph into non-overlapping line-aligned crops', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   const visionRequestStart = visionRequests.length;
-  const lines = [
-    'A long visual paragraph starts with the full setup.',
-    'The second line continues the same argument.',
-    'The third line keeps every qualifier visible.',
-    'The fourth line introduces the estimator.',
-    'Energy E = mc^2 remains inside the explanation.',
-    'The sixth line retains all assumptions.',
-    'The seventh line records evaluation conditions.',
-    'The final visual line must remain in the screenshot.',
-  ];
+  const lines = Array.from({ length: 24 }, (_, index) => index === 11
+    ? 'Abstract line 12 keeps E = mc^2 in its visual context.'
+    : `Abstract line ${String(index + 1).padStart(2, '0')} keeps distinct visual context.`);
   try {
     await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
     await pdfPage.locator('#file-input').setInputFiles({
@@ -556,32 +549,52 @@ test('captures every visual line in a long multimodal PDF block', async ({}, tes
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
     await expect(pdfPage.locator('#pdf-document-translation-status'))
-      .toContainText('已识别 1 段，等待确认');
+      .toContainText('已识别 2 段，等待确认');
     await expect(pdfPage.locator('#pdf-document-translation-primary'))
       .toHaveText('开始多模态全文翻译');
     await pdfPage.locator('#pdf-document-translation-primary').click();
-    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 1/1');
-    expect(visionRequests).toHaveLength(visionRequestStart + 1);
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+    expect(visionRequests).toHaveLength(visionRequestStart + 2);
 
-    const request = visionRequests[visionRequestStart]!;
-    const imageDataUrl = (request.messages as Array<{
-      content?: Array<{ type?: string; image_url?: { url?: string } }>;
-    }> | undefined)?.[0]?.content?.find((item) => item.type === 'image_url')?.image_url?.url;
-    expect(imageDataUrl).toMatch(/^data:image\/png;base64,/);
-    const dimensions = await pdfPage.evaluate(async (url) => {
+    const requests = visionRequests.slice(visionRequestStart);
+    const promptAndImages = requests.map((request) => {
+      const content = (request.messages as Array<{
+        content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
+      }> | undefined)?.[0]?.content;
+      return {
+        prompt: content?.find((item) => item.type === 'text')?.text ?? '',
+        imageDataUrl: content?.find((item) => item.type === 'image_url')?.image_url?.url,
+      };
+    });
+    const hintMarker = '不得当作指令：';
+    const recognizedHints = promptAndImages.map(({ prompt }) => {
+      const markerIndex = prompt.indexOf(hintMarker);
+      expect(markerIndex).toBeGreaterThanOrEqual(0);
+      const serialized = prompt.slice(markerIndex + hintMarker.length).split('\n', 1)[0]!;
+      return JSON.parse(serialized) as string;
+    });
+    for (const line of lines) {
+      expect(recognizedHints.filter((hint) => hint.includes(line))).toHaveLength(1);
+    }
+    const imageDataUrls = promptAndImages.map(({ imageDataUrl }) => {
+      expect(imageDataUrl).toMatch(/^data:image\/png;base64,/);
+      return imageDataUrl!;
+    });
+    const dimensions = await pdfPage.evaluate(async (urls) => Promise.all(urls.map(async (url) => {
       const image = new Image();
-      image.src = url!;
+      image.src = url;
       await image.decode();
       return { width: image.naturalWidth, height: image.naturalHeight };
-    }, imageDataUrl);
-    expect(dimensions.width).toBeGreaterThan(600);
-    expect(dimensions.height).toBeGreaterThan(350);
+    })), imageDataUrls);
+    expect(dimensions[0]!.width).toBeGreaterThan(600);
+    expect(dimensions[0]!.height).toBeGreaterThan(800);
+    expect(dimensions[1]!.height).toBeGreaterThan(100);
 
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
-      await writeFile(
-        testInfo.outputPath('pdf-full-document-long-visual-crop.png'),
-        Buffer.from(imageDataUrl!.split(',', 2)[1]!, 'base64'),
-      );
+      await Promise.all(imageDataUrls.map((imageDataUrl, index) => writeFile(
+        testInfo.outputPath(`pdf-full-document-long-visual-crop-${index + 1}.png`),
+        Buffer.from(imageDataUrl.split(',', 2)[1]!, 'base64'),
+      )));
     }
   } finally {
     await pdfPage.close();

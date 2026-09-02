@@ -2025,16 +2025,14 @@ async function capturePdfDocumentTranslationVisualBlock(
   context.fillStyle = '#fff';
   context.fillRect(0, 0, canvas.width, canvas.height);
   await page.render({ canvas, canvasContext: context, viewport }).promise;
-  const paddingX = Math.max(6, baseViewport.width * .012);
-  const paddingY = Math.max(5, baseViewport.height * .008);
   const region = normalizeRegion(
     {
-      x: anchor.leftRatio * baseViewport.width - paddingX,
-      y: anchor.topRatio * baseViewport.height - paddingY,
+      x: anchor.leftRatio * baseViewport.width,
+      y: anchor.topRatio * baseViewport.height,
     },
     {
-      x: (anchor.leftRatio + anchor.widthRatio) * baseViewport.width + paddingX,
-      y: (anchor.topRatio + anchor.heightRatio) * baseViewport.height + paddingY,
+      x: (anchor.leftRatio + anchor.widthRatio) * baseViewport.width,
+      y: (anchor.topRatio + anchor.heightRatio) * baseViewport.height,
     },
     { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
   );
