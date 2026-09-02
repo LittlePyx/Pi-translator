@@ -1488,6 +1488,29 @@ function pdfLayoutTranslationBlocks(): PdfLayoutTranslationBlock[] {
   ));
 }
 
+async function renderPdfDocumentTranslationExportHtml(html: string): Promise<string> {
+  const exportBlocks = pdfDocumentTranslationBlocksState.filter((block) => (
+    block.included && block.status === 'done' && Boolean(block.text.trim()) &&
+    Boolean(block.translatedText?.trim())
+  ));
+  const exportDocument = new DOMParser().parseFromString(html, 'text/html');
+  const pairs = [...exportDocument.querySelectorAll<HTMLElement>('.page-translations > .pair')];
+  if (pairs.length !== exportBlocks.length) return html;
+  const targets: Array<{ container: HTMLElement; text: string; renderLatex: boolean }> = [];
+  pairs.forEach((pair, index) => {
+    const block = exportBlocks[index]!;
+    const renderLatex = block.kind !== 'code';
+    const source = pair.querySelector<HTMLElement>(':scope > .source');
+    if (source) targets.push({ container: source, text: block.text, renderLatex });
+    const translation = pair.querySelector<HTMLElement>(':scope > .translation');
+    if (translation && block.translatedText) {
+      targets.push({ container: translation, text: block.translatedText, renderLatex });
+    }
+  });
+  await renderTranslationContents(targets);
+  return `<!doctype html>\n${exportDocument.documentElement.outerHTML}`;
+}
+
 async function renderPdfLayoutTranslationFragments(
   blocks: readonly PdfLayoutTranslationBlock[],
 ): Promise<Map<string, Node[]>> {
@@ -1682,6 +1705,10 @@ async function handlePdfDocumentTranslationExport(
       result = pdfDocumentTranslationExportResult(
         await capturePdfDocumentTranslationExportPageImages(),
       );
+      result = {
+        ...result,
+        printableHtml: await renderPdfDocumentTranslationExportHtml(result.printableHtml),
+      };
     }
     const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
     const partialLabel = result.complete

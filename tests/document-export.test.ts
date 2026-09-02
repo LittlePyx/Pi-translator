@@ -108,6 +108,8 @@ describe('document translation export', () => {
     );
     expect(result.printableHtml).toContain('class="page-layout"');
     expect(result.printableHtml).toContain('.page-bundle:first-of-type{break-before:auto}');
+    expect(result.printableHtml).toContain('.pi-math-inline');
+    expect(result.printableHtml).toContain('.pi-math-display');
     expect(result.printableHtml).not.toContain('svg+xml');
     expect(result.printableHtml).not.toContain('onload');
   });

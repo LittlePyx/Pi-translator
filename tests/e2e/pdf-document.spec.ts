@@ -559,6 +559,33 @@ test('uses one authorized vision model for every block in a PDF containing formu
       vision: visionRequests.length,
     };
     await panel.locator('#pdf-document-translation-copy-menu > summary').click();
+    const htmlDownloadPromise = pdfPage.waitForEvent('download');
+    await panel.locator('#pdf-document-translation-download-html').click();
+    const htmlDownload = await htmlDownloadPromise;
+    const htmlDownloadPath = await htmlDownload.path();
+    expect(htmlDownloadPath).toBeTruthy();
+    const downloadedHtml = await readFile(htmlDownloadPath!, 'utf8');
+    expect(downloadedHtml).toContain('data:image/jpeg;base64,');
+    expect(downloadedHtml).toContain('class="pi-math pi-math-inline"');
+    expect(downloadedHtml).toContain('<math');
+    const exportPreview = await context.newPage();
+    await exportPreview.setContent(downloadedHtml, { waitUntil: 'load' });
+    const exportedFormula = exportPreview.locator('.translation', {
+      hasText: '能量关系式',
+    }).last();
+    await expect(exportedFormula.locator('math')).toBeVisible();
+    await expect(exportedFormula).toContainText('能量关系式');
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await exportPreview.setViewportSize({ width: 1200, height: 800 });
+      await exportPreview.screenshot({
+        path: testInfo.outputPath('pdf-bilingual-html-formula.png'),
+        fullPage: false,
+      });
+    }
+    await exportPreview.close();
+    expect(textRequests).toHaveLength(requestsBeforeLayoutExport.text);
+    expect(visionRequests).toHaveLength(requestsBeforeLayoutExport.vision);
+    await panel.locator('#pdf-document-translation-copy-menu > summary').click();
     const layoutPreviewPromise = context.waitForEvent('page');
     await panel.locator('#pdf-document-translation-print-layout').click();
     const layoutPreview = await layoutPreviewPromise;
