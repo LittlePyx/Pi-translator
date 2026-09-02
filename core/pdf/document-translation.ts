@@ -147,6 +147,7 @@ const CONTINUITY_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
 const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$)/iu;
 const FIGURE_CAPTION = /(?:^|\s)((?:fig(?:ure)?\.?|scheme|图)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
 const TABLE_CAPTION = /(?:^|\s)((?:table|表)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
+const FIGURE_FRAGMENT_LABEL = /\b(?:accuracy|epoch|error|iteration|loss|method|model|number|phase|psnr|ratio|score|ssim|time|training)\b|\bdb\b/iu;
 const INLINE_SECTION_LEAD = /^[\p{Lu}\d][^.!?。！？:：\t]{2,72}[:：]\s+\p{Lu}/u;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',
@@ -602,6 +603,21 @@ function pdfDocumentTranslationCaptionText(
   const match = pattern.exec(text);
   if (!match?.[1]) return undefined;
   const captionStart = match.index + match[0].lastIndexOf(match[1]);
+  const prefix = text.slice(0, captionStart).replace(/\s+/gu, ' ').trim();
+  const prefixDigits = prefix.match(/[\d.,%+−-]/gu)?.length ?? 0;
+  const prefixLetters = prefix.match(/\p{L}/gu)?.length ?? 0;
+  const numericFragment = prefixDigits >= 3 && prefixLetters <= 4;
+  // A PDF paragraph can legitimately mention "Figure 2." in the middle of a
+  // sentence. Only tolerate content before a caption label when it looks like
+  // compact chart metadata that was joined to the caption by the text layer.
+  // This keeps full-width captions as objects without turning the column prose
+  // below them into duplicate figure objects.
+  if (
+    prefix && (
+      prefix.length > 120 || SENTENCE_END.test(prefix) ||
+      (!prefix.includes('\t') && !numericFragment && !FIGURE_FRAGMENT_LABEL.test(prefix))
+    )
+  ) return undefined;
   return text.slice(captionStart).replace(/\s+/gu, ' ').trim() || undefined;
 }
 
@@ -621,7 +637,7 @@ function pdfDocumentTranslationLooksFigureFragment(
     return false;
   }
   const numericCharacters = text.match(/[\d.,%+−-]/gu)?.length ?? 0;
-  const axisOrLegend = /\b(?:accuracy|epoch|error|iteration|loss|method|model|number|phase|psnr|ratio|score|ssim|time|training)\b|\bdb\b/iu.test(text);
+  const axisOrLegend = FIGURE_FRAGMENT_LABEL.test(text);
   return block.kind === 'table' || block.kind === 'formula' || axisOrLegend ||
     (text.length <= 28 && numericCharacters >= Math.max(1, text.length * .28));
 }

@@ -4,6 +4,7 @@ import { browser } from 'wxt/browser';
 
 import {
   isPdfBackgroundDocumentMessage,
+  pdfBackgroundVisualResultIsStructurallySafe,
   PDF_BACKGROUND_CACHE_NAME,
   type PdfBackgroundDocumentMessage,
   type PdfBackgroundTranslationBlock,
@@ -176,9 +177,7 @@ async function processVisualBlock(
   });
   const result = response.data.result;
   const translatedText = result.translatedText.trim();
-  const structurallySafe = !result.formulaNeedsReview && (
-    !block.containsFormula || Boolean(result.formulaLatex?.length)
-  );
+  const structurallySafe = pdfBackgroundVisualResultIsStructurallySafe(block, result);
   if (translatedText && structurallySafe) {
     return { blockId: block.id, translatedText, visualProcessed: true };
   }

@@ -673,6 +673,63 @@ test('translates a captioned paper table as one visual object beside ordinary te
   }
 });
 
+test('translates a formula-bearing full-width figure caption above two columns', async () => {
+  const pdfPage = await context.newPage();
+  const textRequestStart = textRequests.length;
+  const visionRequestStart = visionRequests.length;
+  const leftLines = [
+    'The design is illustrated in Figure 2.',
+    'Rather than fixed transforms, learnable mappings are adopted.',
+    'Every stage follows the optimization process.',
+    'The parameters are learned end to end.',
+    'Residual information improves reconstruction.',
+    'The resulting network remains interpretable.',
+    'Training uses paired measurements and images.',
+    'This paragraph ends before the next section.',
+  ];
+  const rightLines = Array.from(
+    { length: 8 },
+    (_, index) => `Right column contribution ${index + 1} remains ordinary prose.`,
+  );
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'full-width-formula-caption.pdf',
+      mimeType: 'application/pdf',
+      buffer: createTwoColumnTextPdf(leftLines, rightLines, [
+        { text: 'Figure 2. Illustration of our proposed ISTA-Net framework.', x: 54, y: 760 },
+        { text: 'Specifically, ISTA-Net is composed of Np phases, and each phase is one iteration.', x: 54, y: 745 },
+        { text: 'The transforms are learnable and satisfy F-tilde(k) o F(k) = I.', x: 54, y: 730 },
+      ]),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 6 段，等待确认');
+    expect(textRequests).toHaveLength(textRequestStart);
+    expect(visionRequests).toHaveLength(visionRequestStart);
+
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 6/6');
+    expect(textRequests).toHaveLength(textRequestStart);
+    expect(visionRequests).toHaveLength(visionRequestStart + 6);
+
+    const figureCard = pdfPage.locator('[data-object-role="figure"]');
+    await expect(figureCard).toHaveCount(1);
+    await expect(figureCard).toHaveAttribute('data-translation-mode', 'vision');
+    await expect(figureCard).toContainText('图 2：所提出的 ISTA-Net 框架示意图');
+    await expect(figureCard).not.toContainText('已保留原图');
+    await figureCard.click();
+    const highlight = pdfPage.locator('.pdf-page[data-page-number="1"] .region-source-highlight');
+    await expect(highlight).toBeVisible();
+    const highlightBounds = await highlight.boundingBox();
+    expect(highlightBounds?.width).toBeGreaterThan(400);
+  } finally {
+    await pdfPage.close();
+  }
+});
+
 test('continues a text-only PDF translation while the reader tab is frozen', async () => {
   const pdfPage = await context.newPage();
   const lifecycle = await context.newCDPSession(pdfPage);

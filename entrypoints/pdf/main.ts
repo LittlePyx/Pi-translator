@@ -80,6 +80,7 @@ import {
 } from '../../core/pdf/document-translation';
 import {
   isPdfBackgroundDocumentMessage,
+  pdfBackgroundVisualResultIsStructurallySafe,
   PDF_BACKGROUND_CACHE_NAME,
   type PdfBackgroundDocumentMessage,
   type PdfBackgroundTranslationSnapshot,
@@ -2921,9 +2922,10 @@ async function processPdfDocumentTranslationVisualBlock(
   }
   const result = response.data.result;
   const translatedText = result.translatedText.trim();
-  const structurallySafe = !result.formulaNeedsReview && (
-    !containsFormula || Boolean(result.formulaLatex?.length)
-  );
+  const structurallySafe = pdfBackgroundVisualResultIsStructurallySafe({
+    containsFormula,
+    visualPurpose: pdfDocumentTranslationVisualPurpose(block),
+  }, result);
   if (translatedText && structurallySafe) {
     block.status = 'done';
     block.translatedText = translatedText;

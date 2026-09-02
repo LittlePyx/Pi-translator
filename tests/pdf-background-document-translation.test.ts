@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isPdfBackgroundDocumentMessage,
   isPdfBackgroundProxyMessage,
+  pdfBackgroundVisualResultIsStructurallySafe,
 } from '../core/pdf/background-document-translation';
 
 function startMessage() {
@@ -35,6 +36,28 @@ function startMessage() {
 }
 
 describe('PDF background translation message guards', () => {
+  it('accepts complete figure and table translations without formula metadata', () => {
+    expect(pdfBackgroundVisualResultIsStructurallySafe({
+      containsFormula: true,
+      visualPurpose: 'figure',
+    }, {
+      formulaNeedsReview: true,
+      formulaLatex: [],
+    })).toBe(true);
+    expect(pdfBackgroundVisualResultIsStructurallySafe({
+      containsFormula: true,
+      visualPurpose: 'table',
+    }, {
+      formulaLatex: [],
+    })).toBe(true);
+    expect(pdfBackgroundVisualResultIsStructurallySafe({
+      containsFormula: true,
+      visualPurpose: 'formula',
+    }, {
+      formulaLatex: [],
+    })).toBe(false);
+  });
+
   it('accepts complete start, control, snapshot, and tab cleanup messages', () => {
     expect(isPdfBackgroundDocumentMessage(startMessage())).toBe(true);
     expect(isPdfBackgroundDocumentMessage({

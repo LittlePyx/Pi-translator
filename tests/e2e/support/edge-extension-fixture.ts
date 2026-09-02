@@ -1079,6 +1079,7 @@ export function installEdgeExtensionHooks(): void {
       imagePrompt.includes('E = mc^2');
     const isEscapedFormula = imagePrompt.includes('Escaped distribution');
     const isRenderedFormula = imagePrompt.includes('∑ᵢ xᵢ²');
+    const isFigureObject = imagePrompt.includes('当前图片是论文中的一张完整图表或插图');
     const isTableObject = imagePrompt.includes('当前图片是论文中的一张完整表格');
     const formulaLatex = isEscapedFormula
       ? String.raw`\\mathbb{Q}_\\Omega\\`
@@ -1105,6 +1106,8 @@ export function installEdgeExtensionHooks(): void {
                 ? '能量关系式 $E=mc^2$ 保持不变。'
                 : isRenderedFormula
                   ? '该量满足 $\\sum_i x_i^2 \\ge 0$。'
+                  : isFigureObject
+                    ? String.raw`图 2：所提出的 ISTA-Net 框架示意图。具体而言，ISTA-Net 由多个阶段组成，每个阶段对应一次 ISTA 迭代；前向变换 $F(k)$ 和后向变换 $\widetilde{F}(k)$ 均可学习，并满足 $\widetilde{F}(k) \circ F(k) = I$。`
                   : isTableObject
                     ? '表 1：Set11 上的平均 PSNR 对比。\n\n| 模型 | PSNR | 时间 |\n| --- | ---: | ---: |\n| ISTA-Net | 31.53 | 0.039 s |\n| ISTA-Net+ | 32.57 | 0.047 s |'
                   : shouldReturnRevisedRecognition
@@ -1118,6 +1121,8 @@ export function installEdgeExtensionHooks(): void {
                   ? 'Energy $E=mc^2$ is invariant.'
                   : isRenderedFormula
                     ? 'The quantity $\\sum_i x_i^2 \\ge 0$ is nonnegative.'
+                    : isFigureObject
+                      ? String.raw`Figure 2. Illustration of the proposed ISTA-Net framework. The forward transform $F(k)$ and backward transform $\widetilde{F}(k)$ are learnable and satisfy $\widetilde{F}(k) \circ F(k) = I$.`
                     : isTableObject
                       ? 'Table 1. Average PSNR comparison on Set11.\n\n| Model | PSNR | Time |\n| --- | ---: | ---: |\n| ISTA-Net | 31.53 | 0.039 s |\n| ISTA-Net+ | 32.57 | 0.047 s |'
                     : shouldReturnRevisedRecognition

@@ -46,6 +46,21 @@ export interface PdfBackgroundTranslationSnapshot {
   errorMessage?: string;
 }
 
+/**
+ * Figure and table results are object translations, not standalone formula
+ * transcriptions. Their captions may contain symbols such as F(k), but a
+ * provider is not required to duplicate every such token in formulaLatex.
+ */
+export function pdfBackgroundVisualResultIsStructurallySafe(
+  block: Pick<PdfBackgroundTranslationBlock, 'containsFormula' | 'visualPurpose'>,
+  result: { formulaNeedsReview?: boolean; formulaLatex?: readonly string[] },
+): boolean {
+  if (block.visualPurpose === 'figure' || block.visualPurpose === 'table') return true;
+  return !result.formulaNeedsReview && (
+    !block.containsFormula || Boolean(result.formulaLatex?.length)
+  );
+}
+
 export type PdfBackgroundDocumentMessage =
   | {
       type: 'START_PDF_BACKGROUND_DOCUMENT_TRANSLATION';

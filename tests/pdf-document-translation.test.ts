@@ -327,6 +327,46 @@ describe('PDF document translation', () => {
     ]);
   });
 
+  it('keeps a full-width formula-bearing caption separate from both body columns', () => {
+    const leftLines = [
+      'The design is illustrated in Figure 2.',
+      'Rather than fixed transforms, learnable mappings are adopted.',
+      'Every stage follows the optimization process.',
+      'The parameters are learned end to end.',
+      'Residual information improves reconstruction.',
+      'The resulting network remains interpretable.',
+      'Training uses paired measurements and images.',
+      'This paragraph ends before the next section.',
+    ];
+    const rightLines = Array.from(
+      { length: 8 },
+      (_, index) => `Right column contribution ${index + 1} remains ordinary prose.`,
+    );
+    const captionLines = [
+      'Figure 2. Illustration of our proposed ISTA-Net framework.',
+      'Specifically, ISTA-Net is composed of Np phases, and each phase is one iteration.',
+      'The forward transform F(k) and backward transform F-tilde(k) are learnable.',
+    ];
+    const prepared = preparePdfDocumentTranslationPages([page(2, [
+      ...captionLines.map((text, index) => positioned(text, 54, 60 + index * 15, 500)),
+      ...leftLines.flatMap((text, index) => [
+        positioned(text, 54, 190 + index * 18, 220),
+        positioned(rightLines[index]!, 330, 190 + index * 18, 220),
+      ]),
+    ])]);
+
+    expect(prepared.multiColumnPages).toBe(1);
+    const figures = prepared.blocks.filter((block) => block.kind === 'figure');
+    expect(figures).toHaveLength(1);
+    expect(figures[0]!.text).toBe(captionLines.join(' '));
+    expect(figures[0]!.sourceAnchor!.widthRatio).toBeGreaterThan(.8);
+    const referencedProse = prepared.blocks.find((block) => (
+      block.text.includes('illustrated in Figure 2.')
+    ));
+    expect(referencedProse?.kind).toBeUndefined();
+    expect(referencedProse?.text).toContain('Rather than fixed transforms');
+  });
+
   it('preserves table cells by row instead of reading down inferred columns', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned('Model', 64, 100, 60),
