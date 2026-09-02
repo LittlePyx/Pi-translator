@@ -475,9 +475,10 @@ function translationElement(
   );
   toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]')
     ?.setAttribute('aria-expanded', 'false');
-  translation.append(text);
+  // Keep the desktop toolbar in the translation's text flow so the first lines
+  // wrap around its reserved area instead of being covered when it appears.
+  translation.append(toolbar, text);
   if (actions.recognizeFormula) translation.append(formulaRecognitionNotice(actions.recognizeFormula));
-  translation.append(toolbar);
   applySourceTypography(translation, block, 18);
   return translation;
 }
@@ -768,15 +769,14 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       all: initial !important;
       display: flex !important;
-      position: absolute !important;
+      position: relative !important;
+      float: right !important;
       z-index: 2 !important;
-      top: 0 !important;
-      right: 0 !important;
       box-sizing: border-box !important;
       width: max-content !important;
       max-width: 100% !important;
       max-height: 32px !important;
-      margin: 0 !important;
+      margin: 0 0 .18em .65em !important;
       align-items: center !important;
       justify-content: flex-end !important;
       gap: 4px !important;
@@ -786,8 +786,7 @@ function installTranslationStyle(): void {
       overflow: hidden !important;
       opacity: 0 !important;
       pointer-events: none !important;
-      transform: translateY(-2px) !important;
-      transition: opacity 120ms ease, transform 120ms ease !important;
+      transition: opacity 120ms ease !important;
       color: color-mix(in srgb, var(--pi-bilingual-color) 70%, #4f46e5 30%) !important;
       background: color-mix(in srgb, var(--pi-bilingual-surface) 96%, #6558d9 4%) !important;
       box-shadow: 0 3px 12px color-mix(in srgb, var(--pi-bilingual-color) 14%, transparent) !important;
@@ -800,7 +799,6 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HINT_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       opacity: .9 !important;
       pointer-events: auto !important;
-      transform: translateY(0) !important;
     }
     [${TRANSLATION_FEEDBACK_ATTRIBUTE}] {
       all: initial !important;
@@ -840,6 +838,7 @@ function installTranslationStyle(): void {
     [${TRANSLATION_ACTIONS_ATTRIBUTE}] > button[data-action="more"] { display: none !important; }
     [${TRANSLATION_ATTRIBUTE}][${TRANSLATION_HIDDEN_ATTRIBUTE}] > [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
       position: relative !important;
+      float: none !important;
       inset: auto !important;
       width: 100% !important;
       margin-top: .28em !important;
@@ -858,6 +857,7 @@ function installTranslationStyle(): void {
     @media (any-hover: none) {
       [${TRANSLATION_ACTIONS_ATTRIBUTE}] {
         position: relative !important;
+        float: none !important;
         inset: auto !important;
         width: 100% !important;
         max-height: 32px !important;
@@ -866,7 +866,6 @@ function installTranslationStyle(): void {
         padding: 0 !important;
         opacity: .72 !important;
         pointer-events: auto !important;
-        transform: translateY(0) !important;
         background: transparent !important;
         box-shadow: none !important;
       }

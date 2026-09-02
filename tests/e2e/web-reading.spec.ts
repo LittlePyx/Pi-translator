@@ -910,6 +910,20 @@ test('completes bilingual article translation without scrolling and keeps contro
       (element) => Number.parseFloat(getComputedStyle(element).opacity),
     )).toBeGreaterThan(0);
     await page.waitForTimeout(160);
+    const actionOverlap = await introTranslation.evaluate((translation) => {
+      const toolbar = translation.querySelector<HTMLElement>('[data-pi-bilingual-actions]')!;
+      const text = translation.querySelector<HTMLElement>('[data-pi-bilingual-text]')!;
+      const toolbarRect = toolbar.getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(text);
+      return [...range.getClientRects()].some((lineRect) =>
+        lineRect.left < toolbarRect.right
+        && lineRect.right > toolbarRect.left
+        && lineRect.top < toolbarRect.bottom
+        && lineRect.bottom > toolbarRect.top
+      );
+    });
+    expect(actionOverlap).toBe(false);
     const layoutAfterHover = await page.evaluate(() => {
       const translation = document.querySelector<HTMLElement>(
         '#article-intro + [data-pi-bilingual-translation]',
