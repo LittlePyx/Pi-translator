@@ -130,25 +130,26 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-outline[hidden] { display: none; }
 
 .pdf-document-translation {
+  --pdf-document-translation-panel-width: clamp(420px, 40vw, 560px);
   position: fixed;
   z-index: 11;
   top: 54px;
   right: 0;
   bottom: 0;
   display: grid;
-  width: min(390px, 100vw);
+  width: var(--pdf-document-translation-panel-width);
   grid-template-rows: auto auto auto minmax(0, 1fr);
   border-left: 1px solid var(--line);
   background: #f8f9fb;
-  box-shadow: -8px 0 24px rgba(20, 30, 50, .09);
+  box-shadow: -12px 0 32px rgba(20, 30, 50, .08);
 }
 .pdf-document-translation[hidden] { display: none; }
 .pdf-document-translation > header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   min-height: 60px;
   align-items: center;
-  justify-content: space-between;
-  gap: 10px;
+  gap: 8px;
   padding: 10px 9px 10px 14px;
   border-bottom: 1px solid var(--line);
   background: rgba(255, 255, 255, .94);
@@ -175,7 +176,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.pdf-document-translation > header button {
+.pdf-document-translation > header #pdf-document-translation-close {
   width: 34px;
   height: 34px;
   border: 0;
@@ -184,7 +185,10 @@ button { color: inherit; font: inherit; cursor: pointer; }
   background: transparent;
   font-size: 20px;
 }
-.pdf-document-translation > header button:hover { color: #4338ca; background: #f3f4ff; }
+.pdf-document-translation > header #pdf-document-translation-close:hover {
+  color: #4338ca;
+  background: #f3f4ff;
+}
 .pdf-document-translation-overview {
   display: grid;
   gap: 9px;
@@ -591,6 +595,11 @@ button { color: inherit; font: inherit; cursor: pointer; }
   border-bottom: 1px solid #e8eaf0;
   background: rgba(248, 249, 251, .96);
 }
+.pdf-document-translation-reader-label {
+  color: #667085;
+  font-size: 9.5px;
+  font-weight: 700;
+}
 .pdf-document-translation-view-switch {
   display: inline-flex;
   min-width: 0;
@@ -641,22 +650,22 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-document-translation-pages {
   min-height: 0;
   overflow: auto;
-  padding: 10px 14px 24px;
+  padding: 18px 20px 30px;
   scrollbar-width: thin;
 }
-.pdf-document-translation[data-reading-mode="current"]
+.pdf-document-translation[data-view-mode="compare"]
   .pdf-document-translation-page:not([data-current]) { display: none; }
 .pdf-document-translation-page {
-  margin-bottom: 9px;
-  padding: 12px;
-  border: 1px solid #e3e6ef;
-  border-radius: 10px;
-  background: #fff;
+  margin: 0 auto 12px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
   box-shadow: none;
 }
 .pdf-document-translation-page[data-current] {
-  border-color: #c8c8f2;
-  box-shadow: 0 0 0 1px rgba(79, 70, 229, .035);
+  border-color: transparent;
+  box-shadow: none;
 }
 .pdf-document-translation-page > header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
 .pdf-document-translation-page > header button {
@@ -668,7 +677,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
   font-weight: 750;
 }
 .pdf-document-translation-page > header small { color: var(--muted); font-size: 9px; }
-.pdf-document-translation-block { margin: 0 0 10px; color: #273247; font-size: 12px; line-height: 1.75; white-space: pre-wrap; }
+.pdf-document-translation-block { margin: 0 0 12px; color: #273247; font-size: 13px; line-height: 1.82; white-space: pre-wrap; }
 .pdf-document-translation-block[data-source-anchor][data-status="done"] {
   margin-left: -8px;
   padding: 5px 7px 5px 8px;
@@ -779,6 +788,73 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
 .pdf-document-translation-empty { margin: 26px 20px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }
 .pdf-document-translation-empty[hidden] { display: none; }
+
+.pdf-document-translation[data-view-mode="reading"] {
+  left: 0;
+  width: auto;
+  border-left: 0;
+  background: #f3f4f8;
+  box-shadow: none;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-overview,
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-settings {
+  width: min(920px, calc(100vw - 48px));
+  box-sizing: border-box;
+  justify-self: center;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-overview {
+  margin-top: 14px;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-settings {
+  overflow: visible;
+  border: 1px solid #e1e4ec;
+  border-radius: 10px;
+  background: #fff;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-reader > header {
+  display: none;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-pages {
+  padding: 30px 24px 56px;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-page {
+  max-width: 760px;
+  margin-bottom: 20px;
+  padding: 32px 42px 38px;
+  border: 1px solid #e3e5ec;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 10px 30px rgba(29, 38, 57, .055);
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-page > header {
+  margin-bottom: 18px;
+}
+.pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-block {
+  margin-bottom: 15px;
+  font-size: 15px;
+  line-height: 1.9;
+}
+.pdf-document-translation[data-view-mode="source"] {
+  top: 66px;
+  right: 14px;
+  bottom: auto;
+  width: min(560px, calc(100vw - 28px));
+  grid-template-rows: auto;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: transparent;
+  box-shadow: 0 12px 34px rgba(20, 30, 50, .15);
+}
+.pdf-document-translation[data-view-mode="source"] > header {
+  min-height: 54px;
+  border-bottom: 0;
+}
+.pdf-document-translation[data-view-mode="source"] .pdf-document-translation-overview,
+.pdf-document-translation[data-view-mode="source"] .pdf-document-translation-settings,
+.pdf-document-translation[data-view-mode="source"] .pdf-document-translation-reader {
+  display: none;
+}
 .pdf-outline > header {
   display: flex;
   min-height: 42px;
@@ -1482,14 +1558,25 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-viewer { padding-inline: 14px; }
 }
 
-@media (max-width: 560px) {
+@media (max-width: 620px) {
   .pdf-outline { right: 9px; left: 9px; width: auto; }
   .pdf-search {
     right: 9px;
     left: 9px;
     grid-template-columns: 15px minmax(90px, 1fr) minmax(62px, auto) repeat(4, 30px);
   }
-  .pdf-document-translation { top: 54px; width: 100vw; }
+  .pdf-document-translation:not([data-view-mode="source"]) { top: 54px; width: 100vw; }
+  .pdf-document-translation[data-view-mode="source"] { right: 9px; left: 9px; width: auto; }
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-overview,
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-settings {
+    width: calc(100vw - 28px);
+  }
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-pages {
+    padding: 18px 14px 36px;
+  }
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-page {
+    padding: 24px 22px 30px;
+  }
 }
 
 @media (max-width: 460px) {
@@ -1504,6 +1591,14 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .queue-action { width: 32px; min-height: 30px; padding-inline: 0; font-size: 0; }
   .toolbar .queue-action::before { content: "队"; font-size: 10px; }
   .toolbar .queue-action span { margin-left: 2px; font-size: 9px; }
+  .pdf-document-translation > header {
+    grid-template-columns: minmax(0, 1fr) auto 30px;
+    gap: 5px;
+    padding-inline: 10px 7px;
+  }
+  .pdf-document-translation-mark,
+  .pdf-document-translation-title small { display: none; }
+  .pdf-document-translation-view-switch button { padding-inline: 7px; }
 }
 
 @media (max-width: 400px) {
@@ -1535,6 +1630,8 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .toolbar .document-translate { color: #c7d2fe; border-color: #50547e; background: rgba(99, 102, 241, .14); }
   .toolbar .document-translate[aria-expanded="true"] { color: #fff; border-color: #7377dc; background: #5659df; }
   .pdf-document-translation { background: #171e28; box-shadow: -8px 0 24px rgba(0, 0, 0, .3); }
+  .pdf-document-translation[data-view-mode="reading"] { background: #141a23; box-shadow: none; }
+  .pdf-document-translation[data-view-mode="source"] { background: transparent; box-shadow: 0 12px 34px rgba(0, 0, 0, .42); }
   .pdf-document-translation > header { background: rgba(26, 34, 47, .96); }
   .pdf-document-translation > header strong { color: #edf1f7; }
   .pdf-document-translation-mark { border-color: #45466e; background: #282842; }
@@ -1596,6 +1693,7 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
   .pdf-document-translation-ocr[data-tone="error"] .pdf-document-translation-ocr-copy small { color: #ffadb9; }
   .pdf-document-translation-note::before { color: #c7d2fe; background: #292943; }
   .pdf-document-translation-reader > header { border-color: #354052; background: #171e28; }
+  .pdf-document-translation-reader-label { color: #9ba7b8; }
   .pdf-document-translation-view-switch { background: #303947; }
   .pdf-document-translation-view-switch button { color: #9ba7b8; }
   .pdf-document-translation-view-switch button[aria-pressed="true"] {
@@ -1613,6 +1711,18 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
     border-color: #354052;
     background: #1d2634;
     box-shadow: none;
+  }
+  .pdf-document-translation[data-view-mode="compare"] .pdf-document-translation-page {
+    border-color: transparent;
+    background: transparent;
+  }
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-settings,
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-page {
+    border-color: #354052;
+    background: #1d2634;
+  }
+  .pdf-document-translation[data-view-mode="reading"] .pdf-document-translation-page {
+    box-shadow: 0 12px 32px rgba(0, 0, 0, .2);
   }
   .pdf-document-translation-page[data-current] { border-color: #565a91; }
   .pdf-document-translation-block { color: #dde4ef; }

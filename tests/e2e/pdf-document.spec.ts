@@ -178,8 +178,8 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
-    await expect(panel).toHaveAttribute('data-reading-mode', 'current');
-    await expect(panel.locator('#pdf-document-translation-view-current'))
+    await expect(panel).toHaveAttribute('data-view-mode', 'compare');
+    await expect(panel.locator('#pdf-document-translation-view-compare'))
       .toHaveAttribute('aria-pressed', 'true');
     await expect(panel.locator('#pdf-document-translation-settings')).not.toHaveAttribute('open', '');
     await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(1);
@@ -216,10 +216,25 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
       .toBeHidden();
     await panel.locator('#pdf-document-translation-page-previous').click();
     await expect(pdfPage.locator('#page-number')).toHaveValue('1');
-    await panel.locator('#pdf-document-translation-view-continuous').click();
-    await expect(panel).toHaveAttribute('data-reading-mode', 'continuous');
+    await panel.locator('#pdf-document-translation-view-reading').click();
+    await expect(panel).toHaveAttribute('data-view-mode', 'reading');
     await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(2);
     await expect(panel.locator('.pdf-document-translation-page-navigation')).toBeHidden();
+    await expect(pdfPage.locator('#document-stage')).toHaveCSS('margin-right', '0px');
+    const readingSurface = await panel.evaluate((element) => ({
+      width: element.getBoundingClientRect().width,
+      viewportWidth: window.innerWidth,
+      pageWidth: element.querySelector<HTMLElement>('.pdf-document-translation-page')!
+        .getBoundingClientRect().width,
+    }));
+    expect(Math.abs(readingSurface.width - readingSurface.viewportWidth)).toBeLessThanOrEqual(1);
+    expect(readingSurface.pageWidth).toBeLessThanOrEqual(761);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-translation-reading.png'),
+        fullPage: false,
+      });
+    }
     expect(textRequests).toHaveLength(requestsBeforeCopy);
     expect(visionRequests).toHaveLength(visionRequestsBeforeCopy);
     await pdfPage.evaluate(() => {
@@ -371,6 +386,8 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
       '.pdf-page[data-page-number="2"] .region-source-highlight',
     )).toBeVisible();
 
+    await panel.locator('#pdf-document-translation-view-reading').click();
+    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(2);
     await firstTranslation.evaluate((block) => {
       const selection = window.getSelection();
       const range = document.createRange();
@@ -389,11 +406,36 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(pdfPage.locator(
       '.pdf-page[data-page-number="1"] .region-source-highlight',
     )).toBeVisible();
+    await expect(panel).toHaveAttribute('data-view-mode', 'compare');
     expect(textRequests).toHaveLength(requestsBeforePreview + 2);
     expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
       getComputedStyle(stage).marginRight
     ))).not.toBe('0px');
-    await panel.locator('#pdf-document-translation-view-current').click();
+    const requestsBeforeSourceView = textRequests.length;
+    const visionRequestsBeforeSourceView = visionRequests.length;
+    await panel.locator('#pdf-document-translation-view-source').click();
+    await expect(panel).toHaveAttribute('data-view-mode', 'source');
+    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(0);
+    await expect(pdfPage.locator('.pdf-page[data-page-number="1"]')).toBeVisible();
+    await expect(pdfPage.locator('#document-stage')).toHaveCSS('margin-right', '0px');
+    const sourceDock = await panel.evaluate((element) => ({
+      height: element.getBoundingClientRect().height,
+      viewportHeight: window.innerHeight,
+    }));
+    expect(sourceDock.height).toBeLessThan(sourceDock.viewportHeight * .2);
+    expect(textRequests).toHaveLength(requestsBeforeSourceView);
+    expect(visionRequests).toHaveLength(visionRequestsBeforeSourceView);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-translation-source.png'),
+        fullPage: false,
+      });
+    }
+    await panel.locator('#pdf-document-translation-view-compare').click();
+    await expect(panel).toHaveAttribute('data-view-mode', 'compare');
+    expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
+      getComputedStyle(stage).marginRight
+    ))).not.toBe('0px');
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(1);
     const narrowReaderLayout = await panel.locator('#pdf-document-translation-reader > header')
@@ -404,6 +446,12 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
       }));
     expect(narrowReaderLayout.scrollWidth).toBeLessThanOrEqual(narrowReaderLayout.clientWidth + 1);
     expect(narrowReaderLayout.height).toBeGreaterThanOrEqual(40);
+    const narrowWorkspaceHeader = await panel.locator(':scope > header').evaluate((header) => ({
+      clientWidth: header.clientWidth,
+      scrollWidth: header.scrollWidth,
+    }));
+    expect(narrowWorkspaceHeader.scrollWidth)
+      .toBeLessThanOrEqual(narrowWorkspaceHeader.clientWidth + 1);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({
         path: testInfo.outputPath('pdf-full-document-translation.png'),
@@ -2346,10 +2394,14 @@ test('keeps the PDF selection sidebar and full-document panel mutually exclusive
     await expect(pdfPage.locator('#pdf-document-translation-status'))
       .toContainText('已识别 1 段，等待确认');
     expect(textRequests).toHaveLength(requestsAfterSelection);
-    await expect.poll(() => pdfPage.locator('#document-stage').evaluate((stage) => ({
-      selectionSidebar: stage.style.getPropertyValue('--pdf-sidebar-right'),
-      documentSidebar: stage.style.getPropertyValue('--pdf-document-sidebar-right'),
-    }))).toEqual({ selectionSidebar: '0px', documentSidebar: '390px' });
+    await expect.poll(() => pdfPage.evaluate(() => {
+      const stage = document.querySelector<HTMLElement>('#document-stage')!;
+      const panel = document.querySelector<HTMLElement>('#pdf-document-translation')!;
+      const documentSidebar = stage.style.getPropertyValue('--pdf-document-sidebar-right');
+      return stage.style.getPropertyValue('--pdf-sidebar-right') === '0px' &&
+        documentSidebar === `${Math.round(panel.getBoundingClientRect().width)}px` &&
+        Number.parseFloat(documentSidebar) > 0;
+    })).toBe(true);
 
     await selectPdfText();
     await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');

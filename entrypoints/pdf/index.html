@@ -89,6 +89,7 @@
       id="pdf-document-translation"
       class="pdf-document-translation"
       aria-label="PDF 全文翻译"
+      data-view-mode="compare"
       hidden
     >
       <header>
@@ -100,6 +101,26 @@
             <strong>PDF 全文翻译</strong>
             <small id="pdf-document-translation-status" aria-live="polite">准备文档内容…</small>
           </span>
+        </div>
+        <div class="pdf-document-translation-view-switch" role="group" aria-label="PDF 阅读视图">
+          <button
+            id="pdf-document-translation-view-reading"
+            type="button"
+            aria-label="阅读译文"
+            aria-pressed="false"
+          >阅读</button>
+          <button
+            id="pdf-document-translation-view-compare"
+            type="button"
+            aria-label="对照原文与译文"
+            aria-pressed="true"
+          >对照</button>
+          <button
+            id="pdf-document-translation-view-source"
+            type="button"
+            aria-label="只看 PDF 原页"
+            aria-pressed="false"
+          >原页</button>
         </div>
         <button
           id="pdf-document-translation-close"
@@ -247,10 +268,7 @@
       </details>
       <section id="pdf-document-translation-reader" class="pdf-document-translation-reader" aria-label="PDF 译文阅读">
         <header>
-          <div class="pdf-document-translation-view-switch" role="group" aria-label="译文显示方式">
-            <button id="pdf-document-translation-view-current" type="button" aria-pressed="true">当前页</button>
-            <button id="pdf-document-translation-view-continuous" type="button" aria-pressed="false">连续阅读</button>
-          </div>
+          <span class="pdf-document-translation-reader-label">当前页译文</span>
           <nav class="pdf-document-translation-page-navigation" aria-label="译文页码导航">
             <button id="pdf-document-translation-page-previous" type="button" aria-label="上一页译文">‹</button>
             <output id="pdf-document-translation-page-status" aria-live="polite">1 / 1</output>
