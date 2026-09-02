@@ -544,6 +544,10 @@ test('uses one authorized vision model for every block in a PDF containing formu
     expect(unifiedVisionPrompts[0]).toContain('下一连续块原文');
     expect(unifiedVisionPrompts[1]).toContain('上一连续块原文');
     await expect(panel.locator('[data-translation-mode="vision"]')).toHaveCount(2);
+    const proseVisionLabel = await panel
+      .locator('[data-translation-mode="vision"]:not([data-visual-role="formula"])')
+      .evaluate((element) => getComputedStyle(element, '::before').content);
+    expect(proseVisionLabel).not.toContain('多模态译文');
     await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
     const requestsBeforeLayoutExport = {
       text: textRequests.length,
