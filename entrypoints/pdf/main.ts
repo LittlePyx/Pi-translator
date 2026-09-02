@@ -1379,6 +1379,7 @@ function setPdfDocumentTranslationCopyFeedback(message: string, error = false): 
 
 function pdfDocumentTranslationExportResult(
   pageImages: readonly DocumentTranslationExportPageImage[] = [],
+  visualImages: ReadonlyMap<string, { dataUrl: string; alt: string }> = new Map(),
 ) {
   return buildDocumentTranslationExport(
     pdfDocumentTranslationBlocksState.flatMap((block) => block.included
@@ -1388,6 +1389,12 @@ function pdfDocumentTranslationExportResult(
             ? { translatedText: block.translatedText }
             : {}),
           ...(block.referencePreserved ? { sourceOnly: true } : {}),
+          ...(visualImages.get(block.id)
+            ? {
+                sourceImageDataUrl: visualImages.get(block.id)!.dataUrl,
+                sourceImageAlt: visualImages.get(block.id)!.alt,
+              }
+            : {}),
           pageNumber: block.pageNumber,
         }]
       : []),
@@ -1440,6 +1447,38 @@ async function capturePdfDocumentTranslationExportPageImages(
     } catch {
       // A page-image failure must not prevent exporting the completed text.
     }
+  }
+  return images;
+}
+
+async function capturePdfDocumentTranslationMarkdownVisualImages(): Promise<
+  Map<string, { dataUrl: string; alt: string }>
+> {
+  const pdf = pdfDocument;
+  if (!pdf) return new Map();
+  const epoch = documentEpoch;
+  const images = new Map<string, { dataUrl: string; alt: string }>();
+  const visualBlocks = pdfDocumentTranslationBlocksState.filter((block) => (
+    block.included && block.status === 'done' && Boolean(block.translatedText?.trim()) &&
+    (block.kind === 'figure' || block.kind === 'table') &&
+    pdfDocumentTranslationSourceRegions(block).length > 0
+  ));
+  for (const block of visualBlocks) {
+    if (documentEpoch !== epoch || pdfDocument !== pdf) break;
+    try {
+      const capture = await capturePdfDocumentTranslationVisualBlock(pdf, block, {
+        maxEdge: 1_400,
+        maxBytes: 900 * 1_024,
+      });
+      if (documentEpoch !== epoch || pdfDocument !== pdf) break;
+      images.set(block.id, {
+        dataUrl: capture.imageDataUrl,
+        alt: `原 PDF 第 ${block.pageNumber} 页${block.kind === 'table' ? '表格' : '图表'}截图`,
+      });
+    } catch {
+      // A local crop failure must not prevent downloading the completed text.
+    }
+    await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
   }
   return images;
 }
@@ -1673,6 +1712,13 @@ async function handlePdfDocumentTranslationExport(
         printableHtml: await renderPdfDocumentTranslationExportHtml(result.printableHtml),
       };
     }
+    if (action === 'bilingual-markdown') {
+      setPdfDocumentTranslationCopyFeedback('正在本地截取图表并生成双语 Markdown…');
+      result = pdfDocumentTranslationExportResult(
+        [],
+        await capturePdfDocumentTranslationMarkdownVisualImages(),
+      );
+    }
     const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
     const partialLabel = result.complete
       ? ''
@@ -1691,7 +1737,9 @@ async function handlePdfDocumentTranslationExport(
       message = action === 'translation-markdown'
         ? '已下载纯译文 Markdown'
         : action === 'bilingual-markdown'
-          ? '已下载双语 Markdown'
+          ? `已下载图文双语 Markdown${result.embeddedImageCount
+            ? ` · ${result.embeddedImageCount} 张图表截图`
+            : ' · 未检测到可嵌入图表'}`
           : '已下载带原页图的可打印 HTML';
       message += pageLabel;
     }
@@ -2554,6 +2602,7 @@ async function capturePdfDocumentTranslationOcrPage(
 async function capturePdfDocumentTranslationVisualBlock(
   pdf: PDFDocumentProxy,
   block: PdfDocumentTranslationRuntimeBlock,
+  options: { maxEdge?: number; maxBytes?: number } = {},
 ): Promise<{
   imageDataUrl: string;
   imageWidth: number;
@@ -2593,6 +2642,7 @@ async function capturePdfDocumentTranslationVisualBlock(
     canvas,
     { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
     regions,
+    options,
   );
   return {
     imageDataUrl: capture.dataUrl,

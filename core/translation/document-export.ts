@@ -3,6 +3,9 @@ export interface DocumentTranslationExportBlock {
   translatedText?: string;
   pageNumber?: number;
   sourceOnly?: boolean;
+  /** Trusted local crop embedded only in the downloadable bilingual Markdown. */
+  sourceImageDataUrl?: string;
+  sourceImageAlt?: string;
 }
 
 export interface DocumentTranslationExport {
@@ -16,6 +19,7 @@ export interface DocumentTranslationExport {
   unavailablePageCount: number;
   contentTruncated: boolean;
   pageCount: number;
+  embeddedImageCount: number;
   complete: boolean;
 }
 
@@ -49,6 +53,12 @@ function cleanExportText(value: string): string {
 
 function markdownBlockquote(value: string): string {
   return value.split('\n').map((line) => line ? `> ${line}` : '>').join('\n');
+}
+
+const TRUSTED_LOCAL_IMAGE = /^data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+$/u;
+
+function markdownImageAlt(value: string): string {
+  return value.replace(/[\[\]\\\r\n]+/gu, ' ').replace(/\s+/gu, ' ').trim();
 }
 
 function escapeHtml(value: string): string {
@@ -190,6 +200,12 @@ export function buildDocumentTranslationExport(
         ? { pageNumber: block.pageNumber }
         : {}),
       ...(block.sourceOnly === true ? { sourceOnly: true } : {}),
+      ...(block.sourceImageDataUrl && TRUSTED_LOCAL_IMAGE.test(block.sourceImageDataUrl)
+        ? {
+            sourceImageDataUrl: block.sourceImageDataUrl,
+            sourceImageAlt: markdownImageAlt(block.sourceImageAlt ?? '') || '原文图表截图',
+          }
+        : {}),
     }];
   });
   const completed = normalized.flatMap((block) => block.translatedText
@@ -208,6 +224,7 @@ export function buildDocumentTranslationExport(
   const pages = new Set(completed.flatMap((block) => (
     block.pageNumber === undefined ? [] : [block.pageNumber]
   )));
+  const embeddedImageCount = completed.filter((block) => block.sourceImageDataUrl).length;
   const bilingualParts: string[] = [];
   const translationParts: string[] = [];
   let previousPage: number | undefined;
@@ -218,9 +235,12 @@ export function buildDocumentTranslationExport(
       previousPage = block.pageNumber;
     }
     translationParts.push(block.translatedText);
-    bilingualParts.push(block.sourceOnly
+    const bilingualText = block.sourceOnly
       ? block.sourceText
-      : `${block.sourceText}\n\n${markdownBlockquote(block.translatedText)}`);
+      : `${block.sourceText}\n\n${markdownBlockquote(block.translatedText)}`;
+    bilingualParts.push(block.sourceImageDataUrl
+      ? `![${block.sourceImageAlt}](${block.sourceImageDataUrl})\n\n${bilingualText}`
+      : bilingualText);
   }
   if (!complete && completed.length && totalBlockCount) {
     const notice = partialMarkdownNotice(
@@ -250,6 +270,7 @@ export function buildDocumentTranslationExport(
     unavailablePageCount,
     contentTruncated,
     pageCount: pages.size,
+    embeddedImageCount,
     complete,
   };
 }

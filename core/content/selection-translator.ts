@@ -2318,6 +2318,7 @@ async function startSelectionTranslatorInstance(
           unavailablePageCount: 0,
           contentTruncated: false,
           pageCount: 0,
+          embeddedImageCount: 0,
           complete: false,
         } },
       });

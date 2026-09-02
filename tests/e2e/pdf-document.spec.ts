@@ -807,6 +807,27 @@ test('translates a formula-bearing full-width figure caption above two columns',
     await expect(highlight).toBeVisible();
     const highlightBounds = await highlight.boundingBox();
     expect(highlightBounds?.width).toBeGreaterThan(400);
+    const textRequestsBeforeExport = textRequests.length;
+    const visionRequestsBeforeExport = visionRequests.length;
+    const panel = pdfPage.locator('#pdf-document-translation');
+    const copyMenu = panel.locator('#pdf-document-translation-copy-menu');
+    await copyMenu.locator(':scope > summary').click();
+    const downloadPromise = pdfPage.waitForEvent('download');
+    await panel.locator('#pdf-document-translation-download-bilingual').click();
+    const download = await downloadPromise;
+    expect(download.suggestedFilename()).toBe('pi-translator-pdf-bilingual.md');
+    const downloadPath = await download.path();
+    expect(downloadPath).toBeTruthy();
+    const markdown = (await readFile(downloadPath!, 'utf8')).replace(/^\uFEFF/u, '');
+    expect(markdown).toMatch(
+      /!\[原 PDF 第 1 页图表截图\]\(data:image\/(?:png|jpeg);base64,[A-Za-z0-9+/=]+\)/u,
+    );
+    expect(markdown).toContain('Figure 2. Illustration of our proposed ISTA-Net framework.');
+    expect(markdown).toContain('> 图 2：所提出的 ISTA-Net 框架示意图');
+    await expect(panel.locator('#pdf-document-translation-copy-feedback'))
+      .toContainText('1 张图表截图');
+    expect(textRequests).toHaveLength(textRequestsBeforeExport);
+    expect(visionRequests).toHaveLength(visionRequestsBeforeExport);
   } finally {
     await pdfPage.close();
   }

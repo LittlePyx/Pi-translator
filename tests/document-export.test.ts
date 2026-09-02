@@ -27,6 +27,7 @@ describe('document translation export', () => {
       unavailablePageCount: 0,
       contentTruncated: false,
       pageCount: 0,
+      embeddedImageCount: 0,
       complete: false,
     });
     expect(result.translationMarkdown).toContain('部分结果：已完成 2/4 段');
@@ -114,6 +115,32 @@ describe('document translation export', () => {
     expect(result.printableHtml).not.toContain('onload');
   });
 
+  it('embeds trusted visual crops in bilingual Markdown without bloating pure translation', () => {
+    const result = buildDocumentTranslationExport([{
+      pageNumber: 6,
+      sourceText: 'Figure 6. PSNR comparison.',
+      translatedText: '图 6：PSNR 对比。',
+      sourceImageDataUrl: 'data:image/png;base64,AA==',
+      sourceImageAlt: '原 PDF 第 6 页图表截图',
+    }, {
+      pageNumber: 6,
+      sourceText: 'Unsafe figure.',
+      translatedText: '不安全图像。',
+      sourceImageDataUrl: 'data:image/svg+xml,<svg onload=alert(1)>',
+      sourceImageAlt: 'bad](javascript:alert(1))',
+    }]);
+
+    expect(result.embeddedImageCount).toBe(1);
+    expect(result.bilingualMarkdown).toContain(
+      '![原 PDF 第 6 页图表截图](data:image/png;base64,AA==)',
+    );
+    expect(result.bilingualMarkdown).toContain('Figure 6. PSNR comparison.');
+    expect(result.bilingualMarkdown).toContain('> 图 6：PSNR 对比。');
+    expect(result.translationMarkdown).not.toContain('data:image');
+    expect(result.bilingualMarkdown).not.toContain('svg+xml');
+    expect(result.bilingualMarkdown).not.toContain('javascript:');
+  });
+
   it('returns an empty export when no translation is complete', () => {
     expect(buildDocumentTranslationExport([
       { sourceText: 'Pending.' },
@@ -127,6 +154,7 @@ describe('document translation export', () => {
       unavailablePageCount: 0,
       contentTruncated: false,
       pageCount: 0,
+      embeddedImageCount: 0,
       complete: false,
     });
   });
