@@ -698,6 +698,12 @@ button { color: inherit; font: inherit; cursor: pointer; }
 .pdf-document-translation-block[data-note-role="footnote"][data-source-anchor][data-status="done"] {
   padding-top: 8px;
 }
+.pdf-document-translation-block[data-reference-role="source"] {
+  margin-bottom: 6px;
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.6;
+}
 .pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
 .pdf-document-translation-block[data-status="error"] { color: #b42336; }
 .pdf-document-translation-block[data-object-role] {

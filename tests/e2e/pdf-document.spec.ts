@@ -1298,6 +1298,61 @@ test('restores explicitly retained PDF progress after session loss and translate
   }
 });
 
+test('keeps bibliography entries original without sending them for translation', async () => {
+  const sourceUrl = 'https://www.overleaf.com/pdf-original-bibliography.pdf';
+  const bodyText = 'The paper body should still be translated.';
+  const referenceText = '[12] A. Author. An Exact Paper Title. CVPR, 2026.';
+  await context.route(sourceUrl, async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: 'application/pdf',
+      body: createMultiPageTextPdf([
+        { text: bodyText },
+        { text: 'References' },
+        { text: referenceText },
+      ]),
+    });
+  });
+  const readerUrl = new URL(`chrome-extension://${extensionId}/pdf.html`);
+  readerUrl.searchParams.set('url', sourceUrl);
+  const pdfPage = await context.newPage();
+  const requestStart = textRequests.length;
+  const visionRequestStart = visionRequests.length;
+  try {
+    await pdfPage.goto(readerUrl.href);
+    await expect(pdfPage.locator('#page-count')).toHaveText('3');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-range-feedback'))
+      .toContainText('参考文献 1 段保留原文');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toContainText('1 段参考文献保留原文且不发送请求');
+
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 3/3');
+    expect(textRequests).toHaveLength(requestStart + 1);
+    expect(visionRequests).toHaveLength(visionRequestStart);
+    const messages = textRequests.at(-1)!.messages as Array<{ role?: string; content?: string }>;
+    const content = messages.find((message) => message.role === 'user')?.content;
+    const payload = JSON.parse(content!) as { segments: Array<{ text: string }> };
+    expect(payload.segments.map((segment) => segment.text)).toEqual([
+      bodyText,
+      'References',
+    ]);
+
+    const referenceCard = pdfPage.locator('[data-reference-role="source"]');
+    await expect(referenceCard).toHaveCount(1);
+    await expect(referenceCard).toHaveText(referenceText);
+    await expect(referenceCard).toHaveAttribute(
+      'title',
+      /按原文保留，未发送翻译请求/,
+    );
+  } finally {
+    await pdfPage.close();
+    await context.unroute(sourceUrl);
+  }
+});
+
 test('limits PDF document translation by pages and recognized back matter', async ({}, testInfo) => {
   const sourceUrl = 'https://www.overleaf.com/pdf-document-range.pdf';
   const bodyText = 'The main paper body remains inside the selected translation range.';

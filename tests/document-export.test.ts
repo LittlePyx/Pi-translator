@@ -72,6 +72,25 @@ describe('document translation export', () => {
     expect(result.printableHtml).toContain('完整结果 · 3 段');
   });
 
+  it('keeps source-only bibliography entries once in bilingual exports', () => {
+    const reference = '[12] A. Author. An Exact Paper Title. CVPR, 2026.';
+    const result = buildDocumentTranslationExport([
+      { sourceText: 'References', translatedText: '参考文献', pageNumber: 8 },
+      {
+        sourceText: reference,
+        translatedText: reference,
+        pageNumber: 8,
+        sourceOnly: true,
+      },
+    ]);
+
+    expect(result.translationText).toContain(reference);
+    expect(result.bilingualMarkdown.match(/An Exact Paper Title/gu)).toHaveLength(1);
+    expect(result.printableHtml.match(/An Exact Paper Title/gu)).toHaveLength(1);
+    expect(result.printableHtml).toContain('class="pair source-only"');
+    expect(result).toMatchObject({ complete: true, blockCount: 2, missingBlockCount: 0 });
+  });
+
   it('embeds trusted local PDF page images beside bilingual printable content', () => {
     const result = buildDocumentTranslationExport([{
       pageNumber: 2,

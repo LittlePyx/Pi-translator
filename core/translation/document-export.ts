@@ -2,6 +2,7 @@ export interface DocumentTranslationExportBlock {
   sourceText: string;
   translatedText?: string;
   pageNumber?: number;
+  sourceOnly?: boolean;
 }
 
 export interface DocumentTranslationExport {
@@ -88,7 +89,12 @@ function partialMarkdownNotice(
 }
 
 function buildPrintableHtml(
-  blocks: readonly { sourceText: string; translatedText: string; pageNumber?: number }[],
+  blocks: readonly {
+    sourceText: string;
+    translatedText: string;
+    pageNumber?: number;
+    sourceOnly?: boolean;
+  }[],
   completed: number,
   total: number,
   unavailablePages: number,
@@ -127,7 +133,9 @@ function buildPrintableHtml(
       closePage();
       previousPage = undefined;
     }
-    content.push(`<section class="pair"><div class="source">${escapeHtml(block.sourceText)}</div><div class="translation">${escapeHtml(block.translatedText)}</div></section>`);
+    content.push(block.sourceOnly
+      ? `<section class="pair source-only"><div class="source">${escapeHtml(block.sourceText)}</div></section>`
+      : `<section class="pair"><div class="source">${escapeHtml(block.sourceText)}</div><div class="translation">${escapeHtml(block.translatedText)}</div></section>`);
   }
   closePage();
   const status = complete
@@ -151,7 +159,7 @@ function buildPrintableHtml(
     header{margin-bottom:34px;padding-bottom:18px;border-bottom:1px solid #dfe4ec}
     h1{margin:0;color:#302d85;font-size:26px;letter-spacing:-.02em}header p{margin:8px 0 0;color:${complete ? '#667085' : '#9a6416'};font-size:13px}
     h2{margin:34px 0 12px;color:#6764cc;font-size:14px}.page-bundle{break-before:page}.page-bundle:first-of-type{break-before:auto}.page-layout{display:grid;grid-template-columns:minmax(280px,.88fr) minmax(0,1.12fr);align-items:start;gap:28px}.page-layout.text-only{display:block}.source-page{position:sticky;top:18px;margin:0;padding:10px;border:1px solid #dfe4ec;border-radius:10px;background:#f7f8fb}.source-page img{display:block;width:100%;height:auto}.source-page figcaption{margin-top:7px;color:#7b8494;font-size:10px;text-align:center}.pair{break-inside:avoid;margin:0 0 24px;padding:0 0 0 15px;border-left:2px solid #716de0}
-    .source,.translation{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.72}.source{color:#667085;font-size:13px}.translation{margin-top:7px;color:#1f2937;font-size:15px}
+    .source,.translation{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.72}.source{color:#667085;font-size:13px}.translation{margin-top:7px;color:#1f2937;font-size:15px}.source-only .source{color:#364152;font-size:13.5px}
     footer{margin-top:42px;padding-top:14px;border-top:1px solid #e5e8ee;color:#8a94a3;font-size:11px}
     @media(max-width:820px){body{padding:28px 20px 48px}.page-layout{display:block}.source-page{position:static;margin-bottom:22px}.pair{padding-left:11px}}
     @media print{body{max-width:none;padding:0}header{margin-bottom:24px}.page-layout{grid-template-columns:minmax(0,42fr) minmax(0,58fr);gap:18px}.source-page{position:static;padding:6px}.pair{break-inside:avoid}footer{color:#6b7280}}
@@ -180,6 +188,7 @@ export function buildDocumentTranslationExport(
       ...(Number.isSafeInteger(block.pageNumber) && (block.pageNumber ?? 0) > 0
         ? { pageNumber: block.pageNumber }
         : {}),
+      ...(block.sourceOnly === true ? { sourceOnly: true } : {}),
     }];
   });
   const completed = normalized.flatMap((block) => block.translatedText
@@ -208,7 +217,9 @@ export function buildDocumentTranslationExport(
       previousPage = block.pageNumber;
     }
     translationParts.push(block.translatedText);
-    bilingualParts.push(`${block.sourceText}\n\n${markdownBlockquote(block.translatedText)}`);
+    bilingualParts.push(block.sourceOnly
+      ? block.sourceText
+      : `${block.sourceText}\n\n${markdownBlockquote(block.translatedText)}`);
   }
   if (!complete && completed.length && totalBlockCount) {
     const notice = partialMarkdownNotice(

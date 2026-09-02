@@ -47,6 +47,19 @@ export function classifyPdfDocumentTranslationSections(
   });
 }
 
+/**
+ * Bibliographic entries are identifiers rather than prose: translating a paper
+ * title can make it harder to search, and author, venue, DOI, and URL fields
+ * must stay exact. The section heading itself remains translatable.
+ */
+export function pdfDocumentTranslationReferenceEntryStaysOriginal(
+  text: string,
+  section: PdfDocumentTranslationSection,
+): boolean {
+  return section === 'references' &&
+    pdfDocumentTranslationSectionHeading(text) !== 'references';
+}
+
 function rangeSummary(pages: readonly number[]): string {
   const ranges: string[] = [];
   let start = pages[0]!;

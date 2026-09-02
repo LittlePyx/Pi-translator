@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   classifyPdfDocumentTranslationSections,
   parsePdfDocumentPageRange,
+  pdfDocumentTranslationReferenceEntryStaysOriginal,
   pdfDocumentTranslationSectionHeading,
 } from '../core/pdf/document-translation-range';
 
@@ -64,5 +65,24 @@ describe('PDF document translation section detection', () => {
       'references',
       'references',
     ]);
+  });
+
+  it('preserves bibliography entries but still translates the section heading', () => {
+    expect(pdfDocumentTranslationReferenceEntryStaysOriginal(
+      'References',
+      'references',
+    )).toBe(false);
+    expect(pdfDocumentTranslationReferenceEntryStaysOriginal(
+      '[12] A. Author. An Exact Paper Title. CVPR, 2026.',
+      'references',
+    )).toBe(true);
+    expect(pdfDocumentTranslationReferenceEntryStaysOriginal(
+      'A reference to prior work appears in this body paragraph.',
+      'body',
+    )).toBe(false);
+    expect(pdfDocumentTranslationReferenceEntryStaysOriginal(
+      'Appendix A: Proofs',
+      'appendix',
+    )).toBe(false);
   });
 });

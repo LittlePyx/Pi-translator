@@ -89,6 +89,7 @@ import {
 import {
   classifyPdfDocumentTranslationSections,
   parsePdfDocumentPageRange,
+  pdfDocumentTranslationReferenceEntryStaysOriginal,
   type PdfDocumentTranslationSection,
 } from '../../core/pdf/document-translation-range';
 import {
@@ -448,6 +449,7 @@ interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock
   singleRetry?: boolean;
   visualFallbackMessage?: string;
   visualProcessed?: boolean;
+  referencePreserved?: boolean;
 }
 
 let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
@@ -762,11 +764,15 @@ function scopedPdfDocumentTranslationBlocks(): PdfDocumentTranslationRuntimeBloc
 }
 
 function pdfDocumentTranslationFormulaBlocks(): PdfDocumentTranslationRuntimeBlock[] {
-  return pdfDocumentTranslationBlocksState.filter(pdfDocumentTranslationBlockContainsFormula);
+  return pdfDocumentTranslationBlocksState.filter((block) => (
+    !block.referencePreserved && pdfDocumentTranslationBlockContainsFormula(block)
+  ));
 }
 
 function pdfDocumentTranslationFormulaBlocksInScope(): PdfDocumentTranslationRuntimeBlock[] {
-  return scopedPdfDocumentTranslationBlocks().filter(pdfDocumentTranslationBlockContainsFormula);
+  return scopedPdfDocumentTranslationBlocks().filter((block) => (
+    !block.referencePreserved && pdfDocumentTranslationBlockContainsFormula(block)
+  ));
 }
 
 function pdfDocumentTranslationVisualPurpose(
@@ -778,7 +784,9 @@ function pdfDocumentTranslationVisualPurpose(
 
 function pdfDocumentTranslationVisualObjectsInScope(): PdfDocumentTranslationRuntimeBlock[] {
   return scopedPdfDocumentTranslationBlocks().filter(
-    (block) => block.kind === 'figure' || block.kind === 'table',
+    (block) => !block.referencePreserved && (
+      block.kind === 'figure' || block.kind === 'table'
+    ),
   );
 }
 
@@ -790,7 +798,7 @@ function pdfDocumentTranslationUsesUnifiedVision(): boolean {
 function pdfDocumentTranslationBlockUsesVision(
   block: PdfDocumentTranslationRuntimeBlock,
 ): boolean {
-  return pdfDocumentTranslationMultimodalEnabled &&
+  return !block.referencePreserved && pdfDocumentTranslationMultimodalEnabled &&
     pdfDocumentTranslationMultimodalAuthorized && (
       pdfDocumentTranslationUsesUnifiedVision() ||
       pdfDocumentTranslationVisualPurpose(block) !== 'document'
@@ -829,13 +837,14 @@ function pdfDocumentTranslationScopeFeedback(): string {
         pdfDocumentTranslationPageInRange(block.pageNumber) && block.section === 'appendix'
       )).length
     : 0;
+  const preservedReferences = scoped.filter((block) => block.referencePreserved).length;
   const skipped = [
     skippedReferences ? `参考文献 ${skippedReferences} 段` : '',
     skippedAppendix ? `附录 ${skippedAppendix} 段` : '',
   ].filter(Boolean);
   return `${baseLabel} · ${selectedPages} 页 / ${scoped.length} 段${
     skipped.length ? ` · 已跳过${skipped.join('、')}` : ''
-  }`;
+  }${preservedReferences ? ` · 参考文献 ${preservedReferences} 段保留原文` : ''}`;
 }
 
 function currentPdfDocumentTranslationSessionContext():
@@ -855,7 +864,7 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-semantic-visual-objects-v7',
+      'pdf-semantic-visual-objects-v8',
       pdfDocumentTranslationUsesUnifiedVision()
         ? 'unified-vision'
         : pdfDocumentTranslationMultimodalEnabled &&
@@ -1157,6 +1166,16 @@ function syncPdfDocumentTranslationUi(): void {
   const documentFormulaBlocks = pdfDocumentTranslationFormulaBlocks();
   const formulaBlocksInScope = pdfDocumentTranslationFormulaBlocksInScope();
   const visualObjectsInScope = pdfDocumentTranslationVisualObjectsInScope();
+  const preservedReferencesInScope = scopedPdfDocumentTranslationBlocks().filter(
+    (block) => block.referencePreserved,
+  ).length;
+  const requestableBlocksInScope = Math.max(0, total - preservedReferencesInScope);
+  const referencePreservationNote = preservedReferencesInScope
+    ? `；${preservedReferencesInScope} 段参考文献保留原文且不发送请求`
+    : '';
+  const referenceDetail = preservedReferencesInScope
+    ? '参考文献条目按原文保留且不发送翻译请求。'
+    : '';
   const figureObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'figure');
   const tableObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'table');
   const usesUnifiedVision = pdfDocumentTranslationUsesUnifiedVision();
@@ -1224,13 +1243,13 @@ function syncPdfDocumentTranslationUi(): void {
     translated > 0;
   documentTranslationMultimodalStatus.textContent = pdfDocumentTranslationMultimodalEnabled
     ? usesUnifiedVision
-      ? `文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${total} 段统一使用视觉模型，预计 ${total} 次视觉请求`
+      ? `文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${requestableBlocksInScope} 段统一使用视觉模型，预计 ${requestableBlocksInScope} 次视觉请求${referencePreservationNote}`
       : unreadablePagesInScope.length
         ? `点击开始后识别 ${unreadablePagesInScope.length} 个扫描页；若发现公式，当前范围全部段落改用视觉模型`
         : visualObjectsInScope.length
-          ? `普通正文使用文字接口；${figureObjectsInScope.length ? `${figureObjectsInScope.length} 个图表` : ''}${figureObjectsInScope.length && tableObjectsInScope.length ? '、' : ''}${tableObjectsInScope.length ? `${tableObjectsInScope.length} 个表格` : ''}将整块使用视觉模型，预计 ${visualObjectsInScope.length} 次视觉请求`
-          : '文档未检测到公式、图表或表格对象；普通正文使用文字接口'
-    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${visualObjectsInScope.length ? '图表与表格不会发送图像，只保留合并后的文字结构；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口`;
+          ? `普通正文使用文字接口；${figureObjectsInScope.length ? `${figureObjectsInScope.length} 个图表` : ''}${figureObjectsInScope.length && tableObjectsInScope.length ? '、' : ''}${tableObjectsInScope.length ? `${tableObjectsInScope.length} 个表格` : ''}将整块使用视觉模型，预计 ${visualObjectsInScope.length} 次视觉请求${referencePreservationNote}`
+          : `文档未检测到公式、图表或表格对象；普通正文使用文字接口${referencePreservationNote}`
+    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${visualObjectsInScope.length ? '图表与表格不会发送图像，只保留合并后的文字结构；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口${referencePreservationNote}`;
   const defaultStatus = pdfDocumentTranslationPhase === 'idle'
     ? '尚未读取正文'
     : pdfDocumentTranslationPhase === 'preparing'
@@ -1336,12 +1355,12 @@ function syncPdfDocumentTranslationUi(): void {
     ? ` ${visualFallbackCount} 段视觉结果未通过校验，已安全保留原文。`
     : '';
   documentTranslationNote.textContent = pdfDocumentTranslationUnreadablePages
-    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部段落统一使用视觉模型。${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
+    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部可翻译段落统一使用视觉模型。${referenceDetail}${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
     : usesUnifiedVision
-      ? `文档含公式，当前范围全部段落统一使用视觉模型，以保持术语、语气和公式处理一致。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
+      ? `文档含公式，当前范围全部可翻译段落统一使用视觉模型，以保持术语、语气和公式处理一致。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
       : visualObjectsInScope.length && pdfDocumentTranslationMultimodalEnabled
-        ? `普通正文使用文字接口；图表与表格按完整对象各发送一次图像，避免把刻度、图例或单元格拆成零散译文。${retentionNote}原始 PDF 始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 点击对象译文可返回并高亮整块原文。`
-        : `文档未检测到需要整块视觉处理的公式、图表或表格，普通正文使用文字接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
+        ? `普通正文使用文字接口；图表与表格按完整对象各发送一次图像，避免把刻度、图例或单元格拆成零散译文。${referenceDetail}${retentionNote}原始 PDF 始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 点击对象译文可返回并高亮整块原文。`
+        : `文档未检测到需要整块视觉处理的公式、图表或表格，普通正文使用文字接口。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
   syncPdfDocumentTranslationCurrentPage();
 }
 
@@ -1368,6 +1387,7 @@ function pdfDocumentTranslationExportResult(
           ...(block.status === 'done' && block.translatedText
             ? { translatedText: block.translatedText }
             : {}),
+          ...(block.referencePreserved ? { sourceOnly: true } : {}),
           pageNumber: block.pageNumber,
         }]
       : []),
@@ -1933,6 +1953,8 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
   }
   if (block.kind === 'footnote') container.dataset.noteRole = 'footnote';
   else delete container.dataset.noteRole;
+  if (block.referencePreserved) container.dataset.referenceRole = 'source';
+  else delete container.dataset.referenceRole;
   const sourceAvailable = Boolean(
     pdfDocumentTranslationSourceRegions(block).length && block.status === 'done',
   );
@@ -1958,7 +1980,9 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     delete container.dataset.translationMode;
     delete container.dataset.visualRole;
   }
-  if (sourceAvailable && block.visualProcessed) {
+  if (sourceAvailable && block.referencePreserved) {
+    container.title = '参考文献条目按原文保留，未发送翻译请求；点击返回并高亮原文';
+  } else if (sourceAvailable && block.visualProcessed) {
     const purpose = pdfDocumentTranslationVisualPurpose(block);
     container.title = block.kind === 'footnote'
       ? '脚注已完整翻译；点击返回并高亮整条脚注'
@@ -2405,6 +2429,10 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         occurrence,
       ),
       section: sections[index] ?? 'body',
+      ...(pdfDocumentTranslationReferenceEntryStaysOriginal(
+        block.text,
+        sections[index] ?? 'body',
+      ) ? { referencePreserved: true } : {}),
       included: true,
       status: 'idle' as const,
     };
@@ -2625,6 +2653,11 @@ function addPdfDocumentTranslationOcrPage(
   const sections = classifyPdfDocumentTranslationSections(pdfDocumentTranslationBlocksState);
   pdfDocumentTranslationBlocksState.forEach((block, index) => {
     block.section = sections[index] ?? 'body';
+    if (pdfDocumentTranslationReferenceEntryStaysOriginal(block.text, block.section)) {
+      block.referencePreserved = true;
+    } else {
+      delete block.referencePreserved;
+    }
     block.included = pdfDocumentTranslationBlockInScope(block);
   });
   rebuildPdfDocumentTranslationResults();
@@ -3195,6 +3228,19 @@ function closePdfDocumentTranslation(
   if (options.restoreFocus !== false) translateDocument.focus({ preventScroll: true });
 }
 
+function preservePdfDocumentTranslationReferenceEntries(): void {
+  for (const block of pdfDocumentTranslationBlocksState) {
+    if (!block.included || !block.referencePreserved || block.status !== 'idle') continue;
+    block.status = 'done';
+    block.translatedText = block.text;
+    delete block.errorMessage;
+    delete block.singleRetry;
+    delete block.visualFallbackMessage;
+    delete block.visualProcessed;
+    renderPdfDocumentTranslationBlock(block);
+  }
+}
+
 async function startOrTogglePdfDocumentTranslation(): Promise<void> {
   if (pdfDocumentTranslationOcrRunning) return;
   if (pdfDocumentTranslationPhase === 'running') {
@@ -3229,6 +3275,7 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
       if (!scopedPdfDocumentTranslationBlocks().length) return;
     }
   }
+  preservePdfDocumentTranslationReferenceEntries();
   pdfDocumentTranslationPhase = 'running';
   pdfDocumentTranslationMessage = undefined;
   documentTranslationSettings.open = false;
