@@ -833,6 +833,23 @@ test('joins a sentence that crosses columns and a full-width region into one vis
     const cards = pdfPage.locator('#pdf-document-translation-pages [data-translation-block]');
     await expect(cards).toHaveCount(1);
     await expect(cards).toHaveAttribute('data-translation-mode', 'vision');
+    await cards.click();
+    const sourceHighlights = pdfPage.locator(
+      '.pdf-page[data-page-number="1"] .region-source-highlight',
+    );
+    await expect(sourceHighlights).toHaveCount(3);
+    const highlightTops = await sourceHighlights.evaluateAll((highlights) => (
+      highlights.map((highlight) => highlight.getBoundingClientRect().top)
+    ));
+    expect(highlightTops).toEqual([...highlightTops].sort((left, right) => left - right));
+    const highlightVisibility = await sourceHighlights.evaluateAll((highlights) => {
+      const stage = document.querySelector<HTMLElement>('#document-stage')!.getBoundingClientRect();
+      return highlights.map((highlight) => {
+        const rect = highlight.getBoundingClientRect();
+        return rect.top >= stage.top - 1 && rect.bottom <= stage.bottom + 1;
+      });
+    });
+    expect(highlightVisibility).toEqual([true, true, true]);
 
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await writeFile(

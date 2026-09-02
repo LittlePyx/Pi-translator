@@ -562,12 +562,12 @@ interface ActiveRegionSelection {
 }
 
 let activeRegion: ActiveRegionSelection | undefined;
-let sourceRegionHighlight: HTMLElement | undefined;
+let sourceRegionHighlights: HTMLElement[] = [];
 let sourceRegionHighlightTimer: ReturnType<typeof setTimeout> | undefined;
 
 function clearSourceRegionHighlight(): void {
-  sourceRegionHighlight?.remove();
-  sourceRegionHighlight = undefined;
+  for (const highlight of sourceRegionHighlights) highlight.remove();
+  sourceRegionHighlights = [];
   if (sourceRegionHighlightTimer) clearTimeout(sourceRegionHighlightTimer);
   sourceRegionHighlightTimer = undefined;
 }
@@ -1704,22 +1704,27 @@ function updatePdfDocumentTranslationPageProgress(pageNumber: number): void {
 function pdfDocumentTranslationSourceLocation(
   block: PdfDocumentTranslationRuntimeBlock,
 ): PdfSourceLocation | undefined {
-  const region = pdfDocumentTranslationSourceRegions(block)[0];
-  if (!region) return undefined;
-  return {
+  return pdfDocumentTranslationSourceLocations(block)[0];
+}
+
+function pdfDocumentTranslationSourceLocations(
+  block: PdfDocumentTranslationRuntimeBlock,
+): PdfSourceLocation[] {
+  return pdfDocumentTranslationSourceRegions(block).map((region) => ({
     documentId: currentDocumentSessionId,
     pageNumber: region.pageNumber,
     ...region.sourceAnchor,
-  };
+  }));
 }
 
 function activatePdfDocumentTranslationSource(
   block: PdfDocumentTranslationRuntimeBlock,
 ): void {
   if (block.status !== 'done') return;
-  const reference = pdfDocumentTranslationSourceLocation(block);
+  const references = pdfDocumentTranslationSourceLocations(block);
+  const reference = references[0];
   if (!reference) return;
-  void navigateToPdfRegion(reference).then(() => {
+  void navigateToPdfRegions(references).then(() => {
     updatePageControl({ pageNumber: block.pageNumber, ratio: reference.topRatio });
     syncPdfDocumentTranslationCurrentPage(block.pageNumber);
   });
@@ -5598,6 +5603,27 @@ function regionFromSourceLocation(
   );
 }
 
+function scrollPdfSourceLocationsIntoView(
+  references: readonly PdfSourceLocation[],
+  pageElement: HTMLElement,
+): void {
+  const pageNumber = Number(pageElement.dataset.pageNumber);
+  const samePage = references.filter((reference) => reference.pageNumber === pageNumber);
+  if (!samePage.length) return;
+  const pageHeight = pageElement.offsetHeight;
+  const top = Math.min(...samePage.map((reference) => reference.topRatio)) * pageHeight;
+  const bottom = Math.max(...samePage.map((reference) => (
+    reference.topRatio + reference.heightRatio
+  ))) * pageHeight;
+  const envelopeHeight = Math.max(0, bottom - top);
+  const viewportHeight = stage.clientHeight;
+  const padding = 12;
+  const targetOffset = envelopeHeight <= Math.max(0, viewportHeight - padding * 2)
+    ? top - (viewportHeight - envelopeHeight) / 2
+    : top - padding;
+  stage.scrollTop = Math.max(0, pageElement.offsetTop + targetOffset);
+}
+
 function pdfMarkerRects(reference: PdfSourceLocation): Array<{
   top: number;
   right: number;
@@ -5639,26 +5665,40 @@ async function restorePdfRegionSelection(reference: PdfSourceLocation): Promise<
 }
 
 async function navigateToPdfRegion(reference: PdfSourceLocation): Promise<void> {
+  await navigateToPdfRegions([reference]);
+}
+
+async function navigateToPdfRegions(references: readonly PdfSourceLocation[]): Promise<void> {
+  const first = references[0];
+  if (!first) return;
   const pageElement = await pageForSourceLocation({
-    ...reference,
+    ...first,
     documentId: currentDocumentSessionId,
   });
   if (!pageElement) return;
   clearSourceRegionHighlight();
-  const region = regionFromSourceLocation(reference, pageElement);
-  const highlight = document.createElement('div');
-  highlight.className = 'region-source-highlight';
-  highlight.style.left = `${region.left}px`;
-  highlight.style.top = `${region.top}px`;
-  highlight.style.width = `${region.width}px`;
-  highlight.style.height = `${region.height}px`;
-  highlight.setAttribute('aria-hidden', 'true');
-  pageElement.append(highlight);
-  sourceRegionHighlight = highlight;
+  const highlights = references
+    .filter((reference) => reference.pageNumber === first.pageNumber)
+    .map((reference) => {
+      const region = regionFromSourceLocation(reference, pageElement);
+      const highlight = document.createElement('div');
+      highlight.className = 'region-source-highlight';
+      highlight.style.left = `${region.left}px`;
+      highlight.style.top = `${region.top}px`;
+      highlight.style.width = `${region.width}px`;
+      highlight.style.height = `${region.height}px`;
+      highlight.setAttribute('aria-hidden', 'true');
+      pageElement.append(highlight);
+      return highlight;
+    });
+  sourceRegionHighlights = highlights;
+  scrollPdfSourceLocationsIntoView(references, pageElement);
   sourceRegionHighlightTimer = setTimeout(() => {
-    if (sourceRegionHighlight === highlight) sourceRegionHighlight = undefined;
-    highlight.remove();
-    sourceRegionHighlightTimer = undefined;
+    for (const highlight of highlights) highlight.remove();
+    if (sourceRegionHighlights === highlights) {
+      sourceRegionHighlights = [];
+      sourceRegionHighlightTimer = undefined;
+    }
   }, 1800);
 }
 

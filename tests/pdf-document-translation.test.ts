@@ -115,6 +115,36 @@ describe('PDF document translation', () => {
     expect(merged[0]!.sourceRegions).toHaveLength(4);
   });
 
+  it('coalesces adjacent formula fragments without merging separate columns', () => {
+    const merged = mergePdfDocumentTranslationContinuationBlocks([
+      {
+        id: 'P1B1', pageNumber: 1, blockIndex: 0, text: 'The objective is',
+        sourceAnchor: { leftRatio: .08, topRatio: .1, widthRatio: .38, heightRatio: .05 },
+      },
+      {
+        id: 'P1B2', pageNumber: 1, blockIndex: 1, text: 'x = y', kind: 'formula',
+        sourceAnchor: { leftRatio: .12, topRatio: .151, widthRatio: .3, heightRatio: .04 },
+      },
+      {
+        id: 'P1B3', pageNumber: 1, blockIndex: 2, text: 'where x is reconstructed',
+        sourceAnchor: { leftRatio: .08, topRatio: .192, widthRatio: .38, heightRatio: .05 },
+      },
+      {
+        id: 'P1B4', pageNumber: 1, blockIndex: 3, text: 'from the measurements.',
+        sourceAnchor: { leftRatio: .52, topRatio: .1, widthRatio: .38, heightRatio: .05 },
+      },
+    ]);
+
+    expect(merged).toHaveLength(1);
+    expect(merged[0]!.sourceRegions).toHaveLength(2);
+    expect(merged[0]!.sourceRegions?.[0]?.sourceAnchor).toMatchObject({
+      leftRatio: .08,
+      topRatio: .1,
+    });
+    expect(merged[0]!.sourceRegions?.[0]?.sourceAnchor.heightRatio).toBeCloseTo(.142);
+    expect(merged[0]!.sourceRegions?.[1]?.sourceAnchor.leftRatio).toBe(.52);
+  });
+
   it('does not merge an unpunctuated paper title into the following body', () => {
     const anchor = {
       leftRatio: .1, topRatio: .1, widthRatio: .8, heightRatio: .06,
@@ -136,6 +166,64 @@ describe('PDF document translation', () => {
     expect(merged.map((block) => block.text)).toEqual([
       'ISTA-Net: Interpretable Optimization-Inspired Deep Network',
       'Compressed sensing reconstructs natural images.',
+    ]);
+  });
+
+  it('keeps citation-led prose and natural-language from clauses in their paragraphs', () => {
+    expect(pdfDocumentTranslationBlockKind(
+      '[48, 46, 10, 52]. Metzler et al. propose to integrate the well-defined denoiser.',
+    )).toBe('text');
+    expect(pdfDocumentTranslationBlockKind(
+      'from the compression realm, an enhanced version is derived.',
+    )).toBe('text');
+    expect(pdfDocumentTranslationBlockKind('from torch import nn')).toBe('code');
+
+    const prepared = preparePdfDocumentTranslationPages([page(3, [
+      positioned('Earlier methods improve CS reconstruction', 54, 100),
+      positioned('[48, 46, 10, 52]. Metzler et al. propose to integrate the well-', 54, 115),
+      positioned('defined BM3D denoiser into the AMP framework.', 54, 130),
+      positioned('Moreover, borrowing more insights', 54, 160),
+      positioned('from the compression realm, an enhanced version, dubbed', 54, 175),
+      positioned('ISTA-Net+, is derived from ISTA-Net.', 54, 190),
+    ])]);
+
+    expect(prepared.blocks.map((block) => ({ text: block.text, kind: block.kind }))).toEqual([
+      {
+        text: 'Earlier methods improve CS reconstruction [48, 46, 10, 52]. ' +
+          'Metzler et al. propose to integrate the well- defined BM3D denoiser into the AMP framework.',
+        kind: undefined,
+      },
+      {
+        text: 'Moreover, borrowing more insights from the compression realm, an enhanced version, ' +
+          'dubbed ISTA-Net+, is derived from ISTA-Net.',
+        kind: undefined,
+      },
+    ]);
+  });
+
+  it('keeps a prose line containing an inline equation out of table mode', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(5, [
+      positioned('will enforce the symmetry constraint F ◦ F˜', 54, 100, 200),
+      positioned('= I', 280, 100, 25),
+      positioned('by incorporating it in training.', 330, 100, 180),
+    ])]);
+
+    expect(prepared.blocks).toHaveLength(1);
+    expect(prepared.blocks[0]).toMatchObject({
+      kind: 'formula',
+      text: 'will enforce the symmetry constraint F ◦ F˜\t= I\tby incorporating it in training.',
+    });
+  });
+
+  it('starts a generic colon-led paper subsection on a new paragraph', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(2, [
+      positioned('The preceding discussion continues without terminal punctuation', 54, 100),
+      positioned('Ablation protocol: We compare every setting.', 54, 115),
+    ])]);
+
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'The preceding discussion continues without terminal punctuation',
+      'Ablation protocol: We compare every setting.',
     ]);
   });
 

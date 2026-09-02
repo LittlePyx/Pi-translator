@@ -126,18 +126,22 @@ interface AnalyzedPage {
 export const PDF_DOCUMENT_TRANSLATION_BLOCK_LENGTH = 2_400;
 export const PDF_DOCUMENT_TRANSLATION_CONTINUATION_LENGTH = 4_800;
 const PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS = 8;
+const PDF_DOCUMENT_TRANSLATION_CONTINUATION_MEMBERS = 24;
 
 const LATIN_OR_DIGIT_END = /[\p{L}\p{N}]$/u;
 const LATIN_OR_DIGIT_START = /^[\p{L}\p{N}]/u;
 const CJK_BOUNDARY = /[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]/u;
 const EQUATION_NUMBER = /^(?:\(?\d{1,4}[a-z]?\)?|\[\d{1,4}\])$/iu;
-const CODE_LINE = /^(?:[$>#]\s|(?:const|let|var|function|class|def|import|from|return|if|for|while)\b|\w+\s*(?:\([^)]*\))?\s*(?:=>|:=|==|!=|<=|>=)|[{}[\];]|\S+\s*=\s*\S+)/u;
+const HIGH_CONFIDENCE_CODE_LINE = /^(?:[$>#]\s|(?:const|let|var)\s+[$\p{L}_][$\p{L}\p{N}_]*|(?:function|class|def)\s+[$\p{L}_][$\p{L}\p{N}_]*|from\s+[\w.]+\s+import\s+|import\s+(?:[{*]|[\w.]+(?:\s*,\s*[\w.]+)*\s*$)|(?:return|if|for|while)\s*\(|\w+\s*(?:\([^)]*\))?\s*(?:=>|:=|==|!=|<=|>=)|;\s*$)/u;
+const CODE_LINE = /^(?:[$>#]\s|(?:const|let|var)\s+[$\p{L}_][$\p{L}\p{N}_]*|(?:function|class|def)\s+[$\p{L}_][$\p{L}\p{N}_]*|from\s+[\w.]+\s+import\s+|import\s+(?:[{*]|[\w.]+(?:\s*,\s*[\w.]+)*\s*$)|(?:return|if|for|while)\s*\(|\w+\s*(?:\([^)]*\))?\s*(?:=>|:=|==|!=|<=|>=)|;\s*$|\S+\s*=\s*\S+)/u;
+const STANDALONE_MATH_DELIMITER = /^[{}[\]]+$/u;
 const LIST_ITEM_LINE = /^(?:[-*\u2022\u2023\u25aa\u25e6\u2013\u2014]\s+|\d{1,3}[.)]\s+|\(\d{1,3}\)\s+|[A-Za-z][.)]\s+|\([A-Za-z]\)\s+|\[\d{1,4}\]\s+)/u;
 const SECTION_HEADING_LINE = /^(?:(?:\d+(?:\.\d+){0,4}|[IVXLC]+)\.?\s+)[\p{Lu}\d]/u;
 const SENTENCE_END = /[.!?。！？:：][\])}\u201d\u2019'"]?$/u;
 const HEADING_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
 const CONTINUITY_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
 const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*[A-Z]?\d+(?:[.:-]|\s)/iu;
+const INLINE_SECTION_LEAD = /^[\p{Lu}\d][^.!?。！？:：\t]{2,72}[:：]\s+\p{Lu}/u;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',
   'acknowledgments',
@@ -257,9 +261,47 @@ function lineFromAtoms(atoms: readonly VisualAtom[], structured = false): Visual
   };
 }
 
+function structuredLineFromChunks(chunks: readonly VisualAtom[][]): VisualLine {
+  const cells = chunks.map((chunk) => lineFromAtoms(chunk));
+  const text = cells.map((cell) => cell.text).join('\t');
+  const proseEquationRow = chunksLookLikeProse(chunks) && /[=≈≠≤≥]/u.test(text);
+  const fragmentedEquationRow = cells.length >= 2 &&
+    cells.every((cell) => cell.text.length <= 14) &&
+    cells.every((cell) => !/[A-Za-z]{2,}/u.test(cell.text)) &&
+    cells.some((cell) => (
+      /[\d=+\-−*/×÷^_<>≤≥≈≠Α-Ωα-ω]/u.test(cell.text) ||
+      /^[()~]*[A-Za-z][()~]*$/u.test(cell.text.trim())
+    ));
+  return {
+    text,
+    left: cells[0]!.left,
+    right: cells.at(-1)!.right,
+    top: Math.min(...cells.map((cell) => cell.top)),
+    bottom: Math.max(...cells.map((cell) => cell.bottom)),
+    height: median(cells.map((cell) => cell.height)),
+    structured: true,
+    kind: proseEquationRow || fragmentedEquationRow ||
+      cells.some((cell) => cell.kind === 'formula') ||
+      shouldUseVisionForPdfFormula(text.replace(/\t/gu, ' '))
+      ? 'formula'
+      : 'table',
+  };
+}
+
+function chunksLookLikeProse(chunks: readonly VisualAtom[][]): boolean {
+  const text = chunks.map((chunk) => joinAtoms(chunk)).join(' ');
+  const letters = text.match(/\p{L}/gu)?.length ?? 0;
+  const words = text.match(/\p{L}+/gu)?.length ?? 0;
+  return letters >= 20 && words >= 4 && !looksMathDominant(text);
+}
+
 function visualLines(page: PdfDocumentTranslationPageInput): VisualLine[] | undefined {
   const atoms = visualAtoms(page);
   if (!atoms) return undefined;
+  const provisionalDivider = candidateColumnDivider(
+    atoms.map((atom) => lineFromAtoms([atom])),
+    page.pageWidth,
+  );
   const ordered = [...atoms].sort((left, right) => left.top - right.top || left.left - right.left);
   const rows: VisualAtom[][] = [];
   for (const atom of ordered) {
@@ -293,17 +335,54 @@ function visualLines(page: PdfDocumentTranslationPageInput): VisualLine[] | unde
       else chunks.push([atom]);
     }
     if (chunks.length >= 3) {
-      const cells = chunks.map((chunk) => lineFromAtoms(chunk));
-      output.push({
-        text: cells.map((cell) => cell.text).join('\t'),
-        left: cells[0]!.left,
-        right: cells.at(-1)!.right,
-        top: Math.min(...cells.map((cell) => cell.top)),
-        bottom: Math.max(...cells.map((cell) => cell.bottom)),
-        height: median(cells.map((cell) => cell.height)),
-        structured: true,
-        kind: cells.some((cell) => cell.kind === 'formula') ? 'formula' : 'table',
-      });
+      if (provisionalDivider) {
+        const tolerance = Math.max(3, rowHeight * .35);
+        const leftChunks = chunks.filter((chunk) => chunk.at(-1)!.right <= provisionalDivider + tolerance);
+        const rightChunks = chunks.filter((chunk) => chunk[0]!.left >= provisionalDivider - tolerance);
+        const crossingChunks = chunks.filter((chunk) => (
+          chunk[0]!.left < provisionalDivider - tolerance &&
+          chunk.at(-1)!.right > provisionalDivider + tolerance
+        ));
+        if (
+          leftChunks.length && rightChunks.length && !crossingChunks.length &&
+          leftChunks.length + rightChunks.length === chunks.length
+        ) {
+          output.push(
+            ...(leftChunks.length === 1
+              ? [lineFromAtoms(leftChunks[0]!)]
+              : [structuredLineFromChunks(leftChunks)]),
+            ...(rightChunks.length === 1
+              ? [lineFromAtoms(rightChunks[0]!)]
+              : [structuredLineFromChunks(rightChunks)]),
+          );
+          continue;
+        }
+      }
+      const gaps = chunks.slice(0, -1).map((chunk, index) => ({
+        index,
+        gap: chunks[index + 1]![0]!.left - chunk.at(-1)!.right,
+      }));
+      const widestGap = gaps.reduce((best, candidate) => (
+        candidate.gap > best.gap ? candidate : best
+      ));
+      const leftChunks = chunks.slice(0, widestGap.index + 1);
+      const rightChunks = chunks.slice(widestGap.index + 1);
+      const separatesColumnProse = widestGap.gap >= Math.max(page.pageWidth * .1, rowHeight * 5) && (
+        (leftChunks.length === 1 && rightChunks.length >= 2 && chunksLookLikeProse(leftChunks)) ||
+        (rightChunks.length === 1 && leftChunks.length >= 2 && chunksLookLikeProse(rightChunks))
+      );
+      if (separatesColumnProse) {
+        output.push(
+          ...(leftChunks.length === 1
+            ? [lineFromAtoms(leftChunks[0]!)]
+            : [structuredLineFromChunks(leftChunks)]),
+          ...(rightChunks.length === 1
+            ? [lineFromAtoms(rightChunks[0]!)]
+            : [structuredLineFromChunks(rightChunks)]),
+        );
+        continue;
+      }
+      output.push(structuredLineFromChunks(chunks));
       continue;
     }
     if (chunks.length === 2) {
@@ -335,7 +414,8 @@ function looksMathDominant(text: string): boolean {
 }
 
 function looksProtectedStructure(text: string): boolean {
-  return text.includes('\t') || looksMathDominant(text) || CODE_LINE.test(text.trim());
+  return text.includes('\t') || looksMathDominant(text) ||
+    CODE_LINE.test(text.trim()) || STANDALONE_MATH_DELIMITER.test(text.trim());
 }
 
 /**
@@ -350,10 +430,8 @@ export function pdfDocumentTranslationBlockKind(
   const trimmed = text.trim();
   if (sourceKinds.includes('formula')) return 'formula';
   if (sourceKinds.includes('table')) return 'table';
-  if (
-    sourceKinds.includes('code') ||
-    /^(?:[$>#]\s|const\b|let\b|var\b|function\b|class\b|def\b|import\b|from\b|return\b|if\b|for\b|while\b)/u.test(trimmed)
-  ) return 'code';
+  if (STANDALONE_MATH_DELIMITER.test(trimmed)) return 'formula';
+  if (sourceKinds.includes('code') || HIGH_CONFIDENCE_CODE_LINE.test(trimmed)) return 'code';
   const withoutEquationNumber = trimmed.replace(
     /\s*\t\s*(?:\(?\d{1,4}[a-z]?\)?|\[\d{1,4}\])\s*$/iu,
     '',
@@ -392,6 +470,62 @@ export function pdfDocumentTranslationSourceRegions(
   return block.sourceAnchor
     ? [{ pageNumber: block.pageNumber, sourceAnchor: { ...block.sourceAnchor } }]
     : [];
+}
+
+function coalesceAdjacentPdfDocumentTranslationSourceRegions(
+  regions: readonly PdfDocumentTranslationSourceRegion[],
+): PdfDocumentTranslationSourceRegion[] {
+  const output: PdfDocumentTranslationSourceRegion[] = [];
+  for (const region of regions) {
+    const previous = output.at(-1);
+    if (!previous || previous.pageNumber !== region.pageNumber) {
+      output.push({
+        pageNumber: region.pageNumber,
+        sourceAnchor: { ...region.sourceAnchor },
+      });
+      continue;
+    }
+    const left = Math.max(previous.sourceAnchor.leftRatio, region.sourceAnchor.leftRatio);
+    const right = Math.min(
+      previous.sourceAnchor.leftRatio + previous.sourceAnchor.widthRatio,
+      region.sourceAnchor.leftRatio + region.sourceAnchor.widthRatio,
+    );
+    const horizontalOverlap = Math.max(0, right - left);
+    const minimumWidth = Math.min(
+      previous.sourceAnchor.widthRatio,
+      region.sourceAnchor.widthRatio,
+    );
+    const previousBottom = previous.sourceAnchor.topRatio + previous.sourceAnchor.heightRatio;
+    const verticalGap = region.sourceAnchor.topRatio - previousBottom;
+    const followsSameColumn =
+      horizontalOverlap >= minimumWidth * .55 &&
+      region.sourceAnchor.topRatio >= previous.sourceAnchor.topRatio - .004 &&
+      verticalGap <= .018;
+    if (!followsSameColumn) {
+      output.push({
+        pageNumber: region.pageNumber,
+        sourceAnchor: { ...region.sourceAnchor },
+      });
+      continue;
+    }
+    const mergedLeft = Math.min(previous.sourceAnchor.leftRatio, region.sourceAnchor.leftRatio);
+    const mergedTop = Math.min(previous.sourceAnchor.topRatio, region.sourceAnchor.topRatio);
+    const mergedRight = Math.max(
+      previous.sourceAnchor.leftRatio + previous.sourceAnchor.widthRatio,
+      region.sourceAnchor.leftRatio + region.sourceAnchor.widthRatio,
+    );
+    const mergedBottom = Math.max(
+      previousBottom,
+      region.sourceAnchor.topRatio + region.sourceAnchor.heightRatio,
+    );
+    previous.sourceAnchor = {
+      leftRatio: mergedLeft,
+      topRatio: mergedTop,
+      widthRatio: mergedRight - mergedLeft,
+      heightRatio: mergedBottom - mergedTop,
+    };
+  }
+  return output;
 }
 
 export interface PdfDocumentTranslationContinuity {
@@ -537,9 +671,11 @@ export function mergePdfDocumentTranslationContinuationBlocks(
     const members = [index];
     let text = blocks[index]!.text;
     let cursor = index;
-    let regions = pdfDocumentTranslationSourceRegions(blocks[index]!);
+    let regions = coalesceAdjacentPdfDocumentTranslationSourceRegions(
+      pdfDocumentTranslationSourceRegions(blocks[index]!),
+    );
     if (!regions.length) continue;
-    while (members.length < PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS) {
+    while (members.length < PDF_DOCUMENT_TRANSLATION_CONTINUATION_MEMBERS) {
       const continuity = pdfDocumentTranslationContinuity(blocks, cursor);
       const nextIndex = continuity.nextIndex;
       if (!continuity.continuesNext || nextIndex === undefined || nextIndex <= cursor) break;
@@ -554,7 +690,10 @@ export function mergePdfDocumentTranslationContinuationBlocks(
       ) break;
       const joined = joinPdfDocumentTranslationContinuationText(text, next.text);
       if (joined.length > PDF_DOCUMENT_TRANSLATION_CONTINUATION_LENGTH) break;
-      const joinedRegions = [...regions, ...nextRegions];
+      const joinedRegions = coalesceAdjacentPdfDocumentTranslationSourceRegions([
+        ...regions,
+        ...nextRegions,
+      ]);
       if (joinedRegions.length > PDF_DOCUMENT_TRANSLATION_CONTINUATION_REGIONS) break;
       text = joined;
       regions = joinedRegions;
@@ -756,6 +895,7 @@ function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
       previous.region !== current.region ||
       protectedBoundary ||
       headingBoundary ||
+      INLINE_SECTION_LEAD.test(current.text.trim()) ||
       LIST_ITEM_LINE.test(current.text.trim()) ||
       startsIndentedParagraph ||
       (verticalStep > 0 && verticalStep > ordinaryStep * 1.35),
