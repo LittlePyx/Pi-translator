@@ -429,6 +429,53 @@ describe('PDF document translation', () => {
     });
   });
 
+  it('keeps a prose sentence beginning with a figure reference out of the preceding formula', () => {
+    const anchor = (topRatio: number, widthRatio = .38) => ({
+      leftRatio: .08,
+      topRatio,
+      widthRatio,
+      heightRatio: .02,
+    });
+    const merged = mergePdfDocumentTranslationContinuationBlocks([
+      {
+        id: 'P5B1', pageNumber: 5, blockIndex: 0,
+        text: 'The output in this module should be updated as:',
+        sourceAnchor: anchor(.60),
+      },
+      {
+        id: 'P5B2', pageNumber: 5, blockIndex: 1,
+        text: 'x = F(r).\t(12)', kind: 'formula',
+        sourceAnchor: anchor(.622, .30),
+      },
+      {
+        id: 'P5B3', pageNumber: 5, blockIndex: 2,
+        text: 'Figure 2 clearly illustrates how Eq. (6) with the closed-',
+        sourceAnchor: anchor(.646),
+      },
+      {
+        id: 'P5B4', pageNumber: 5, blockIndex: 3,
+        text: 'form solution in Eq. (12) is mapped into a deep network in',
+        sourceAnchor: anchor(.666),
+      },
+      {
+        id: 'P5B5', pageNumber: 5, blockIndex: 4,
+        text: 'the k-th phase of ISTA-Net.',
+        sourceAnchor: anchor(.686, .22),
+      },
+    ]);
+
+    expect(merged).toHaveLength(2);
+    expect(merged[0]!.text).toBe(
+      'The output in this module should be updated as: x = F(r).\t(12)',
+    );
+    expect(merged[0]!.text).not.toContain('form solution');
+    expect(merged[1]!.text).toBe(
+      'Figure 2 clearly illustrates how Eq. (6) with the closed- ' +
+      'form solution in Eq. (12) is mapped into a deep network in ' +
+      'the k-th phase of ISTA-Net.',
+    );
+  });
+
   it('does not mistake ordinary Korean prose for mathematical alphanumeric symbols', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned('한국어 문장은 일반 본문입니다.', 54, 100, 210),

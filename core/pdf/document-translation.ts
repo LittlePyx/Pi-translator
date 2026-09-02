@@ -140,7 +140,11 @@ const SECTION_HEADING_LINE = /^(?:(?:\d+(?:\.\d+){0,4}|[IVXLC]+)\.?\s+)[\p{Lu}\d
 const SENTENCE_END = /[.!?。！？:：][\])}\u201d\u2019'"]?$/u;
 const HEADING_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
 const CONTINUITY_SENTENCE_END = /[.!?。！？][\])}\u201d\u2019'"]?$/u;
-const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*[A-Z]?\d+(?:[.:-]|\s)/iu;
+// Treat a block as an interrupting caption only when the label has an explicit
+// caption separator. A prose sentence such as "Figure 2 clearly illustrates"
+// is a semantic paragraph, not a caption; skipping it would let its lower-case
+// continuation lines attach to the preceding equation or paragraph.
+const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表|算法)\s*[A-Z]?\d+\s*[.:-](?:\s|$)/iu;
 const INLINE_SECTION_LEAD = /^[\p{Lu}\d][^.!?。！？:：\t]{2,72}[:：]\s+\p{Lu}/u;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',

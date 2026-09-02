@@ -6,22 +6,25 @@
 
 自动化测试分别将纯文字和含公式 PDF 的 Pi 阅读器标签页强制置为浏览器 `frozen` 状态：纯文字队列在冻结期间完成后续 3 个批次；多模态队列在冻结期间完成全部 3 个视觉段落且文字请求为 0；恢复标签页后均自动显示完成。另以 `CVPR-2018-ISTA-Net- Interpretable...Deep Network for Image Compressive Sensing.pdf` 的真实论文文件完成当前页统一多模态定向验收：冻结期间全部段落视觉请求继续完成，文字请求为 0，恢复后自动显示完成状态。
 
+同一真实论文第 5 页还暴露并修复了图号引用误判：`Figure 2 clearly illustrates...` 原本被当作图注跳过，导致首行单独成块、后两行错误并入前一个公式 `(12)` 段。修复后该三行组成一个完整正文块，公式段不再包含它的后两行；在实际 Edge 页面点击译文后只出现一个覆盖三行的连续紫色高亮框，并与上一个段落互不重叠。
+
 | 检查项 | 结果 |
 | --- | --- |
 | TypeScript 类型检查 | 通过 |
-| Vitest 单元测试 | 693/693 通过（102 个文件） |
+| Vitest 单元测试 | 694/694 通过（102 个文件） |
 | Microsoft Edge 扩展端到端测试 | 131/131 通过；包含纯文字与统一多模态后台冻结回归 |
 | 真实 ISTA-Net PDF 后台冻结定向验收 | 通过；当前页全部视觉段落在冻结期间完成，文字请求 0 |
+| 真实 ISTA-Net PDF 第 5 页图号引用与原文高亮 | 通过；三行正文保持为一个块、一个高亮区域，与公式段不交叉 |
 | Edge MV3 生产构建 | 通过（3.84 MB）；包含打包内置的 `pdf-background.html` |
 | API Key 与私钥模式扫描 | 通过 |
 | ZIP 文件结构与生产构建逐文件一致性 | 通过；36 项，Manifest V3 |
 
-本地发布后修复验证包：`.output/tex-selection-translator-0.15.0-edge.zip`（1,172,149 bytes）
+本地发布后修复验证包：`.output/tex-selection-translator-0.15.0-edge.zip`（1,172,150 bytes）
 
 SHA-256：
 
 ```text
-552E0104D928701ED91C66BCAB9C38C4D5719A4EBB81A66E149AFB3E1EFA9CE8
+363777D0531BDACA33ACFA3F995B0FCE4FD46C00557075EF4970206C0D4DB152
 ```
 
 该文件与下方已经正式发布的 v0.15.0 资产内容不同，但 `package.json` 尚未提升版本号，因此只用于本地加载和本轮验收，不得覆盖 GitHub Release 资产或提交 Edge 商店。后续如需对外发布，应先由用户明确决定新版本号，再以新的签名 tag 和候选包完成发布门禁。
