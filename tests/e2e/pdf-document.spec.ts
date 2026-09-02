@@ -549,7 +549,11 @@ test('uses one authorized vision model for every block in a PDF containing formu
       .locator('[data-translation-mode="vision"]:not([data-visual-role="formula"])')
       .evaluate((element) => getComputedStyle(element, '::before').content);
     expect(proseVisionLabel).not.toContain('多模态译文');
-    await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
+    const formulaVisionCard = panel.locator('[data-visual-role="formula"]');
+    await expect(formulaVisionCard).toContainText('能量关系式');
+    const formulaVisionLabel = await formulaVisionCard
+      .evaluate((element) => getComputedStyle(element, '::before').content);
+    expect(formulaVisionLabel).not.toContain('多模态公式');
     const requestsBeforeLayoutExport = {
       text: textRequests.length,
       vision: visionRequests.length,

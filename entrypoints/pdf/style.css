@@ -740,9 +740,6 @@ button { color: inherit; font: inherit; cursor: pointer; }
   line-height: 1.35;
   letter-spacing: .04em;
 }
-.pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="formula"]::before {
-  content: "多模态公式";
-}
 .pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="figure"]::before {
   content: "图表";
 }
