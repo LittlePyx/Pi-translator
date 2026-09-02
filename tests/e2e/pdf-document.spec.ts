@@ -165,6 +165,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(pdfPage.locator('#pdf-document-translation-progress')).toBeVisible();
     await expect(pdfPage.locator('#pdf-document-translation-progress'))
       .toHaveAttribute('aria-valuenow', '0');
+    await expect(panel.locator('#pdf-document-translation-settings')).toHaveAttribute('open', '');
     expect(textRequests).toHaveLength(requestsBeforePreview);
 
     mockControl.omitNextDocumentBatchItem = true;
@@ -176,9 +177,50 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('.pdf-document-translation-page')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]')).toHaveCount(2);
     await expect(panel.locator('[data-translation-block]').first()).toContainText('批量生成的学术译文');
+    await expect(panel).toHaveAttribute('data-reading-mode', 'current');
+    await expect(panel.locator('#pdf-document-translation-view-current'))
+      .toHaveAttribute('aria-pressed', 'true');
+    await expect(panel.locator('#pdf-document-translation-settings')).not.toHaveAttribute('open', '');
+    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(1);
+    await expect(panel.locator('.pdf-document-translation-page[data-page-number="1"]'))
+      .toBeVisible();
+    await expect(panel.locator('.pdf-document-translation-page[data-page-number="2"]'))
+      .toBeHidden();
+    const readingLayout = await panel.evaluate((element) => {
+      const reader = element.querySelector<HTMLElement>('#pdf-document-translation-reader')!;
+      return {
+        panelHeight: element.clientHeight,
+        readerHeight: reader.clientHeight,
+        scrollWidth: reader.scrollWidth,
+        clientWidth: reader.clientWidth,
+      };
+    });
+    expect(readingLayout.readerHeight).toBeGreaterThan(readingLayout.panelHeight * .5);
+    expect(readingLayout.scrollWidth).toBeLessThanOrEqual(readingLayout.clientWidth + 1);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await pdfPage.screenshot({
+        path: testInfo.outputPath('pdf-full-document-translation-current-page.png'),
+        fullPage: false,
+      });
+    }
     expect(visionRequests).toHaveLength(visionRequestsBeforePreview);
     const requestsBeforeCopy = textRequests.length;
     const visionRequestsBeforeCopy = visionRequests.length;
+    await panel.locator('#pdf-document-translation-page-next').click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('2');
+    await expect(panel.locator('#pdf-document-translation-page-status')).toHaveText('2 / 2');
+    await expect(panel.locator('.pdf-document-translation-page[data-page-number="2"]'))
+      .toBeVisible();
+    await expect(panel.locator('.pdf-document-translation-page[data-page-number="1"]'))
+      .toBeHidden();
+    await panel.locator('#pdf-document-translation-page-previous').click();
+    await expect(pdfPage.locator('#page-number')).toHaveValue('1');
+    await panel.locator('#pdf-document-translation-view-continuous').click();
+    await expect(panel).toHaveAttribute('data-reading-mode', 'continuous');
+    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(2);
+    await expect(panel.locator('.pdf-document-translation-page-navigation')).toBeHidden();
+    expect(textRequests).toHaveLength(requestsBeforeCopy);
+    expect(visionRequests).toHaveLength(visionRequestsBeforeCopy);
     await pdfPage.evaluate(() => {
       const scope = globalThis as typeof globalThis & { __piCopiedText?: string };
       scope.__piCopiedText = '';
@@ -349,6 +391,17 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
       getComputedStyle(stage).marginRight
     ))).not.toBe('0px');
+    await panel.locator('#pdf-document-translation-view-current').click();
+    await pdfPage.setViewportSize({ width: 360, height: 700 });
+    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(1);
+    const narrowReaderLayout = await panel.locator('#pdf-document-translation-reader > header')
+      .evaluate((header) => ({
+        clientWidth: header.clientWidth,
+        scrollWidth: header.scrollWidth,
+        height: header.getBoundingClientRect().height,
+      }));
+    expect(narrowReaderLayout.scrollWidth).toBeLessThanOrEqual(narrowReaderLayout.clientWidth + 1);
+    expect(narrowReaderLayout.height).toBeGreaterThanOrEqual(40);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({
         path: testInfo.outputPath('pdf-full-document-translation.png'),
@@ -956,6 +1009,7 @@ test('restores explicitly retained PDF progress after session loss and translate
     const restoredRetention = restoredReader.locator(
       '#pdf-document-translation-retention-toggle',
     );
+    await panel.locator('#pdf-document-translation-settings > summary').click();
     await restoredRetention.uncheck();
     await expect(restoredReader.locator('#pdf-document-translation-retention-status'))
       .toContainText('本机保存已清除');
@@ -1051,6 +1105,7 @@ test('limits PDF document translation by pages and recognized back matter', asyn
       appendixText,
     ]);
 
+    await pdfPage.locator('#pdf-document-translation-settings > summary').click();
     await range.selectOption('current');
     await expect(feedback).toContainText('第 1 页 · 1 页 / 1 段');
     await expect(pdfPage.locator('#pdf-document-translation-status'))
@@ -1068,6 +1123,7 @@ test('limits PDF document translation by pages and recognized back matter', asyn
     };
     expect(currentPayload.segments.map((segment) => segment.text)).toEqual([bodyText]);
 
+    await pdfPage.locator('#pdf-document-translation-settings > summary').click();
     await range.selectOption('all');
     await expect(feedback).toContainText('整篇文档 · 3 页 / 3 段');
     await expect(pdfPage.locator('#pdf-document-translation-status'))

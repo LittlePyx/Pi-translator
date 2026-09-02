@@ -299,6 +299,31 @@ const documentTranslationOcrAction = element<HTMLButtonElement>(
   'pdf-document-translation-ocr-action',
 );
 const documentTranslationNote = element<HTMLElement>('pdf-document-translation-note');
+const documentTranslationSettings = element<HTMLDetailsElement>(
+  'pdf-document-translation-settings',
+);
+const documentTranslationSettingsSummary = element<HTMLElement>(
+  'pdf-document-translation-settings-summary',
+);
+const documentTranslationReader = element<HTMLElement>('pdf-document-translation-reader');
+const documentTranslationViewCurrent = element<HTMLButtonElement>(
+  'pdf-document-translation-view-current',
+);
+const documentTranslationViewContinuous = element<HTMLButtonElement>(
+  'pdf-document-translation-view-continuous',
+);
+const documentTranslationPagePrevious = element<HTMLButtonElement>(
+  'pdf-document-translation-page-previous',
+);
+const documentTranslationPageStatus = element<HTMLOutputElement>(
+  'pdf-document-translation-page-status',
+);
+const documentTranslationPageNext = element<HTMLButtonElement>(
+  'pdf-document-translation-page-next',
+);
+const documentTranslationPageEmpty = element<HTMLElement>(
+  'pdf-document-translation-page-empty',
+);
 const documentTranslationPages = element<HTMLElement>('pdf-document-translation-pages');
 const searchPanel = element<HTMLElement>('pdf-search');
 const searchQuery = element<HTMLInputElement>('pdf-search-query');
@@ -439,12 +464,15 @@ let pdfDocumentTranslationRetentionPending = false;
 let pdfDocumentTranslationRetentionMessage: string | undefined;
 let pdfDocumentTranslationRetentionError = false;
 type PdfDocumentTranslationRangeMode = 'all' | 'current' | 'custom';
+type PdfDocumentTranslationReadingMode = 'current' | 'continuous';
 let pdfDocumentTranslationRangeMode: PdfDocumentTranslationRangeMode = 'all';
 let pdfDocumentTranslationRangePages: number[] = [];
 let pdfDocumentTranslationRangeSummary = '';
 let pdfDocumentTranslationRangeError: string | undefined;
 let pdfDocumentTranslationSkipReferencesEnabled = false;
 let pdfDocumentTranslationSkipAppendixEnabled = false;
+let pdfDocumentTranslationReadingMode: PdfDocumentTranslationReadingMode = 'current';
+let pdfDocumentTranslationDisplayedPage = 0;
 let pdfDocumentTranslationMultimodalEnabled = true;
 let pdfDocumentTranslationMultimodalAuthorized = false;
 interface PdfDocumentTranslationSessionContext {
@@ -1012,11 +1040,70 @@ function updatePdfDocumentTranslationInset(): void {
 }
 
 function syncPdfDocumentTranslationCurrentPage(pageNumber = visiblePageAnchor().pageNumber): void {
+  const totalPages = pdfDocument?.numPages ?? 0;
+  const safePageNumber = totalPages
+    ? clamp(Math.round(pageNumber), 1, totalPages)
+    : Math.max(1, Math.round(pageNumber));
+  const displayedPageChanged = pdfDocumentTranslationDisplayedPage !== safePageNumber;
+  pdfDocumentTranslationDisplayedPage = safePageNumber;
+  documentTranslationPanel.dataset.readingMode = pdfDocumentTranslationReadingMode;
+  documentTranslationReader.dataset.readingMode = pdfDocumentTranslationReadingMode;
+  documentTranslationViewCurrent.setAttribute(
+    'aria-pressed',
+    String(pdfDocumentTranslationReadingMode === 'current'),
+  );
+  documentTranslationViewContinuous.setAttribute(
+    'aria-pressed',
+    String(pdfDocumentTranslationReadingMode === 'continuous'),
+  );
+  const pageNavigation = documentTranslationPageStatus.closest<HTMLElement>('nav');
+  if (pageNavigation) pageNavigation.hidden = pdfDocumentTranslationReadingMode === 'continuous';
+  documentTranslationPageStatus.textContent = `${safePageNumber} / ${Math.max(1, totalPages)}`;
+  documentTranslationPagePrevious.disabled = !totalPages || safePageNumber <= 1;
+  documentTranslationPageNext.disabled = !totalPages || safePageNumber >= totalPages;
   for (const section of documentTranslationPages.querySelectorAll<HTMLElement>(
     '.pdf-document-translation-page[data-page-number]',
   )) {
-    section.toggleAttribute('data-current', Number(section.dataset.pageNumber) === pageNumber);
+    section.toggleAttribute(
+      'data-current',
+      Number(section.dataset.pageNumber) === safePageNumber,
+    );
   }
+  const currentSection = documentTranslationPages.querySelector<HTMLElement>(
+    `.pdf-document-translation-page[data-page-number="${safePageNumber}"]`,
+  );
+  const currentBlocks = pdfDocumentTranslationBlocksState.filter((block) => (
+    block.included && block.pageNumber === safePageNumber
+  ));
+  documentTranslationPageEmpty.hidden = pdfDocumentTranslationReadingMode === 'continuous' ||
+    Boolean(currentSection);
+  if (!documentTranslationPageEmpty.hidden) {
+    documentTranslationPageEmpty.textContent = !currentBlocks.length
+      ? `第 ${safePageNumber} 页不在当前翻译范围内。`
+      : currentBlocks.some((block) => block.status === 'idle')
+        ? `第 ${safePageNumber} 页译文尚未完成，全文翻译会继续在后台处理。`
+        : `第 ${safePageNumber} 页暂时没有可显示的译文。`;
+  }
+  if (displayedPageChanged && pdfDocumentTranslationReadingMode === 'current') {
+    documentTranslationPages.scrollTop = 0;
+  }
+}
+
+function setPdfDocumentTranslationReadingMode(mode: PdfDocumentTranslationReadingMode): void {
+  if (pdfDocumentTranslationReadingMode === mode) return;
+  pdfDocumentTranslationReadingMode = mode;
+  documentTranslationPages.scrollTop = 0;
+  syncPdfDocumentTranslationCurrentPage();
+}
+
+function movePdfDocumentTranslationReadingPage(direction: -1 | 1): void {
+  const totalPages = pdfDocument?.numPages ?? 0;
+  if (!totalPages) return;
+  const pageNumber = clamp(pdfDocumentTranslationDisplayedPage + direction, 1, totalPages);
+  if (pageNumber === pdfDocumentTranslationDisplayedPage) return;
+  scrollToPageAnchor({ pageNumber, ratio: 0 });
+  updatePageControl({ pageNumber, ratio: 0 });
+  schedulePageRetention();
 }
 
 function syncPdfDocumentTranslationUi(): void {
@@ -1072,6 +1159,18 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationRangeFeedback.dataset.tone = pdfDocumentTranslationRangeError
     ? 'error'
     : 'info';
+  const settingsScopeLabel = pdfDocumentTranslationRangeMode === 'all'
+    ? '整篇文档'
+    : pdfDocumentTranslationRangeMode === 'current'
+      ? `第 ${pdfDocumentTranslationRangePages[0] ?? currentRangePage} 页`
+      : `${pdfDocumentTranslationRangeSummary || '指定页码'} 页`;
+  documentTranslationSettingsSummary.textContent = `${settingsScopeLabel} · ${
+    pdfDocumentTranslationMultimodalEnabled
+      ? usesUnifiedVision
+        ? '统一多模态'
+        : '按内容选择接口'
+      : '仅文字接口'
+  }`;
   documentTranslationMultimodal.dataset.mode = pdfDocumentTranslationMultimodalEnabled
     ? 'smart'
     : 'text';
@@ -1194,6 +1293,7 @@ function syncPdfDocumentTranslationUi(): void {
     : usesUnifiedVision
       ? `文档含公式，当前范围全部段落统一使用视觉模型，以保持术语、语气和公式处理一致。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
       : `文档未检测到公式，普通正文使用文字接口。${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
+  syncPdfDocumentTranslationCurrentPage();
 }
 
 function setPdfDocumentTranslationCopyFeedback(message: string, error = false): void {
@@ -1776,6 +1876,9 @@ function resetPdfDocumentTranslation(closePanel = false): void {
   pdfDocumentTranslationRetentionError = false;
   pdfDocumentTranslationTask = undefined;
   pdfDocumentTranslationSessionContext = undefined;
+  pdfDocumentTranslationReadingMode = 'current';
+  pdfDocumentTranslationDisplayedPage = 0;
+  documentTranslationSettings.open = true;
   resetPdfDocumentTranslationScope();
   documentTranslationPages.replaceChildren();
   if (closePanel) documentTranslationPanel.hidden = true;
@@ -1797,6 +1900,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   pdfDocumentTranslationMultiColumnPages = 0;
   pdfDocumentTranslationRemovedMarginLines = 0;
   documentTranslationPages.replaceChildren();
+  documentTranslationSettings.open = true;
   syncPdfDocumentTranslationUi();
   const pages: PdfDocumentTranslationPageInput[] = [];
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -1953,6 +2057,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         ? 'paused'
         : 'ready'
     : 'error';
+  if (restoredCount) documentTranslationSettings.open = false;
   if (!discovered.length) {
     pdfDocumentTranslationMessage = pdfDocumentTranslationUnreadablePages
       ? '没有读取到文字层；可在下方确认识别扫描页。'
@@ -2698,6 +2803,7 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
   }
   pdfDocumentTranslationPhase = 'running';
   pdfDocumentTranslationMessage = undefined;
+  documentTranslationSettings.open = false;
   syncPdfDocumentTranslationUi();
   void persistPdfDocumentTranslationSession();
   void processPdfDocumentTranslationQueue();
@@ -6430,6 +6536,18 @@ translateDocument.addEventListener('click', () => {
   else closePdfDocumentTranslation();
 });
 documentTranslationClose.addEventListener('click', () => closePdfDocumentTranslation());
+documentTranslationViewCurrent.addEventListener('click', () => {
+  setPdfDocumentTranslationReadingMode('current');
+});
+documentTranslationViewContinuous.addEventListener('click', () => {
+  setPdfDocumentTranslationReadingMode('continuous');
+});
+documentTranslationPagePrevious.addEventListener('click', () => {
+  movePdfDocumentTranslationReadingPage(-1);
+});
+documentTranslationPageNext.addEventListener('click', () => {
+  movePdfDocumentTranslationReadingPage(1);
+});
 documentTranslationPrimary.addEventListener('click', () => {
   void startOrTogglePdfDocumentTranslation();
 });

@@ -141,100 +141,125 @@
           <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
         </div>
         <small id="pdf-document-translation-copy-feedback" class="pdf-document-translation-copy-feedback" aria-live="polite"></small>
-        <div id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
+      </section>
+      <details id="pdf-document-translation-settings" class="pdf-document-translation-settings" open>
+        <summary>
           <span>
-            <strong>关闭后保留译文</strong>
-            <small id="pdf-document-translation-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
+            <strong>翻译设置</strong>
+            <small id="pdf-document-translation-settings-summary">整篇文档 · 自动选择接口</small>
           </span>
-          <span class="pdf-document-translation-retention-actions">
-            <button id="pdf-document-translation-retention-manage" type="button">管理</button>
-            <label class="pdf-document-translation-retention-switch">
-              <input
-                id="pdf-document-translation-retention-toggle"
-                type="checkbox"
-                role="switch"
-                aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
-              />
+          <span aria-hidden="true">⌄</span>
+        </summary>
+        <div class="pdf-document-translation-settings-body">
+          <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
+            <div class="pdf-document-translation-scope-heading">
+              <strong>翻译范围</strong>
+              <span>只会发送所选正文</span>
+            </div>
+            <label class="pdf-document-translation-range-label">
+              <span>范围</span>
+              <select id="pdf-document-translation-range" aria-label="翻译页码范围" disabled>
+                <option value="all">整篇文档</option>
+                <option id="pdf-document-translation-range-current" value="current">当前页</option>
+                <option value="custom">指定页码</option>
+              </select>
             </label>
-          </span>
+            <form id="pdf-document-translation-custom-range" hidden>
+              <input
+                id="pdf-document-translation-custom-pages"
+                type="text"
+                inputmode="numeric"
+                autocomplete="off"
+                aria-label="指定翻译页码"
+                placeholder="如 1-6, 9, 12-15"
+              />
+              <button type="submit">应用</button>
+            </form>
+            <div class="pdf-document-translation-section-options">
+              <label title="从识别到的 References 或参考文献标题开始跳过，遇到附录标题后停止">
+                <input id="pdf-document-translation-skip-references" type="checkbox" disabled />
+                <span>跳过参考文献</span>
+              </label>
+              <label title="从识别到的 Appendix、Supplementary Materials 或附录标题开始跳过">
+                <input id="pdf-document-translation-skip-appendix" type="checkbox" disabled />
+                <span>跳过附录</span>
+              </label>
+            </div>
+            <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
+          </section>
+          <div id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
+            <span>
+              <strong>关闭后保留译文</strong>
+              <small id="pdf-document-translation-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
+            </span>
+            <span class="pdf-document-translation-retention-actions">
+              <button id="pdf-document-translation-retention-manage" type="button">管理</button>
+              <label class="pdf-document-translation-retention-switch">
+                <input
+                  id="pdf-document-translation-retention-toggle"
+                  type="checkbox"
+                  role="switch"
+                  aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
+                />
+              </label>
+            </span>
+          </div>
+          <section
+            id="pdf-document-translation-multimodal"
+            class="pdf-document-translation-multimodal"
+            aria-label="全文翻译视觉处理方式"
+          >
+            <label>
+              <input
+                id="pdf-document-translation-multimodal-toggle"
+                type="checkbox"
+                checked
+              />
+              <span>
+                <strong>公式文档统一多模态（推荐）</strong>
+                <small id="pdf-document-translation-multimodal-status" aria-live="polite">
+                  检测到公式后，当前翻译范围全部使用视觉模型
+                </small>
+              </span>
+            </label>
+          </section>
+          <section
+            id="pdf-document-translation-ocr"
+            class="pdf-document-translation-ocr"
+            aria-label="扫描页文字识别"
+            hidden
+          >
+            <span class="pdf-document-translation-ocr-badge" aria-hidden="true">OCR</span>
+            <span class="pdf-document-translation-ocr-copy">
+              <strong>扫描页尚未识别</strong>
+              <small id="pdf-document-translation-ocr-status" aria-live="polite"></small>
+            </span>
+            <button id="pdf-document-translation-ocr-action" type="button"></button>
+          </section>
+          <p id="pdf-document-translation-note" class="pdf-document-translation-note">
+            预览和范围调整只在本地完成；点击开始即授权当前范围在本次任务中按上方方式发送。
+          </p>
         </div>
+      </details>
+      <section id="pdf-document-translation-reader" class="pdf-document-translation-reader" aria-label="PDF 译文阅读">
+        <header>
+          <div class="pdf-document-translation-view-switch" role="group" aria-label="译文显示方式">
+            <button id="pdf-document-translation-view-current" type="button" aria-pressed="true">当前页</button>
+            <button id="pdf-document-translation-view-continuous" type="button" aria-pressed="false">连续阅读</button>
+          </div>
+          <nav class="pdf-document-translation-page-navigation" aria-label="译文页码导航">
+            <button id="pdf-document-translation-page-previous" type="button" aria-label="上一页译文">‹</button>
+            <output id="pdf-document-translation-page-status" aria-live="polite">1 / 1</output>
+            <button id="pdf-document-translation-page-next" type="button" aria-label="下一页译文">›</button>
+          </nav>
+        </header>
+        <p id="pdf-document-translation-page-empty" class="pdf-document-translation-empty" hidden></p>
+        <div
+          id="pdf-document-translation-pages"
+          class="pdf-document-translation-pages"
+          aria-label="按页排列的 PDF 译文"
+        ></div>
       </section>
-      <section class="pdf-document-translation-scope" aria-label="PDF 翻译范围">
-        <div class="pdf-document-translation-scope-heading">
-          <strong>翻译范围</strong>
-          <span>只会发送所选正文</span>
-        </div>
-        <label class="pdf-document-translation-range-label">
-          <span>范围</span>
-          <select id="pdf-document-translation-range" aria-label="翻译页码范围" disabled>
-            <option value="all">整篇文档</option>
-            <option id="pdf-document-translation-range-current" value="current">当前页</option>
-            <option value="custom">指定页码</option>
-          </select>
-        </label>
-        <form id="pdf-document-translation-custom-range" hidden>
-          <input
-            id="pdf-document-translation-custom-pages"
-            type="text"
-            inputmode="numeric"
-            autocomplete="off"
-            aria-label="指定翻译页码"
-            placeholder="如 1-6, 9, 12-15"
-          />
-          <button type="submit">应用</button>
-        </form>
-        <div class="pdf-document-translation-section-options">
-          <label title="从识别到的 References 或参考文献标题开始跳过，遇到附录标题后停止">
-            <input id="pdf-document-translation-skip-references" type="checkbox" disabled />
-            <span>跳过参考文献</span>
-          </label>
-          <label title="从识别到的 Appendix、Supplementary Materials 或附录标题开始跳过">
-            <input id="pdf-document-translation-skip-appendix" type="checkbox" disabled />
-            <span>跳过附录</span>
-          </label>
-        </div>
-        <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
-      </section>
-      <section
-        id="pdf-document-translation-multimodal"
-        class="pdf-document-translation-multimodal"
-        aria-label="全文翻译视觉处理方式"
-      >
-        <label>
-          <input
-            id="pdf-document-translation-multimodal-toggle"
-            type="checkbox"
-            checked
-          />
-          <span>
-            <strong>公式文档统一多模态（推荐）</strong>
-            <small id="pdf-document-translation-multimodal-status" aria-live="polite">
-              检测到公式后，当前翻译范围全部使用视觉模型
-            </small>
-          </span>
-        </label>
-      </section>
-      <section
-        id="pdf-document-translation-ocr"
-        class="pdf-document-translation-ocr"
-        aria-label="扫描页文字识别"
-        hidden
-      >
-        <span class="pdf-document-translation-ocr-badge" aria-hidden="true">OCR</span>
-        <span class="pdf-document-translation-ocr-copy">
-          <strong>扫描页尚未识别</strong>
-          <small id="pdf-document-translation-ocr-status" aria-live="polite"></small>
-        </span>
-        <button id="pdf-document-translation-ocr-action" type="button"></button>
-      </section>
-      <p id="pdf-document-translation-note" class="pdf-document-translation-note">
-        预览和范围调整只在本地完成；点击开始即授权当前范围在本次任务中按上方方式发送。
-      </p>
-      <div
-        id="pdf-document-translation-pages"
-        class="pdf-document-translation-pages"
-        aria-label="按页排列的 PDF 译文"
-      ></div>
     </aside>
 
     <aside id="pdf-outline" class="pdf-outline" aria-label="当前 PDF 文档导航" hidden>
