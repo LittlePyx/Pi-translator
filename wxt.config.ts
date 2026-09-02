@@ -16,7 +16,7 @@ export default defineConfig({
       48: 'brand/pi_logo.png',
       128: 'brand/pi_logo.png',
     },
-    permissions: ['storage', 'contextMenus', 'activeTab', 'scripting', 'sidePanel'],
+    permissions: ['storage', 'contextMenus', 'activeTab', 'scripting', 'sidePanel', 'offscreen'],
     side_panel: {
       default_path: 'sidepanel.html',
     },

@@ -158,6 +158,10 @@ import {
 } from '../core/pdf/source';
 import { normalizePdfSelectionText } from '../core/pdf/text-normalizer';
 import {
+  isPdfBackgroundProxyMessage,
+  PDF_BACKGROUND_DOCUMENT_PATH,
+} from '../core/pdf/background-document-translation';
+import {
   resolveNativePdfTranslationProvider,
   type NativePdfTranslationProvider,
 } from '../core/pdf/native-translation-profile';
@@ -238,6 +242,51 @@ const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
 const pendingTranslationRequests = new Map<number, string>();
 const runTranslationCommit = createPerTabAsyncLane();
+let pdfBackgroundDocumentCreation: Promise<void> | undefined;
+
+interface ChromiumOffscreenApi {
+  runtime: {
+    getContexts(filter: {
+      contextTypes: string[];
+      documentUrls: string[];
+    }): Promise<unknown[]>;
+  };
+  offscreen: {
+    createDocument(input: {
+      url: string;
+      reasons: string[];
+      justification: string;
+    }): Promise<void>;
+  };
+}
+
+async function ensurePdfBackgroundDocument(): Promise<void> {
+  const offscreenUrl = browser.runtime.getURL(PDF_BACKGROUND_DOCUMENT_PATH);
+  const chromium = (globalThis as typeof globalThis & { chrome: ChromiumOffscreenApi }).chrome;
+  const existing = await chromium.runtime.getContexts({
+    contextTypes: ['OFFSCREEN_DOCUMENT'],
+    documentUrls: [offscreenUrl],
+  });
+  if (existing.length) return;
+  if (!pdfBackgroundDocumentCreation) {
+    pdfBackgroundDocumentCreation = chromium.offscreen.createDocument({
+      url: PDF_BACKGROUND_DOCUMENT_PATH.slice(1),
+      reasons: ['WORKERS'],
+      justification: 'Continue user-confirmed PDF translation when the reader tab is backgrounded.',
+    }).finally(() => {
+      pdfBackgroundDocumentCreation = undefined;
+    });
+  }
+  await pdfBackgroundDocumentCreation;
+}
+
+function disposePdfBackgroundTranslationsForTab(sourceTabId: number): void {
+  void browser.runtime.sendMessage({
+    type: 'DISPOSE_PDF_BACKGROUND_TRANSLATIONS_FOR_TAB',
+    target: 'pdf-background',
+    payload: { sourceTabId },
+  }).catch(() => undefined);
+}
 const tabLifecycles = createPerTabLifecycle();
 const pdfSidePanelSessions = new Map<number, PdfSidePanelSession>();
 const pdfSidePanelCorrectionClaims = new Map<number, string>();
@@ -4354,6 +4403,7 @@ export default defineBackground(() => {
   });
 
   browser.tabs.onRemoved.addListener((tabId) => {
+    disposePdfBackgroundTranslationsForTab(tabId);
     tabLifecycles.close(tabId);
     activeRequests.get(tabId)?.controller.abort();
     activeRequests.delete(tabId);
@@ -4398,6 +4448,7 @@ export default defineBackground(() => {
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (tab.active) rememberActiveBrowserTab(tabId, tab.windowId);
     if (changeInfo.status === 'loading' || changeInfo.url) {
+      disposePdfBackgroundTranslationsForTab(tabId);
       pendingWebCapturePermissionTabs.delete(tabId);
     }
     if (changeInfo.status === 'loading' && !changeInfo.url) {
@@ -4510,6 +4561,46 @@ export default defineBackground(() => {
 
   browser.runtime.onMessage.addListener(
     (message: unknown, sender): Promise<unknown> | undefined => {
+      if (isPdfBackgroundProxyMessage(message)) {
+        const senderUrl = sender.url ?? sender.tab?.url ?? '';
+        if (message.type === 'ENSURE_PDF_BACKGROUND_DOCUMENT') {
+          if (!isExtensionPdfReaderUrl(senderUrl, PI_PDF_READER_URL)) {
+            return Promise.resolve(errorResponse(new TranslationError(
+              'UNSUPPORTED_PAGE',
+              '只能从 Pi PDF 启动后台全文翻译。',
+              false,
+            )));
+          }
+          return ensurePdfBackgroundDocument()
+            .then(() => ({ ok: true, data: { ready: true } }))
+            .catch((error: unknown) => errorResponse(error));
+        }
+        if (senderUrl !== browser.runtime.getURL(PDF_BACKGROUND_DOCUMENT_PATH)) {
+          return Promise.resolve(errorResponse(new TranslationError(
+            'UNSUPPORTED_PAGE',
+            '后台 PDF 请求来源无效。',
+            false,
+          )));
+        }
+        if (message.type === 'CANCEL_PDF_BACKGROUND_VISUAL_BLOCK') {
+          const active = activeRequests.get(message.payload.sourceTabId);
+          const cancelled = active?.requestId === message.payload.requestId;
+          if (cancelled) active.controller.abort();
+          return Promise.resolve({ ok: true, data: { cancelled } });
+        }
+        if (message.type === 'TRANSLATE_PDF_BACKGROUND_TEXT_BLOCK') {
+          return translateDocumentBatch(
+            message.payload.request,
+            message.payload.sourceTabId,
+          );
+        }
+        return translateImageRegion(
+          message.payload.request,
+          message.payload.sourceTabId,
+          'none',
+          true,
+        );
+      }
       if (!isRuntimeMessage(message)) return undefined;
       const routed = routeRuntimeMessage(lowRiskMessageHandlers, message, sender);
       if (routed !== undefined) return routed;

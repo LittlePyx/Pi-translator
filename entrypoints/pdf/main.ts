@@ -79,6 +79,12 @@ import {
   type PdfDocumentTranslationTextItem,
 } from '../../core/pdf/document-translation';
 import {
+  isPdfBackgroundDocumentMessage,
+  PDF_BACKGROUND_CACHE_NAME,
+  type PdfBackgroundDocumentMessage,
+  type PdfBackgroundTranslationSnapshot,
+} from '../../core/pdf/background-document-translation';
+import {
   classifyPdfDocumentTranslationSections,
   parsePdfDocumentPageRange,
   type PdfDocumentTranslationSection,
@@ -360,6 +366,7 @@ const RETAINED_PAGE_RADIUS = 2;
 const MAX_PAGE_CANVAS_PIXELS = 12_000_000;
 let zoomLevel = 1.25;
 let pdfDocument: PDFDocumentProxy | undefined;
+let currentPdfBackgroundData: Uint8Array | undefined;
 let currentSourceUrl = location.href;
 let currentSourceLabel: string | undefined;
 let renderGeneration = 0;
@@ -449,6 +456,7 @@ let pdfDocumentTranslationMultiColumnPages = 0;
 let pdfDocumentTranslationRemovedMarginLines = 0;
 let pdfDocumentTranslationRequestId: string | undefined;
 let pdfDocumentTranslationTask: Promise<void> | undefined;
+let pdfDocumentBackgroundJobId: string | undefined;
 let pdfDocumentTranslationRevision = 0;
 let pdfDocumentTranslationMessage: string | undefined;
 let pdfDocumentTranslationOcrRunning = false;
@@ -960,10 +968,12 @@ function applyPdfDocumentTranslationScope(): boolean {
   );
   const previousPhase = pdfDocumentTranslationPhase;
   if (changed && (
+    pdfDocumentBackgroundJobId ||
     pdfDocumentTranslationRequestId ||
     pdfDocumentTranslationBlocksState.some((block) => block.status === 'translating')
   )) {
     pdfDocumentTranslationRevision += 1;
+    disposePdfDocumentBackgroundJob();
     cancelPdfDocumentTranslationRequest();
     for (const block of pdfDocumentTranslationBlocksState) {
       if (block.status === 'translating') block.status = 'idle';
@@ -1820,6 +1830,7 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     retry.type = 'button';
     retry.textContent = '重试本段';
     retry.addEventListener('click', () => {
+      disposePdfDocumentBackgroundJob();
       block.status = 'idle';
       block.singleRetry = true;
       delete block.errorMessage;
@@ -1827,13 +1838,248 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
       pdfDocumentTranslationMessage = undefined;
       renderPdfDocumentTranslationBlock(block);
       syncPdfDocumentTranslationUi();
-      void processPdfDocumentTranslationQueue();
+      void startPdfDocumentBackgroundTranslation().then((started) => {
+        if (!started) void processPdfDocumentTranslationQueue();
+      });
     });
     container.append(retry);
   } else {
     container.textContent = '正在翻译本页内容…';
   }
   updatePdfDocumentTranslationPageProgress(block.pageNumber);
+}
+
+interface PdfBackgroundCommandResponse {
+  ok: boolean;
+  snapshot?: PdfBackgroundTranslationSnapshot;
+  error?: string;
+}
+
+let pdfDocumentBackgroundSnapshotQueue: Promise<void> = Promise.resolve();
+let pdfDocumentBackgroundControlQueue: Promise<void> = Promise.resolve();
+
+async function applyPdfDocumentBackgroundSnapshot(
+  snapshot: PdfBackgroundTranslationSnapshot,
+): Promise<void> {
+  if (
+    snapshot.jobId !== pdfDocumentBackgroundJobId ||
+    snapshot.documentSessionId !== currentDocumentSessionId
+  ) return;
+  const completedById = new Map(
+    snapshot.completed.map((outcome) => [outcome.blockId, outcome]),
+  );
+  const changed: PdfDocumentTranslationRuntimeBlock[] = [];
+  for (const block of pdfDocumentTranslationBlocksState) {
+    const outcome = completedById.get(block.id);
+    if (outcome) {
+      if (
+        block.status !== 'done' ||
+        block.translatedText !== outcome.translatedText ||
+        block.visualProcessed !== outcome.visualProcessed ||
+        block.visualFallbackMessage !== outcome.visualFallbackMessage
+      ) changed.push(block);
+      block.status = 'done';
+      block.translatedText = outcome.translatedText;
+      if (outcome.visualProcessed) block.visualProcessed = true;
+      else delete block.visualProcessed;
+      if (outcome.visualFallbackMessage) {
+        block.visualFallbackMessage = outcome.visualFallbackMessage;
+      } else {
+        delete block.visualFallbackMessage;
+      }
+      delete block.errorMessage;
+      delete block.singleRetry;
+    } else if (block.included && block.status === 'translating') {
+      block.status = block.id === snapshot.activeBlockId ? 'translating' : 'idle';
+    } else if (
+      block.included &&
+      block.id === snapshot.activeBlockId &&
+      block.status === 'idle'
+    ) {
+      block.status = 'translating';
+    }
+    if (block.included && (outcome || block.id === snapshot.activeBlockId)) {
+      renderPdfDocumentTranslationBlock(block);
+    }
+  }
+  pdfDocumentTranslationPhase = snapshot.phase;
+  pdfDocumentTranslationMessage = snapshot.errorMessage;
+  syncPdfDocumentTranslationUi();
+  if (changed.length) await persistPdfDocumentTranslationSession(changed);
+  if (snapshot.phase === 'complete') await persistPdfDocumentTranslationSession();
+}
+
+function queuePdfDocumentBackgroundSnapshot(snapshot: PdfBackgroundTranslationSnapshot): void {
+  pdfDocumentBackgroundSnapshotQueue = pdfDocumentBackgroundSnapshotQueue
+    .then(() => applyPdfDocumentBackgroundSnapshot(snapshot))
+    .catch(() => undefined);
+}
+
+function sendPdfDocumentBackgroundControl(
+  action: 'pause' | 'resume' | 'stop' | 'dispose',
+): Promise<void> {
+  const jobId = pdfDocumentBackgroundJobId;
+  if (!jobId) return Promise.resolve();
+  if (action === 'dispose') pdfDocumentBackgroundJobId = undefined;
+  const operation = pdfDocumentBackgroundControlQueue.then(async () => {
+    const response = await browser.runtime.sendMessage({
+      type: 'CONTROL_PDF_BACKGROUND_DOCUMENT_TRANSLATION',
+      target: 'pdf-background',
+      payload: { jobId, action },
+    } satisfies PdfBackgroundDocumentMessage).catch(() => undefined) as
+      | PdfBackgroundCommandResponse
+      | undefined;
+    if (
+      action !== 'dispose' &&
+      pdfDocumentBackgroundJobId === jobId &&
+      response?.snapshot
+    ) queuePdfDocumentBackgroundSnapshot(response.snapshot);
+  });
+  pdfDocumentBackgroundControlQueue = operation.catch(() => undefined);
+  return operation;
+}
+
+async function disposePdfDocumentBackgroundJobById(jobId: string): Promise<void> {
+  await browser.runtime.sendMessage({
+    type: 'CONTROL_PDF_BACKGROUND_DOCUMENT_TRANSLATION',
+    target: 'pdf-background',
+    payload: { jobId, action: 'dispose' },
+  } satisfies PdfBackgroundDocumentMessage).catch(() => undefined);
+}
+
+function disposePdfDocumentBackgroundJob(): void {
+  void sendPdfDocumentBackgroundControl('dispose');
+}
+
+async function syncPdfDocumentBackgroundTranslation(): Promise<void> {
+  const jobId = pdfDocumentBackgroundJobId;
+  if (!jobId) return;
+  const response = await browser.runtime.sendMessage({
+    type: 'GET_PDF_BACKGROUND_DOCUMENT_TRANSLATION',
+    target: 'pdf-background',
+    payload: { jobId },
+  } satisfies PdfBackgroundDocumentMessage).catch(() => undefined) as
+    | PdfBackgroundCommandResponse
+    | undefined;
+  if (response?.snapshot) queuePdfDocumentBackgroundSnapshot(response.snapshot);
+}
+
+async function startPdfDocumentBackgroundTranslation(): Promise<boolean> {
+  const epoch = documentEpoch;
+  const documentSessionId = currentDocumentSessionId;
+  const backgroundData = currentPdfBackgroundData;
+  const pending = pdfDocumentTranslationBlocksState.filter(
+    (block) => block.included && block.status === 'idle',
+  );
+  if (!pending.length) return false;
+  const mode = pdfDocumentTranslationUsesUnifiedVision() &&
+    pdfDocumentTranslationMultimodalAuthorized
+    ? 'vision'
+    : 'text';
+  if (mode === 'vision' && !backgroundData) return false;
+  const ready = await browser.runtime.sendMessage({
+    type: 'ENSURE_PDF_BACKGROUND_DOCUMENT',
+  }).catch(() => undefined) as { ok?: boolean } | undefined;
+  if (
+    !ready?.ok || epoch !== documentEpoch ||
+    documentSessionId !== currentDocumentSessionId
+  ) return false;
+  const jobId = crypto.randomUUID();
+  pdfDocumentBackgroundJobId = jobId;
+  const pdfResourceUrl = mode === 'vision'
+    ? `https://pi-translator.invalid/__pdf-background/${encodeURIComponent(jobId)}.pdf`
+    : undefined;
+  if (pdfResourceUrl) {
+    try {
+      const cache = await caches.open(PDF_BACKGROUND_CACHE_NAME);
+      await cache.put(
+        pdfResourceUrl,
+        new Response(backgroundData!.slice().buffer as ArrayBuffer, {
+          headers: { 'Content-Type': 'application/pdf' },
+        }),
+      );
+    } catch {
+      if (pdfDocumentBackgroundJobId === jobId) pdfDocumentBackgroundJobId = undefined;
+      return false;
+    }
+    if (
+      pdfDocumentBackgroundJobId !== jobId || epoch !== documentEpoch ||
+      documentSessionId !== currentDocumentSessionId
+    ) {
+      void caches.open(PDF_BACKGROUND_CACHE_NAME)
+        .then((cache) => cache.delete(pdfResourceUrl))
+        .catch(() => undefined);
+      return false;
+    }
+  }
+  const pendingIds = new Set(pending.map((block) => block.id));
+  const response = await browser.runtime.sendMessage({
+    type: 'START_PDF_BACKGROUND_DOCUMENT_TRANSLATION',
+    target: 'pdf-background',
+    payload: {
+      jobId,
+      documentSessionId,
+      mode,
+      ...(pdfResourceUrl ? { pdfResourceUrl } : {}),
+      blocks: pending.map((block) => {
+        const index = pdfDocumentTranslationBlocksState.indexOf(block);
+        const continuity = pdfDocumentTranslationContinuity(
+          pdfDocumentTranslationBlocksState,
+          index,
+        );
+        const previous = continuity.previousIndex === undefined
+          ? undefined
+          : pdfDocumentTranslationBlocksState[continuity.previousIndex];
+        const contextText = pdfDocumentTranslationContext(block);
+        return {
+          id: block.id,
+          pageNumber: block.pageNumber,
+          text: block.text,
+          containsFormula: pdfDocumentTranslationBlockContainsFormula(block),
+          preserveInTextMode: block.kind === 'formula',
+          sourceRegions: pdfDocumentTranslationSourceRegions(block).map((region) => ({
+            ...region,
+            sourceAnchor: { ...region.sourceAnchor },
+          })),
+          ...(continuity.continuesPrevious && previous && pendingIds.has(previous.id)
+            ? { previousBlockId: previous.id }
+            : {}),
+          ...(contextText ? { contextText } : {}),
+        };
+      }),
+      settings: {
+        ...(currentReadingIdentity || currentDocumentSessionId
+          ? { documentId: currentReadingIdentity ?? currentDocumentSessionId }
+          : {}),
+        pageUrl: currentSourceUrl,
+        ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
+        targetLanguage: pdfDocumentTranslationSettings.targetLanguage,
+        sourceLanguage: pdfDocumentTranslationSettings.sourceLanguage,
+        style: pdfDocumentTranslationSettings.style,
+        contentMode: pdfDocumentTranslationSettings.contentMode,
+      },
+    },
+  } satisfies PdfBackgroundDocumentMessage).catch(() => undefined) as
+    | PdfBackgroundCommandResponse
+    | undefined;
+  if (
+    pdfDocumentBackgroundJobId !== jobId || epoch !== documentEpoch ||
+    documentSessionId !== currentDocumentSessionId
+  ) {
+    await disposePdfDocumentBackgroundJobById(jobId);
+    return false;
+  }
+  if (!response?.ok) {
+    pdfDocumentBackgroundJobId = undefined;
+    if (pdfResourceUrl) {
+      void caches.open(PDF_BACKGROUND_CACHE_NAME)
+        .then((cache) => cache.delete(pdfResourceUrl))
+        .catch(() => undefined);
+    }
+    return false;
+  }
+  if (response.snapshot) queuePdfDocumentBackgroundSnapshot(response.snapshot);
+  return true;
 }
 
 function cancelPdfDocumentTranslationRequest(): void {
@@ -1858,6 +2104,7 @@ function cancelPdfDocumentTranslationOcrRequest(): void {
 
 function resetPdfDocumentTranslation(closePanel = false): void {
   pdfDocumentTranslationRevision += 1;
+  disposePdfDocumentBackgroundJob();
   cancelPdfDocumentTranslationRequest();
   pdfDocumentTranslationOcrRevision += 1;
   cancelPdfDocumentTranslationOcrRequest();
@@ -2779,6 +3026,7 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
     pdfDocumentTranslationPhase = 'paused';
     pdfDocumentTranslationMessage = undefined;
     syncPdfDocumentTranslationUi();
+    void sendPdfDocumentBackgroundControl('pause');
     void persistPdfDocumentTranslationSession();
     return;
   }
@@ -2811,11 +3059,18 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
   documentTranslationSettings.open = false;
   syncPdfDocumentTranslationUi();
   void persistPdfDocumentTranslationSession();
-  void processPdfDocumentTranslationQueue();
+  if (pdfDocumentBackgroundJobId) {
+    void sendPdfDocumentBackgroundControl('resume');
+    return;
+  }
+  if (!await startPdfDocumentBackgroundTranslation()) {
+    void processPdfDocumentTranslationQueue();
+  }
 }
 
 function stopPdfDocumentTranslation(): void {
   pdfDocumentTranslationRevision += 1;
+  void sendPdfDocumentBackgroundControl('stop');
   cancelPdfDocumentTranslationRequest();
   for (const block of pdfDocumentTranslationBlocksState) {
     if (block.status !== 'translating') continue;
@@ -2833,6 +3088,7 @@ async function restartPdfDocumentTranslation(): Promise<void> {
   pdfDocumentTranslationRevision += 1;
   const revision = pdfDocumentTranslationRevision;
   const previousTask = pdfDocumentTranslationTask;
+  disposePdfDocumentBackgroundJob();
   cancelPdfDocumentTranslationRequest();
   for (const block of pdfDocumentTranslationBlocksState) {
     if (!block.included) continue;
@@ -3305,6 +3561,7 @@ function beginDocumentOpen(
   loadingStage: Extract<PdfLoadingStage, 'reading-local' | 'reading-online'>,
 ): DocumentOpenOperation {
   resetPdfDocumentTranslation(true);
+  currentPdfBackgroundData = undefined;
   void persistReadingState();
   currentReadingIdentity = undefined;
   restoringReadingState = false;
@@ -5105,6 +5362,7 @@ async function openPdfData(
   if (!isCurrentOpen(operation)) return;
   setLoading('正在加载阅读组件…', 'runtime');
   let nextDocument: PDFDocumentProxy | undefined;
+  const nextPdfBackgroundData = data.slice();
   try {
     const readingStatePromise = readingIdentity
       ? getPdfReadingState(readingIdentity).catch(() => undefined)
@@ -5132,6 +5390,7 @@ async function openPdfData(
       return;
     }
     pdfDocument = nextDocument;
+    currentPdfBackgroundData = nextPdfBackgroundData;
     currentReadingIdentity = readingIdentity;
     pdfReadingBookmarks = restoredBookmarks.bookmarks;
     renderPdfBookmarks();
@@ -5172,7 +5431,10 @@ async function openPdfData(
     scheduleReadingStateSave();
   } catch (error) {
     if (!isCurrentOpen(operation)) return;
-    if (pdfDocument === nextDocument) pdfDocument = undefined;
+    if (pdfDocument === nextDocument) {
+      pdfDocument = undefined;
+      currentPdfBackgroundData = undefined;
+    }
     if (nextDocument) void nextDocument.destroy().catch(() => undefined);
     emptyState.hidden = false;
     viewer.hidden = true;
@@ -6775,6 +7037,22 @@ const onPdfViewportResize = (): void => {
 };
 window.addEventListener('resize', onPdfViewportResize, { passive: true });
 
+browser.runtime.onMessage.addListener((value: unknown): undefined => {
+  if (
+    !isPdfBackgroundDocumentMessage(value) ||
+    value.type !== 'PDF_BACKGROUND_DOCUMENT_TRANSLATION_UPDATED'
+  ) return undefined;
+  queuePdfDocumentBackgroundSnapshot(value.payload);
+  return undefined;
+});
+
+const syncBackgroundTranslationWhenForegrounded = (): void => {
+  if (document.visibilityState === 'visible') void syncPdfDocumentBackgroundTranslation();
+};
+document.addEventListener('visibilitychange', syncBackgroundTranslationWhenForegrounded);
+document.addEventListener('resume', syncBackgroundTranslationWhenForegrounded);
+window.addEventListener('focus', syncBackgroundTranslationWhenForegrounded);
+
 window.addEventListener('beforeunload', () => {
   hideDropOverlay();
   stopSearchIndexing();
@@ -6782,11 +7060,15 @@ window.addEventListener('beforeunload', () => {
   if (textSelectionSnapFrame !== undefined) cancelAnimationFrame(textSelectionSnapFrame);
   void persistReadingState();
   window.removeEventListener('resize', onPdfViewportResize);
+  window.removeEventListener('focus', syncBackgroundTranslationWhenForegrounded);
+  document.removeEventListener('visibilitychange', syncBackgroundTranslationWhenForegrounded);
+  document.removeEventListener('resume', syncBackgroundTranslationWhenForegrounded);
   document.removeEventListener('pointerdown', beginSmartTextSelection, true);
   document.removeEventListener('pointerup', finishSmartTextSelection, true);
   document.removeEventListener('pointercancel', cancelSmartTextSelection, true);
   openAbortController?.abort();
   resetPdfDocumentTranslation(true);
+  currentPdfBackgroundData = undefined;
   if (openLoadingTask) void openLoadingTask.destroy().catch(() => undefined);
   clearDocument();
   void pdfDocument?.destroy();

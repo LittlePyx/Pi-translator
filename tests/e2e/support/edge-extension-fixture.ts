@@ -51,6 +51,12 @@ export interface EdgeE2EMockControl {
   interactiveRequestStarted: (() => void) | undefined;
   releaseHeldInteractiveRequest: (() => void) | undefined;
   heldInteractiveRequestGate: Promise<void>;
+  holdNextVisionRequest: boolean;
+  releaseHeldVisionRequest: (() => void) | undefined;
+  heldVisionRequestGate: Promise<void>;
+  holdNextDocumentBatchRequest: boolean;
+  releaseHeldDocumentBatchRequest: (() => void) | undefined;
+  heldDocumentBatchRequestGate: Promise<void>;
   omitNextDocumentBatchItem: boolean;
 }
 
@@ -75,6 +81,12 @@ export const mockControl: EdgeE2EMockControl = {
   interactiveRequestStarted: undefined,
   releaseHeldInteractiveRequest: undefined,
   heldInteractiveRequestGate: Promise.resolve(),
+  holdNextVisionRequest: false,
+  releaseHeldVisionRequest: undefined,
+  heldVisionRequestGate: Promise.resolve(),
+  holdNextDocumentBatchRequest: false,
+  releaseHeldDocumentBatchRequest: undefined,
+  heldDocumentBatchRequestGate: Promise.resolve(),
   omitNextDocumentBatchItem: false,
 };
 
@@ -82,6 +94,8 @@ function resetMockControl(): void {
   mockControl.releasePartialRecoveryFailure?.();
   mockControl.releaseHeldBilingualRequest?.();
   mockControl.releaseHeldInteractiveRequest?.();
+  mockControl.releaseHeldVisionRequest?.();
+  mockControl.releaseHeldDocumentBatchRequest?.();
   Object.assign(mockControl, {
     echoVisionPayloadOnce: false,
     failNextRevisionRequest: false,
@@ -103,6 +117,12 @@ function resetMockControl(): void {
     interactiveRequestStarted: undefined,
     releaseHeldInteractiveRequest: undefined,
     heldInteractiveRequestGate: Promise.resolve(),
+    holdNextVisionRequest: false,
+    releaseHeldVisionRequest: undefined,
+    heldVisionRequestGate: Promise.resolve(),
+    holdNextDocumentBatchRequest: false,
+    releaseHeldDocumentBatchRequest: undefined,
+    heldDocumentBatchRequestGate: Promise.resolve(),
     omitNextDocumentBatchItem: false,
   } satisfies EdgeE2EMockControl);
 }
@@ -781,6 +801,14 @@ export function installEdgeExtensionHooks(): void {
       mockControl.interactiveRequestStarted = undefined;
       await mockControl.heldInteractiveRequestGate;
     }
+    if (
+      mockControl.holdNextDocumentBatchRequest &&
+      requestedSegments.length > 0 &&
+      requestedSegments.every((segment) => /^(?:B\d+|P\d+B\d+)$/u.test(segment.id))
+    ) {
+      mockControl.holdNextDocumentBatchRequest = false;
+      await mockControl.heldDocumentBatchRequestGate;
+    }
     if (isPartialRecoverySelection && mockControl.failNextRecoveryRequestAfterPartial) {
       mockControl.partialRecoveryRequestIndex += 1;
       if (mockControl.partialRecoveryRequestIndex === 1) {
@@ -981,6 +1009,10 @@ export function installEdgeExtensionHooks(): void {
   await context.route('https://www.overleaf.com/pi-translator-e2e-vision/**', async (route) => {
     const body = route.request().postDataJSON() as Record<string, unknown>;
     visionRequests.push(body);
+    if (mockControl.holdNextVisionRequest) {
+      mockControl.holdNextVisionRequest = false;
+      await mockControl.heldVisionRequestGate;
+    }
     const requestImage = (body.messages as Array<{
       content?: Array<{ type?: string; text?: string; image_url?: { url?: string } }>;
     }> | undefined)?.[0]?.content?.find((item) => item.type === 'image_url')?.image_url?.url;

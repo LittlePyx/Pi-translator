@@ -590,6 +590,111 @@ test('uses one authorized vision model for every block in a PDF containing formu
   }
 });
 
+test('continues a text-only PDF translation while the reader tab is frozen', async () => {
+  const pdfPage = await context.newPage();
+  const lifecycle = await context.newCDPSession(pdfPage);
+  const textRequestStart = textRequests.length;
+  const visionRequestStart = visionRequests.length;
+  let frozen = false;
+  mockControl.heldDocumentBatchRequestGate = new Promise<void>((resolve) => {
+    mockControl.releaseHeldDocumentBatchRequest = resolve;
+  });
+  mockControl.holdNextDocumentBatchRequest = true;
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'background-text-translation.pdf',
+      mimeType: 'application/pdf',
+      buffer: createMultiPageTextPdf(Array.from({ length: 14 }, (_, index) => ({
+        text: `Text-only background translation page ${index + 1} remains continuous.`,
+      }))),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 14 段，等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect.poll(() => textRequests.length).toBe(textRequestStart + 1);
+
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'frozen' });
+    frozen = true;
+    mockControl.releaseHeldDocumentBatchRequest?.();
+    mockControl.releaseHeldDocumentBatchRequest = undefined;
+
+    await expect.poll(() => textRequests.length, { timeout: 20_000 })
+      .toBe(textRequestStart + 3);
+    expect(visionRequests).toHaveLength(visionRequestStart);
+
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'active' });
+    frozen = false;
+    await pdfPage.bringToFront();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 14/14', { timeout: 20_000 });
+  } finally {
+    mockControl.releaseHeldDocumentBatchRequest?.();
+    mockControl.releaseHeldDocumentBatchRequest = undefined;
+    if (frozen) {
+      await lifecycle.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined);
+    }
+    await pdfPage.close();
+  }
+});
+
+test('continues an authorized multimodal PDF translation while the reader tab is frozen', async () => {
+  const pdfPage = await context.newPage();
+  const visionRequestStart = visionRequests.length;
+  const textRequestStart = textRequests.length;
+  const lifecycle = await context.newCDPSession(pdfPage);
+  let frozen = false;
+  mockControl.heldVisionRequestGate = new Promise<void>((resolve) => {
+    mockControl.releaseHeldVisionRequest = resolve;
+  });
+  mockControl.holdNextVisionRequest = true;
+  try {
+    await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await pdfPage.locator('#file-input').setInputFiles({
+      name: 'background-multimodal-translation.pdf',
+      mimeType: 'application/pdf',
+      buffer: createMultiPageTextPdf([
+        { text: 'Energy E = mc^2 begins this three-page document.' },
+        { text: 'The second page must translate without the reader tab running.' },
+        { text: 'The third page proves that the background queue reaches completion.' },
+      ]),
+    });
+    await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
+    await pdfPage.locator('#translate-document').click();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已识别 3 段，等待确认');
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect.poll(() => visionRequests.length).toBe(visionRequestStart + 1);
+    expect(visionRequests).toHaveLength(visionRequestStart + 1);
+
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'frozen' });
+    frozen = true;
+    mockControl.releaseHeldVisionRequest?.();
+    mockControl.releaseHeldVisionRequest = undefined;
+
+    await expect.poll(() => visionRequests.length, { timeout: 20_000 })
+      .toBe(visionRequestStart + 3);
+    expect(textRequests).toHaveLength(textRequestStart);
+
+    await lifecycle.send('Page.setWebLifecycleState', { state: 'active' });
+    frozen = false;
+    await pdfPage.bringToFront();
+    await expect(pdfPage.locator('#pdf-document-translation-status'))
+      .toContainText('已完成 3/3', { timeout: 20_000 });
+    await expect(pdfPage.locator('#pdf-document-translation'))
+      .toHaveAttribute('data-phase', 'complete');
+  } finally {
+    mockControl.releaseHeldVisionRequest?.();
+    mockControl.releaseHeldVisionRequest = undefined;
+    if (frozen) {
+      await lifecycle.send('Page.setWebLifecycleState', { state: 'active' }).catch(() => undefined);
+    }
+    await pdfPage.close();
+  }
+});
+
 test('joins long paragraph chunks into one non-overlapping multimodal crop', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   const visionRequestStart = visionRequests.length;
