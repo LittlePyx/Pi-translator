@@ -466,6 +466,51 @@ describe('PDF document translation', () => {
     expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.2);
   });
 
+  it('suppresses text-layer chart fragments contained by an inferred figure crop', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P8B1', pageNumber: 8, blockIndex: 0,
+        text: '32.4 32.2 32 31.8 31.6 PSNR (dB) 31.4 31.2 31 30.8 30.6',
+        sourceAnchor: { leftRatio: .118, topRatio: .096, widthRatio: .056, heightRatio: .164 },
+      },
+      {
+        id: 'P8B2', pageNumber: 8, blockIndex: 1,
+        text: '20 40 60 80 100 120 140 160 180 200',
+        sourceAnchor: { leftRatio: .157, topRatio: .258, widthRatio: .263, heightRatio: .012 },
+      },
+      {
+        id: 'P8B3', pageNumber: 8, blockIndex: 2,
+        text: 'Figure 6. PSNR comparison between two ISTA-Net+ variants.',
+        sourceAnchor: { leftRatio: .076, topRatio: .282, widthRatio: .398, heightRatio: .029 },
+      },
+      {
+        id: 'P8B4', pageNumber: 8, blockIndex: 3, text: 'f\tf', kind: 'formula',
+        sourceAnchor: { leftRatio: .31, topRatio: .297, widthRatio: .082, heightRatio: .015 },
+      },
+      {
+        id: 'P8B5', pageNumber: 8, blockIndex: 4,
+        text: 'Table 3. Average PSNR comparison.',
+        sourceAnchor: { leftRatio: .068, topRatio: .308, widthRatio: .414, heightRatio: .118 },
+      },
+      {
+        id: 'P8B6', pageNumber: 8, blockIndex: 5,
+        text: 'The discussion below the figure remains ordinary prose.',
+        sourceAnchor: { leftRatio: .076, topRatio: .45, widthRatio: .398, heightRatio: .04 },
+      },
+    ]);
+
+    expect(grouped.map((block) => ({ kind: block.kind, text: block.text }))).toEqual([
+      {
+        kind: 'figure',
+        text: 'Figure 6. PSNR comparison between two ISTA-Net+ variants.',
+      },
+      { kind: undefined, text: 'Table 3. Average PSNR comparison.' },
+      { kind: undefined, text: 'The discussion below the figure remains ordinary prose.' },
+    ]);
+    expect(grouped[0]!.sourceAnchor!.topRatio).toBeLessThan(.12);
+    expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.2);
+  });
+
   it('keeps a table caption and all adjacent rows in one table object', () => {
     const grouped = groupPdfDocumentTranslationVisualObjects([
       {

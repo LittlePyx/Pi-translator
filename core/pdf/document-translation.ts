@@ -703,8 +703,12 @@ function pdfDocumentTranslationLooksFigureFragment(
     return false;
   }
   const numericCharacters = text.match(/[\d.,%+−-]/gu)?.length ?? 0;
+  const numericTokens = text.split(/\s+/u).filter(Boolean);
+  const numericSequence = numericTokens.length >= 3 && numericTokens.every((token) => (
+    /^[+−-]?(?:\d+(?:[.,]\d+)*|\.\d+)(?:e[+−-]?\d+)?%?$/iu.test(token)
+  ));
   const axisOrLegend = FIGURE_FRAGMENT_LABEL.test(text);
-  return block.kind === 'table' || block.kind === 'formula' || axisOrLegend ||
+  return block.kind === 'table' || block.kind === 'formula' || axisOrLegend || numericSequence ||
     (text.length <= 28 && numericCharacters >= Math.max(1, text.length * .28));
 }
 
@@ -820,6 +824,50 @@ function groupPdfDocumentTranslationFigures(
     });
   }
   return output;
+}
+
+function pdfDocumentTranslationBoundsContainFragment(
+  outer: PdfDocumentTranslationAnchorBounds,
+  inner: PdfDocumentTranslationAnchorBounds,
+): boolean {
+  const intersectionWidth = Math.max(
+    0,
+    Math.min(outer.right, inner.right) - Math.max(outer.left, inner.left),
+  );
+  const intersectionHeight = Math.max(
+    0,
+    Math.min(outer.bottom, inner.bottom) - Math.max(outer.top, inner.top),
+  );
+  const innerArea = Math.max(0, inner.right - inner.left) * Math.max(0, inner.bottom - inner.top);
+  return innerArea > 0 && intersectionWidth * intersectionHeight >= innerArea * .88;
+}
+
+/**
+ * A vector chart can expose its axes, ticks, legends, and isolated caption
+ * subscripts in PDF reading order before or after its caption. Once the whole
+ * figure crop is known, suppress only high-confidence figure fragments that
+ * are geometrically contained by that crop. The caption remains the single
+ * translatable object; nearby prose, equations, and following tables remain
+ * independent.
+ */
+function removePdfDocumentTranslationFigureInteriorFragments(
+  input: readonly PdfDocumentTranslationBlock[],
+): PdfDocumentTranslationBlock[] {
+  const figures = input.flatMap((block) => {
+    if (block.kind !== 'figure') return [];
+    const bounds = pdfDocumentTranslationBlockBounds(block);
+    return bounds ? [{ pageNumber: block.pageNumber, bounds }] : [];
+  });
+  if (!figures.length) return [...input];
+  return input.filter((block) => {
+    if (block.kind === 'figure' || !pdfDocumentTranslationLooksFigureFragment(block)) return true;
+    const bounds = pdfDocumentTranslationBlockBounds(block);
+    if (!bounds) return true;
+    return !figures.some((figure) => (
+      figure.pageNumber === block.pageNumber &&
+      pdfDocumentTranslationBoundsContainFragment(figure.bounds, bounds)
+    ));
+  });
 }
 
 function groupPdfDocumentTranslationTables(
@@ -950,7 +998,9 @@ export function groupPdfDocumentTranslationVisualObjects(
   blocks: readonly PdfDocumentTranslationBlock[],
 ): PdfDocumentTranslationBlock[] {
   return reindexPdfDocumentTranslationPageBlocks(
-    groupPdfDocumentTranslationTables(groupPdfDocumentTranslationFigures(blocks)),
+    groupPdfDocumentTranslationTables(removePdfDocumentTranslationFigureInteriorFragments(
+      groupPdfDocumentTranslationFigures(blocks),
+    )),
   );
 }
 

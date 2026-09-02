@@ -855,7 +855,7 @@ function currentPdfDocumentTranslationSessionContext():
       contentMode: pdfDocumentTranslationSettings.contentMode,
     },
     behaviorKey: pdfDocumentTranslationSessionBehaviorKey([
-      'pdf-semantic-visual-objects-v6',
+      'pdf-semantic-visual-objects-v7',
       pdfDocumentTranslationUsesUnifiedVision()
         ? 'unified-vision'
         : pdfDocumentTranslationMultimodalEnabled &&
