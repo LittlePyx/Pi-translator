@@ -84,7 +84,8 @@ function percent(value: number): string {
 }
 
 function safeRole(value: PdfDocumentTranslationBlockKind | undefined): string {
-  return value === 'formula' || value === 'code' || value === 'table' || value === 'figure'
+  return value === 'formula' || value === 'code' || value === 'table' || value === 'figure' ||
+    value === 'footnote'
     ? value
     : 'text';
 }
@@ -219,7 +220,7 @@ export function buildPdfLayoutTranslationExport(
     main{display:grid;justify-content:center;gap:24px}.pdf-layout-page{position:relative;width:var(--page-width);height:var(--page-height);overflow:hidden;background:#fff;box-shadow:0 12px 34px rgba(15,23,42,.18);break-after:page}
     .pdf-layout-source{position:absolute;inset:0;width:100%;height:100%;object-fit:fill}.pdf-layout-source-missing{display:grid;height:100%;place-items:center;padding:48pt;color:#8b5e12;font-size:13pt;line-height:1.6;text-align:center}
     .pdf-layout-overlay{position:absolute;z-index:2;display:block;overflow:hidden;padding:2.1pt 2.5pt;color:#111827;background:#fff;box-shadow:0 0 0 1pt #fff;font-size:11pt;line-height:1.34;overflow-wrap:anywhere;print-color-adjust:exact;-webkit-print-color-adjust:exact}
-    .pdf-layout-overlay[data-layout-role="formula"]{font-family:"Segoe UI","Microsoft YaHei","Cambria Math",serif}.pdf-layout-overlay[data-layout-role="code"]{font-family:Consolas,"Cascadia Mono",monospace}.pdf-layout-overlay[data-layout-role="table"]{outline:.35pt solid #d8dce6;outline-offset:-.35pt}
+    .pdf-layout-overlay[data-layout-role="formula"]{font-family:"Segoe UI","Microsoft YaHei","Cambria Math",serif}.pdf-layout-overlay[data-layout-role="code"]{font-family:Consolas,"Cascadia Mono",monospace}.pdf-layout-overlay[data-layout-role="table"]{outline:.35pt solid #d8dce6;outline-offset:-.35pt}.pdf-layout-overlay[data-layout-role="footnote"]{padding:1.2pt 1.8pt;color:#334155;font-size:8pt;line-height:1.22}
     .pdf-layout-mask{position:absolute;z-index:0;inset:0;width:100%;height:100%}.pdf-layout-block-content{position:relative;z-index:1;white-space:pre-wrap}.pi-rich-strong{font-weight:700}.pi-math-inline{display:inline-flex;max-width:100%;vertical-align:-.14em}.pi-math-display{display:block;width:100%;margin:.45em 0;text-align:center}.pi-math-numbered{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:4pt}.pi-math-scroll{min-width:0;overflow:hidden;text-align:center}.pi-equation-tag{white-space:nowrap;font-size:.86em}.pi-math math{color:inherit;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif}.pi-math-display math{font-size:1.02em}
     .pdf-layout-overlay[data-layout-overflow-reference]{display:flex;align-items:center;width:auto!important;max-width:30%;height:auto!important;min-height:14pt;padding:2pt 4pt;border:.7pt solid #d69e2e;border-radius:3pt;color:#7a4d00;background:#fff8dc;font-size:7.5pt;font-weight:700;line-height:1.2;box-shadow:0 1pt 3pt rgba(93,63,10,.14)}
     .pdf-layout-partial-cover{display:grid;place-items:center;padding:56pt}.pdf-layout-partial-cover>div{max-width:390pt;padding:30pt;border:1pt solid #ead8aa;border-radius:10pt;background:#fffbeb}.pdf-layout-partial-cover span{color:#5b57dc;font-size:9pt;font-weight:700;letter-spacing:.06em}.pdf-layout-partial-cover strong{display:block;margin-top:8pt;color:#694a12;font-size:22pt}.pdf-layout-partial-cover p{margin:14pt 0 5pt;color:#8b5e12;font-size:12pt}.pdf-layout-partial-cover small{color:#7b6a4d;font-size:9pt;line-height:1.55}

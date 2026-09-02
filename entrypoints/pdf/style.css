@@ -687,6 +687,17 @@ button { color: inherit; font: inherit; cursor: pointer; }
   outline-offset: 1px;
   background: rgba(99, 102, 241, .07);
 }
+.pdf-document-translation-block[data-note-role="footnote"] {
+  margin-top: 14px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-size: 10.5px;
+  line-height: 1.65;
+}
+.pdf-document-translation-block[data-note-role="footnote"][data-source-anchor][data-status="done"] {
+  padding-top: 8px;
+}
 .pdf-document-translation-block[data-status="translating"] { color: var(--muted); }
 .pdf-document-translation-block[data-status="error"] { color: #b42336; }
 .pdf-document-translation-block[data-object-role] {

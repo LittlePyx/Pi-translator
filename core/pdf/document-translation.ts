@@ -3,7 +3,8 @@ import { splitLongTranslationText } from '../translation/text-chunker';
 import type { CoordinateOcrPage } from './ocr-text-layer';
 import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
 
-export type PdfDocumentTranslationBlockKind = 'text' | 'formula' | 'code' | 'table' | 'figure';
+export type PdfDocumentTranslationBlockKind =
+  'text' | 'formula' | 'code' | 'table' | 'figure' | 'footnote';
 
 export interface PdfDocumentTranslationBlock {
   id: string;
@@ -102,6 +103,7 @@ interface VisualLine {
   kind?: PdfDocumentTranslationBlockKind;
   region?: VisualLineRegion;
   breakBefore?: boolean;
+  footnoteStart?: boolean;
 }
 
 interface JoinedLayoutLine {
@@ -148,6 +150,7 @@ const CAPTION_BLOCK = /^(?:fig(?:ure)?\.?|table|algorithm|listing|scheme|图|表
 const FIGURE_CAPTION = /(?:^|\s)((?:fig(?:ure)?\.?|scheme|图)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
 const TABLE_CAPTION = /(?:^|\s)((?:table|表)\s*(?:[A-Z]?\d+[A-Z]?|[IVXLC]+)\s*[.:-](?:\s|$))/iu;
 const FIGURE_FRAGMENT_LABEL = /\b(?:accuracy|epoch|error|iteration|loss|method|model|number|phase|psnr|ratio|score|ssim|time|training)\b|\bdb\b/iu;
+const FOOTNOTE_LEAD = /^(?:\d{1,3}|[*†‡§¶])(?:\s+|(?=\p{L}))/u;
 const INLINE_SECTION_LEAD = /^[\p{Lu}\d][^.!?。！？:：\t]{2,72}[:：]\s+\p{Lu}/u;
 const KNOWN_SECTION_HEADINGS = new Set([
   'abstract',
@@ -255,7 +258,9 @@ function lineFromAtoms(atoms: readonly VisualAtom[], structured = false): Visual
       ? 'table'
       : atoms.some((atom) => atom.kind === 'code')
         ? 'code'
-        : undefined;
+        : atoms.some((atom) => atom.kind === 'footnote')
+          ? 'footnote'
+          : undefined;
   return {
     text: joinAtoms(atoms),
     left: Math.min(...atoms.map((atom) => atom.left)),
@@ -409,7 +414,64 @@ function visualLines(page: PdfDocumentTranslationPageInput): VisualLine[] | unde
     }
     output.push(...chunks.map((chunk) => lineFromAtoms(chunk)));
   }
-  return output.filter((line) => line.text);
+  return markPdfDocumentTranslationFootnoteLines(
+    output.filter((line) => line.text),
+    page.pageHeight,
+  );
+}
+
+function pdfDocumentTranslationLinesShareLane(left: VisualLine, right: VisualLine): boolean {
+  const overlap = Math.max(0, Math.min(left.right, right.right) - Math.max(left.left, right.left));
+  const minimumWidth = Math.min(left.right - left.left, right.right - right.left);
+  return minimumWidth > 0 && overlap >= minimumWidth * .55;
+}
+
+/**
+ * Marks high-confidence page-bottom footnotes before paragraph construction.
+ * A numeric marker alone is not sufficient: the line must also be materially
+ * smaller than the page body, and wrapped lines must remain in the same lane.
+ */
+function markPdfDocumentTranslationFootnoteLines(
+  lines: VisualLine[],
+  pageHeight: number,
+): VisualLine[] {
+  if (!(pageHeight > 0)) return lines;
+  const bodyHeights = lines.filter((line) => (
+    !line.structured &&
+    line.top >= pageHeight * .08 &&
+    line.bottom <= pageHeight * .82 &&
+    /\p{L}/u.test(line.text)
+  )).map((line) => line.height);
+  const typicalHeight = median(bodyHeights) || median(lines.map((line) => line.height));
+  if (!(typicalHeight > 0)) return lines;
+  const maximumFootnoteHeight = typicalHeight * .88;
+  const maximumBottom = pageHeight * .93;
+  const starts = lines.filter((line) => (
+    !line.structured &&
+    line.top >= pageHeight * .72 &&
+    line.bottom <= maximumBottom &&
+    line.height <= maximumFootnoteHeight &&
+    FOOTNOTE_LEAD.test(line.text.trim())
+  ));
+  for (const start of starts) {
+    start.kind = 'footnote';
+    start.footnoteStart = true;
+    let previous = start;
+    for (const candidate of lines) {
+      if (
+        candidate === start || candidate.top <= previous.top ||
+        candidate.bottom > maximumBottom ||
+        !pdfDocumentTranslationLinesShareLane(start, candidate)
+      ) continue;
+      const verticalGap = candidate.top - previous.bottom;
+      if (verticalGap > Math.max(5, typicalHeight * .8)) break;
+      if (candidate.structured || candidate.height > maximumFootnoteHeight) break;
+      candidate.kind = 'footnote';
+      if (FOOTNOTE_LEAD.test(candidate.text.trim())) candidate.footnoteStart = true;
+      previous = candidate;
+    }
+  }
+  return lines;
 }
 
 function looksMathDominant(text: string): boolean {
@@ -435,6 +497,7 @@ export function pdfDocumentTranslationBlockKind(
   sourceKinds: readonly PdfDocumentTranslationBlockKind[] = [],
 ): PdfDocumentTranslationBlockKind {
   const trimmed = text.trim();
+  if (sourceKinds.includes('footnote')) return 'footnote';
   if (sourceKinds.includes('formula')) return 'formula';
   if (sourceKinds.includes('table')) return 'table';
   if (STANDALONE_MATH_DELIMITER.test(trimmed)) return 'formula';
@@ -624,7 +687,10 @@ function pdfDocumentTranslationCaptionText(
 function pdfDocumentTranslationLooksFigureFragment(
   block: PdfDocumentTranslationBlock,
 ): boolean {
-  if (!block.sourceAnchor || block.kind === 'code' || block.kind === 'figure') return false;
+  if (
+    !block.sourceAnchor || block.kind === 'code' || block.kind === 'figure' ||
+    block.kind === 'footnote'
+  ) return false;
   const text = block.text.replace(/\s+/gu, ' ').trim();
   if (!text || text.length > 120 || FIGURE_CAPTION.test(text) || TABLE_CAPTION.test(text)) {
     return false;
@@ -911,6 +977,7 @@ function pdfDocumentTranslationBlockIsSkippableInterruption(
   block: Pick<PdfDocumentTranslationBlock, 'text' | 'kind'>,
 ): boolean {
   return block.kind === 'code' || block.kind === 'table' || block.kind === 'figure' ||
+    block.kind === 'footnote' ||
     CAPTION_BLOCK.test(block.text.trim());
 }
 
@@ -1086,6 +1153,7 @@ export function mergePdfDocumentTranslationContinuationBlocks(
 }
 
 function looksHeadingLine(line: VisualLine, typicalHeight: number): boolean {
+  if (line.kind === 'footnote') return false;
   const text = line.text.replace(/\s+/gu, ' ').trim();
   if (!text || text.length > 150 || HEADING_SENTENCE_END.test(text)) return false;
   const normalized = text.replace(/\s*[:：]\s*$/u, '').toLocaleLowerCase('en-US');
@@ -1251,9 +1319,13 @@ function joinedLineText(lines: readonly VisualLine[]): JoinedLayoutText {
     const startsIndentedParagraph =
       currentIndent >= Math.max(7, typicalHeight * 0.7) &&
       SENTENCE_END.test(previous.text.trim());
+    const footnoteBoundary =
+      (previous.kind === 'footnote') !== (current.kind === 'footnote') ||
+      Boolean(current.footnoteStart);
     const paragraphBreak = Boolean(
       current.breakBefore ||
       previous.region !== current.region ||
+      footnoteBoundary ||
       protectedBoundary ||
       headingBoundary ||
       INLINE_SECTION_LEAD.test(current.text.trim()) ||

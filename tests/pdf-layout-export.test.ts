@@ -58,6 +58,34 @@ describe('PDF layout translation export', () => {
     expect(result.html).toContain('这段译文不能安全覆盖原文。');
   });
 
+  it('keeps translated footnotes at their source position with compact typography', () => {
+    const result = buildPdfLayoutTranslationExport([{
+      id: 'P6-footnote-1',
+      pageNumber: 6,
+      translatedText: '1 我们使用了作者公开提供的源代码。',
+      role: 'footnote',
+      sourceAnchor: {
+        leftRatio: .5,
+        topRatio: .86,
+        widthRatio: .39,
+        heightRatio: .05,
+      },
+    }], [{
+      pageNumber: 6,
+      dataUrl: 'data:image/png;base64,AA==',
+      pageWidth: 612,
+      pageHeight: 792,
+    }]);
+
+    expect(result).toMatchObject({
+      positionedBlockCount: 1,
+      fallbackBlockCount: 0,
+    });
+    expect(result.html).toContain('data-layout-role="footnote"');
+    expect(result.html).toContain('[data-layout-role="footnote"]');
+    expect(result.html).toContain('font-size:8pt');
+  });
+
   it('keeps code, tables, and figures visible and moves their translations to a continuation', () => {
     const sourceAnchor = {
       leftRatio: .15,

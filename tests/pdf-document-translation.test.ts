@@ -573,6 +573,38 @@ describe('PDF document translation', () => {
     expect(text).not.toContain('Page 2');
   });
 
+  it('groups a small numbered page-bottom footnote without treating it as a section heading', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(6, [
+      ...Array.from({ length: 7 }, (_, index) => positioned(
+        index === 6
+          ? 'From Table 1, we observe that the comparison continues on the next page'
+          : `Main body line ${index + 1} remains in the right column`,
+        309,
+        570 + index * 12,
+        236,
+        10,
+      )),
+      positioned('1', 320, 683, 3, 6),
+      positioned('We use the source code made publicly available by the authors of T-', 323, 684, 222, 8),
+      positioned('VAL3 [22], D-AMP [28], IRCNN [49], and ReconNet [21] and implement', 309, 694, 236, 8),
+      positioned('SDA [30] ourselves, since its source code is not available.', 309, 704, 185, 8),
+      positioned('1833', 297, 748, 18, 9),
+    ])]);
+
+    const footnote = prepared.blocks.find((block) => block.kind === 'footnote');
+    expect(footnote).toMatchObject({
+      text: '1 We use the source code made publicly available by the authors of T- ' +
+        'VAL3 [22], D-AMP [28], IRCNN [49], and ReconNet [21] and implement ' +
+        'SDA [30] ourselves, since its source code is not available.',
+      kind: 'footnote',
+    });
+    expect(footnote?.sourceAnchor?.topRatio).toBeLessThan(.87);
+    expect(footnote?.sourceAnchor?.heightRatio).toBeGreaterThan(.04);
+    expect(prepared.blocks.some((block) => (
+      block !== footnote && block.text.includes('VAL3 [22]')
+    ))).toBe(false);
+  });
+
   it('keeps formulas with equation numbers and code on explicit structure lines', () => {
     const prepared = preparePdfDocumentTranslationPages([page(1, [
       positioned('The objective is defined below.', 54, 90, 220),

@@ -1456,7 +1456,8 @@ function pdfLayoutTranslationBlocks(): PdfLayoutTranslationBlock[] {
           pageNumber: block.pageNumber,
           translatedText: block.translatedText,
           ...(block.sourceAnchor ? { sourceAnchor: block.sourceAnchor } : {}),
-          role: block.kind === 'code' || block.kind === 'table' || block.kind === 'figure'
+          role: block.kind === 'code' || block.kind === 'table' || block.kind === 'figure' ||
+            block.kind === 'footnote'
             ? block.kind
             : pdfDocumentTranslationBlockContainsFormula(block)
               ? 'formula' as const
@@ -1929,6 +1930,8 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
   } else {
     delete container.dataset.objectRole;
   }
+  if (block.kind === 'footnote') container.dataset.noteRole = 'footnote';
+  else delete container.dataset.noteRole;
   const sourceAvailable = Boolean(
     pdfDocumentTranslationSourceRegions(block).length && block.status === 'done',
   );
@@ -1956,13 +1959,15 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
   }
   if (sourceAvailable && block.visualProcessed) {
     const purpose = pdfDocumentTranslationVisualPurpose(block);
-    container.title = purpose === 'figure'
-      ? '图表已作为完整对象翻译；点击返回并高亮整张图表'
-      : purpose === 'table'
-        ? '表格已按完整行列结构翻译；点击返回并高亮整张表格'
-        : purpose === 'formula'
-          ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
-          : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
+    container.title = block.kind === 'footnote'
+      ? '脚注已完整翻译；点击返回并高亮整条脚注'
+      : purpose === 'figure'
+        ? '图表已作为完整对象翻译；点击返回并高亮整张图表'
+        : purpose === 'table'
+          ? '表格已按完整行列结构翻译；点击返回并高亮整张表格'
+          : purpose === 'formula'
+            ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
+            : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
   } else if (sourceAvailable && block.visualFallbackMessage) {
     container.title = `${block.visualFallbackMessage}；已保留${
       pdfDocumentTranslationBlockContainsFormula(block) ? '原式' : '原文'
