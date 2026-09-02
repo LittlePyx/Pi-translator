@@ -249,6 +249,68 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     }
     await expect(panel.locator('#pdf-document-translation-copy-feedback'))
       .toContainText('带原页图的可打印 HTML');
+    await copyMenu.locator(':scope > summary').click();
+    const layoutPreviewPromise = context.waitForEvent('page');
+    await panel.locator('#pdf-document-translation-print-layout').click();
+    const layoutPreview = await layoutPreviewPromise;
+    await expect(layoutPreview.locator('body')).toHaveAttribute('data-pi-layout-ready', 'true', {
+      timeout: 20_000,
+    });
+    await expect(layoutPreview.locator('#pi-layout-print')).toHaveText('保存为 PDF…');
+    await expect(layoutPreview.locator('[data-layout-source-page]')).toHaveCount(2);
+    await expect(layoutPreview.locator('[data-layout-overlay]')).toHaveCount(2);
+    await expect(layoutPreview.locator('[data-layout-source-page="1"] .pdf-layout-source'))
+      .toHaveAttribute('src', /^data:image\/jpeg;base64,/u);
+    await expect(layoutPreview.locator('[data-layout-source-page="1"] [data-layout-overlay]'))
+      .toContainText('批量生成的学术译文');
+    const layoutGeometry = await layoutPreview.locator('[data-layout-source-page="1"]')
+      .evaluate((page) => {
+        const overlay = page.querySelector<HTMLElement>('[data-layout-overlay]')!;
+        const pageBounds = page.getBoundingClientRect();
+        const overlayBounds = overlay.getBoundingClientRect();
+        return {
+          pageWidth: pageBounds.width,
+          pageHeight: pageBounds.height,
+          overlayInside: overlayBounds.left >= pageBounds.left &&
+            overlayBounds.right <= pageBounds.right &&
+            overlayBounds.top >= pageBounds.top &&
+            overlayBounds.bottom <= pageBounds.bottom,
+          fitted: overlay.dataset.layoutFitted,
+        };
+      });
+    expect(layoutGeometry.pageWidth).toBeGreaterThan(500);
+    expect(layoutGeometry.pageHeight).toBeGreaterThan(layoutGeometry.pageWidth);
+    expect(layoutGeometry.overlayInside).toBe(true);
+    expect(layoutGeometry.fitted).toBe('true');
+    await layoutPreview.setViewportSize({ width: 360, height: 700 });
+    const narrowLayout = await layoutPreview.locator('.pi-layout-toolbar').evaluate((toolbar) => {
+      const button = toolbar.querySelector<HTMLElement>('#pi-layout-print')!;
+      return {
+        clientWidth: toolbar.clientWidth,
+        scrollWidth: toolbar.scrollWidth,
+        buttonHeight: button.getBoundingClientRect().height,
+      };
+    });
+    expect(narrowLayout.scrollWidth).toBeLessThanOrEqual(narrowLayout.clientWidth + 1);
+    expect(narrowLayout.buttonHeight).toBeGreaterThanOrEqual(36);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await layoutPreview.setViewportSize({ width: 980, height: 900 });
+      await layoutPreview.screenshot({
+        path: testInfo.outputPath('pdf-layout-translation-preview.png'),
+        fullPage: false,
+      });
+      await layoutPreview.emulateMedia({ media: 'print' });
+      await layoutPreview.locator('[data-layout-source-page="1"]').screenshot({
+        path: testInfo.outputPath('pdf-layout-translation-print-page.png'),
+      });
+      await layoutPreview.emulateMedia({ media: 'screen' });
+      await layoutPreview.setViewportSize({ width: 360, height: 700 });
+      await layoutPreview.screenshot({
+        path: testInfo.outputPath('pdf-layout-translation-preview-360.png'),
+        fullPage: false,
+      });
+    }
+    await layoutPreview.close();
     expect(textRequests.length).toBe(requestsBeforeCopy);
     expect(visionRequests.length).toBe(visionRequestsBeforeCopy);
     const firstTranslation = panel.locator(
@@ -428,6 +490,36 @@ test('uses one authorized vision model for every block in a PDF containing formu
     expect(unifiedVisionPrompts.some((prompt) => prompt.includes('相邻段落上下文'))).toBe(true);
     await expect(panel.locator('[data-translation-mode="vision"]')).toHaveCount(2);
     await expect(panel.locator('[data-visual-role="formula"]')).toContainText('能量关系式');
+    const requestsBeforeLayoutExport = {
+      text: textRequests.length,
+      vision: visionRequests.length,
+    };
+    await panel.locator('#pdf-document-translation-copy-menu > summary').click();
+    const layoutPreviewPromise = context.waitForEvent('page');
+    await panel.locator('#pdf-document-translation-print-layout').click();
+    const layoutPreview = await layoutPreviewPromise;
+    await expect(layoutPreview.locator('body')).toHaveAttribute('data-pi-layout-ready', 'true', {
+      timeout: 20_000,
+    });
+    await expect(layoutPreview.locator('[data-layout-role="formula"]')).toHaveCount(1);
+    await expect(layoutPreview.locator('[data-layout-role="formula"] math')).toBeVisible();
+    await expect(layoutPreview.locator('[data-layout-role="formula"]'))
+      .toContainText('能量关系式');
+    expect(textRequests).toHaveLength(requestsBeforeLayoutExport.text);
+    expect(visionRequests).toHaveLength(requestsBeforeLayoutExport.vision);
+    if (process.env.PI_VISUAL_ARTIFACTS === '1') {
+      await layoutPreview.setViewportSize({ width: 980, height: 900 });
+      await layoutPreview.screenshot({
+        path: testInfo.outputPath('pdf-layout-translation-formula.png'),
+        fullPage: false,
+      });
+      await layoutPreview.emulateMedia({ media: 'print' });
+      await layoutPreview.locator('[data-layout-source-page="1"]').screenshot({
+        path: testInfo.outputPath('pdf-layout-translation-formula-print-page.png'),
+      });
+      await layoutPreview.emulateMedia({ media: 'screen' });
+    }
+    await layoutPreview.close();
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
       await pdfPage.screenshot({
         path: testInfo.outputPath('pdf-full-document-ocr-360.png'),

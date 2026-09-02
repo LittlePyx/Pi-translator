@@ -60,6 +60,11 @@ import {
   type DocumentTranslationExportFormat,
   type DocumentTranslationExportPageImage,
 } from '../../core/translation/document-export';
+import {
+  buildPdfLayoutTranslationExport,
+  type PdfLayoutTranslationBlock,
+  type PdfLayoutTranslationPageImage,
+} from '../../core/translation/pdf-layout-export';
 import { isSupportedTargetLanguage } from '../../core/language/supported-target-languages';
 import {
   comparePdfDocumentTranslationPriority,
@@ -88,7 +93,10 @@ import {
   type PdfDocumentTranslationSessionActivity,
   type PdfDocumentTranslationSessionDescriptor,
 } from '../../core/pdf/document-translation-session';
-import { renderTranslationContent } from '../../ui/translation-content';
+import {
+  renderTranslationContent,
+  renderTranslationContents,
+} from '../../ui/translation-content';
 import {
   mapCoordinateOcrPageToRegion,
   selectableOcrBlocks,
@@ -233,6 +241,9 @@ const documentTranslationDownloadBilingual = element<HTMLButtonElement>(
 );
 const documentTranslationDownloadHtml = element<HTMLButtonElement>(
   'pdf-document-translation-download-html',
+);
+const documentTranslationPrintLayout = element<HTMLButtonElement>(
+  'pdf-document-translation-print-layout',
 );
 const documentTranslationCopyFeedback = element<HTMLElement>(
   'pdf-document-translation-copy-feedback',
@@ -1130,6 +1141,7 @@ function syncPdfDocumentTranslationUi(): void {
     documentTranslationDownloadTranslation,
     documentTranslationDownloadBilingual,
     documentTranslationDownloadHtml,
+    documentTranslationPrintLayout,
   ]) button.disabled = pdfDocumentTranslationCopyPending;
   documentTranslationRetention.hidden = !pdfDocumentTranslationSessionContext ||
     ['idle', 'preparing'].includes(pdfDocumentTranslationPhase);
@@ -1214,8 +1226,10 @@ function pdfDocumentTranslationExportResult(
   );
 }
 
-async function capturePdfDocumentTranslationExportPageImages(): Promise<
-  DocumentTranslationExportPageImage[]
+async function capturePdfDocumentTranslationExportPageImages(
+  mode: 'html' | 'layout' = 'html',
+): Promise<
+  PdfLayoutTranslationPageImage[]
 > {
   const pdf = pdfDocument;
   if (!pdf) return [];
@@ -1223,15 +1237,16 @@ async function capturePdfDocumentTranslationExportPageImages(): Promise<
   const pages = [...new Set(pdfDocumentTranslationBlocksState.flatMap((block) => (
     block.included && block.status === 'done' ? [block.pageNumber] : []
   )))].sort((left, right) => left - right);
-  const images: DocumentTranslationExportPageImage[] = [];
+  const images: PdfLayoutTranslationPageImage[] = [];
   for (const pageNumber of pages) {
     if (documentEpoch !== epoch || pdfDocument !== pdf) break;
     try {
       const page = await pdf.getPage(pageNumber);
       const baseViewport = page.getViewport({ scale: 1 });
-      const scale = Math.min(1.8, Math.max(
+      const scale = Math.min(mode === 'layout' ? 2.8 : 1.8, Math.max(
         .75,
-        1_400 / Math.max(baseViewport.width, baseViewport.height, 1),
+        (mode === 'layout' ? 2_200 : 1_400) /
+          Math.max(baseViewport.width, baseViewport.height, 1),
       ));
       const viewport = page.getViewport({ scale });
       const canvas = document.createElement('canvas');
@@ -1245,7 +1260,9 @@ async function capturePdfDocumentTranslationExportPageImages(): Promise<
       if (documentEpoch !== epoch || pdfDocument !== pdf) break;
       images.push({
         pageNumber,
-        dataUrl: canvas.toDataURL('image/jpeg', .78),
+        dataUrl: canvas.toDataURL('image/jpeg', mode === 'layout' ? .9 : .78),
+        pageWidth: baseViewport.width,
+        pageHeight: baseViewport.height,
       });
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     } catch {
@@ -1258,17 +1275,235 @@ async function capturePdfDocumentTranslationExportPageImages(): Promise<
 type PdfDocumentTranslationExportAction =
   | 'copy-translation'
   | 'copy-bilingual'
+  | 'layout-pdf'
   | DocumentTranslationExportFormat;
+
+function openPdfLayoutTranslationPreview(): Window | undefined {
+  const preview = window.open('', '_blank');
+  if (!preview) return undefined;
+  preview.document.open();
+  preview.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>正在生成版式翻译 PDF</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f4f5f8;color:#364152;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:420px;padding:28px;text-align:center}strong{display:block;margin-bottom:8px;color:#302d85;font-size:18px}</style></head><body><main><strong>正在本地生成版式翻译页…</strong><span>不会产生新的翻译或 OCR 请求。</span></main></body></html>`);
+  preview.document.close();
+  return preview;
+}
+
+function showPdfLayoutTranslationPreviewError(
+  preview: Window,
+  message: string,
+): void {
+  if (preview.closed) return;
+  preview.document.open();
+  preview.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>版式翻译 PDF 生成失败</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f8f5f5;color:#5f2730;font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:520px;padding:30px}strong{display:block;margin-bottom:8px;font-size:18px}</style></head><body><main><strong>版式翻译 PDF 生成失败</strong><span>${message.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</span></main></body></html>`);
+  preview.document.close();
+}
+
+function pdfLayoutTranslationBlocks(): PdfLayoutTranslationBlock[] {
+  return pdfDocumentTranslationBlocksState.flatMap((block) => (
+    block.included && block.status === 'done' && block.translatedText
+      ? [{
+          id: block.id,
+          pageNumber: block.pageNumber,
+          translatedText: block.translatedText,
+          ...(block.sourceAnchor ? { sourceAnchor: block.sourceAnchor } : {}),
+          role: block.kind === 'code' || block.kind === 'table'
+            ? block.kind
+            : pdfDocumentTranslationBlockContainsFormula(block)
+              ? 'formula' as const
+              : 'text' as const,
+        }]
+      : []
+  ));
+}
+
+async function renderPdfLayoutTranslationFragments(
+  blocks: readonly PdfLayoutTranslationBlock[],
+): Promise<Map<string, Node[]>> {
+  const host = document.createElement('div');
+  host.hidden = true;
+  document.body.append(host);
+  const containers = blocks.map((block) => {
+    const container = document.createElement('div');
+    container.dataset.layoutBlockId = block.id;
+    host.append(container);
+    return { block, container };
+  });
+  try {
+    await renderTranslationContents(containers.map(({ block, container }) => ({
+      container,
+      text: block.translatedText,
+      renderLatex: block.role !== 'code',
+    })));
+    return new Map(containers.map(({ block, container }) => [
+      block.id,
+      [...container.childNodes].map((node) => node.cloneNode(true)),
+    ]));
+  } finally {
+    host.remove();
+  }
+}
+
+function hydratePdfLayoutTranslationFragments(
+  preview: Window,
+  fragments: ReadonlyMap<string, readonly Node[]>,
+): void {
+  for (const placeholder of preview.document.querySelectorAll<HTMLElement>(
+    '[data-layout-block-id]',
+  )) {
+    const blockId = placeholder.dataset.layoutBlockId;
+    const nodes = blockId ? fragments.get(blockId) : undefined;
+    if (!nodes?.length) continue;
+    const content = placeholder.querySelector<HTMLElement>('.pdf-layout-block-content');
+    if (!content) continue;
+    content.replaceChildren(...nodes.map((node) => preview.document.importNode(node, true)));
+  }
+}
+
+function pdfLayoutElementOverflows(element: HTMLElement): boolean {
+  return element.scrollHeight > element.clientHeight + 1 ||
+    element.scrollWidth > element.clientWidth + 1;
+}
+
+function fitPdfLayoutTranslationOverlays(preview: Window): void {
+  const overflowIndexes = new Map<number, number>();
+  for (const overlay of preview.document.querySelectorAll<HTMLElement>('[data-layout-overlay]')) {
+    let fontSize = overlay.dataset.layoutRole === 'formula' ? 10 : 11;
+    overlay.style.fontSize = `${fontSize}pt`;
+    while (fontSize > 7 && pdfLayoutElementOverflows(overlay)) {
+      fontSize -= .5;
+      overlay.style.fontSize = `${fontSize}pt`;
+    }
+    if (!pdfLayoutElementOverflows(overlay)) {
+      overlay.dataset.layoutFitted = 'true';
+      continue;
+    }
+    const pageNumber = Number(overlay.dataset.layoutPageNumber);
+    const continuation = preview.document.querySelector<HTMLElement>(
+      `[data-layout-overflow-page="${pageNumber}"]`,
+    );
+    const list = continuation?.querySelector<HTMLElement>('[data-layout-runtime-overflow]');
+    const content = overlay.querySelector<HTMLElement>('.pdf-layout-block-content');
+    if (!continuation || !list || !content) continue;
+    const overflowIndex = (overflowIndexes.get(pageNumber) ?? 0) + 1;
+    overflowIndexes.set(pageNumber, overflowIndex);
+    continuation.hidden = false;
+    const item = preview.document.createElement('article');
+    item.className = 'pdf-layout-continuation-item';
+    const label = preview.document.createElement('strong');
+    label.textContent = `续页译文 ${overflowIndex}`;
+    const fullTranslation = preview.document.createElement('div');
+    fullTranslation.className = 'pdf-layout-block-content';
+    fullTranslation.append(...[...content.childNodes].map((node) => node.cloneNode(true)));
+    item.append(label, fullTranslation);
+    list.append(item);
+    overlay.replaceChildren(preview.document.createTextNode(`译文见续页 ${overflowIndex}`));
+    overlay.dataset.layoutOverflowReference = 'true';
+  }
+}
+
+function paginatePdfLayoutTranslationContinuations(preview: Window): void {
+  const basePages = [...preview.document.querySelectorAll<HTMLElement>(
+    '.pdf-layout-continuation:not([hidden])',
+  )];
+  for (const base of basePages) {
+    const baseList = base.querySelector<HTMLElement>('[data-layout-runtime-overflow]');
+    if (!baseList) continue;
+    const items = [...baseList.children].map((item) => item.cloneNode(true) as HTMLElement);
+    baseList.replaceChildren();
+    let currentPage = base;
+    let currentList = baseList;
+    let sequence = 1;
+    for (const item of items) {
+      currentList.append(item);
+      if (!pdfLayoutElementOverflows(currentPage) || currentList.children.length === 1) continue;
+      item.remove();
+      sequence += 1;
+      const nextPage = base.cloneNode(true) as HTMLElement;
+      nextPage.removeAttribute('hidden');
+      nextPage.dataset.layoutContinuationSequence = String(sequence);
+      const heading = nextPage.querySelector<HTMLElement>('header strong');
+      if (heading) heading.textContent += ` · ${sequence}`;
+      const nextList = nextPage.querySelector<HTMLElement>('[data-layout-runtime-overflow]');
+      if (!nextList) continue;
+      nextList.replaceChildren(item);
+      currentPage.after(nextPage);
+      currentPage = nextPage;
+      currentList = nextList;
+    }
+  }
+}
+
+async function waitForPdfLayoutTranslationPreview(preview: Window): Promise<void> {
+  const images = [...preview.document.images];
+  await Promise.all(images.map((image) => image.decode().catch(() => undefined)));
+  await preview.document.fonts?.ready;
+  await new Promise<void>((resolve) => preview.requestAnimationFrame(() => resolve()));
+  await new Promise<void>((resolve) => preview.requestAnimationFrame(() => resolve()));
+}
+
+async function populateAndPrintPdfLayoutTranslationPreview(
+  preview: Window,
+  html: string,
+  fragments: ReadonlyMap<string, readonly Node[]>,
+): Promise<void> {
+  if (preview.closed) throw new Error('版式翻译页已被关闭。');
+  preview.document.open();
+  preview.document.write(html);
+  preview.document.close();
+  hydratePdfLayoutTranslationFragments(preview, fragments);
+  await waitForPdfLayoutTranslationPreview(preview);
+  fitPdfLayoutTranslationOverlays(preview);
+  paginatePdfLayoutTranslationContinuations(preview);
+  preview.document.body.dataset.piLayoutReady = 'true';
+  preview.document.getElementById('pi-layout-print')?.addEventListener('click', () => {
+    preview.document.documentElement.dataset.piPrintRequested = 'true';
+    preview.print();
+  });
+  preview.opener = null;
+  preview.focus();
+}
 
 async function handlePdfDocumentTranslationExport(
   action: PdfDocumentTranslationExportAction,
 ): Promise<void> {
   if (pdfDocumentTranslationCopyPending) return;
+  const layoutPreview = action === 'layout-pdf'
+    ? openPdfLayoutTranslationPreview()
+    : undefined;
+  if (action === 'layout-pdf' && !layoutPreview) {
+    setPdfDocumentTranslationCopyFeedback('无法打开版式翻译页，请允许此页面打开新窗口。', true);
+    return;
+  }
   let result = pdfDocumentTranslationExportResult();
-  if (!result.blockCount) return;
+  if (!result.blockCount) {
+    layoutPreview?.close();
+    return;
+  }
   pdfDocumentTranslationCopyPending = true;
   syncPdfDocumentTranslationUi();
   try {
+    if (action === 'layout-pdf') {
+      if (!layoutPreview) throw new Error('版式翻译页未打开。');
+      setPdfDocumentTranslationCopyFeedback('正在本地生成版式翻译页…');
+      const blocks = pdfLayoutTranslationBlocks();
+      const [pageImages, fragments] = await Promise.all([
+        capturePdfDocumentTranslationExportPageImages('layout'),
+        renderPdfLayoutTranslationFragments(blocks),
+      ]);
+      const layout = buildPdfLayoutTranslationExport(blocks, pageImages, {
+        totalBlockCount: result.totalBlockCount,
+        unavailablePageCount: result.unavailablePageCount,
+      });
+      await populateAndPrintPdfLayoutTranslationPreview(
+        layoutPreview,
+        layout.html,
+        fragments,
+      );
+      documentTranslationCopyMenu.open = false;
+      setPdfDocumentTranslationCopyFeedback(
+        `已打开版式翻译打印页 · ${layout.pageCount} 页${layout.fallbackBlockCount ? ` · ${layout.fallbackBlockCount} 段在续页` : ''}`,
+      );
+      return;
+    }
     if (action === 'printable-html') {
       setPdfDocumentTranslationCopyFeedback('正在本地生成带原页图的双语 HTML…');
       result = pdfDocumentTranslationExportResult(
@@ -1300,6 +1535,12 @@ async function handlePdfDocumentTranslationExport(
     documentTranslationCopyMenu.open = false;
     setPdfDocumentTranslationCopyFeedback(`${message}${partialLabel}`);
   } catch (error) {
+    if (layoutPreview) {
+      showPdfLayoutTranslationPreviewError(
+        layoutPreview,
+        error instanceof Error ? error.message : '未知错误。',
+      );
+    }
     setPdfDocumentTranslationCopyFeedback(
       error instanceof Error ? error.message : '导出失败，请重试。',
       true,
@@ -6166,6 +6407,9 @@ documentTranslationDownloadBilingual.addEventListener('click', () => {
 });
 documentTranslationDownloadHtml.addEventListener('click', () => {
   void handlePdfDocumentTranslationExport('printable-html');
+});
+documentTranslationPrintLayout.addEventListener('click', () => {
+  void handlePdfDocumentTranslationExport('layout-pdf');
 });
 documentTranslationRetentionToggle.addEventListener('change', () => {
   void setPdfDocumentTranslationRetention(documentTranslationRetentionToggle.checked);
