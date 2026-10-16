@@ -2342,6 +2342,9 @@ test('scopes ergonomic PDF region shortcuts to the reading surface', async () =>
   const firstPage = pdfPage.locator('.pdf-page').first();
   const regionButton = pdfPage.locator('#region-translate');
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  // Restored fit-width can rebuild after the first canvas becomes ready. Wait
+  // for the reading geometry before asserting a gesture that rebuilds cancel.
+  await fitPdfBeforeRegionCapture(pdfPage);
 
   const pageNumber = pdfPage.locator('#page-number');
   await pageNumber.focus();

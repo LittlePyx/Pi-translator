@@ -5,7 +5,9 @@
 - 第二轮 0.16.0 CI run `38926628434`（`8301275`）仍为 189 功能通过 / 8 可选跳过 / 1 失败，但已经通过原“识别本页”菜单点击。此次失败发生于 OCR 后搜索、Escape、放大、再次识别的取消操作：日志明确为 `#pdf-search` 搜索结果 / 范围控件截获指针，不是此前的页面侧栏。原始日志 `output/edge-0.16.0-2026-10-16/ci-second.log` 与 `ci-second-diagnostics/` 保留。
 - 原因：PDF 搜索的 Escape 监听在 document 捕获阶段，而翻译 overlay 在 window 捕获阶段先拦截 Escape 并收起侧栏。焦点在搜索输入框时也会发生，搜索未关闭，之后遮挡 OCR 取消。新增完整步骤在未修复候选中确定失败，见 `search-escape-before/`，不是用重试掩盖。
 - 仅将 PDF 搜索键盘监听移到先注册的 window 捕获阶段，优先关闭当前搜索浮层；不改搜索查询、译文、公式、历史或模型逻辑。新增回归在桌面和 360px 中检查展开侧栏、打开搜索、Escape 关闭搜索、侧栏保持、打开 OCR、取消与恢复，确认前零请求。
-- 本地修复候选的全部 PDF 区域 / OCR 与布局、设计共 31 项通过，TypeScript、包结构一致性通过，证据 `search-layering-final.log` / `typecheck-search.log` / `candidate-search-fixed.log`。完整远程门禁与最终精确 ZIP 尚须新轮结果，不将本地 31 项替代全量，也不增加实际模型质量结论。
+- 本地修复候选的 PDF 区域 / OCR 与布局、设计共 31 项，实际为 **30 通过 / 1 快捷键范围检查失败**（点击 PDF 后 R 仍为 off），不能只看到末尾第 31 个用例通过就误记为整轮通过。TypeScript、包结构一致性通过，证据 `search-layering-final.log` / `typecheck-search.log` / `candidate-search-fixed.log`。该记录已更正，快捷键失败需核对焦点与事件，再决定是否修复。完整远程门禁与最终精确 ZIP 仍须新轮结果，不增加实际模型质量结论。
+- 快捷键后续证据：原 trace 的 `after@call@2084` 已为 single；约 8ms 后 `before@call@2086` 页面从 315px 变为 1195px，状态变回 off。代码中恢复“适合宽度”的延迟重建调用 `buildPages → clearDocument → setRegionMode('off')`，符合缩放时取消选区的既有保护。单例新档案焦点在 textLayer 时通过；失败不是已证实的按键丢失。用例复用现有 `fitPdfBeforeRegionCapture` 等待实际页面尺寸 / 渲染稳定，不改产品逻辑、不增加固定 sleep、不移除输入框及 R / Shift+R / Escape 断言。原始 trace `shortcut-original-trace/`、单例诊断 `shortcut-focus-diagnosis.json` 保留；此修改后完整同组 **31/31 通过**，以 `search-fit-final.log` 为准，不覆盖前轮 30/1 记录。
+- 第三轮 CI run `38928653360`（`1d65d66`）为 189 功能通过 / 8 可选跳过 / 1 失败；原 OCR 流程通过，剩余快捷键 single / off 断言与本地未稳定首帧的失败一致，日志 `ci-third.log`。将上述已经本地 31/31 验证的尺寸等待同步到测试；本次不再修改产品代码，仍由新一轮完整 CI 决定能否打包。
 
 ## 2026-10-16：0.16.0 CI 的 PDF 菜单与已展开侧栏遮挡
 
