@@ -1,6 +1,6 @@
 # Pi Translator v0.16.0
 
-状态：更新包准备中；本轮不创建 GitHub Release、不提交 Edge 商店审核。
+状态：最终 CI ZIP、独立 Edge 新安装和两条 0.15.0 → 0.16.0 升级验收已完成；尚未创建 GitHub Release 或提交 Edge 商店审核。最终来源为 `bcee17d` / [CI 38929968829](https://github.com/LittlePyx/Pi-translator/actions/runs/38929968829)，精确包 SHA-256 与安装记录见本轮验收依据。
 
 ## 科研阅读与资料管理
 
