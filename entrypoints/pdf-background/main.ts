@@ -1,18 +1,24 @@
 import workerUrl from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 import type { PDFDocumentProxy } from 'pdfjs-dist';
 import { browser } from 'wxt/browser';
+import { translationErrorMessage } from '../../core/messaging/user-facing-error';
 
 import {
   isPdfBackgroundDocumentMessage,
-  pdfBackgroundVisualFallbackMessage,
-  pdfBackgroundVisualResultIsStructurallySafe,
+  pdfBackgroundVisualOutcome,
+  pdfBackgroundTextOutcome,
   PDF_BACKGROUND_CACHE_NAME,
   type PdfBackgroundDocumentMessage,
   type PdfBackgroundTranslationBlock,
   type PdfBackgroundTranslationOutcome,
   type PdfBackgroundTranslationSnapshot,
 } from '../../core/pdf/background-document-translation';
-import { captureCanvasRegions, normalizeRegion } from '../../core/pdf/region-capture';
+import { capturePdfVisualRegions } from '../../core/pdf/document-visual-capture';
+import { PdfCapturePrefetch } from '../../core/pdf/capture-prefetch';
+import {pdfFontHintText} from '../../core/pdf/math-font-evidence';
+import { combinePdfVisualOutcomes, pdfVisualUnitContext } from '../../core/pdf/visual-unit-translation';
+import { addPdfReportedTokens, consumePdfRequest, emptyPdfRequestUsage, type PdfRequestUsage } from '../../core/pdf/request-budget';
+import {preparePdfFormulaProseRepair} from '../../core/pdf/formula-prose-repair';
 import type {
   TranslateRuntimeResponse,
   TranslationBatchRuntimeResponse,
@@ -31,10 +37,15 @@ interface BackgroundJob {
   pdf?: PDFDocumentProxy;
   phase: PdfBackgroundTranslationSnapshot['phase'];
   completed: PdfBackgroundTranslationOutcome[];
+  unitOutcomes: Map<string, PdfBackgroundTranslationOutcome[]>;
+  captures: PdfCapturePrefetch<Awaited<ReturnType<typeof capturePdfVisualRegions>>>;
+  timing: NonNullable<PdfBackgroundTranslationSnapshot['performance']>;
   activeBlockId?: string;
   activeRequestId?: string;
   errorMessage?: string;
   run?: Promise<void>;
+  requestUsage: PdfRequestUsage;
+  snapshotRevision: number;
 }
 
 const jobs = new Map<string, BackgroundJob>();
@@ -42,8 +53,11 @@ const jobs = new Map<string, BackgroundJob>();
 function snapshot(job: BackgroundJob): PdfBackgroundTranslationSnapshot {
   return {
     jobId: job.jobId,
+    revision: ++job.snapshotRevision,
     documentSessionId: job.documentSessionId,
     phase: job.phase,
+    requestUsage: { ...job.requestUsage },
+    performance: { ...job.timing },
     completed: job.completed.map((outcome) => ({ ...outcome })),
     ...(job.activeBlockId ? { activeBlockId: job.activeBlockId } : {}),
     ...(job.errorMessage ? { errorMessage: job.errorMessage } : {}),
@@ -51,58 +65,28 @@ function snapshot(job: BackgroundJob): PdfBackgroundTranslationSnapshot {
 }
 
 function publish(job: BackgroundJob): void {
+  if (job.phase !== 'running') console.info('[Pi PDF timing]', { phase: job.phase, ...job.timing });
   void browser.runtime.sendMessage({
     type: 'PDF_BACKGROUND_DOCUMENT_TRANSLATION_UPDATED',
     payload: snapshot(job),
   } satisfies PdfBackgroundDocumentMessage).catch(() => undefined);
 }
 
-async function captureBlock(
-  job: BackgroundJob,
-  block: PdfBackgroundTranslationBlock,
-): Promise<{ imageDataUrl: string; imageWidth: number; imageHeight: number; captureMs: number }> {
-  const startedAt = performance.now();
-  const pdf = job.pdf;
-  if (!pdf) throw new Error('后台 PDF 尚未准备完成。');
-  const page = await pdf.getPage(block.pageNumber);
-  const baseViewport = page.getViewport({ scale: 1 });
-  const scale = Math.min(2.4, Math.max(
-    1,
-    1_800 / Math.max(baseViewport.width, baseViewport.height, 1),
-  ));
-  const viewport = page.getViewport({ scale });
-  const canvas = document.createElement('canvas');
-  canvas.width = Math.max(1, Math.ceil(viewport.width));
-  canvas.height = Math.max(1, Math.ceil(viewport.height));
-  const context = canvas.getContext('2d', { alpha: false });
-  if (!context) throw new Error('当前浏览器无法生成段落区域图像。');
-  context.fillStyle = '#fff';
-  context.fillRect(0, 0, canvas.width, canvas.height);
-  // PDF.js schedules ordinary display rendering through requestAnimationFrame.
-  // Offscreen documents are hidden, so their animation frames do not run;
-  // print intent deliberately uses the promise-based render scheduler instead.
-  await page.render({ canvas, canvasContext: context, viewport, intent: 'print' }).promise;
-  const regions = block.sourceRegions.map(({ sourceAnchor: anchor }) => normalizeRegion(
-    { x: anchor.leftRatio * baseViewport.width, y: anchor.topRatio * baseViewport.height },
-    {
-      x: (anchor.leftRatio + anchor.widthRatio) * baseViewport.width,
-      y: (anchor.topRatio + anchor.heightRatio) * baseViewport.height,
-    },
-    { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
-  ));
-  const capture = await captureCanvasRegions(
-    canvas,
-    { left: 0, top: 0, width: baseViewport.width, height: baseViewport.height },
-    regions,
-  );
-  canvas.width = 0;
-  canvas.height = 0;
-  return {
-    imageDataUrl: capture.dataUrl,
-    imageWidth: capture.width,
-    imageHeight: capture.height,
-    captureMs: Math.max(0, performance.now() - startedAt),
-  };
+async function captureBlock(job: BackgroundJob, block: PdfBackgroundTranslationBlock) {
+  if (!job.pdf) throw new Error("后台 PDF 尚未准备完成。");
+  return capturePdfVisualRegions(job.pdf, block.sourceRegions);
+}
+
+const captureKey = (block: PdfBackgroundTranslationBlock) => JSON.stringify(block.sourceRegions);
+
+function nextVisualCapture(job: BackgroundJob, current: PdfBackgroundTranslationBlock) {
+  const leaves = job.blocks.flatMap((block) => {
+    if (job.mode !== 'vision' && !(job.mode === 'hybrid' && block.visualPurpose !== 'document')) return [];
+    const { visualUnits, ...base } = block;
+    return visualUnits?.length ? visualUnits.map((unit) => ({ ...base, ...unit })) : [block];
+  });
+  const index = leaves.findIndex((block) => captureKey(block) === captureKey(current));
+  return index < 0 ? undefined : leaves[index + 1];
 }
 
 async function cancelActiveRequest(job: BackgroundJob): Promise<void> {
@@ -115,9 +99,13 @@ async function cancelActiveRequest(job: BackgroundJob): Promise<void> {
 }
 
 function blockContext(job: BackgroundJob, block: PdfBackgroundTranslationBlock): string {
-  const previousTranslation = block.previousBlockId
-    ? job.completed.find((outcome) => outcome.blockId === block.previousBlockId)?.translatedText
+  const previous = block.previousBlockId
+    ? job.completed.find((outcome) => outcome.blockId === block.previousBlockId)
     : undefined;
+  // Review placeholders are UI annotations, never model context. The source
+  // continuity context is still available for these unfinished results.
+  const previousTranslation = previous?.formulaReviewMessage || previous?.visualFallbackMessage
+    ? undefined : previous?.translatedText;
   return [
     block.contextText,
     previousTranslation ? `上一连续块译文：${previousTranslation.slice(-340)}` : '',
@@ -128,6 +116,23 @@ async function processVisualBlock(
   job: BackgroundJob,
   block: PdfBackgroundTranslationBlock,
 ): Promise<PdfBackgroundTranslationOutcome> {
+  const units = block.visualUnits;
+  if (units?.length) {
+    const completed = job.unitOutcomes.get(block.id) ?? [];
+    job.unitOutcomes.set(block.id, completed);
+    while (completed.length < units.length) {
+      if (job.phase !== 'running') throw Object.assign(new Error('已暂停'), { code: 'REQUEST_ABORTED' });
+      const index = completed.length;
+      const unit = units[index]!;
+      const { visualUnits: _plan, ...base } = block;
+      const result = await processVisualBlock(job, { ...base, ...unit,
+        contextText: pdfVisualUnitContext(units, index, block.contextText) });
+      // Save a successfully returned region even if pause arrives immediately
+      // afterwards. Resume must not charge for that region a second time.
+      completed.push(result);
+    }
+    return combinePdfVisualOutcomes(block.id, completed);
+  }
   if (!block.sourceRegions.length) {
     return {
       blockId: block.id,
@@ -138,11 +143,25 @@ async function processVisualBlock(
         : '本段缺少可靠的视觉定位',
     };
   }
-  const capture = await captureBlock(job, block);
+  const waitStartedAt = performance.now();
+  const { value: capture, prefetched } = await job.captures.take(captureKey(block), () => captureBlock(job, block));
+  job.timing.captureWaitMs += performance.now() - waitStartedAt;
+  job.timing.captures += 1;
+  job.timing.prefetched += Number(prefetched);
+  job.timing.pageRenderMs += capture.pageRenderMs;
+  job.timing.cropEncodeMs += capture.cropEncodeMs;
+  if (job.phase !== 'running') throw Object.assign(new Error('已暂停'), { code: 'REQUEST_ABORTED' });
   const requestId = crypto.randomUUID();
   job.activeRequestId = requestId;
   const firstRegion = block.sourceRegions[0];
   const contextText = blockContext(job, block);
+  const requestStartedAt = performance.now();
+  const next = nextVisualCapture(job, block);
+  if (next?.sourceRegions.length) job.captures.prepare(captureKey(next), async () => {
+    if (job.phase !== 'running') throw Object.assign(new Error('已暂停'), { code: 'REQUEST_ABORTED' });
+    return captureBlock(job, next);
+  });
+  consumePdfRequest(job.requestUsage, 'vision', job.settings.requestLimit ?? 0);
   const response = await browser.runtime.sendMessage({
     type: 'TRANSLATE_PDF_BACKGROUND_VISUAL_BLOCK',
     payload: {
@@ -154,7 +173,8 @@ async function processVisualBlock(
         imageWidth: capture.imageWidth,
         imageHeight: capture.imageHeight,
         visualPurpose: block.visualPurpose,
-        recognizedTextHint: block.text,
+        recognizedTextHint: pdfFontHintText(block.text,block.sourceFontHints),
+        ...(block.sourceEquations ? { sourceEquations: block.sourceEquations } : {}),
         ...(contextText ? { contextText } : {}),
         pageUrl: job.settings.pageUrl,
         ...(job.settings.sourceLabel ? { sourceLabel: job.settings.sourceLabel } : {}),
@@ -172,22 +192,28 @@ async function processVisualBlock(
       },
     },
   }) as TranslateRuntimeResponse;
+  job.timing.requestMs += performance.now() - requestStartedAt;
   if (job.activeRequestId === requestId) delete job.activeRequestId;
-  if (!response.ok) throw Object.assign(new Error(response.error.message), {
+  if (!response.ok) throw Object.assign(new Error(translationErrorMessage(response.error.code, response.error.message)), {
     code: response.error.code,
   });
-  const result = response.data.result;
-  const translatedText = result.translatedText.trim();
-  const structurallySafe = pdfBackgroundVisualResultIsStructurallySafe(block, result);
-  if (translatedText && structurallySafe) {
-    return { blockId: block.id, translatedText, visualProcessed: true };
+  let result = response.data.result;
+  let repairNote:string|undefined;
+  if (!result.cached) addPdfReportedTokens(job.requestUsage, result.usage, result.usageSource);
+  if(job.phase==='running'&&preparePdfFormulaProseRepair(result.formulaDocument,job.settings.targetLanguage)){
+    let authorized=true;try{consumePdfRequest(job.requestUsage,'text',job.settings.requestLimit??0)}catch{authorized=false;repairNote='任务请求上限不足，未发送正文修复。'}
+    if(authorized){
+      job.activeRequestId=requestId;
+      const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{sourceTabId:job.sourceTabId,requestId,document:result.formulaDocument!,targetLanguage:job.settings.targetLanguage,sourceLanguage:job.settings.sourceLanguage,style:job.settings.style}}) as TranslateRuntimeResponse;
+      if(job.activeRequestId===requestId)delete job.activeRequestId;
+      if(repaired.ok){result=repaired.data.result;addPdfReportedTokens(job.requestUsage,result.usage,result.usageSource)}else repairNote=`正文修复未完成：${translationErrorMessage(repaired.error.code,repaired.error.message)}`;
+    }
   }
-  return {
-    blockId: block.id,
-    translatedText: block.text,
-    visualProcessed: false,
-    visualFallbackMessage: pdfBackgroundVisualFallbackMessage(block, result),
-  };
+  const validationStartedAt = performance.now();
+  const outcome = pdfBackgroundVisualOutcome(block, result, job.settings.targetLanguage);
+  if(repairNote)outcome.formulaReviewMessage=[outcome.formulaReviewMessage,repairNote].filter(Boolean).join('；').slice(0,1800);
+  job.timing.validationMs += performance.now() - validationStartedAt;
+  return outcome;
 }
 
 async function processTextBlocks(
@@ -205,10 +231,12 @@ async function processTextBlocks(
   let pending = blocks.filter((block) => !block.preserveInTextMode);
   const translated: PdfBackgroundTranslationOutcome[] = [];
   const contextText = pending[0] ? blockContext(job, pending[0]) : '';
+  try {
   for (let attempt = 0; attempt < 2; attempt += 1) {
     if (!pending.length) break;
     const requestId = crypto.randomUUID();
     job.activeRequestId = requestId;
+    consumePdfRequest(job.requestUsage, 'text', job.settings.requestLimit ?? 0);
     const response = await browser.runtime.sendMessage({
       type: 'TRANSLATE_PDF_BACKGROUND_TEXT_BLOCK',
       payload: {
@@ -228,16 +256,17 @@ async function processTextBlocks(
       },
     }) as TranslationBatchRuntimeResponse;
     if (job.activeRequestId === requestId) delete job.activeRequestId;
-    if (!response.ok) throw Object.assign(new Error(response.error.message), {
+    if (!response.ok) throw Object.assign(new Error(translationErrorMessage(response.error.code, response.error.message)), {
       code: response.error.code,
     });
+    addPdfReportedTokens(job.requestUsage, response.data.usage, response.data.usageSource);
     const returned = new Map(
       response.data.items.map((item) => [item.id, item.translatedText.trim()]),
     );
     for (const block of pending) {
       const translatedText = returned.get(block.id);
       if (translatedText) {
-        translated.push({ blockId: block.id, translatedText, visualProcessed: false });
+        translated.push(pdfBackgroundTextOutcome(block, translatedText, job.settings.targetLanguage));
       }
     }
     pending = pending.filter((block) => !returned.get(block.id));
@@ -246,6 +275,13 @@ async function processTextBlocks(
     throw Object.assign(new Error('模型没有返回部分段落的译文。'), {
       code: 'INVALID_RESPONSE',
     });
+  }
+  } catch (error) {
+    // Budget, network and incomplete follow-up replies must all preserve the
+    // successful siblings so resume never pays for those paragraphs again.
+    const known = new Set(job.completed.map(outcome => outcome.blockId));
+    job.completed.push(...[...preserved, ...translated].filter(outcome => !known.has(outcome.blockId)));
+    throw error;
   }
   const outcomes = new Map(
     [...preserved, ...translated].map((outcome) => [outcome.blockId, outcome]),
@@ -282,19 +318,23 @@ function runJob(job: BackgroundJob): void {
         const outcomes = useVision
           ? [await processVisualBlock(job, block)]
           : await processTextBlocks(job, textBatch);
-        if (job.phase !== 'running') break;
+        if (jobs.get(job.jobId) !== job) break;
+        // A fully returned result still belongs to this task when pause/stop
+        // arrives at this boundary. Persist it before honoring that control.
         job.completed.push(...outcomes);
+        outcomes.forEach((outcome) => job.unitOutcomes.delete(outcome.blockId));
         outcomes.forEach((outcome) => completedIds.add(outcome.blockId));
         delete job.activeBlockId;
         publish(job);
       } catch (error) {
+        job.captures.clear();
         delete job.activeRequestId;
         delete job.activeBlockId;
         if (job.phase !== 'running') break;
         const code = error && typeof error === 'object' && 'code' in error
           ? String(error.code)
           : '';
-        job.phase = code === 'REQUEST_ABORTED' ? 'paused' : 'error';
+        job.phase = code === 'REQUEST_ABORTED' || code === 'REQUEST_BUDGET_REACHED' ? 'paused' : 'error';
         job.errorMessage = error instanceof Error ? error.message : 'PDF 后台翻译失败。';
         publish(job);
         break;
@@ -302,6 +342,7 @@ function runJob(job: BackgroundJob): void {
     }
     if (job.phase === 'running') {
       job.phase = 'complete';
+      job.captures.clear();
       delete job.activeBlockId;
       publish(job);
     }
@@ -313,6 +354,7 @@ function runJob(job: BackgroundJob): void {
 
 async function disposeJob(job: BackgroundJob): Promise<void> {
   job.phase = 'stopped';
+  job.captures.clear();
   jobs.delete(job.jobId);
   await cancelActiveRequest(job);
   await job.pdf?.destroy().catch(() => undefined);
@@ -371,6 +413,7 @@ browser.runtime.onMessage.addListener((value: unknown, sender): Promise<unknown>
     }
     if (message.payload.action === 'pause') {
       job.phase = 'paused';
+      job.captures.clear();
       delete job.errorMessage;
       return cancelActiveRequest(job).then(() => {
         delete job.activeBlockId;
@@ -380,6 +423,7 @@ browser.runtime.onMessage.addListener((value: unknown, sender): Promise<unknown>
     }
     if (message.payload.action === 'stop') {
       job.phase = 'stopped';
+      job.captures.clear();
       delete job.errorMessage;
       return cancelActiveRequest(job).then(() => {
         delete job.activeBlockId;
@@ -387,6 +431,7 @@ browser.runtime.onMessage.addListener((value: unknown, sender): Promise<unknown>
         return { ok: true, snapshot: snapshot(job) };
       });
     }
+    if (message.payload.requestLimit !== undefined) job.settings.requestLimit = message.payload.requestLimit;
     job.phase = 'running';
     delete job.errorMessage;
     publish(job);
@@ -406,6 +451,12 @@ browser.runtime.onMessage.addListener((value: unknown, sender): Promise<unknown>
     settings: message.payload.settings,
     phase: 'running',
     completed: [],
+    snapshotRevision: 0,
+    requestUsage: { ...message.payload.settings.requestUsage ?? emptyPdfRequestUsage() },
+    unitOutcomes: new Map(),
+    captures: new PdfCapturePrefetch(),
+    timing: { captures: 0, prefetched: 0, pageRenderMs: 0, cropEncodeMs: 0,
+      captureWaitMs: 0, requestMs: 0, validationMs: 0 },
   };
   jobs.set(job.jobId, job);
   if (job.mode !== 'text') void initializeJob(job, message.payload.pdfResourceUrl!);

@@ -6,6 +6,11 @@ import {
 } from '../core/translation/response-parser';
 
 describe('DeepSeek response parsing', () => {
+  it.each(['length', 'content_filter', 'error', 'tool_calls'])('rejects unfinished non-stream replies: %s', finish_reason => {
+    expect(() => parseDeepSeekEnvelope({ choices: [{ finish_reason, message: { content: '{"translation":"partial but valid JSON"}' } }] }))
+      .toThrow(/token limit|content filter|unsupported reason/);
+  });
+
   it('parses a structured translation', () => {
     const result = parseStructuredTranslation(
       JSON.stringify({

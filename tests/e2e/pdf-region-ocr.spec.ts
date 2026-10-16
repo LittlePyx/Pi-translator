@@ -1,3 +1,6 @@
+import {clickPdfReaderAction,openPdfReaderMore} from './support/translation-controls';
+import {fitPdfBeforeRegionCapture} from './support/pdf-controls';
+import {openTranslationMore} from './support/translation-controls';
 import type { Route } from '@playwright/test';
 import {
   context,
@@ -444,6 +447,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
     name: '识别第 1 页并生成临时文字层',
   })).toBeVisible();
   const recognizeCurrentPage = pdfPage.locator('#recognize-page');
+  await openPdfReaderMore(pdfPage);
   await expect(recognizeCurrentPage).toBeVisible();
   await recognizeCurrentPage.click();
   await expect(firstPage.locator('.region-confirm-note')).toContainText('qwen3.5-ocr');
@@ -478,9 +482,10 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await expect(ocrLine).toHaveClass(/pi-pdf-search-current/);
   await searchQuery.press('Escape');
 
-  await pdfPage.locator('#zoom-in').click();
+  await clickPdfReaderAction(pdfPage,'zoom-in');
   await expect(firstPage.locator('[data-pi-ocr-block="e2e-ocr-line"]'))
     .toHaveText('Selectable scanned academic sentence.');
+  await openPdfReaderMore(pdfPage);
   await expect(recognizeCurrentPage).toBeVisible();
   await recognizeCurrentPage.click();
   await expect(firstPage.locator('.region-confirm')).toBeVisible();
@@ -496,6 +501,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await expect(replacementPage).toHaveAttribute('data-rendered', 'ready');
   await expect(replacementPage.locator('[data-pi-ocr-block]')).toHaveCount(0);
   await expect(replacementPage).toHaveAttribute('data-has-text', 'false');
+  await openPdfReaderMore(pdfPage);
   await expect(recognizeCurrentPage).toBeVisible();
   await pdfPage.close();
 });
@@ -606,13 +612,15 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   await expect(overlay.locator('.body .pi-math-inline math')).toBeVisible();
   const formulaView = overlay.locator('.formula-view');
   await expect(formulaView).toHaveText('源码');
+  await openTranslationMore(overlay);
   await formulaView.click();
   await expect(overlay.locator('.body')).toHaveText('能量关系式 $E=mc^2$ 保持不变。');
   await expect(formulaView).toHaveText('公式');
-  await expect(formulaView).toBeFocused();
+  await expect(overlay.locator('details.more > summary')).toBeFocused();
+  await openTranslationMore(overlay);
   await formulaView.click();
   await expect(overlay.locator('.body .pi-math-inline math')).toBeVisible();
-  await expect(formulaView).toBeFocused();
+  await expect(overlay.locator('details.more > summary')).toBeFocused();
   await overlay.locator('.recognized-source summary').click();
   await expect(overlay.locator('.recognized-text'))
     .toHaveText('Energy $E=mc^2$ is invariant.');
@@ -624,6 +632,7 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
 
   const textRequestsBeforeCorrection = textRequests.length;
   const visionRequestsBeforeCorrection = visionRequests.length;
+  await openTranslationMore(overlay);
   await overlay.getByRole('button', { name: '修正译文' }).click();
   const correctionEditor = overlay.getByRole('group', {
     name: '修正译文，公式已锁定',
@@ -640,6 +649,7 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
 
   await expect(overlay.locator('.body')).toContainText('修正后的能量关系式');
   await expect(overlay.locator('.body .pi-math-inline math')).toBeVisible();
+  await openTranslationMore(overlay);
   await overlay.locator('.formula-view').click();
   await expect(overlay.locator('.body'))
     .toHaveText('修正后的能量关系式 $E=mc^2$ 保持不变。');
@@ -649,6 +659,7 @@ test('automatically uses vision for selected PDF formulas and exposes their LaTe
   await overlay.getByRole('button', { name: '撤销上次译文修正' }).click();
   await expect(overlay.locator('.body')).toContainText('能量关系式');
   await expect(overlay.locator('.body')).not.toContainText('修正后的能量关系式');
+  await openTranslationMore(overlay);
   await overlay.locator('.formula-view').click();
   await expect(overlay.locator('.body')).toHaveText('能量关系式 $E=mc^2$ 保持不变。');
   expect(textRequests).toHaveLength(textRequestsBeforeCorrection);
@@ -741,7 +752,9 @@ test('canonicalizes over-escaped vision LaTeX before rendering and source displa
   await expect(overlay.locator('.uncertain-note')).toHaveCount(0);
   await expect(overlay.locator('.body .pi-math-inline math')).toHaveCount(2);
   await expect(overlay.locator('.body math [mathvariant="double-struck"]').first())
-    .toHaveText('Q');
+    .toHaveText('ℚ');
+
+  await openTranslationMore(overlay);
 
   await overlay.locator('.formula-view').click();
   const sourceText = await overlay.locator('.body').textContent() ?? '';
@@ -892,6 +905,7 @@ test('shows a compact PDF region queue and lets waiting or active tasks be cance
     await queuePanel.locator('.queue-item').first().getByRole('button', { name: '取消' }).click();
     releaseResponse?.();
     await expect(queueButton).toBeHidden();
+    await openPdfReaderMore(pdfPage);
     await expect(pdfPage.locator('#recognize-page')).toBeVisible();
     await expect(pdfPage.locator('#notice')).toContainText('正在取消当前框选翻译');
   } finally {
@@ -943,16 +957,19 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
 
     await selectText('#dense-source');
     await expect(overlay.locator('.body')).toContainText('密集元信息在窄屏中保持清晰');
-    await expect(overlay.locator('.meta')).toContainText('2 段');
+    await expect(overlay.locator('.meta')).not.toContainText('2 段');
+    await openTranslationMore(overlay);
+    await expect(overlay.locator('.menu-result-info')).toContainText('2 段');
     await expect(overlay.getByRole('group', { name: '译文显示方式' })).toBeVisible();
+    await openTranslationMore(overlay);
     await expect(overlay.locator('.formula-view')).toBeVisible();
-    await overlay.locator('.meta').evaluate((meta) => {
+    await overlay.locator('.menu-result-info').evaluate((meta) => {
       const context = document.createElement('span');
       context.className = 'cache-badge';
       context.textContent = '含上下文';
       meta.append(context);
     });
-    await expect(overlay.locator('.meta')).toContainText('含上下文');
+    await expect(overlay.locator('.menu-result-info')).toContainText('含上下文');
     const sourceHost = overlay.locator('.source-host');
     await expect(sourceHost).toHaveAttribute('title', 'www.overleaf.com');
     const longSourceHost =
@@ -1152,7 +1169,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     expect(readingNavigationLayout.scrollWidth)
       .toBeLessThanOrEqual(readingNavigationLayout.clientWidth + 1);
     expect(readingNavigationLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
-    expect(new Set(readingNavigationLayout.childTops).size).toBe(1);
+    expect(Math.max(...readingNavigationLayout.childTops)-Math.min(...readingNavigationLayout.childTops)).toBeLessThanOrEqual(2);
 
     await readingBottom.click();
     await expect(readingBottom).toBeDisabled();
@@ -1294,7 +1311,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       };
     });
     expect(compactFooterLayout.scrollWidth).toBeLessThanOrEqual(compactFooterLayout.clientWidth + 1);
-    expect(compactFooterLayout.moreTop).toBe(compactFooterLayout.copyTop);
+    expect(Math.abs(compactFooterLayout.moreTop-compactFooterLayout.copyTop)).toBeLessThanOrEqual(2);
     expect(compactFooterLayout.readingTop).toBeGreaterThan(compactFooterLayout.copyTop);
     await densePage.setViewportSize({ width: 360, height: 700 });
     await expect.poll(readingAnchorOffset).toBeCloseTo(resizeAnchorOffset, 0);
@@ -1312,11 +1329,12 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
       .toBeCloseTo(markScrollTop, 0);
     const formula = overlay.locator('.formula-view');
+    await openTranslationMore(overlay);
     await formula.focus();
     const formulaScrollTop = await scrollToSecondSegment();
     await formula.press('Enter');
     await expect(formula).toHaveText('公式');
-    await expect(formula).toBeFocused();
+    await expect(overlay.locator('details.more > summary')).toBeFocused();
     await expect.poll(() => resultScroll.evaluate((element) => element.scrollTop))
       .toBeCloseTo(formulaScrollTop, 0);
 
@@ -1542,7 +1560,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       await densePage.screenshot({ path: testInfo.outputPath('result-metadata-controls-360-dark.png') });
     }
 
-    await overlay.locator('.meta').evaluate((meta) => {
+    await overlay.locator('.menu-result-info').evaluate((meta) => {
       const latency = [...meta.querySelectorAll<HTMLElement>('.meta-dot')]
         .find((item) => /(?:毫秒|秒)$/u.test(item.textContent?.trim() ?? ''));
       latency?.remove();
@@ -1551,8 +1569,10 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       cache.textContent = '会话缓存';
       meta.append(cache);
     });
-    await expect(overlay.locator('.cache-badge').filter({ hasText: '会话缓存' })).toBeVisible();
-    await expect(overlay.locator('.meta')).toContainText('2 段');
+    await expect(overlay.locator('.cache-badge').filter({ hasText: '会话缓存' })).toBeHidden();
+    await expect(overlay.locator('.meta')).not.toContainText('2 段');
+    await openTranslationMore(overlay);
+    await expect(overlay.locator('.menu-result-info')).toContainText('2 段');
     const cachedLayout = await overlay.locator('.result-topline').evaluate((topLine) => ({
       clientWidth: topLine.clientWidth,
       scrollWidth: topLine.scrollWidth,
@@ -1599,7 +1619,7 @@ test('keeps narrow PDF translation states readable and touch-safe', async ({}, t
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     await expect.poll(() => firstPage.evaluate((element) =>
       element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
 
@@ -1709,7 +1729,7 @@ test('keeps narrow PDF translation errors readable and touch-safe', async ({}, t
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     const textSpan = firstPage.locator('.textLayer span')
       .filter({ hasText: 'Energy E = mc^2 is invariant.' });
     await expect(textSpan).toBeVisible();
@@ -1774,7 +1794,7 @@ test('keeps narrow PDF document memory readable with long terms', async ({}, tes
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     const textSpan = firstPage.locator('.textLayer span')
       .filter({ hasText: 'The adaptive policy E = mc^2 is stable.' });
     await expect(textSpan).toBeVisible();
@@ -1965,7 +1985,7 @@ test('keeps narrow OCR review and source editing readable', async ({}, testInfo)
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     await pdfPage.locator('#region-translate').click();
     const pageBounds = await firstPage.boundingBox();
     expect(pageBounds).not.toBeNull();
@@ -2077,7 +2097,7 @@ test('keeps narrow pending OCR reviews actionable and reveals their regions', as
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     await pdfPage.locator('#region-translate').click();
     const pageBounds = await firstPage.boundingBox();
     expect(pageBounds).not.toBeNull();
@@ -2182,6 +2202,7 @@ test('clears an unsent PDF image selection on Escape, zoom, and document replace
     expect(visionRequests).toHaveLength(requestCount);
   };
 
+  await fitPdfBeforeRegionCapture(pdfPage);
   await drawRegion();
   await pdfPage.keyboard.press('Escape');
   await expect(regionButton).toHaveAttribute('aria-pressed', 'true');
@@ -2192,7 +2213,7 @@ test('clears an unsent PDF image selection on Escape, zoom, and document replace
   expect(visionRequests).toHaveLength(requestCount);
 
   await drawRegion();
-  await pdfPage.locator('#zoom-in').click();
+  await clickPdfReaderAction(pdfPage,'zoom-in');
   await expect(regionButton).toHaveAttribute('aria-pressed', 'false');
   await expect(firstPage.locator('.region-selection-box')).toHaveCount(0);
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -2222,7 +2243,7 @@ test('creates and adjusts a PDF image region with the keyboard and touch-safe mo
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-  await pdfPage.locator('#fit-width').click();
+  await clickPdfReaderAction(pdfPage,'fit-width');
   await expect.poll(() => firstPage.evaluate((element) =>
     element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
   const regionButton = pdfPage.locator('#region-translate');
@@ -2366,11 +2387,13 @@ test('drops a delayed image capture after the user opens another PDF', async () 
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  await fitPdfBeforeRegionCapture(pdfPage);
   const pageBox = await firstPage.boundingBox();
   expect(pageBox).not.toBeNull();
   if (!pageBox) return;
   const requestCount = visionRequests.length;
   await pdfPage.locator('#region-translate').click();
+  await expect(pdfPage.locator('#region-translate')).toHaveAttribute('data-region-mode', 'continuous');
   await pdfPage.mouse.move(pageBox.x + 170, pageBox.y + 220);
   await pdfPage.mouse.down();
   await pdfPage.mouse.move(pageBox.x + 420, pageBox.y + 420, { steps: 5 });

@@ -4,6 +4,8 @@ import type {
   TranslationBatchRuntimeResponse,
   TranslateRuntimeResponse,
 } from '../messaging/messages';
+import productTheme from '../../ui/product-theme.css?inline';
+import productBilingualControl from '../../ui/product-bilingual-control.css?inline';
 import { translationErrorMessage } from '../messaging/user-facing-error';
 import { isLikelyTargetLanguage } from '../language/target-language';
 import {
@@ -621,11 +623,11 @@ function installTranslationStyle(): void {
       box-sizing: border-box !important;
       width: auto !important;
       margin: .36em 0 .92em !important;
-      border-left: 1.5px solid color-mix(in srgb, var(--pi-bilingual-color) 20%, #6558d9 80%) !important;
-      border-radius: 0 9px 9px 0 !important;
+      border-left: 1.5px solid color-mix(in srgb, var(--pi-bilingual-color) 22%, transparent) !important;
+      border-radius: 0 !important;
       padding: .16em .55em .2em .78em !important;
       color: var(--pi-bilingual-color) !important;
-      background: linear-gradient(90deg, color-mix(in srgb, var(--pi-bilingual-surface) 95%, #6558d9 5%), transparent 42%) !important;
+      background: transparent !important;
       font-family: var(--pi-bilingual-font) !important;
       font-size: var(--pi-bilingual-size) !important;
       font-style: normal !important;
@@ -1632,6 +1634,8 @@ export function createBilingualPageTranslator(
           .menu button { width:100%;border-radius:7px;text-align:left; }
           @media (prefers-color-scheme: dark) { .launcher{color:#e5e9f0;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 4px 14px rgba(0,0,0,.24)} .mark{filter:brightness(0) invert(1)} button,button[data-action="start"]{color:#d8dde6} button:hover,button[data-action="start"]:hover,details.more > summary:hover,details.more[open] > summary{color:#c7c3ff;background:#2a3140} button[data-action="scope"]{color:#aab2c0}button[data-action="scope"]::before{background:#3c4553}button[data-action="dismiss"],details.more > summary{color:#8f99aa}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)} }
           @media (max-width:520px) { .launcher{padding:2px} button{min-height:32px}.count,.launcher>button[data-action="scope"],.launcher>button[data-action="dismiss"]{display:none}details.more{display:block} }
+          ${productTheme}
+          ${productBilingualControl}
         </style>
         <div class="launcher" role="group" aria-label="网页正文翻译">
           <button type="button" data-action="start"><span class="mark-shell"><img class="mark" src="${logoUrl}" alt="" aria-hidden="true" /></span><span class="launcher-copy"><strong>译全文</strong><span class="count"></span></span></button>
@@ -2418,6 +2422,7 @@ export function createBilingualPageTranslator(
           @media (prefers-color-scheme: dark) { .bar{color:#edf1f7;border-color:#3c4553;background:rgba(24,31,43,.97);box-shadow:0 5px 18px rgba(0,0,0,.25)} .mark{filter:brightness(0) invert(1)} .control-title{color:#e5e9f0} output{color:#aab3c2}.progress{background:#343d4e}.language,.display{color:#aab3c2} select{color:#c7c3ff;background:transparent}select:hover{background:#2a3140}button{color:#b7bfcc;background:transparent}button:hover{color:#c7c3ff;background:#2a3140}button[data-action="pause"]{color:#c7c3ff;background:#30334f}button[data-action="pause"]:hover{color:#dedbff;background:#3a3d5d} details.more>summary,button[data-action="compact"],.language-confirmation button[data-action="cancel-language"],.scope-panel button[data-action="cancel-scope"],.scope-presets button,.start-confirmation button[data-action="cancel-start"],.start-confirmation button[data-action="adjust-start"]{color:#aab3c2;background:transparent}.scope-presets button[aria-pressed="true"]{color:#cbc7ff;background:#30334f}details.more>summary:hover,details.more[open]>summary,.menu button:hover{color:#cbc7ff;background:#2a3140}.menu{border-color:#3c4553;background:rgba(24,31,43,.98);box-shadow:0 10px 28px rgba(0,0,0,.32)}.menu button{color:#cbd2dd;background:transparent}.language-confirmation,.scope-panel,.start-confirmation{color:#cbd2dd;border-top-color:#3b4352} }
           @media (max-width:480px) { .bar{gap:5px;padding-left:8px} .mark{display:none} button{padding-inline:6px}.language>span,.display>span{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}.scope-presets{flex:1 0 100%;justify-content:flex-start}.scope-actions{margin-left:auto} }
         </style>
+        <style>${productTheme}${productBilingualControl}</style>
         <div class="bar">
           <img class="mark" src="${logoUrl}" alt="" aria-hidden="true" />
           <span class="status-copy"><strong class="control-title">网页全文翻译</strong><output role="status" aria-live="polite"></output></span>

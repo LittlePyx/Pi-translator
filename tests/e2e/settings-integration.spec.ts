@@ -1,3 +1,4 @@
+import {openTranslationMore} from './support/translation-controls';
 import {
   context,
   createTextPdf,
@@ -71,7 +72,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
   await reopened.locator('[data-settings-target="support"]').click();
-  const support = reopened.locator('details.support-disclosure');
+  const support = reopened.locator('details.support-disclosure').filter({has:reopened.locator('#copy-diagnostic-report')});
+  await expect(reopened.locator('details.support-disclosure').filter({has:reopened.locator('#extension-version')})).not.toHaveAttribute('open','');
   await expect(support).not.toHaveAttribute('open', '');
   await support.locator('summary').click();
   await reopened.locator('#restart-onboarding').click();
@@ -470,6 +472,7 @@ test('persists and undoes a native PDF correction through the real background se
     await restartBackground();
     await expect(sidePanel.locator('#session')).toBeVisible();
     await expect(sidePanel.locator('#translation-text')).toContainText('原始 PDF 译文保留公式');
+    await openTranslationMore(sidePanel);
     await sidePanel.locator('#correct').click();
     const correction = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
     await correction.getByLabel('可编辑译文第 1 段').fill(correctedTextPart);
@@ -517,7 +520,7 @@ test('persists and undoes a native PDF correction through the real background se
     await sidePanel.locator('#undo-correction').click();
     await expect(sidePanel.locator('#translation-text')).toContainText('原始 PDF 译文保留公式');
     await expect(sidePanel.locator('#correction-undo')).toBeHidden();
-    await expect(sidePanel.locator('#correct')).toBeFocused();
+    await expect(sidePanel.locator('#panel-more > summary')).toBeFocused();
 
     const restoredSession = await sidePanel.evaluate(async (id) => {
       const api = (globalThis as typeof globalThis & {

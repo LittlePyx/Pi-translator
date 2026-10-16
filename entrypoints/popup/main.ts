@@ -98,6 +98,10 @@ const readinessPanel = element<HTMLElement>('readiness-panel');
 const readinessTitle = element<HTMLElement>('readiness-title');
 const readinessNote = element<HTMLParagraphElement>('readiness-note');
 const readinessIssues = element<HTMLElement>('readiness-issues');
+const serviceDetails = element<HTMLDetailsElement>('popup-service-details');
+const serviceState = element<HTMLElement>('popup-service-state');
+const moreActions = element<HTMLDetailsElement>('popup-more-actions');
+const moreBody = element<HTMLElement>('popup-more-body');
 const pageContext = element<HTMLParagraphElement>('page-context');
 const featureGuideToggle = element<HTMLButtonElement>('feature-guide-toggle');
 const featureGuide = element<HTMLElement>('feature-guide');
@@ -270,15 +274,17 @@ function renderPopupReadiness(
     shortcut,
     page: popupPageState(activeUrl, generalPageMode, Boolean(activePdfContext)),
   });
-  readinessPanel.dataset.state = result.issues.length ? 'issue' : 'ready';
+  const blocking = result.issues.filter(issue=>issue.id!=='shortcut');
+  const issues = blocking.length ? blocking : result.issues;
+  readinessPanel.dataset.state = issues.length ? 'issue' : 'ready';
   readinessPanel.removeAttribute('aria-busy');
-  readinessTitle.textContent = result.issues.length
-    ? `还需处理 ${result.issues.length} 项`
+  readinessTitle.textContent = issues.length
+    ? `还需处理 ${issues.length} 项`
     : result.contextNote
       ? '当前页面不可使用'
       : 'Pi Translator 已就绪';
   readinessNote.textContent = result.contextNote ?? '';
-  readinessIssues.replaceChildren(...result.issues.map((issue) => {
+  readinessIssues.replaceChildren(...issues.map((issue) => {
     const row = document.createElement('div');
     row.className = 'readiness-issue';
     const copy = document.createElement('div');
@@ -296,6 +302,18 @@ function renderPopupReadiness(
   }));
   readinessIssues.hidden = result.issues.length === 0;
   readinessPanel.hidden = result.issues.length === 0 && !result.contextNote;
+  const needsSetup = blocking.length>0;
+  serviceDetails.dataset.blocking = String(needsSetup);
+  serviceState.textContent = needsSetup ? '需要配置' : result.contextNote ? '页面受限' : `文字${textApi.value}${shortcut==='missing'?' · 快捷键未设':shortcut==='unknown'?' · 快捷键待检查':''}`;
+  serviceState.dataset.tone = needsSetup ? 'issue' : 'ready';
+  // Missing shortcuts do not block translation. Only reveal blocking setup automatically.
+  if (needsSetup) {
+    serviceDetails.open = true;
+    quickActions.before(serviceDetails);
+  } else {
+    moreBody.append(serviceDetails);
+    if (result.contextNote) serviceDetails.open = true;
+  }
 }
 
 function hidePdfAccessAlert(): void {
@@ -363,12 +381,13 @@ function renderFeatureGuide(): void {
     featureGuideProgressState,
     featureGuideRevealOverride,
   );
-  featureGuide.hidden = !model.shouldShow;
-  featureGuideToggle.hidden = model.shouldShow;
+  featureGuide.hidden = !featureGuideRevealOverride;
+  featureGuideToggle.hidden = featureGuideRevealOverride;
+  featureGuideToggle.setAttribute('aria-expanded', String(featureGuideRevealOverride));
   featureGuideToggle.textContent = model.completedCount === model.steps.length
     ? '查看用法'
     : '使用提示';
-  if (!model.shouldShow) return;
+  if (!featureGuideRevealOverride) return;
   featureGuideEyebrow.textContent = model.eyebrow;
   featureGuideTitle.textContent = model.title;
   featureGuideDescription.textContent = model.description;
@@ -400,7 +419,7 @@ function renderFeatureGuide(): void {
     : '完成后会自动记住，仅保存在本机';
   featureGuideDismiss.setAttribute(
     'aria-label',
-    featureGuideRevealOverride ? '关闭使用提示' : '不再提示当前页面的用法',
+    '关闭使用提示',
   );
 }
 
@@ -637,6 +656,7 @@ function updateQuickActions(): void {
         ? 'sidebar'
         : 'reader';
   quickActions.prepend(primaryAction);
+  if (!pdfIsPrimary) moreBody.prepend(openPdf);
   quickActions.removeAttribute('aria-busy');
   renderFeatureGuide();
 }
@@ -857,18 +877,23 @@ featureGuideToggle.addEventListener('click', () => {
   renderFeatureGuide();
   featureGuideTitle.focus({ preventScroll: true });
 });
+moreActions.addEventListener('toggle', () => {
+  if (!moreActions.open && featureGuideRevealOverride) {
+    featureGuideRevealOverride = false;
+    renderFeatureGuide();
+  }
+});
 
 featureGuideDismiss.addEventListener('click', () => {
   const scene = featureGuideScene;
   if (!scene) return;
   featureGuideDismiss.disabled = true;
   void (async () => {
-    if (!featureGuideRevealOverride) {
-      await dismissFeatureDiscovery(scene);
-      featureGuideProgressState.dismissed[scene] = true;
-    }
+    await dismissFeatureDiscovery(scene);
+    featureGuideProgressState.dismissed[scene] = true;
     featureGuideRevealOverride = false;
     renderFeatureGuide();
+    featureGuideToggle.focus({ preventScroll: true });
   })().catch(() => {
     setStatus('使用提示状态未能保存，请稍后再试。', 'error');
   }).finally(() => {
@@ -881,6 +906,7 @@ openSettings.addEventListener('click', () => {
 });
 
 textApiStatus.addEventListener('click', () => openSettingsPage(textApiSettingsFocus));
+document.getElementById('open-library')!.addEventListener('click', () => openSettingsPage('storage'));
 visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettingsFocus));
 
 translatePage.addEventListener('click', () => {

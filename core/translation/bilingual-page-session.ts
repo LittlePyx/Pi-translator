@@ -4,6 +4,8 @@ import {
 } from '../language/supported-target-languages';
 import type { TranslationContentMode, TranslationStyle } from './types';
 import type { BilingualPageDisplayMode } from './bilingual-page';
+import {fixedDocumentKey,readFixedDocumentRecords,retainDocumentSessions} from './fixed-document-storage';
+import {withDocumentStorageLock} from './document-storage-lock';
 import {
   summarizeRetainedTranslationStorage,
   type RetainedTranslationStorageSummary,
@@ -69,7 +71,7 @@ type SessionsByTab = Record<string, StoredBilingualPageSession[]>;
 let sessionWriteTail: Promise<void> = Promise.resolve();
 
 function serializeSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const next = sessionWriteTail.catch(() => undefined).then(operation);
+  const next = sessionWriteTail.catch(() => undefined).then(()=>withDocumentStorageLock(operation));
   sessionWriteTail = next.then(
     () => undefined,
     () => undefined,
@@ -397,29 +399,17 @@ export function saveBilingualPageSession(
 async function readRetained(): Promise<StoredBilingualPageSession[]> {
   const stored = await browser.storage.local.get(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
   const value = stored[BILINGUAL_PAGE_RETAINED_STORAGE_KEY];
-  return Array.isArray(value) ? value.filter(validStoredSession) : [];
+  const fixed=Object.values(await readFixedDocumentRecords('web')).filter(validStoredSession);
+  const fixedIds=new Set(fixed.map(session=>fixedDocumentKey('web',session)));
+  return [...fixed,...(Array.isArray(value)?value.filter(validStoredSession):[]).filter(session=>!fixedIds.has(fixedDocumentKey('web',session)))];
 }
 
-function pruneRetained(
-  sessions: StoredBilingualPageSession[],
-): StoredBilingualPageSession[] {
-  const ordered = [...sessions].sort((left, right) => right.updatedAt - left.updatedAt);
-  const retained: StoredBilingualPageSession[] = [];
-  let retainedCharacters = 0;
-  for (const session of ordered) {
-    const characters = session.blocks.reduce(
-      (total, block) => total + block.translatedText.length,
-      0,
-    );
-    if (
-      retained.length >= MAX_RETAINED_SESSIONS ||
-      retainedCharacters + characters > MAX_RETAINED_TRANSLATION_CHARACTERS
-    ) continue;
-    retained.push(session);
-    retainedCharacters += characters;
-  }
-  return retained;
+export function sanitizeRetainedWebRecord(value:unknown):StoredBilingualPageSession|undefined{
+  if(!validStoredSession(value)||!Object.keys(value).every(key=>['pageKey','targetLanguage','sourceLanguage','style','contentMode','documentSignatures','excludedSignatures','displayMode','translationsHidden','controlCollapsed','activity','blocks','updatedAt','behaviorKey'].includes(key)))return undefined;
+  return JSON.parse(JSON.stringify(value)) as StoredBilingualPageSession;
 }
+export async function retainedWebRecordsForBackup():Promise<StoredBilingualPageSession[]>{return (await readRetained()).flatMap(value=>{const record=sanitizeRetainedWebRecord(value);return record?[record]:[]})}
+
 
 /**
  * Reads an explicitly retained webpage translation. A model change does not
@@ -447,7 +437,12 @@ export function getRetainedBilingualPageStorageSummary(): Promise<
     BILINGUAL_PAGE_RETAINED_STORAGE_KEY,
     MAX_RETAINED_SESSIONS,
     MAX_RETAINED_TRANSLATION_CHARACTERS,
+    Object.values(await readFixedDocumentRecords('web')).filter(validStoredSession).length,
   ));
+}
+
+export function listRetainedBilingualPageTranslations(): Promise<BilingualPageSessionSnapshot[]> {
+  return serializeSessionOperation(async () => (await readRetained()).map(cloneSession));
 }
 
 export function saveRetainedBilingualPageSession(
@@ -463,15 +458,17 @@ export function saveRetainedBilingualPageSession(
       descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
     ));
     const next = nextStoredSession(previous, update, behaviorKey);
-    const retained = pruneRetained([
+    const fixed=await readFixedDocumentRecords('web');
+    const retained = retainDocumentSessions('web',[
       next,
       ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
-    ]);
+    ],new Set(Object.keys(fixed)),MAX_RETAINED_SESSIONS,MAX_RETAINED_TRANSLATION_CHARACTERS);
     if (!retained.includes(next)) {
-      throw new Error('This webpage translation is too large to retain locally.');
+      throw new Error('保存空间不足，请先取消固定或备份清理其他文档。当前页面中的译文仍可阅读。');
     }
     await browser.storage.local.set({
-      [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained,
+      [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained.filter(record=>!fixed[fixedDocumentKey('web',record)]),
+      ...(fixed[fixedDocumentKey('web',next)]?{[fixedDocumentKey('web',next)]:next}:{}),
     });
     return cloneSession(next);
   });
@@ -481,6 +478,8 @@ export function clearRetainedBilingualPageSession(
   descriptor?: BilingualPageSessionDescriptor,
 ): Promise<void> {
   return serializeSessionOperation(async () => {
+    const fixed=await readFixedDocumentRecords('web');
+    for(const [key,value] of Object.entries(fixed))if(!descriptor||(validStoredSession(value)&&descriptorMatches(value,descriptor)))await browser.storage.local.remove(key);
     if (!descriptor) {
       await browser.storage.local.remove(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
       return;
@@ -490,11 +489,24 @@ export function clearRetainedBilingualPageSession(
     if (retained.length === sessions.length) return;
     if (retained.length) {
       await browser.storage.local.set({
-        [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained,
+        [BILINGUAL_PAGE_RETAINED_STORAGE_KEY]: retained.filter(record=>!fixed[fixedDocumentKey('web',record)]),
       });
     } else {
       await browser.storage.local.remove(BILINGUAL_PAGE_RETAINED_STORAGE_KEY);
     }
+  });
+}
+
+export function setRetainedBilingualPagePinned(descriptor:BilingualPageSessionDescriptor,pinned:boolean):Promise<void>{
+  return serializeSessionOperation(async()=>{
+    const sessions=await readRetained();const session=sessions.find(item=>descriptorMatches(item,descriptor));
+    if(!session)throw new Error('这份译文已被移除，请刷新。');
+    const key=fixedDocumentKey('web',session);const fixed=await readFixedDocumentRecords('web');
+    session.updatedAt=Date.now();
+    if(pinned)fixed[key]=session;else delete fixed[key];
+    const retained=retainDocumentSessions('web',sessions,new Set(Object.keys(fixed)),MAX_RETAINED_SESSIONS,MAX_RETAINED_TRANSLATION_CHARACTERS);
+    await browser.storage.local.set({[BILINGUAL_PAGE_RETAINED_STORAGE_KEY]:retained.filter(record=>!fixed[fixedDocumentKey('web',record)]),...(pinned?{[key]:session}:{})});
+    if(!pinned)await browser.storage.local.remove(key);
   });
 }
 

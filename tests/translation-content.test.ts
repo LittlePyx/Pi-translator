@@ -76,6 +76,32 @@ afterEach(() => {
 });
 
 describe('shared translation content renderer', () => {
+  it('renders a locally owned number without sending it to KaTeX and retains it on render failure', async () => {
+    installFakeDom();
+    const sendMessage = vi.fn().mockResolvedValueOnce({ ok: true, data: { html: ['<math>x=y</math>'] } })
+      .mockResolvedValueOnce({ ok: false });
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const container = new FakeElement('div');
+    const target = { container: container as unknown as HTMLElement, text: String.raw`\[x=y\]`, renderLatex: true, equationNumber: '16' };
+    await renderTranslationContents([target]);
+    expect(sendMessage.mock.calls[0]).toMatchObject([{ payload: { items: [{ tex: 'x=y' }] } }]);
+    expect((container.children[0] as FakeElement).children[1]!.textContent).toBe('(16)');
+    await renderTranslationContents([target]);
+    expect(container.children[0]!.textContent).toContain('(16)');
+    await renderTranslationContents([{ ...target, renderLatex: false }]);
+    expect(container.children[0]!.textContent).toContain('(16)');
+    expect(sendMessage).toHaveBeenCalledTimes(2);
+  });
+  it('honors registry layout instead of promoting a long isolated inline formula', async () => {
+    installFakeDom();
+    const sendMessage = vi.fn(async () => ({ ok: true, data: { html: ['<math>x</math>'] } }));
+    vi.stubGlobal('browser', { runtime: { sendMessage } });
+    const container = new FakeElement('span');
+    await renderTranslationContents([{ container: container as unknown as HTMLElement,
+      text: `$${'x+'.repeat(90)}y$`, renderLatex: true, formulaDisplayMode: false }]);
+    expect((container.children[0] as FakeElement).className).toContain('pi-math-inline');
+    expect(sendMessage.mock.calls[0]).toMatchObject([{ payload: { items: [{ displayMode: false }] } }]);
+  });
   it('aggregates formulae from several containers into one runtime message', async () => {
     installFakeDom();
     const sendMessage = vi.fn(async (message: {

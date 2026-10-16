@@ -1,4 +1,5 @@
 import { MAX_SELECTION_LENGTH, type SelectionSnapshot } from '../selection/types';
+import {preparePdfFormulaProseRepair,type RepairPdfFormulaProseRequest} from '../pdf/formula-prose-repair';
 import type {
   ContextMode,
   GeneralPageMode,
@@ -26,7 +27,8 @@ import type {
 import type { TranslationErrorCode } from './errors';
 import { validTranslationBatchItems } from '../translation/document-batch';
 import type { SettingsFocus, TranslationProviderRole } from './user-facing-error';
-import type { DocumentMemorySnapshot } from '../document/document-memory-repository';
+import type { DocumentMemorySnapshot,DocumentTermInput,DocumentTermSource,DocumentTermSelection } from '../document/document-memory-repository';
+import type {TermSource} from '../document/term-provenance';
 import type { PdfSourceLocation } from '../translation/types';
 import type {
   CoordinateOcrPage,
@@ -89,6 +91,8 @@ export interface SettingsRecoveryReadyPayload {
 }
 
 export interface PublicSettings {
+  modelPrices?: import('../translation/cost-estimate').ModelTokenPrice[];
+  costTextSource?: import('../translation/cost-estimate').UsageSource;
   sourceLanguage: 'auto' | string;
   targetLanguage: string;
   style: TranslationStyle;
@@ -179,12 +183,16 @@ export interface PdfSidePanelSession {
 }
 
 export type RuntimeMessage =
+  | {type:'GET_WEB_EXCERPTS';payload:{pageUrl:string}}
+  | {type:'SAVE_WEB_EXCERPT';payload:{pageUrl:string;excerpt:import('../content/web-excerpt-repository').WebExcerpt}}
+  | {type:'REMOVE_WEB_EXCERPT';payload:{pageUrl:string;markerId:string}}
   | { type: 'TRANSLATE_SELECTION'; payload: TranslateRequest }
   | { type: 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR'; payload: TranslateRequest }
   | { type: 'TRANSLATE_BILINGUAL_PAGE_SEGMENT'; payload: TranslateRequest }
   | { type: 'TRANSLATE_DOCUMENT_BATCH'; payload: TranslateBatchRequest }
   | { type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK'; payload: TranslateImageRegionRequest }
   | { type: 'TRANSLATE_IMAGE_REGION'; payload: TranslateImageRegionRequest }
+  | { type:'REPAIR_PDF_FORMULA_PROSE';payload:RepairPdfFormulaProseRequest }
   | { type: 'RECOGNIZE_PDF_PAGE'; payload: RecognizePdfPageRequest }
   | { type: 'CAPTURE_VISIBLE_TAB' }
   | { type: 'CANCEL_TRANSLATION'; payload: { requestId: string } }
@@ -316,10 +324,12 @@ export type RuntimeMessage =
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
   | { type: 'GET_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
+  | { type: 'LIST_DOCUMENT_TERM_SOURCES'; payload: DocumentMemoryLocator & {targetLanguage:SupportedTargetLanguage} }
+  | { type: 'REUSE_DOCUMENT_TERMS'; payload: DocumentMemoryLocator & {context:TermSource;targetLanguage:SupportedTargetLanguage;selections:DocumentTermSelection[]} }
   | { type: 'CONFIRM_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { candidateId: string } }
   | {
       type: 'UPSERT_DOCUMENT_TERM';
-      payload: DocumentMemoryLocator & { term: { id?: string; source: string; target: string } };
+      payload: DocumentMemoryLocator & { term: DocumentTermInput };
     }
   | { type: 'REMOVE_DOCUMENT_TERM'; payload: DocumentMemoryLocator & { termId: string } }
   | { type: 'DISMISS_DOCUMENT_TERM_CANDIDATE'; payload: DocumentMemoryLocator & { candidateId: string } }
@@ -430,6 +440,8 @@ export interface TranslationSessionResult {
 
 export type TranslateRuntimeResponse = RuntimeResponse<TranslationSessionResult>;
 export type TranslationBatchRuntimeResponse = RuntimeResponse<{
+  usage?: import('../translation/provider-usage').ProviderTokenUsage;
+  usageSource?: import('../translation/cost-estimate').UsageSource;
   items: TranslationBatchItemResult[];
   missingItemIds: string[];
 }>;
@@ -453,6 +465,7 @@ export type ApiDiagnosticResponse = RuntimeResponse<ApiDiagnosticReport>;
 export type PublicSettingsResponse = RuntimeResponse<PublicSettings>;
 export type LocalDiagnosticReportResponse = RuntimeResponse<{ report: string }>;
 export type DocumentMemoryResponse = RuntimeResponse<{ memory: DocumentMemorySnapshot }>;
+export type DocumentTermSourcesResponse = RuntimeResponse<{sources:DocumentTermSource[]}>;
 export type UpdateTranslationResultResponse = RuntimeResponse<TranslationSessionResult>;
 export type ActivePdfSourceResponse = RuntimeResponse<{
   detected: boolean;
@@ -759,6 +772,17 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
 
   const message = value as { type: unknown; payload?: unknown };
   const type = message.type;
+  if(type==='REPAIR_PDF_FORMULA_PROSE'){
+    const payload=record(message.payload);
+    return Boolean(payload&&(payload.sourceTabId===undefined||Number.isSafeInteger(payload.sourceTabId)&&Number(payload.sourceTabId)>=0)&&typeof payload.requestId==='string'&&payload.requestId.length>0&&payload.requestId.length<=240&&
+      isSupportedTargetLanguage(payload.targetLanguage)&&typeof payload.sourceLanguage==='string'&&payload.sourceLanguage.length<=80&&
+      ['academic','literal','general'].includes(String(payload.style))&&preparePdfFormulaProseRepair(payload.document,payload.targetLanguage));
+  }
+  if(type==='GET_WEB_EXCERPTS'||type==='SAVE_WEB_EXCERPT'||type==='REMOVE_WEB_EXCERPT'){
+    const payload=record(message.payload);
+    return Boolean(payload&&typeof payload.pageUrl==='string'&&payload.pageUrl.length<=4000&&
+      (type==='GET_WEB_EXCERPTS'||type==='SAVE_WEB_EXCERPT'&&record(payload.excerpt)||type==='REMOVE_WEB_EXCERPT'&&typeof payload.markerId==='string'&&payload.markerId.length<=240));
+  }
   if (type === 'START_BILINGUAL_PAGE') {
     const payload = record(message.payload);
     return Boolean(
@@ -1000,6 +1024,11 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||
     type === 'GET_DOCUMENT_MEMORY' ||
+    type === 'LIST_DOCUMENT_TERM_SOURCES' ||
+    type === 'REUSE_DOCUMENT_TERMS' ||
+    type === 'GET_WEB_EXCERPTS' ||
+    type === 'SAVE_WEB_EXCERPT' ||
+    type === 'REMOVE_WEB_EXCERPT' ||
     type === 'CONFIRM_DOCUMENT_TERM' ||
     type === 'UPSERT_DOCUMENT_TERM' ||
     type === 'REMOVE_DOCUMENT_TERM' ||

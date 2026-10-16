@@ -7,6 +7,7 @@ describe('local diagnostic report', () => {
       generatedAt: '2026-08-09T00:00:00.000Z',
       version: '0.10.0',
       manifestVersion: 3,
+      build: { buildId: 'a'.repeat(64), builtAt: '2026-10-13T00:00:00.000Z', commit: 'b'.repeat(40), sourcePath: 'private workspace' },
       apiState: {
         profileCount: 2,
         apiKeyConfigured: true,
@@ -34,6 +35,8 @@ describe('local diagnostic report', () => {
 
     expect(report).toContain('providerFirstOutputMs');
     expect(report).toContain('performanceSummary');
+    expect(JSON.parse(report).build.buildId).toBe('a'.repeat(64));
+    expect(report).not.toContain('private workspace');
     for (const sensitive of [
       'sk-private',
       'private.example',

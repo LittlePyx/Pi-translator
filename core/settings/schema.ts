@@ -16,6 +16,7 @@ export interface ApiProfile {
 }
 
 export interface ExtensionSettingsV8 {
+  modelPrices?: import('../translation/cost-estimate').ModelTokenPrice[];
   schemaVersion: 8;
   provider: 'openai-compatible';
   apiProfiles: ApiProfile[];

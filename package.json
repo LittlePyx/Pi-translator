@@ -10,17 +10,20 @@
   "scripts": {
     "dev": "wxt -b edge",
     "prepare": "wxt prepare",
-    "build:edge": "wxt build -b edge",
-    "zip:edge": "wxt zip -b edge",
+    "build:edge": "node tools/write-build-info.mjs && wxt build -b edge",
+    "zip:edge": "node tools/write-build-info.mjs && wxt zip -b edge",
     "typecheck": "wxt prepare && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build:edge && npm run test:e2e:built",
-    "test:e2e:built": "playwright test tests/e2e/web-reading.spec.ts tests/e2e/web-selection.spec.ts tests/e2e/pdf-document.spec.ts tests/e2e/pdf-region-ocr.spec.ts tests/e2e/translation-surfaces.spec.ts tests/e2e/browser-sidebar.spec.ts tests/e2e/settings-integration.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
+    "test:e2e:built": "playwright test tests/e2e/web-reading.spec.ts tests/e2e/web-selection.spec.ts tests/e2e/pdf-document.spec.ts tests/e2e/pdf-math-regression.spec.ts tests/e2e/pdf-translation-reliability.spec.ts tests/e2e/pdf-paragraph-flow.spec.ts tests/e2e/pdf-paper-metadata.spec.ts tests/e2e/pdf-equation-numbering.spec.ts tests/e2e/pdf-product-workflow.spec.ts tests/e2e/pdf-library-cost-excerpts.spec.ts tests/e2e/pdf-reading-workflow.spec.ts tests/e2e/term-excerpts.spec.ts tests/e2e/term-reuse.spec.ts tests/e2e/research-reading.spec.ts tests/e2e/pdf-region-ocr.spec.ts tests/e2e/translation-surfaces.spec.ts tests/e2e/browser-sidebar.spec.ts tests/e2e/settings-integration.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
     "test:live-formula": "vite-node tools/live-formula-acceptance.ts",
     "test:marketing": "npm run build:edge && playwright test tests/e2e/marketing-screenshots.spec.ts",
     "check:secrets": "node tools/check-secrets.mjs",
     "check:release-artifact": "node tools/check-release-consistency.mjs",
     "check:release": "npm run zip:edge && npm run check:release-artifact",
+    "test:product": "playwright test tests/e2e/pdf-product-workflow.spec.ts tests/e2e/pdf-library-cost-excerpts.spec.ts tests/e2e/pdf-reading-workflow.spec.ts tests/e2e/term-excerpts.spec.ts tests/e2e/term-reuse.spec.ts tests/e2e/research-reading.spec.ts",
+    "test:design": "npm run build:edge && npm run test:layout:built",
+    "test:layout:built": "playwright test tests/e2e/product-layout-audit.spec.ts tests/e2e/product-design.spec.ts",
     "test:watch": "vitest"
   },
   "devDependencies": {

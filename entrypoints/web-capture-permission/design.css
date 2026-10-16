@@ -1,0 +1,6 @@
+html, body { color: var(--pi-text); background: var(--pi-surface); }
+#grant { border: 1px solid var(--pi-line); border-radius: var(--pi-radius); color: var(--pi-text); background: var(--pi-surface); box-shadow: none; }
+#grant:hover:not(:disabled) { border-color: var(--control-border-hover); color: var(--pi-text); background: var(--pi-subtle); }
+#grant strong { color: var(--pi-text); font-weight: 550; }
+#grant small { color: var(--pi-muted); font-weight: 400; }
+.region-icon, .arrow { color: var(--pi-muted); }

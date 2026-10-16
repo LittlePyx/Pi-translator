@@ -2058,3 +2058,14 @@ button:focus-visible {
   .retained-storage-actions .confirming { border-color: #dc6478; background: #a93046; }
   #retained-storage-action-status.error { color: #ff9cab; }
 }
+/* Local document library and explicitly configured model prices. */
+.document-library{display:grid;gap:12px;margin:16px 0}
+.library-entry{min-width:0;padding:16px;border:1px solid var(--line);border-radius:12px}
+.library-entry input{width:100%;min-width:0;box-sizing:border-box}
+.library-entry p{overflow-wrap:anywhere}
+.library-actions{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.library-entry pre{max-height:240px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit;font-size:13px;line-height:1.7}
+.library-entry summary{cursor:pointer;font-size:13px}
+.price-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
+@media(max-width:860px){.settings-workspace{grid-template-columns:minmax(0,1fr)}.settings-nav,.settings-content{min-width:0}}
+@media(max-width:620px){.price-editor{grid-template-columns:minmax(0,1fr)}.library-entry{padding:12px}}

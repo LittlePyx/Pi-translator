@@ -1,3 +1,5 @@
+import { latexSourceRanges } from '../latex/protector';
+
 export const DEFAULT_TRANSLATION_CHUNK_SIZE = 6_000;
 
 function preferredBoundary(text: string, start: number, maximumEnd: number): number {
@@ -5,7 +7,7 @@ function preferredBoundary(text: string, start: number, maximumEnd: number): num
   const window = text.slice(minimumEnd, maximumEnd);
   const candidates = [
     /\n\n/g,
-    /[。！？!?]\s*/g,
+    /[。！？!?]\s*|\.[ \t\n]+(?=[A-Z0-9"“])/g,
     /\n/g,
     /\s+/g,
   ];
@@ -26,12 +28,19 @@ export function splitLongTranslationText(
   if (!text) return [];
   if (maximumLength < 200) throw new Error('Translation chunk size is too small.');
   const chunks: string[] = [];
+  const protectedRanges = latexSourceRanges(text);
   let start = 0;
   while (start < text.length) {
     const maximumEnd = Math.min(text.length, start + maximumLength);
-    const end = maximumEnd === text.length
+    let end = maximumEnd === text.length
       ? maximumEnd
       : preferredBoundary(text, start, maximumEnd);
+    const crossing = protectedRanges.find((range) => range.start < end && range.end > end);
+    if (crossing) {
+      // An indivisible fragment may exceed the preferred size. Sending the
+      // intact fragment is safer than exposing half of a formula to translation.
+      end = crossing.start > start ? crossing.start : crossing.end;
+    }
     const chunk = text.slice(start, end).trim();
     if (chunk) chunks.push(chunk);
     start = end;

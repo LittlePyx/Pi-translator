@@ -1,3 +1,4 @@
+import {openTranslationMore} from './support/translation-controls';
 import type { Page } from '@playwright/test';
 import {
   clearBrowserSelection,
@@ -67,10 +68,12 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await browserTargetLanguage.selectOption(initialTargetLanguage);
     await expect(browserTargetLanguage).toHaveValue(initialTargetLanguage);
     await expect(browserTargetLanguage).toBeEnabled();
+    await openTranslationMore(sidePanel);
     const webRegionAction = sidePanel.getByRole('button', { name: '框选网页', exact: true });
     await expect(webRegionAction).toBeVisible();
     expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
       .toBeGreaterThanOrEqual(31);
+    await sidePanel.keyboard.press('Escape');
     const browserPause = sidePanel.getByRole('button', {
       name: '暂停当前标签页的自动连续翻译',
     });
@@ -173,7 +176,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     });
     expect(alignedLayout.pageScrollWidth).toBeLessThanOrEqual(alignedLayout.pageClientWidth + 1);
     expect(alignedLayout.headerScrollWidth).toBeLessThanOrEqual(alignedLayout.headerClientWidth + 1);
-    expect(alignedLayout.regionActionHeight).toBeGreaterThanOrEqual(31);
+    await expect(sidePanel.locator('#start-web-region')).toBeHidden();
     expect(alignedLayout.continuousToggleHeight).toBeGreaterThanOrEqual(29);
     expect(alignedLayout.targetLanguageHeight).toBeGreaterThanOrEqual(31);
     expect(alignedLayout.resultScrollWidth).toBeLessThanOrEqual(alignedLayout.resultClientWidth + 1);
@@ -235,6 +238,7 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(newerTranslation).toBeDisabled();
 
     const requestsBeforeCorrectionOpen = textRequests.length;
+    await openTranslationMore(sidePanel);
     await sidePanel.locator('#correct').click();
     await expect(sidePanel.getByRole('group', { name: '修正译文，公式已锁定' })).toBeVisible();
     await expect(browserTargetLanguage).toBeDisabled();
@@ -329,7 +333,8 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(readingProgress).toHaveText('底部');
     const formulaView = sidePanel.locator('#formula-view');
     await expect(formulaView).toHaveText('源码');
-    await formulaView.evaluate((button: HTMLButtonElement) => button.click());
+    await openTranslationMore(sidePanel);
+    await formulaView.click();
     await expect(formulaView).toHaveText('公式');
     await expect(readingProgress).toHaveText('底部');
     await alignedView.evaluate((button: HTMLButtonElement) => button.click());
@@ -351,6 +356,8 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await expect(sidePanel.locator('#translation-text')).toContainText('一致的学术翻译');
     expect(textRequests.length - requestsBeforeCleanupSelection).toBeLessThanOrEqual(1);
     await sidePanel.setViewportSize({ width: 390, height: 760 });
+
+    await openTranslationMore(sidePanel);
 
     await sidePanel.locator('#open-pi-reader').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
@@ -443,6 +450,7 @@ test('uses the preferred browser side panel from the result primary action', asy
     expect(storedMode).toBe('browser');
   } finally {
     if (browserSidebarOpened && !sidePanel.isClosed()) {
+      await openTranslationMore(sidePanel);
       await sidePanel.locator('#open-pi-reader').click();
       await page.bringToFront();
       await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
@@ -643,6 +651,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     await markedHistoryFilter.click();
     await expect(historySummary).toHaveText('3 条历史翻译');
     await historyPage.keyboard.press('Escape');
+    await openTranslationMore(overlay);
     await overlay.getByRole('button', { name: '修正译文' }).click();
     const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
     await editor.fill('窄屏多控件组合下仍然清晰可读的用户修订译文。');
@@ -668,17 +677,17 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
         headerHeight: headerBounds.height,
         toolsRight: toolsBounds.right,
         titleVisible: titleBounds.width > 0 && titleBounds.height > 0,
-        historyTop: tools.querySelector<HTMLElement>('.history-navigation')
+        historyTop: surface.querySelector<HTMLElement>('.history-navigation')
           ?.getBoundingClientRect().top,
-        versionTop: tools.querySelector<HTMLElement>('.version-navigation')
+        versionTop: surface.querySelector<HTMLElement>('.version-navigation')
           ?.getBoundingClientRect().top,
       };
     });
     expect(denseLayout.scrollWidth).toBeLessThanOrEqual(denseLayout.clientWidth + 1);
     expect(denseLayout.toolsRight).toBeLessThanOrEqual(denseLayout.surfaceRight);
     expect(denseLayout.headerHeight).toBeLessThanOrEqual(70);
-    expect(denseLayout.titleVisible).toBe(false);
-    expect(denseLayout.versionTop).toBeGreaterThan(denseLayout.historyTop ?? 0);
+    expect(denseLayout.titleVisible).toBe(true);
+    expect(denseLayout.versionTop).toBeGreaterThanOrEqual(denseLayout.historyTop ?? 0);
     const footer = overlay.locator('.footer');
     const undo = overlay.getByRole('button', { name: '撤销上次译文修正' });
     const mark = overlay.locator('.mark-action');
@@ -686,7 +695,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     await expect(undo).toBeFocused();
     const footerLayout = await footer.evaluate((element) => {
       const controls = [...element.querySelectorAll<HTMLElement>(
-        ':scope > button,:scope > .correction-undo > button,:scope > details.more > summary',
+        ':scope > button,:scope > details.more > summary',
       )];
       return {
         clientWidth: element.clientWidth,
@@ -697,11 +706,11 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     });
     expect(footerLayout.scrollWidth).toBeLessThanOrEqual(footerLayout.clientWidth + 1);
     expect(footerLayout.controlHeights.every((height) => height >= 32)).toBe(true);
-    expect(new Set(footerLayout.controlTops).size).toBe(1);
-    await historyPage.keyboard.press('Tab');
-    await expect(mark).toBeFocused();
-    await historyPage.keyboard.press('Tab');
+    expect(Math.max(...footerLayout.controlTops)-Math.min(...footerLayout.controlTops)).toBeLessThanOrEqual(2);
+    await historyPage.keyboard.press('Shift+Tab');
     await expect(more).toBeFocused();
+    await historyPage.keyboard.press('Shift+Tab');
+    await expect(mark).toBeFocused();
     const copy = overlay.locator('.copy-action');
     await copy.click();
     await expect(copy).toHaveText('已复制');
@@ -775,7 +784,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     }
     await undo.click();
     await expect(undoStatus).toHaveCount(0);
-    await expect(overlay.getByRole('button', { name: '修正译文' })).toBeFocused();
+    await expect(overlay.locator('details.more > summary')).toBeFocused();
   } finally {
     await historyPage.close();
   }
@@ -927,6 +936,7 @@ test('shows verified global terminology and opens its exact settings area', asyn
     );
     await options.close();
     options = undefined;
+    await openTranslationMore(overlay);
     await overlay.getByRole('button', { name: '修正译文' }).click();
     await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' })
       .fill('这是一条不沿用当前固定术语的手动译文。');

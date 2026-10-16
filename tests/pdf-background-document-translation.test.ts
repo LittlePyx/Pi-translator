@@ -37,14 +37,27 @@ function startMessage() {
 }
 
 describe('PDF background translation message guards', () => {
-  it('accepts complete figure and table translations without formula metadata', () => {
+  it.each(['foreign-page', 'duplicate-text', 'outside-region'])('rejects a visual plan with %s', (mode) => {
+    const base = startMessage();
+    const source = { pageNumber: 1, sourceAnchor: { leftRatio: .1, topRatio: .1, widthRatio: .4, heightRatio: .4 } };
+    const first = { text: 'first', sourceRegions: [{ ...source, sourceAnchor: { ...source.sourceAnchor, heightRatio: .1 } }], equationNumbers: [] };
+    const second = { text: 'second', sourceRegions: [{ ...source, sourceAnchor: { ...source.sourceAnchor, topRatio: .3, heightRatio: .1 } }], equationNumbers: [] };
+    const block = { ...base.payload.blocks[0]!, text: 'first second', sourceRegions: [source], visualUnits: [first, second] };
+    const message = { ...base, payload: { ...base.payload, blocks: [block] } };
+    expect(isPdfBackgroundDocumentMessage(message)).toBe(true);
+    if (mode === 'foreign-page') first.sourceRegions[0]!.pageNumber = 2;
+    if (mode === 'duplicate-text') second.text = 'first second';
+    if (mode === 'outside-region') second.sourceRegions[0]!.sourceAnchor.topRatio = .8;
+    expect(isPdfBackgroundDocumentMessage(message)).toBe(false);
+  });
+  it('accepts figure/table results without formula metadata but retains explicit validation failures', () => {
     expect(pdfBackgroundVisualResultIsStructurallySafe({
       containsFormula: true,
       visualPurpose: 'figure',
     }, {
       formulaNeedsReview: true,
       formulaLatex: [],
-    })).toBe(true);
+    })).toBe(false);
     expect(pdfBackgroundVisualResultIsStructurallySafe({
       containsFormula: true,
       visualPurpose: 'table',

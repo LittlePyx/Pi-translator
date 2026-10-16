@@ -7,8 +7,10 @@ import {
   persistedPdfMarkerKey,
 } from '../content/session-translation-markers';
 import { pdfReadingStateId } from './reading-state';
+import {withDocumentStorageLock} from '../translation/document-storage-lock';
+import { citationDoi, citationUrl } from '../content/excerpt-citation';
 
-const PDF_TRANSLATION_MARKERS_KEY = 'piPdfTranslationMarkersV1';
+export const PDF_TRANSLATION_MARKERS_KEY = 'piPdfTranslationMarkersV1';
 const MAX_MARKER_DOCUMENTS = 30;
 const MAX_MARKERS_PER_DOCUMENT = 100;
 const MAX_MARKER_TEXT_LENGTH = 4_000;
@@ -90,13 +92,15 @@ function normalizeContent(value: unknown): TranslationMarkerContent | undefined 
   const pageNumber = finiteNumber(content.pageNumber)
     ? Math.max(1, Math.round(content.pageNumber))
     : undefined;
+  const sourceUrl = citationUrl(content.sourceUrl);
+  const doi = citationDoi(content.doi);
   return {
     originalText,
     translatedText,
     sourceTitle: sourceTitle.slice(0, 500),
-    ...(typeof content.sourceUrl === 'string' && /^https?:/iu.test(content.sourceUrl)
-      ? { sourceUrl: content.sourceUrl.slice(0, 4_000) }
-      : {}),
+    ...(sourceUrl ? {sourceUrl} : {}),
+    ...(doi ? {doi} : {}),
+    ...(typeof content.note === 'string' && content.note.trim() ? {note: content.note.trim().slice(0,2000)} : {}),
     ...(pageNumber ? { pageNumber } : {}),
   };
 }
@@ -176,6 +180,7 @@ async function updateDocumentState(
   identity: string,
   update: (current: PdfTranslationMarkerState) => PdfTranslationMarkerState,
 ): Promise<PdfTranslationMarkerState> {
+  return withDocumentStorageLock(async()=>{
   const [id, stored] = await Promise.all([
     pdfReadingStateId(identity),
     browser.storage.local.get(PDF_TRANSLATION_MARKERS_KEY),
@@ -187,6 +192,7 @@ async function updateDocumentState(
   const retained = retainedStateMap(states);
   await browser.storage.local.set({ [PDF_TRANSLATION_MARKERS_KEY]: retained });
   return next;
+  });
 }
 
 export async function getPdfTranslationMarkerState(
@@ -217,12 +223,15 @@ export async function setPdfTranslationMarkerPersistence(
 export async function savePdfTranslationMarkers(
   identity: string,
   markers: PersistedPdfTranslationMarker[],
+  expected?: readonly PersistedPdfTranslationMarker[],
 ): Promise<PdfTranslationMarkerState> {
-  return updateDocumentState(identity, (current) => ({
+  return updateDocumentState(identity, (current) => {
+    if(expected&&JSON.stringify(current.markers)!==JSON.stringify(expected))throw new Error('PDF 摘录已在其他窗口修改。原记录已保留，请重新打开文档后再操作。');
+    return ({
     ...current,
     markers,
     updatedAt: Date.now(),
-  }));
+  });});
 }
 
 export async function clearPdfTranslationMarkers(

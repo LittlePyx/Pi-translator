@@ -1,6 +1,7 @@
 import type { ViewportRect } from '../selection/types';
 import type { PdfSourceLocation, TranslateResult } from '../translation/types';
 import { splitLightMarkup } from '../translation/light-markup';
+import { citationDoi, citationUrl, citationMarkdownUrl, escapeCitationText, type ExcerptCitation } from './excerpt-citation';
 
 export type TranslationMarkerAnchor =
   | {
@@ -33,6 +34,7 @@ export interface TranslationMarkerEntry {
 export type TranslationMarkerLocationState = 'ready' | 'pending' | 'missing';
 
 export interface TranslationMarkerSummary extends TranslationMarkerContent {
+  retained?:boolean;
   markerId: string;
   createdAt: number;
   locationState: TranslationMarkerLocationState;
@@ -45,7 +47,7 @@ interface VisibleMarkerRect {
   rect: ViewportRect;
 }
 
-export interface TranslationMarkerContent {
+export interface TranslationMarkerContent extends ExcerptCitation {
   originalText: string;
   translatedText: string;
   sourceTitle: string;
@@ -381,18 +383,20 @@ export function buildTranslationMarkerMarkdown(
 ): string {
   if (!contents.length) return '';
   const sections = contents.map((content) => {
-    const title = content.pageNumber
-      ? `${content.sourceTitle} · 第 ${content.pageNumber} 页`
-      : content.sourceTitle;
+    const title = escapeCitationText(content.sourceTitle) + (content.pageNumber ? ` · 第 ${content.pageNumber} 页` : '');
     const quote = content.originalText
       .trim()
       .split(/\r?\n/u)
       .map((line) => `> ${line}`)
       .join('\n');
-    const source = content.sourceUrl && /^https?:/iu.test(content.sourceUrl)
-      ? `\n\n[查看来源](${content.sourceUrl})`
+    const sourceUrl = citationUrl(content.sourceUrl);
+    const source = sourceUrl
+      ? `\n\n[查看来源](${citationMarkdownUrl(sourceUrl)})`
       : '';
-    return `## ${title}\n\n${quote}\n\n${content.translatedText.trim()}${source}`;
+    const doi = citationDoi(content.doi);
+    const doiLine = doi ? `\n\nDOI: [${escapeCitationText(doi)}](https://doi.org/${citationMarkdownUrl(doi)})` : '';
+    const note = content.note?.trim() ? `\n\n个人笔记：\n\n${content.note.trim().split(/\r?\n/u).map(line=>`> ${line}`).join('\n')}` : '';
+    return `## ${title}\n\n${quote}\n\n${content.translatedText.trim()}${source}${doiLine}${note}`;
   });
   return `# Pi Translator 标记笔记\n\n${sections.join('\n\n---\n\n')}\n`;
 }

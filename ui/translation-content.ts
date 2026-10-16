@@ -19,6 +19,10 @@ export interface TranslationContentTarget {
   container: HTMLElement;
   text: string;
   renderLatex: boolean;
+  /** Registry entries already carry layout; do not infer it from isolated text. */
+  formulaDisplayMode?: boolean;
+  /** Verified local source label, independent of model-generated TeX. */
+  equationNumber?: string;
 }
 
 export interface TranslationRenderPerformance {
@@ -134,20 +138,21 @@ export function renderTranslationContents(
           continue;
         }
         if (!target.renderLatex) {
-          appendStyledText(target.container, segment.raw, isStrong);
+          appendStyledText(target.container, segment.raw + (target.equationNumber ? ` (${target.equationNumber})` : ''), isStrong);
           continue;
         }
-        const math = document.createElement(segment.displayMode ? 'div' : 'span');
-        math.className = `pi-math ${segment.displayMode ? 'pi-math-display' : 'pi-math-inline'}`;
+        const displayMode = target.formulaDisplayMode ?? segment.displayMode;
+        const math = document.createElement(displayMode ? 'div' : 'span');
+        math.className = `pi-math ${displayMode ? 'pi-math-display' : 'pi-math-inline'}`;
         if (isStrong) math.classList.add('pi-rich-strong');
-        math.textContent = segment.raw;
+        math.textContent = segment.raw + (target.equationNumber ? ` (${target.equationNumber})` : '');
         target.container.append(math);
-        const parts = latexRenderParts(segment.tex, segment.displayMode);
+        const parts = latexRenderParts(segment.tex, displayMode);
         jobs.push({
           element: math,
           tex: parts.tex,
-          displayMode: segment.displayMode,
-          ...(parts.equationTag ? { equationTag: parts.equationTag } : {}),
+          displayMode,
+          ...((target.equationNumber ?? parts.equationTag) ? { equationTag: target.equationNumber ?? parts.equationTag } : {}),
         });
       }
     }

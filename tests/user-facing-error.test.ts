@@ -7,6 +7,10 @@ import {
 } from '../core/messaging/user-facing-error';
 
 describe('user-facing errors', () => {
+  it('distinguishes generation truncation and filtering from a generic malformed response', () => {
+    expect(translationErrorMessage('INVALID_RESPONSE', 'The API stopped because the output token limit was reached.')).toContain('输出长度上限');
+    expect(translationErrorMessage('INVALID_RESPONSE', 'The API stopped because the response was blocked by a content filter.')).toContain('内容过滤');
+  });
   it('keeps safe Chinese stale-correction details from the background', () => {
     const detail = '本句译文已变化，请重新打开修正。';
 

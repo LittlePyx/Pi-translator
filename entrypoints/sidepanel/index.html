@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pi Translator - 翻译侧栏</title>
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="../../ui/product-theme.css" />
+    <link rel="stylesheet" href="./design.css" />
   </head>
   <body>
     <main>
@@ -16,7 +18,7 @@
             <span id="app-subtitle">网页与 PDF 翻译</span>
           </div>
         </div>
-        <div class="header-actions">
+        <div id="panel-more-home" class="header-actions">
           <button
             id="continuous-translation-toggle"
             class="continuous-translation-toggle"
@@ -25,14 +27,20 @@
             title="暂停当前标签页的自动连续翻译"
             hidden
           ><span class="continuous-translation-dot" aria-hidden="true"></span><span id="continuous-translation-label" data-short-label="自动">自动翻译中</span></button>
-          <button
+          <details id="panel-more" class="panel-more">
+            <summary aria-label="更多翻译操作">更多</summary>
+            <div class="panel-menu">
+              <div class="panel-menu-group"><span>译文</span><button id="correct" class="correction-action" type="button" hidden>修正</button><button id="formula-view" type="button" hidden>源码</button></div>
+              <div class="panel-menu-group"><span>阅读与工具</span><button
             id="start-web-region"
             class="web-region-action"
             type="button"
             title="在当前网页拖动框选文字、公式、图表或图像"
             hidden
-          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label" data-short-label="框选">框选网页</span></button>
-          <button id="open-settings" class="text-action" type="button">设置</button>
+          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label" data-short-label="框选">框选网页</span></button><button id="open-pi-reader" type="button" hidden>用 Pi 打开</button></div>
+              <div class="panel-menu-group"><button id="open-settings" class="text-action" type="button">设置</button></div>
+            </div>
+          </details>
         </div>
       </header>
 
@@ -68,6 +76,29 @@
         >
           <i></i>
         </div>
+
+        <div class="bilingual-page-actions">
+          <button id="bilingual-page-primary" class="primary" type="button">开始</button>
+          <button id="bilingual-page-scope" type="button" hidden>调整范围</button>
+          <label id="bilingual-page-display-control" class="bilingual-page-display" hidden>
+            <span>显示</span>
+            <select id="bilingual-page-display" aria-label="正文显示方式">
+              <option value="bilingual">双语</option>
+              <option value="translation">译文</option>
+              <option value="source">原文</option>
+            </select>
+          </label>
+          <details id="bilingual-page-copy-menu" class="bilingual-page-copy-menu" hidden>
+            <summary>更多</summary>
+            <div>
+              <div id="bilingual-page-export-actions" class="bilingual-page-menu-group"><span>导出</span>
+              <button id="bilingual-page-copy-translation" type="button">复制纯译文</button>
+              <button id="bilingual-page-copy-bilingual" type="button">复制双语 Markdown</button>
+              <span role="separator"></span>
+              <button id="bilingual-page-download-translation" type="button">下载纯译文 .md</button>
+              <button id="bilingual-page-download-bilingual" type="button">下载双语 .md</button>
+              <button id="bilingual-page-download-html" type="button">下载可打印 HTML</button>
+              </div>
         <div id="bilingual-page-retention" class="bilingual-page-retention" hidden>
           <span>
             <strong>关闭后保留译文</strong>
@@ -85,30 +116,12 @@
             </label>
           </span>
         </div>
-        <div class="bilingual-page-actions">
-          <button id="bilingual-page-primary" class="primary" type="button">开始</button>
-          <button id="bilingual-page-scope" type="button" hidden>调整范围</button>
-          <label id="bilingual-page-display-control" class="bilingual-page-display" hidden>
-            <span>显示</span>
-            <select id="bilingual-page-display" aria-label="正文显示方式">
-              <option value="bilingual">双语</option>
-              <option value="translation">译文</option>
-              <option value="source">原文</option>
-            </select>
-          </label>
-          <details id="bilingual-page-copy-menu" class="bilingual-page-copy-menu" hidden>
-            <summary>导出</summary>
-            <div>
-              <button id="bilingual-page-copy-translation" type="button">复制纯译文</button>
-              <button id="bilingual-page-copy-bilingual" type="button">复制双语 Markdown</button>
-              <span role="separator"></span>
-              <button id="bilingual-page-download-translation" type="button">下载纯译文 .md</button>
-              <button id="bilingual-page-download-bilingual" type="button">下载双语 .md</button>
-              <button id="bilingual-page-download-html" type="button">下载可打印 HTML</button>
+              <div id="bilingual-page-more-actions" class="bilingual-page-menu-group"></div>
             </div>
           </details>
         </div>
         <div class="bilingual-page-footer">
+          <small id="bilingual-page-retention-error" role="alert" hidden></small>
           <small id="bilingual-page-copy-feedback" class="bilingual-page-copy-feedback" aria-live="polite"></small>
           <button id="bilingual-page-clear" type="button" title="清除当前网页的全文译文" hidden>清除</button>
         </div>
@@ -133,7 +146,6 @@
             <span id="source-kind-label">当前来源</span>
             <strong id="source-label"></strong>
           </div>
-          <button id="open-pi-reader" type="button">用 Pi 打开</button>
         </section>
         <nav id="web-history-navigation" class="web-history-navigation" aria-label="最近译文" hidden>
           <span class="web-history-label">最近译文</span>
@@ -181,7 +193,6 @@
                 <button id="translation-view-full" type="button" class="active" aria-label="显示完整译文" aria-pressed="true" title="显示完整译文">全文</button>
                 <button id="translation-view-aligned" type="button" aria-label="显示逐句对照" aria-pressed="false" title="显示逐句对照">逐句</button>
               </div>
-              <button id="formula-view" type="button" hidden>源码</button>
               <span id="translation-state" tabindex="-1" aria-live="polite"></span>
               <button id="stop-translation" type="button" title="停止翻译" hidden>停止</button>
             </div>
@@ -206,7 +217,6 @@
         <footer id="session-actions" class="session-actions" hidden>
           <button id="copy" class="copy-action" type="button" disabled>复制译文</button>
           <span id="copy-feedback" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></span>
-          <button id="correct" class="correction-action" type="button" hidden>修正</button>
           <span id="correction-undo" class="correction-undo" role="status" hidden>
             <span id="correction-undo-message">已修正 ·</span>
             <button id="undo-correction" type="button">撤销</button>

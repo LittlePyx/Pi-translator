@@ -1,8 +1,13 @@
+import {isPdfPaperRole,type PdfPaperRole} from '../pdf/paper-metadata';
+
 export interface DocumentTranslationExportBlock {
   sourceText: string;
   translatedText?: string;
   pageNumber?: number;
   sourceOnly?: boolean;
+  /** Source-derived document section depth, independent of translated text. */
+  headingLevel?: 1 | 2 | 3 | undefined;
+  paperRole?: PdfPaperRole | undefined;
   /** Trusted local crop embedded only in the downloadable bilingual Markdown. */
   sourceImageDataUrl?: string;
   sourceImageAlt?: string;
@@ -104,6 +109,8 @@ function buildPrintableHtml(
     translatedText: string;
     pageNumber?: number;
     sourceOnly?: boolean;
+    headingLevel?: 1 | 2 | 3;
+    paperRole?: PdfPaperRole;
   }[],
   completed: number,
   total: number,
@@ -143,9 +150,16 @@ function buildPrintableHtml(
       closePage();
       previousPage = undefined;
     }
+    const heading = block.headingLevel;
+    const render = (text: string) => block.paperRole==='title'
+      ? `<h1 class="document-paper-title">${escapeHtml(text)}</h1>` : heading
+      ? `<h${heading + 1} class="document-section-title">${escapeHtml(text)}</h${heading + 1}>`
+      : escapeHtml(text);
+    const section = (heading ? ` data-heading-level="${heading}"` : '')+
+      (block.paperRole?` data-paper-role="${block.paperRole}"`:'');
     content.push(block.sourceOnly
-      ? `<section class="pair source-only"><div class="source">${escapeHtml(block.sourceText)}</div></section>`
-      : `<section class="pair"><div class="source">${escapeHtml(block.sourceText)}</div><div class="translation">${escapeHtml(block.translatedText)}</div></section>`);
+      ? `<section class="pair source-only"${section}><div class="source">${render(block.sourceText)}</div></section>`
+      : `<section class="pair"${section}><div class="source">${render(block.sourceText)}</div><div class="translation">${render(block.translatedText)}</div></section>`);
   }
   closePage();
   const status = complete
@@ -170,7 +184,11 @@ function buildPrintableHtml(
     h1{margin:0;color:#302d85;font-size:26px;letter-spacing:-.02em}header p{margin:8px 0 0;color:${complete ? '#667085' : '#9a6416'};font-size:13px}
     h2{margin:34px 0 12px;color:#6764cc;font-size:14px}.page-bundle{break-before:page}.page-bundle:first-of-type{break-before:auto}.page-layout{display:grid;grid-template-columns:minmax(280px,.88fr) minmax(0,1.12fr);align-items:start;gap:28px}.page-layout.text-only{display:block}.source-page{position:sticky;top:18px;margin:0;padding:10px;border:1px solid #dfe4ec;border-radius:10px;background:#f7f8fb}.source-page img{display:block;width:100%;height:auto}.source-page figcaption{margin-top:7px;color:#7b8494;font-size:10px;text-align:center}.pair{break-inside:avoid;margin:0 0 24px;padding:0 0 0 15px;border-left:2px solid #716de0}
     .source,.translation{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.72}.source{color:#667085;font-size:13px}.translation{margin-top:7px;color:#1f2937;font-size:15px}.source-only .source{color:#364152;font-size:13.5px}
+    .pair[data-heading-level]{break-after:avoid;margin-top:28px;margin-bottom:12px;border-left:0;padding-left:0}.pair[data-heading-level="2"]{margin-top:22px}.pair[data-heading-level="3"]{margin-top:16px}.document-section-title{margin:0;color:inherit;font-weight:650;line-height:1.45}.pair[data-heading-level="1"] .document-section-title{font-size:1.4em}.pair[data-heading-level="2"] .document-section-title{font-size:1.2em}.pair[data-heading-level="3"] .document-section-title{font-size:1.05em}
+    .document-section-title .pi-math{font-weight:400}
     .pi-rich-strong{font-weight:700}.pi-math-inline{display:inline-flex;max-width:100%;vertical-align:-.14em;white-space:normal}.pi-math-display{display:block;width:100%;margin:.58em 0;overflow-x:auto;overflow-y:hidden;text-align:center;line-height:1.3;white-space:normal}.pi-math-numbered{display:grid;grid-template-columns:minmax(0,1fr) max-content;align-items:center;gap:6px;overflow:visible}.pi-math-scroll{min-width:0;max-width:100%;overflow-x:auto;overflow-y:hidden;text-align:center}.pi-equation-tag{align-self:center;white-space:nowrap;font:normal .9em/1 "Cambria Math","STIX Two Math","Latin Modern Math",serif}.pi-math math{color:inherit;font-family:"Cambria Math","STIX Two Math","Latin Modern Math",serif;font-synthesis:none}.pi-math-display math{font-size:1.04em}
+    .pdf-document-table-scroll{max-width:100%;overflow-x:auto;white-space:normal}.pdf-document-table{width:100%;border-collapse:collapse;font-size:.92em}.pdf-document-table th,.pdf-document-table td{padding:7px 9px;border-bottom:1px solid #dfe4ec;text-align:left;vertical-align:top}.pdf-document-table th{font-weight:600}.pdf-document-table-caption{margin-bottom:10px}.pdf-document-table-trailing{margin-top:10px}
+    .pair[data-paper-role]{border-left:0;padding-left:0}.document-paper-title{margin:0;font-size:25px;line-height:1.35;letter-spacing:-.02em;overflow-wrap:anywhere}.document-paper-title .pi-math{font-weight:400}.pair[data-paper-role="authors"]{margin-bottom:13px}.pair[data-paper-role="authors"] .translation{font-size:13px;color:#566171;line-height:1.65}.pair[data-paper-role="publication"]{padding:12px 0;border-block:1px solid #e5e8ee;font-size:12px;color:#667085}.pair[data-paper-role="publication"] .translation{font-size:12px;color:#667085}
     footer{margin-top:42px;padding-top:14px;border-top:1px solid #e5e8ee;color:#8a94a3;font-size:11px}
     @media(max-width:820px){body{padding:28px 20px 48px}.page-layout{display:block}.source-page{position:static;margin-bottom:22px}.pair{padding-left:11px}}
     @media print{body{max-width:none;padding:0}header{margin-bottom:24px}.page-layout{grid-template-columns:minmax(0,42fr) minmax(0,58fr);gap:18px}.source-page{position:static;padding:6px}.pair{break-inside:avoid}footer{color:#6b7280}}
@@ -200,6 +218,9 @@ export function buildDocumentTranslationExport(
         ? { pageNumber: block.pageNumber }
         : {}),
       ...(block.sourceOnly === true ? { sourceOnly: true } : {}),
+      ...(block.headingLevel === 1 || block.headingLevel === 2 || block.headingLevel === 3
+        ? { headingLevel: block.headingLevel } : {}),
+      ...(isPdfPaperRole(block.paperRole)?{paperRole:block.paperRole}:{}),
       ...(block.sourceImageDataUrl && TRUSTED_LOCAL_IMAGE.test(block.sourceImageDataUrl)
         ? {
             sourceImageDataUrl: block.sourceImageDataUrl,
@@ -234,10 +255,11 @@ export function buildDocumentTranslationExport(
       translationParts.push(`## 第 ${block.pageNumber} 页`);
       previousPage = block.pageNumber;
     }
-    translationParts.push(block.translatedText);
+    const heading = block.paperRole==='title'?'# ':block.headingLevel ? `${'#'.repeat(block.headingLevel + (block.pageNumber ? 2 : 1))} ` : '';
+    translationParts.push(`${heading}${block.translatedText}`);
     const bilingualText = block.sourceOnly
-      ? block.sourceText
-      : `${block.sourceText}\n\n${markdownBlockquote(block.translatedText)}`;
+      ? `${heading}${block.sourceText}`
+      : `${heading}${block.sourceText}\n\n${markdownBlockquote(heading + block.translatedText)}`;
     bilingualParts.push(block.sourceImageDataUrl
       ? `![${block.sourceImageAlt}](${block.sourceImageDataUrl})\n\n${bilingualText}`
       : bilingualText);

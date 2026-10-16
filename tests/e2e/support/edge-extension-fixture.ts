@@ -386,7 +386,7 @@ export function createTwoPageTextPdf(firstText: string, secondText: string): Buf
 }
 
 export function createMultiPageTextPdf(
-  pages: Array<{ text: string; width?: number; height?: number }>,
+  pages: Array<{ text: string; width?: number; height?: number; top?: number }>,
 ): Buffer {
   const pageCount = pages.length;
   const fontObject = 3 + pageCount;
@@ -398,7 +398,7 @@ export function createMultiPageTextPdf(
   });
   const streams = pages.map((page) => {
     const escaped = page.text.replaceAll('\\', '\\\\').replaceAll('(', '\\(').replaceAll(')', '\\)');
-    const stream = `BT\n/F1 18 Tf\n72 ${(page.height ?? 792) - 72} Td\n(${escaped}) Tj\nET`;
+    const stream = `BT\n/F1 18 Tf\n72 ${(page.height ?? 792) - (page.top ?? 72)} Td\n(${escaped}) Tj\nET`;
     return `<< /Length ${Buffer.byteLength(stream)} >>\nstream\n${stream}\nendstream`;
   });
   const kids = pages.map((_, index) => `${3 + index} 0 R`).join(' ');
@@ -694,7 +694,8 @@ export function installEdgeExtensionHooks(): void {
     textRequests.length = 0;
     visionRequests.length = 0;
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-e2e-'));
-  const extensionPath = path.resolve('.output/edge-mv3');
+  const extensionPath = path.resolve(process.env.PI_LIVE_PRODUCT_ACCEPTANCE === '1' && process.env.PI_LIVE_EXTENSION_PATH
+    ? process.env.PI_LIVE_EXTENSION_PATH : '.output/edge-mv3');
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
     headless: false,

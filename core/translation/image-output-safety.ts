@@ -95,6 +95,9 @@ export function assertSafeImageTranslationResult(
   result: ProviderImageTranslationResult,
   imageInput?: ImageOutputSafetyInput,
 ): void {
+  if (result.formulaDocument) {
+    assertSafeImageTranslationText(JSON.stringify(result.formulaDocument), imageInput);
+  }
   assertSafeImageTranslationText(result.recognizedText, imageInput);
   assertSafeImageTranslationText(result.translatedText, imageInput);
   for (const span of result.uncertainSpans) {

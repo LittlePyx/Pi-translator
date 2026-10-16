@@ -7,6 +7,88 @@ import {
 } from '../core/translation/formula-output-validation';
 
 describe('vision formula output validation', () => {
+  it('normalizes registered affiliation superscripts only when all markers match', () => {
+    const result={recognizedText:'${}^1$DeepMind, London, UK ${}^2$Imperial College London.',translatedText:'¹DeepMind，伦敦，英国。²帝国理工学院，伦敦。',formulaLatex:['{}^1','{}^2'],uncertainSpans:[]};
+    expect(validateImageFormulaResult(reconcileImageFormulaResult(result)).valid).toBe(true);
+    expect(validateImageFormulaResult(reconcileImageFormulaResult({...result,translatedText:result.translatedText.replace('²','³')})).valid).toBe(false);
+  });
+  it('accepts a matching publication ordinal, preserving genuine mathematical powers', () => {
+    const result={recognizedText:'Proceedings of the $35^{th}$ International Conference on Machine Learning.',translatedText:'第35届国际机器学习会议论文集。',formulaLatex:['35^{th}'],uncertainSpans:[]};
+    expect(validateImageFormulaResult(reconcileImageFormulaResult(result)).valid).toBe(true);
+    expect(validateImageFormulaResult(reconcileImageFormulaResult({...result,translatedText:'第36届国际机器学习会议论文集。'})).valid).toBe(false);
+    expect(validateImageFormulaResult(reconcileImageFormulaResult({...result,recognizedText:'The variable is $35^{th}$.'})).valid).toBe(false);
+  });
+  it('matches an exact upright numeric percentage caption label without changing model-name superscripts', () => {
+    const original={recognizedText:'Figure 3. Lena at SR = 10%. ISTA-Net$^+$',translatedText:String.raw`图 3. 采样率 $\mathrm{SR} = 10\%$。ISTA-Net$^+$`,formulaLatex:[String.raw`\mathrm{SR} = 10\%`],uncertainSpans:[]};
+    expect(validateImageFormulaResult(original).valid).toBe(false);
+    const fixed=reconcileImageFormulaResult(original);
+    expect(fixed.recognizedText).toContain(String.raw`$\mathrm{SR} = 10\%$`);
+    expect(fixed.recognizedText).toContain('ISTA-Net$^+$');
+    expect(fixed.translatedText).toBe(original.translatedText);
+    expect(validateImageFormulaResult(fixed).valid).toBe(true);
+    for(const recognizedText of ['SR = 1%. ISTA-Net$^+$','SR = 10%. SR = 10%. ISTA-Net$^+$','`SR = 10%` ISTA-Net$^+$','https://example.com/SR=10% ISTA-Net$^+$']) {
+      expect(reconcileImageFormulaResult({...original,recognizedText}).recognizedText).toBe(recognizedText);
+    }
+    const differentFont={...original,translatedText:original.translatedText.replace('mathrm','mathbf'),formulaLatex:[String.raw`\mathbf{SR} = 10\%`]};
+    expect(reconcileImageFormulaResult(differentFont).recognizedText).toBe(original.recognizedText);
+  });
+  it('reconciles only identical affiliation superscript markers before the existing formula validation', () => {
+    const original = {recognizedText:'${}^1$School of Engineering, Example University ${}^2$Example Institute', translatedText:'¹示例大学工学院 ²示例研究所', formulaLatex:[], uncertainSpans:[]};
+    expect(validateImageFormulaResult(original).valid).toBe(false);
+    const fixed = reconcileImageFormulaResult(original);
+    expect(fixed.recognizedText).toContain('¹School');
+    expect(fixed.translatedText).toBe(original.translatedText);
+    expect(validateImageFormulaResult(fixed).valid).toBe(true);
+    const plainMarkers = reconcileImageFormulaResult({...original,translatedText:'1示例大学工学院 2示例研究所'});
+    expect(plainMarkers.translatedText).toBe(original.translatedText);
+    expect(validateImageFormulaResult(plainMarkers).valid).toBe(true);
+    for (const translatedText of ['²示例大学工学院 ¹示例研究所', '¹示例大学工学院', '¹示例大学工学院 ³示例研究所']) {
+      expect(validateImageFormulaResult(reconcileImageFormulaResult({...original,translatedText})).valid).toBe(false);
+    }
+    const isotope = {...original, recognizedText:'${}^{14}$C remains measurable.', translatedText:'¹⁴C 可以测量。'};
+    expect(validateImageFormulaResult(reconcileImageFormulaResult(isotope)).valid).toBe(false);
+  });
+  const channelFormula = String.raw`\mathrm{C-SA}(F) = F * \mathrm{Sigmoid}(\mathrm{ReLU}(\mathrm{GAP}(F)W_{1})W_{2}),\tag{17}`;
+  const channelPlain = 'C-SA(F) = F * Sigmoid(ReLU(GAP(F)W_1)W_2), (17)';
+
+  it('replaces the plain equation 17 in place instead of appending a second copy', () => {
+    const result = reconcileImageFormulaResult({
+      recognizedText: `\\[${channelFormula}\\]`, translatedText: channelPlain,
+      formulaLatex: [channelFormula], uncertainSpans: [],
+    });
+    expect(result.translatedText).toBe(`\\[${channelFormula}\\]`);
+    expect(validateImageFormulaResult(result).valid).toBe(true);
+  });
+
+  it.each([true, false])('removes only an adjacent equivalent plain equation (before=%s)', (before) => {
+    const math = `\\[${channelFormula}\\]`;
+    const text = before ? `${channelPlain}\n${math}` : `${math}\n${channelPlain}`;
+    expect(normalizeVisionLatexText(text)).toBe(math);
+  });
+
+  it('does not append math when an ambiguous plain equation already exists', () => {
+    const result = reconcileImageFormulaResult({
+      recognizedText: String.raw`\[x=\frac{a}{b}\tag{1}\]`,
+      translatedText: 'x = a / b, (1)', formulaLatex: [String.raw`x=\frac{a}{b}\tag{1}`], uncertainSpans: [],
+    });
+    expect(result.translatedText).toBe('x = a / b, (1)');
+    expect(validateImageFormulaResult(result).valid).toBe(false);
+  });
+
+  it.each([
+    'C-SA(F) = F * Sigmoid(ReLU(GAP(F)W_1)W_3), (17)',
+    'C-SA(F) = F * Sigmoid(ReLU(GAP(F)W_1)W_2), (18)',
+    '说明 C-SA(F) = F * Sigmoid(ReLU(GAP(F)W_1)W_2), (17)',
+  ])('does not erase a different formula, equation number, or explanatory sentence: %s', (line) => {
+    const text = `${line}\n\\[${channelFormula}\\]`;
+    expect(normalizeVisionLatexText(text)).toBe(text);
+  });
+
+  it('keeps surrounding whitespace when no duplicate is present', () => {
+    expect(normalizeVisionLatexText('  before\n\\[x=y\\]\nafter  '))
+      .toBe('  before\n\\[x=y\\]\nafter  ');
+  });
+
   it('repairs common OCR pseudo-TeX commands without another model request', () => {
     expect(repairCommonVisionLatex(String.raw`\textbbQ_{\textOmega}=\textPi_{\texttau}`))
       .toBe(String.raw`\mathbb{Q}_{\Omega}=\Pi_{\tau}`);
@@ -285,7 +367,7 @@ describe('vision formula output validation', () => {
     }).valid).toBe(true);
   });
 
-  it('restores recognized formula bodies locally when the model only drifts in translation', () => {
+  it('does not overwrite different formula bodies merely because counts match', () => {
     const reconciled = reconcileImageFormulaResult({
       recognizedText: 'Source $R=\\frac{a+b}{c}$ and \\[y=Ax.\\]',
       translatedText: '译文 $R=\\frac{a-b}{c}$，以及 \\[y=A x.\\]',
@@ -293,9 +375,9 @@ describe('vision formula output validation', () => {
       uncertainSpans: [],
     });
 
-    expect(reconciled.translatedText).toBe('译文 $R=\\frac{a+b}{c}$，以及 \\[y=Ax.\\]');
-    expect(reconciled.formulaLatex).toEqual(['R=\\frac{a+b}{c}', 'y=Ax.']);
-    expect(validateImageFormulaResult(reconciled).valid).toBe(true);
+    expect(reconciled.translatedText).toBe('译文 $R=\\frac{a-b}{c}$，以及 \\[y=A x.\\]');
+    expect(reconciled.formulaLatex).toEqual(['broken metadata']);
+    expect(validateImageFormulaResult(reconciled).valid).toBe(false);
   });
 
   it('restores safe recognized formulae when the model omits every formula from translation', () => {

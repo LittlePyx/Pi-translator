@@ -9,8 +9,9 @@ const CONTROL_CHARACTER = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/u;
 const REPEATED_DECIMAL_RUN = /(?:^|[^\d.])(\d{1,6}\.\d{1,6})(?:\1)+(?![\d.])/u;
 const EQUATION = /(?:^|[\s(])(?:[A-Za-zΑ-Ωα-ω][\wΑ-Ωα-ω]*(?:\([^)]{1,80}\))?)\s*(?:=|≈|≠|≤|≥|<|>)\s*\S/u;
 const MATH_OPERATOR = /[=+\-−*/×÷^_<>≤≥≈≠]/gu;
-const STRUCTURED_RENDERED_MATH = /(?:\barg\s*(?:min|max)\b|\bKL\s*\([^\n)]{1,120}\)|\bd[A-Za-zΑ-Ωα-ω]\s*\/\s*d[A-Za-zΑ-Ωα-ω]\b|\bs(?:\.\s*t\.?|\s+t)\s*[:.]?\s*[A-Za-zΑ-Ωα-ω])/iu;
+const STRUCTURED_RENDERED_MATH = /(?:\barg\s*(?:min|max)\b|\bKL\s*\([^\n)]{1,120}\)|\bd[A-Za-zΑ-Ωα-ω]\s*\/\s*d[A-Za-zΑ-Ωα-ω]\b|\bs(?:\.\s*t\.?|\s+t)(?![\p{L}\p{N}_])\s*[:.]?\s*[A-Za-zΑ-Ωα-ω])/iu;
 const URL_LIKE = /(?:\b(?:https?|ftp):\/\/|\/\/(?:www\.)?|www\.)[^\s<>"']+/giu;
+const EMAIL_LIKE = /<?[\w.!#$%&'*+/=?^`{|}~-]+@[\w-]+(?:\.[\w-]+)+>?/gu;
 const PDF_MATH_LETTER = 'A-Za-zΑ-Ωα-ωℙℚ𝔼Ππ';
 const PDF_SPACED_EQUATION = new RegExp(
   String.raw`(?:^|[\s([{,;:])(?:[${PDF_MATH_LETTER}][${PDF_MATH_LETTER}\d]*|[${PDF_MATH_LETTER}](?:\s+[${PDF_MATH_LETTER}\d]){1,4}|[${PDF_MATH_LETTER}]\s*\([^\n)]{1,120}\))\s*(?::=|=|≈|≠|≤|≥|<|>)\s*(?:[+\-−]?\s*)?(?:[${PDF_MATH_LETTER}\d([{])`,
@@ -72,7 +73,10 @@ export function shouldUseVisionForPdfFormula(text: string): boolean {
 
   // Query strings and documentation links commonly contain '=' and '_'. Strip
   // them before applying deliberately permissive PDF-text-layer heuristics.
-  const withoutUrls = normalized.replace(URL_LIKE, ' ').trim();
+  // A superscript before "Surname, I.," is a bibliography marker, not an exponent.
+  // Keep genuine powers, equation labels and superscripts elsewhere unchanged.
+  const withoutUrls = normalized.replace(URL_LIKE, ' ').replace(EMAIL_LIKE, ' ')
+    .replace(/(^|\s)[¹²³⁴⁵⁶⁷⁸⁹⁰]+(?=\s+[A-Z][A-Za-z’'-]+(?:\s+[A-Z][A-Za-z’'-]+){0,2},\s*[A-Z]\.)/gu,'$1').trim();
   if (!withoutUrls) return false;
   return Boolean(
     containsExplicitLatex(withoutUrls)

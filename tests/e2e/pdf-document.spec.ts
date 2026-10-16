@@ -1,3 +1,5 @@
+import {clickPdfReaderAction,openPdfReaderMore} from './support/translation-controls';
+import {openPdfTranslationOptions,openPdfTranslationSettings} from './support/pdf-controls';
 import type { Page } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -28,6 +30,24 @@ import {
 } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
+
+test('keeps the source scan hint out of full-translation progress at narrow sizes',async()=>{
+  const target=await context.newPage();
+  try{
+    await target.setViewportSize({width:360,height:700});
+    await target.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await target.locator('#file-input').setInputFiles({name:'demonstration-scan.pdf',mimeType:'application/pdf',buffer:createRasterPdf()});
+    await expect(target.locator('.pdf-page').first()).toHaveAttribute('data-rendered','ready');
+    const hint=target.locator('#notice');
+    await expect(hint).toBeVisible();
+    await expect(hint).toHaveAttribute('data-source-only','true');
+    await target.locator('#translate-document').click();
+    await expect(target.locator('#pdf-document-translation')).toBeVisible();
+    await expect(hint).not.toBeVisible();
+    await target.locator('#pdf-document-translation-close').click();
+    await expect(hint).toBeVisible();
+  }finally{await target.close()}
+});
 test('promotes the current PDF action in the quick popup', async () => {
   const sourceUrl = 'https://www.overleaf.com/popup-primary-action.pdf';
   await context.route(sourceUrl, async (route) => {
@@ -56,7 +76,8 @@ test('promotes the current PDF action in the quick popup', async () => {
     await expect(openSidebar).toHaveClass(/secondary-action/);
     await expect(openSidebar).toHaveText('打开翻译侧栏');
     await expect(popup.locator('#open-web-region')).toBeHidden();
-    await expect(popup.locator('#open-settings')).toHaveText('完整设置');
+    await expect(popup.locator('#open-settings')).toHaveAttribute('aria-label','打开完整设置');
+    await expect(popup.locator('#open-settings')).toBeVisible();
     await expect(popup.locator('#site-control')).toBeHidden();
     const layout = await quickActions.evaluate((actions) => ({
       clientWidth: actions.clientWidth,
@@ -163,12 +184,14 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
       .toHaveAttribute('src', /brand\/pi_logo\.png$/);
     await expect(pdfPage.locator('#pdf-document-translation-status'))
       .toContainText('已识别 2 段，等待确认');
-    await expect(pdfPage.locator('#pdf-document-translation-progress')).toBeVisible();
+    await expect(pdfPage.locator('#pdf-document-translation-progress')).toBeHidden();
     await expect(pdfPage.locator('#pdf-document-translation-progress'))
       .toHaveAttribute('aria-valuenow', '0');
     await expect(panel.locator('#pdf-document-translation-settings')).toHaveAttribute('open', '');
     expect(textRequests).toHaveLength(requestsBeforePreview);
 
+    await panel.locator('#pdf-document-trial > summary').click();
+    await expect(panel.locator('#pdf-document-trial')).toHaveAttribute('open', '');
     mockControl.omitNextDocumentBatchItem = true;
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
@@ -182,6 +205,7 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     await expect(panel.locator('#pdf-document-translation-view-compare'))
       .toHaveAttribute('aria-pressed', 'true');
     await expect(panel.locator('#pdf-document-translation-settings')).not.toHaveAttribute('open', '');
+    await expect(panel.locator('#pdf-document-trial')).not.toHaveAttribute('open', '');
     await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(1);
     await expect(panel.locator('.pdf-document-translation-page[data-page-number="1"]'))
       .toBeVisible();
@@ -235,6 +259,19 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
         fullPage: false,
       });
     }
+    await panel.locator('.pdf-document-translation-page').first().evaluate((page) => {
+      page.style.minHeight = '700px';
+    });
+    const readingPages = panel.locator('#pdf-document-translation-pages');
+    await readingPages.evaluate((pages) => {
+      pages.scrollTop = 180;
+    });
+    await panel.locator('#pdf-document-translation-view-compare').click();
+    await panel.locator('#pdf-document-translation-view-reading').click();
+    expect(await readingPages.evaluate((pages) => pages.scrollTop)).toBe(180);
+    await panel.locator('.pdf-document-translation-page').first().evaluate((page) => {
+      page.style.removeProperty('min-height');
+    });
     expect(textRequests).toHaveLength(requestsBeforeCopy);
     expect(visionRequests).toHaveLength(visionRequestsBeforeCopy);
     await pdfPage.evaluate(() => {
@@ -413,16 +450,12 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
     ))).not.toBe('0px');
     const requestsBeforeSourceView = textRequests.length;
     const visionRequestsBeforeSourceView = visionRequests.length;
-    await panel.locator('#pdf-document-translation-view-source').click();
-    await expect(panel).toHaveAttribute('data-view-mode', 'source');
-    await expect(panel.locator('.pdf-document-translation-page:visible')).toHaveCount(0);
+    await panel.locator('#pdf-document-translation-close').click();
+    await expect(panel).toBeHidden();
+    await expect(pdfPage.locator('#translate-document')).toHaveAttribute('aria-expanded', 'false');
+    await expect(pdfPage.locator('#translate-document')).toBeFocused();
     await expect(pdfPage.locator('.pdf-page[data-page-number="1"]')).toBeVisible();
     await expect(pdfPage.locator('#document-stage')).toHaveCSS('margin-right', '0px');
-    const sourceDock = await panel.evaluate((element) => ({
-      height: element.getBoundingClientRect().height,
-      viewportHeight: window.innerHeight,
-    }));
-    expect(sourceDock.height).toBeLessThan(sourceDock.viewportHeight * .2);
     expect(textRequests).toHaveLength(requestsBeforeSourceView);
     expect(visionRequests).toHaveLength(visionRequestsBeforeSourceView);
     if (process.env.PI_VISUAL_ARTIFACTS === '1') {
@@ -431,6 +464,8 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
         fullPage: false,
       });
     }
+    await pdfPage.locator('#translate-document').click();
+    await expect(panel).toBeVisible();
     await panel.locator('#pdf-document-translation-view-compare').click();
     await expect(panel).toHaveAttribute('data-view-mode', 'compare');
     expect(await pdfPage.locator('#document-stage').evaluate((stage) => (
@@ -468,6 +503,9 @@ test('previews and batch-translates a complete PDF in the reader panel', async (
 
 test('uses one authorized vision model for every block in a PDF containing formulas', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
+  const scannedSource=testInfo.outputPath('scanned-full-document.pdf');await writeFile(scannedSource,createRasterPdf());
+  const worker=context.serviceWorkers()[0]!,storageBefore=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;return{session:await c.storage.session.get(['pdfCoordinateOcrSessionsV1','pdfDocumentTranslationSessionsV1']),local:await c.storage.local.get('pdfDocumentTranslationRetainedV1')}});
+  await worker.evaluate(async()=>{await(globalThis as any).chrome.storage.session.remove('pdfCoordinateOcrSessionsV1')});
   await pdfPage.addInitScript(() => {
     const scope = globalThis as typeof globalThis & { __documentOcrRequests?: number };
     scope.__documentOcrRequests = 0;
@@ -524,11 +562,7 @@ test('uses one authorized vision model for every block in a PDF containing formu
   try {
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
-    await pdfPage.locator('#file-input').setInputFiles({
-      name: 'scanned-full-document.pdf',
-      mimeType: 'application/pdf',
-      buffer: createRasterPdf(),
-    });
+    await pdfPage.locator('#file-input').setInputFiles(scannedSource);
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     await pdfPage.locator('#translate-document').click();
     const panel = pdfPage.locator('#pdf-document-translation');
@@ -543,13 +577,16 @@ test('uses one authorized vision model for every block in a PDF containing formu
     await expect(ocrAction).toHaveText('识别 1 页');
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-toggle')).toBeChecked();
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('1 个扫描页');
+      .toContainText('扫描页将先识别文字');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toHaveAttribute('title', /1 个扫描页/u);
     await expect(pdfPage.locator('#pdf-document-translation-range')).toBeEnabled();
     expect(await pdfPage.evaluate(() => (
       globalThis as typeof globalThis & { __documentOcrRequests?: number }
     ).__documentOcrRequests)).toBe(0);
     expect(textRequests).toHaveLength(requestStart);
 
+    await openPdfTranslationOptions(pdfPage);await pdfPage.locator('#pdf-document-translation-retention-toggle').check();
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(ocr).toHaveAttribute('data-tone', 'error');
     await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
@@ -568,9 +605,9 @@ test('uses one authorized vision model for every block in a PDF containing formu
     await expect(pdfPage.locator('[data-pi-ocr-block="document-ocr-text"]'))
       .toContainText('Scanned full-document paragraph');
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('当前范围 2 段统一使用视觉模型');
+      .toHaveAttribute('title', /当前范围 2 段统一使用视觉模型/u);
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('预计 2 次视觉请求');
+      .toContainText('预计 2 次请求');
     await expect(pdfPage.locator('#pdf-document-translation-primary'))
       .toHaveText('开始多模态全文翻译');
     const panelLayout = await panel.evaluate((element) => ({
@@ -581,6 +618,7 @@ test('uses one authorized vision model for every block in a PDF containing formu
 
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('已完成 2/2');
+    await expect.poll(()=>worker.evaluate(async()=>{const c=(globalThis as any).chrome;return(await c.storage.local.get('pdfDocumentTranslationRetainedV1')).pdfDocumentTranslationRetainedV1?.some((record:any)=>record.blocks.length===2)})).toBe(true);
     expect(textRequests).toHaveLength(requestStart);
     expect(visionRequests).toHaveLength(visionRequestStart + 2);
     const unifiedVisionPrompts = visionRequests.slice(visionRequestStart).map((request) => (
@@ -666,8 +704,14 @@ test('uses one authorized vision model for every block in a PDF containing formu
         fullPage: false,
       });
     }
+    const resumed=await context.newPage();try{
+      await resumed.goto(`chrome-extension://${extensionId}/pdf.html`);await resumed.locator('#file-input').setInputFiles(scannedSource);await resumed.locator('#translate-document').click();
+      await expect(resumed.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');await expect(resumed.locator('[data-translation-block]')).toHaveCount(2);await expect(resumed.locator('[data-pi-ocr-block="document-ocr-text"]')).toHaveText('Scanned full-document paragraph for translation.');
+      expect(textRequests).toHaveLength(requestsBeforeLayoutExport.text);expect(visionRequests).toHaveLength(requestsBeforeLayoutExport.vision);
+    }finally{await resumed.close()}
   } finally {
     await pdfPage.close();
+    await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.session.remove(['pdfCoordinateOcrSessionsV1','pdfDocumentTranslationSessionsV1']);await c.storage.local.remove('pdfDocumentTranslationRetainedV1');await c.storage.session.set(saved.session);await c.storage.local.set(saved.local)},storageBefore);
   }
 });
 
@@ -721,7 +765,97 @@ test('paginates dense source-page translations without covering or clipping the 
   }
 });
 
-test('translates a captioned paper table as one visual object beside ordinary text', async () => {
+test('exports an oversized paragraph completely while keeping formula nodes intact',async({},info)=>{
+  const reader=await context.newPage();
+  try{
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles({name:'演示文本-长段落.pdf',mimeType:'application/pdf',buffer:createTextPdf('Energy E = mc^2 is invariant.')});await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');
+    await reader.locator('#pdf-document-translation-view-reading').click();const block=reader.locator('[data-translation-block]').first();await block.hover();await block.locator('.pdf-paragraph-edit-action').click();
+    const text=reader.locator('#pdf-paragraph-editor textarea').first();const original=await text.inputValue();const repeated='演示文本：这是用于验证单个长段落分页的完整句子。'.repeat(100);await text.fill(repeated+original+'长段落末尾核验标记');await reader.locator('#pdf-paragraph-editor-save').click();await expect(reader.locator('#pdf-paragraph-editor')).not.toBeVisible();
+    const mathBefore=await block.locator('math').count(),requestsBefore=textRequests.length+visionRequests.length;expect(mathBefore).toBeGreaterThan(0);await reader.locator('#pdf-document-translation-copy-menu > summary').click();const opening=context.waitForEvent('page');await reader.locator('#pdf-document-translation-print-layout').click();const preview=await opening;
+    try{
+      await expect(preview.locator('body')).toHaveAttribute('data-pi-layout-ready','true',{timeout:20000});const pages=preview.locator('.pdf-layout-continuation');expect(await pages.count()).toBeGreaterThan(1);
+      const joined=(await pages.allTextContents()).join('');expect(joined.split('演示文本：').length-1).toBe(100);expect(joined).toContain('长段落末尾核验标记');expect(await preview.locator('math').count()).toBe(mathBefore);
+      expect(await pages.evaluateAll(pages=>pages.every(page=>page.scrollHeight<=page.clientHeight+1&&page.scrollWidth<=page.clientWidth+1))).toBe(true);
+      await preview.screenshot({path:info.outputPath('long-paragraph-pagination.png')});expect(textRequests.length+visionRequests.length).toBe(requestsBefore);
+    }finally{await preview.close()}
+  }finally{await reader.close()}
+});
+
+test('keeps the previous formula registry on failed paragraph retry and stores it in history after a valid retry',async({},info)=>{
+  const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let requests=0,repairs=0,release:(()=>void)|undefined;
+  const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;return{local:await c.storage.local.get(null),session:await c.storage.session.get(null)}});
+  const source=info.outputPath('演示文本-公式重试.pdf');await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));
+  const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const handler=async(route:import('@playwright/test').Route)=>{
+    const body=route.request().postDataJSON();if(typeof body.messages[0].content==='string'){
+      repairs++;
+      await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({translation:'演示：修复仍然新增 {{m1}} {{m1}}。'})}}]})});return;
+    }
+    requests++;if(requests===2||requests===3)await new Promise<void>(resolve=>{release=resolve});
+    const translation=requests===2?'演示：错误新增 {{m1}} {{m1}}。':requests===1?'演示：旧译文 {{m1}}。':'演示：新译文 {{m1}}。';
+    await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation,uncertainSpans:requests===1?['演示：核对符号。']:[]})}}]})});
+  };
+  await context.route(endpoint,handler);
+  try{
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-translation-retention-toggle').check();await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');await reader.locator('#pdf-document-translation-view-reading').click();
+    const block=reader.locator('[data-translation-block]').first();const initial=await worker.evaluate(async()=>(await(globalThis as any).chrome.storage.session.get('pdfDocumentTranslationSessionsV1')).pdfDocumentTranslationSessionsV1.find((r:any)=>r.blocks.some((b:any)=>b.translatedText.includes('演示：旧译文'))));const old=initial.blocks[0];
+    await block.getByRole('button',{name:'重试本段',exact:true}).click();await expect.poll(()=>requests).toBe(2);await expect(block).toContainText('旧译文');await reader.locator('#pdf-document-translation-primary').click();release?.();
+    await expect(block).toHaveAttribute('data-status','error');
+    await expect.poll(()=>worker.evaluate(async key=>(await(globalThis as any).chrome.storage.session.get('pdfDocumentTranslationSessionsV1')).pdfDocumentTranslationSessionsV1.find((r:any)=>r.documentKey===key)?.blocks[0]?.revisions?.some((r:any)=>r.reason==='unaccepted'),initial.documentKey)).toBe(true);
+    const rejected=await worker.evaluate(async key=>(await(globalThis as any).chrome.storage.session.get('pdfDocumentTranslationSessionsV1')).pdfDocumentTranslationSessionsV1.find((r:any)=>r.documentKey===key).blocks[0],initial.documentKey);
+    expect(rejected.formulaDocument).toEqual(old.formulaDocument);expect(rejected.translatedText).toBe(old.translatedText);expect(rejected.revisions.some((r:any)=>r.reason==='unaccepted'&&r.translatedText.includes('错误新增'))).toBe(true);
+    expect(repairs).toBe(0);
+    const exportMenu=reader.locator('#pdf-document-translation-copy-menu');if(await exportMenu.getAttribute('open')===null)await exportMenu.locator(':scope > summary').click();const downloading=reader.waitForEvent('download');await reader.locator('#pdf-document-translation-download-html').click();const downloaded=await downloading;const htmlPath=info.outputPath('retained-old-translation.html');await downloaded.saveAs(htmlPath);const html=await readFile(htmlPath,'utf8');expect(html).toContain('<math');expect(html).toContain('重译尚未完成');expect(html).toContain('演示：旧译文');
+    if(await exportMenu.getAttribute('open')===null)await exportMenu.locator(':scope > summary').click();const printing=context.waitForEvent('page');await reader.locator('#pdf-document-translation-print-layout').click();const preview=await printing;await expect(preview.locator('body')).toHaveAttribute('data-pi-layout-ready','true');await expect(preview.locator('body')).toContainText('演示：旧译文');await expect(preview.locator('body')).toContainText('重译尚未完成');await expect(preview.locator('math')).toHaveCount(1);await preview.close();
+    await block.getByRole('button',{name:'重试本段',exact:true}).click();await expect.poll(()=>requests).toBe(3);await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','running');release?.();await expect(block).toHaveAttribute('data-status','done');await expect(block).toContainText('新译文');
+    await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');
+    await expect.poll(()=>worker.evaluate(async key=>(await(globalThis as any).chrome.storage.session.get('pdfDocumentTranslationSessionsV1')).pdfDocumentTranslationSessionsV1.find((r:any)=>r.documentKey===key)?.blocks[0]?.translatedText.includes('新译文'),initial.documentKey)).toBe(true);
+    const accepted=await worker.evaluate(async key=>(await(globalThis as any).chrome.storage.session.get('pdfDocumentTranslationSessionsV1')).pdfDocumentTranslationSessionsV1.find((r:any)=>r.documentKey===key).blocks[0],initial.documentKey);
+    expect(accepted.formulaReviewMessage).toBeUndefined();expect(accepted.revisions.some((r:any)=>r.reason==='translation'&&JSON.stringify(r.formulaDocument)===JSON.stringify(old.formulaDocument))).toBe(true);expect(requests).toBe(3);
+  }finally{release?.();await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
+});
+
+for(const limit of [1,2])test(`repairs formula prose once within the whole-task request budget ${limit}`,async({},info)=>{
+  const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let images=0,texts=0;
+  const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;return{local:await c.storage.local.get(null),session:await c.storage.session.get(null)}});
+  const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+  const handler=async(route:import('@playwright/test').Route)=>{const body=route.request().postDataJSON(),image=Array.isArray(body.messages[0].content);if(image)images++;else texts++;
+    const segments=image?[]:JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>({id:part.id,translation:'演示：能量关系 '+(part.text.match(/⟦[^⟧]+⟧/gu)??[]).join(' ')+' 保持不变。'}));
+    const payload=image?{formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation:'演示：能量 {{m1}} 与 {{m1}} 保持不变。',uncertainSpans:[]}:{translation:'演示：总览文本不用于组装。',segments};
+    await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify(payload)}}]})});
+  };
+  await context.route(endpoint,handler);
+  try{
+    const source=info.outputPath(`演示文本-额度-${limit}.pdf`);await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill(String(limit));await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
+    const block=reader.locator('[data-translation-block]').first();expect(images).toBe(1);expect(texts).toBe(limit-1);
+    if(limit===2){await expect(block).toContainText('能量关系');await expect(block.locator('.pdf-formula-reference-review')).toHaveCount(0);await expect(block.locator('math')).toHaveCount(1)}else await expect(block).toContainText('待核对');
+    await expect(reader.locator('#pdf-document-request-usage')).toContainText(`文字 ${limit-1} 次`);
+  }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
+});
+
+for(const validRepair of [true,false])test(`binds conditional formulas before accepting a visual result with valid counts: ${validRepair}`,async({},info)=>{
+  const worker=context.serviceWorkers()[0]!,reader=await context.newPage(),endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';let images=0,texts=0;
+  const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;return{local:await c.storage.local.get(null),session:await c.storage.session.get(null)}});
+  const handler=async(route:import('@playwright/test').Route)=>{
+    const body=route.request().postDataJSON(),image=Array.isArray(body.messages[0].content);let payload:any;
+    if(image){images++;payload={formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false},{id:'m2',latex:'F=ma',display:false}],recognizedText:'If {{m1}} is invariant, then {{m2}} is stable. Hence the estimate exists¹. This need not hold in general².',translation:'演示：若 {{m2}} 不变，则 {{m1}} 稳定。因此估计存在¹。通常未必成立²。',uncertainSpans:[]}}
+    else{texts++;payload={translation:'演示：只使用绑定分句组装。',segments:JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>{
+      const tokens=part.text.match(/⟦[^⟧]+⟧/gu)??[];let translation=part.id.endsWith('_IF')?`${tokens.join(' ')} 不变。`:part.id.endsWith('_THEN')?`${tokens.join(' ')} 稳定。`:part.id==='PDF_SENTENCE_2'?`因此估计存在${tokens.join(' ')}。`:`通常未必成立${tokens.join(' ')}。`;
+      if(!validRepair&&part.id.endsWith('_IF'))translation=translation.replace('0001','0002');return{id:part.id,translation};})}}
+    await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify(payload)}}]})});
+  };await context.route(endpoint,handler);
+  try{
+    const source=info.outputPath(`演示文本-条件绑定-${validRepair}.pdf`);await writeFile(source,createTextPdf('If E=mc^2 is invariant, then F=ma is stable.'));
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('2');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
+    const block=reader.locator('[data-translation-block]').first();expect(images).toBe(1);expect(texts).toBe(1);
+    if(validRepair){await expect(block).toContainText('如果');await expect(block).toContainText('则');await expect(block).toContainText('通常未必成立²');await expect(block.locator('math')).toHaveCount(2);await expect(block.locator('.pdf-formula-review-notice')).toHaveCount(0)}
+    else{await expect(block).toContainText('条件与结论');await expect(block).toContainText('正文修复未完成');await expect(block).toContainText('所属句子')}
+    await reader.screenshot({path:info.outputPath('conditional-binding.png')});
+  }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
+});
+
+test('translates a captioned paper table as one visual object beside ordinary text', async ({}, info) => {
   const pdfPage = await context.newPage();
   const lifecycle = await context.newCDPSession(pdfPage);
   const textRequestStart = textRequests.length;
@@ -752,9 +886,11 @@ test('translates a captioned paper table as one visual object beside ordinary te
     await expect(pdfPage.locator('#pdf-document-translation-status'))
       .toContainText('已识别 2 段，等待确认');
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('1 个表格');
+      .toHaveAttribute('title', /1 个表格/u);
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('预计 1 次视觉请求');
+      .toContainText('正文用文字接口，图表用视觉模型');
+    await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
+      .toHaveAttribute('title', /预计 1 次视觉请求/u);
     expect(textRequests).toHaveLength(textRequestStart);
     expect(visionRequests).toHaveLength(visionRequestStart);
 
@@ -793,6 +929,18 @@ test('translates a captioned paper table as one visual object beside ordinary te
     const highlightBounds = await highlight.boundingBox();
     expect(highlightBounds?.width).toBeGreaterThan(350);
     expect(highlightBounds?.height).toBeGreaterThan(100);
+    const menu = panel.locator('#pdf-document-translation-copy-menu');
+    if(await menu.getAttribute('open')===null)await menu.locator(':scope > summary').click();
+    const downloading=pdfPage.waitForEvent('download');
+    await panel.locator('#pdf-document-translation-download-html').click();
+    const htmlPath=info.outputPath('structured-table.html');await(await downloading).saveAs(htmlPath);
+    const html=await readFile(htmlPath,'utf8');expect(html).toContain('<table');expect(html).toContain('<th scope="col">');
+    if(await menu.getAttribute('open')===null)await menu.locator(':scope > summary').click();
+    const printing=context.waitForEvent('page');await panel.locator('#pdf-document-translation-print-layout').click();const preview=await printing;
+    await expect(preview.locator('body')).toHaveAttribute('data-pi-layout-ready','true');
+    await expect(preview.locator('table tbody tr')).toHaveCount(2);await expect(preview.locator('table thead')).toContainText('PSNR');
+    expect(textRequests).toHaveLength(textRequestStart+1);expect(visionRequests).toHaveLength(visionRequestStart+1);
+    await preview.close();
   } finally {
     mockControl.releaseHeldVisionRequest?.();
     mockControl.releaseHeldVisionRequest = undefined;
@@ -906,6 +1054,13 @@ test('continues a text-only PDF translation while the reader tab is frozen', asy
       .toContainText('已识别 14 段，等待确认');
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect.poll(() => textRequests.length).toBe(textRequestStart + 1);
+
+    const more = pdfPage.locator('#pdf-document-translation-copy-menu');
+    await more.locator(':scope > summary').click();
+    await expect(more.locator('#pdf-document-translation-clear')).toBeVisible();
+    await expect(more.locator('#pdf-document-translation-export-actions')).toBeHidden();
+    await more.locator(':scope > summary').press('Escape');
+    await expect(more).not.toHaveAttribute('open');
 
     await lifecycle.send('Page.setWebLifecycleState', { state: 'frozen' });
     frozen = true;
@@ -1228,8 +1383,11 @@ test('joins a sentence that crosses columns and a full-width region into one vis
     expect(dimensions.height).toBeGreaterThan(700);
     const cards = pdfPage.locator('#pdf-document-translation-pages [data-translation-block]');
     await expect(cards).toHaveCount(1);
-    await expect(cards).toHaveAttribute('data-translation-mode', 'vision');
-    await cards.click();
+    // The shared local mock returns only the short energy sentence for this
+    // long paragraph. Complete source capture must not certify that omission.
+    await expect(cards).toHaveAttribute('data-translation-mode', 'review');
+    await expect(cards).toContainText('正文译文较短');
+    await cards.press('Enter');
     const sourceHighlights = pdfPage.locator(
       '.pdf-page[data-page-number="1"] .region-source-highlight',
     );
@@ -1262,7 +1420,7 @@ test('joins a sentence that crosses columns and a full-width region into one vis
   }
 });
 
-test('stops automatically authorized PDF full-document OCR', async () => {
+test('stops and resumes automatic OCR with settings collapsed', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.addInitScript(() => {
     const runtime = (globalThis as typeof globalThis & {
@@ -1288,12 +1446,23 @@ test('stops automatically authorized PDF full-document OCR', async () => {
     await pdfPage.locator('#translate-document').click();
     const action = pdfPage.locator('#pdf-document-translation-ocr-action');
     await pdfPage.locator('#pdf-document-translation-primary').click();
-    await expect(action).toHaveText('停止识别');
-    await action.click();
+    await expect(pdfPage.locator('#pdf-document-translation-settings')).not.toHaveAttribute('open');
+    await expect(action).toBeHidden();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('正在识别扫描页 · 0/1');
+    await expect(pdfPage.locator('#pdf-document-translation-primary')).toHaveText('正在识别…');
+    await expect(pdfPage.locator('#pdf-document-translation-page-empty')).toHaveText('正在识别本页文字…');
+    const stop = pdfPage.locator('#pdf-document-translation-stop');
+    await expect(stop).toHaveText('停止识别');
+    await pdfPage.screenshot({ path: testInfo.outputPath('ocr-settings-collapsed.png') });
+    await stop.click();
     await expect(action).toHaveText('识别 1 页');
-    await expect(pdfPage.locator('#pdf-document-translation-ocr-status'))
-      .toContainText('识别已停止');
-    await expect(pdfPage.locator('#pdf-document-translation-primary')).toBeDisabled();
+    await expect(pdfPage.locator('#pdf-document-translation-status')).toContainText('识别已停止');
+    await expect(pdfPage.locator('#pdf-document-translation-primary')).toBeEnabled();
+    await pdfPage.locator('#pdf-document-translation-primary').click();
+    await expect(stop).toHaveText('停止识别');
+    await stop.click();
+    await openPdfTranslationSettings(pdfPage);
+    await expect(pdfPage.locator('#pdf-document-translation-ocr-status')).toContainText('识别已停止');
   } finally {
     await pdfPage.close();
   }
@@ -1326,6 +1495,7 @@ test('restores explicitly retained PDF progress after session loss and translate
     await firstReader.locator('#translate-document').click();
     await expect(firstReader.locator('#pdf-document-translation-status'))
       .toContainText('已识别 2 段，等待确认');
+    await openPdfTranslationOptions(firstReader);
     const retention = firstReader.locator('#pdf-document-translation-retention-toggle');
     await expect(retention).toBeVisible();
     await expect(firstReader.locator('#pdf-document-translation-retention-manage'))
@@ -1405,6 +1575,7 @@ test('restores explicitly retained PDF progress after session loss and translate
 
     const restart = restoredReader.locator('#pdf-document-translation-clear');
     await expect(restart).toHaveText('重新翻译');
+    await restoredReader.locator('#pdf-document-translation-copy-menu > summary').click();
     await restart.click();
     await expect(restoredReader.locator('#pdf-document-translation-status'))
       .toContainText('已完成 3/3');
@@ -1426,7 +1597,7 @@ test('restores explicitly retained PDF progress after session loss and translate
     const restoredRetention = restoredReader.locator(
       '#pdf-document-translation-retention-toggle',
     );
-    await panel.locator('#pdf-document-translation-settings > summary').click();
+    await openPdfTranslationOptions(restoredReader);
     await restoredRetention.uncheck();
     await expect(restoredReader.locator('#pdf-document-translation-retention-status'))
       .toContainText('本机保存已清除');
@@ -1472,7 +1643,7 @@ test('keeps bibliography entries original without sending them for translation',
     await expect(pdfPage.locator('#pdf-document-translation-range-feedback'))
       .toContainText('参考文献 1 段保留原文');
     await expect(pdfPage.locator('#pdf-document-translation-multimodal-status'))
-      .toContainText('1 段参考文献保留原文且不发送请求');
+      .toHaveAttribute('title', /1 段参考文献保留原文且不发送请求/u);
 
     await pdfPage.locator('#pdf-document-translation-primary').click();
     await expect(pdfPage.locator('#pdf-document-translation-status'))
@@ -1533,6 +1704,7 @@ test('limits PDF document translation by pages and recognized back matter', asyn
     const customForm = pdfPage.locator('#pdf-document-translation-custom-range');
     const customPages = pdfPage.locator('#pdf-document-translation-custom-pages');
     const feedback = pdfPage.locator('#pdf-document-translation-range-feedback');
+    await openPdfTranslationOptions(pdfPage);
     const skipReferences = pdfPage.locator('#pdf-document-translation-skip-references');
     const skipAppendix = pdfPage.locator('#pdf-document-translation-skip-appendix');
     await expect(range).toBeEnabled();
@@ -1577,7 +1749,9 @@ test('limits PDF document translation by pages and recognized back matter', asyn
       appendixText,
     ]);
 
-    await pdfPage.locator('#pdf-document-translation-settings > summary').click();
+    await openPdfTranslationSettings(pdfPage);
+    await pdfPage.locator('#page-number').fill('1');
+    await pdfPage.locator('#page-number').press('Enter');
     await range.selectOption('current');
     await expect(feedback).toContainText('第 1 页 · 1 页 / 1 段');
     await expect(pdfPage.locator('#pdf-document-translation-status'))
@@ -1595,7 +1769,7 @@ test('limits PDF document translation by pages and recognized back matter', asyn
     };
     expect(currentPayload.segments.map((segment) => segment.text)).toEqual([bodyText]);
 
-    await pdfPage.locator('#pdf-document-translation-settings > summary').click();
+    await openPdfTranslationSettings(pdfPage);
     await range.selectOption('all');
     await expect(feedback).toContainText('整篇文档 · 3 页 / 3 段');
     await expect(pdfPage.locator('#pdf-document-translation-status'))
@@ -1664,7 +1838,9 @@ test('orders a two-column PDF by reading column before full-document translation
     await pdfPage.locator('#translate-document').click();
     await expect(pdfPage.locator('#pdf-document-translation-status'))
       .toContainText('已识别 3 段，等待确认');
-    await expect(pdfPage.locator('#pdf-document-translation-note'))
+    await openPdfTranslationOptions(pdfPage);
+    await pdfPage.locator('#pdf-document-processing-details').locator('..').locator('summary').click();
+    await expect(pdfPage.locator('#pdf-document-processing-details'))
       .toContainText('已按阅读顺序整理 1 页多栏正文');
 
     const requestStart = textRequests.length;
@@ -1700,18 +1876,19 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
     });
     await expect(pdfPage.locator('.pdf-page').first()).toHaveAttribute('data-rendered', 'ready');
     const openOutline = pdfPage.locator('#open-outline');
+    await openPdfReaderMore(pdfPage);
     await expect(openOutline).toBeVisible();
     await expect(openOutline).toBeEnabled();
     await expect(pdfPage.locator('#pdf-navigation-outline-tab')).not.toHaveAttribute('hidden', '');
-    await openOutline.click();
+    await clickPdfReaderAction(pdfPage,'open-outline');
 
     const panel = pdfPage.locator('#pdf-outline');
     const tree = pdfPage.locator('#pdf-outline-tree');
     const actions = tree.locator('.pdf-outline-action');
     await expect(panel).toBeVisible();
-    await openOutline.click();
+    await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(panel).toBeHidden();
-    await openOutline.click();
+    await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(panel).toBeVisible();
     await expect(pdfPage.locator('#pdf-outline-status')).toHaveText('4 项');
     await expect(actions).toHaveCount(4);
@@ -1739,22 +1916,22 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
 
     await experiment.press('Escape');
     await expect(panel).toBeHidden();
-    await expect(openOutline).toBeFocused();
-    await openOutline.click();
+    await expect(pdfPage.locator('#pdf-reader-menu > summary')).toBeFocused();
+    await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(panel).toBeVisible();
     await pdfPage.keyboard.press('Control+f');
     await expect(panel).toBeHidden();
     await expect(pdfPage.locator('#pdf-search-query')).toBeFocused();
     await pdfPage.locator('#pdf-search-query').press('Escape');
-    await expect(openOutline).toBeFocused();
+    await expect(pdfPage.locator('#pdf-reader-menu > summary')).toBeFocused();
 
     await pdfPage.setViewportSize({ width: 360, height: 700 });
-    await openOutline.click();
+    await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(panel).toBeVisible();
     const compactLabel = await openOutline.evaluate((button) => (
       getComputedStyle(button, '::before').content
     ));
-    expect(compactLabel).toBe('"导"');
+    expect(compactLabel).toBe('none');
     const [panelBounds, toolbarLayout] = await Promise.all([
       panel.boundingBox(),
       pdfPage.locator('#pdf-toolbar').evaluate((toolbar) => ({
@@ -1840,7 +2017,7 @@ test('opens safe PDF links, navigates internal references, and returns to the so
     await expect(externalPage).toHaveTitle('External paper reference');
     await externalPage.close();
 
-    await pdfPage.locator('#zoom-in').click();
+    await clickPdfReaderAction(pdfPage,'zoom-in');
     const zoomedInternal = firstPage.locator('.pdf-link-layer a[aria-label="跳转到第 4 页"]');
     await expect(zoomedInternal).toBeVisible();
     const zoomedBounds = await zoomedInternal.boundingBox();
@@ -1878,8 +2055,9 @@ test('searches every text PDF page locally and navigates highlighted matches', a
     });
     await expect(pdfPage.locator('#page-count')).toHaveText('12');
     await expect(pdfPage.locator('#open-search')).toBeEnabled();
+    await openPdfReaderMore(pdfPage);
     await expect(pdfPage.locator('#open-outline')).toBeVisible();
-    await pdfPage.locator('#open-outline').click();
+    await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(pdfPage.locator('#pdf-navigation-outline-tab')).toBeHidden();
     await expect(pdfPage.locator('#pdf-bookmarks')).toBeVisible();
     await expect(pdfPage.locator('#pdf-bookmark-add')).toBeEnabled();
@@ -1936,7 +2114,7 @@ test('searches every text PDF page locally and navigates highlighted matches', a
     await expect(pdfPage.locator('.pi-pdf-search-match')).toHaveCount(0);
     await expect(pdfPage.locator('#document-stage')).toBeFocused();
 
-    await pdfPage.locator('#open-search').click();
+    await clickPdfReaderAction(pdfPage,'open-search');
     await expect(query).toHaveValue('needle');
     await expect(pdfPage.locator('#pdf-search-status')).toContainText('/ 2');
   } finally {
@@ -1960,6 +2138,7 @@ test('keeps scanned PDF search local and does not start OCR automatically', asyn
     await expect(pdfPage.locator('#pdf-search-status'))
       .toHaveText('当前文档没有可搜索文字');
     expect(visionRequests).toHaveLength(visionRequestsBefore);
+    await openPdfReaderMore(pdfPage);
     await expect(pdfPage.locator('#recognize-page')).toBeVisible();
   } finally {
     await pdfPage.close();
@@ -2100,13 +2279,13 @@ test('opens an inherited PDF on its requested page and keeps that page while zoo
     const beforeZoom = await pageAnchor();
     expect(beforeZoom.page).toBe(2);
 
-    await pdfPage.locator('#zoom-in').click();
+    await clickPdfReaderAction(pdfPage,'zoom-in');
     await expect(secondPage).toHaveAttribute('data-rendered', 'ready');
     await expect.poll(async () => (await pageAnchor()).page).toBe(2);
     await expect.poll(async () => Math.abs((await pageAnchor()).ratio - beforeZoom.ratio))
       .toBeLessThan(0.08);
 
-    await pdfPage.locator('#fit-width').click();
+    await clickPdfReaderAction(pdfPage,'fit-width');
     await expect.poll(async () => (await pageAnchor()).page).toBe(2);
     const stageWidth = await pdfPage.locator('#document-stage').evaluate((element) => element.clientWidth);
     await expect.poll(async () => secondPage.evaluate((element) => element.getBoundingClientRect().width))
@@ -2238,23 +2417,14 @@ test('keeps the PDF toolbar clear and usable at narrow widths', async () => {
 
     await pdfPage.setViewportSize({ width: 420, height: 700 });
     await expect(pdfPage.locator('.brand img')).toBeVisible();
-    await expect(pdfPage.locator('.brand > span')).toBeHidden();
-    const compactActions = await pdfPage.locator('.region-action').evaluateAll((buttons) =>
-      buttons.map((button) => ({
-        label: button.textContent?.trim(),
-        compactLabel: getComputedStyle(button, '::before').content,
-        fontSize: getComputedStyle(button).fontSize,
-      })),
-    );
-    expect(compactActions).toEqual([
-      { label: '识别本页', compactLabel: '"识"', fontSize: '0px' },
-      { label: '框选翻译', compactLabel: '"框"', fontSize: '0px' },
-    ]);
+    await expect(pdfPage.locator('.brand > span')).toBeVisible();
+    await expect(pdfPage.locator('#recognize-page')).toBeHidden();
+    await expect(pdfPage.locator('#region-translate')).toHaveCSS('font-size','12px');
     const regionButton = pdfPage.locator('#region-translate');
     await regionButton.click();
     await expect(regionButton).toHaveAttribute('aria-pressed', 'true');
     expect(await regionButton.evaluate((button) =>
-      getComputedStyle(button, '::before').content)).toBe('"框"');
+      getComputedStyle(button, '::before').content)).toBe('none');
 
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await expect(pdfPage.locator('.zoom-controls output')).toBeHidden();
@@ -2273,10 +2443,11 @@ test('keeps the PDF toolbar clear and usable at narrow widths', async () => {
     });
     expect(layout.scrollWidth).toBe(layout.clientWidth);
     expect(layout.childrenFit).toBe(true);
-    const chooseFileBox = await pdfPage.locator('#choose-file').boundingBox();
-    expect(chooseFileBox?.height).toBeLessThanOrEqual(32);
+    await openPdfReaderMore(pdfPage);
+    await expect(pdfPage.locator('#choose-file')).toBeVisible();
+    expect((await pdfPage.locator('#choose-file').boundingBox())!.height).toBeGreaterThanOrEqual(34);
 
-    await pdfPage.locator('#open-search').click();
+    await clickPdfReaderAction(pdfPage,'open-search');
     await pdfPage.locator('#pdf-search-query').fill('toolbar');
     await expect(pdfPage.locator('#pdf-search-results')).toBeVisible();
     const searchLayout = await pdfPage.locator('#pdf-search').evaluate((search) => {
@@ -2440,17 +2611,21 @@ test('centers a fit-width PDF inside the space left by the translation sidebar',
   const stage = pdfPage.locator('#document-stage');
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-  await pdfPage.locator('#fit-width').click();
+  await clickPdfReaderAction(pdfPage,'fit-width');
   await expect.poll(() => firstPage.evaluate((element) =>
     element.getBoundingClientRect().width)).toBeGreaterThan(1100);
-
-  await firstPage.locator('.textLayer span').first().evaluate((span) => {
-    const range = document.createRange();
-    range.selectNodeContents(span);
-    window.getSelection()?.removeAllRanges();
-    window.getSelection()?.addRange(range);
-    document.dispatchEvent(new Event('selectionchange'));
-  });
+  // Page dimensions are set before PDF.js finishes replacing the text layer.
+  // Selecting the old/incomplete layer races with the fit-width redraw.
+  await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
+  // Exercise a real user drag after layout, including pointer-up; an immediate
+  // synthetic selectionchange can be consumed by the redraw's selection reset.
+  const span = firstPage.locator('.textLayer span').first();
+  await span.scrollIntoViewIfNeeded();
+  const textBounds = (await span.boundingBox())!;
+  await pdfPage.mouse.move(textBounds.x + 2, textBounds.y + textBounds.height / 2);
+  await pdfPage.mouse.down();
+  await pdfPage.mouse.move(textBounds.x + textBounds.width - 2, textBounds.y + textBounds.height / 2, { steps: 12 });
+  await pdfPage.mouse.up();
   const overlay = pdfPage.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   await overlay.locator('.trigger').click();
@@ -2514,7 +2689,7 @@ test('restores a PDF reading position, zoom, and fixed sidebar without storing i
     await pageInput.press('Enter');
     await expect(firstReader.locator('.pdf-page[data-page-number="2"]'))
       .toHaveAttribute('data-rendered', 'ready');
-    await firstReader.locator('#zoom-in').click();
+    await clickPdfReaderAction(firstReader,'zoom-in');
     await expect(firstReader.locator('#zoom-value')).toHaveText('150%');
 
     const secondPageText = firstReader.locator(
@@ -2589,7 +2764,7 @@ test('saves editable PDF reading bookmarks locally by anonymous document identit
     await firstReader.locator('#page-number').fill('2');
     await firstReader.locator('#page-number').press('Enter');
     await expect(firstReader.locator('#page-number')).toHaveValue('2');
-    await firstReader.locator('#open-outline').click();
+    await clickPdfReaderAction(firstReader,'open-outline');
     await expect(firstReader.locator('#pdf-bookmarks')).toBeVisible();
     const add = firstReader.locator('#pdf-bookmark-add');
     await add.click();
@@ -2643,7 +2818,7 @@ test('saves editable PDF reading bookmarks locally by anonymous document identit
   const restoredReader = await context.newPage();
   try {
     await restoredReader.goto(readerUrl.href);
-    await restoredReader.locator('#open-outline').click();
+    await clickPdfReaderAction(restoredReader,'open-outline');
     const restoredItem = restoredReader.locator('.pdf-bookmark-item');
     await expect(restoredItem).toHaveCount(1);
     await expect(restoredItem).toContainText('实验结果');
@@ -2663,7 +2838,7 @@ test('saves editable PDF reading bookmarks locally by anonymous document identit
   const otherReader = await context.newPage();
   try {
     await otherReader.goto(otherReaderUrl.href);
-    await otherReader.locator('#open-outline').click();
+    await clickPdfReaderAction(otherReader,'open-outline');
     await expect(otherReader.locator('.pdf-bookmark-item')).toHaveCount(0);
   } finally {
     await otherReader.close();
@@ -2747,7 +2922,7 @@ test('optionally restores and clears persistent Pi PDF translation markers', asy
     await expect(markerNote.getByRole('button', { name: '复制这条标记' })).toHaveText('已复制');
     await markerNote.getByRole('button', { name: '跳转到原文' }).click();
     await expect(markerLayer.locator('.marker.focused')).toBeVisible();
-    await markerNote.getByRole('button', { name: '删除这条标记' }).click();
+    await markerNote.locator('.marker-note-more > summary').click();await markerNote.getByRole('button', { name: '删除这条标记' }).click();
     await expect(markerLayer.locator('.marker')).toHaveCount(1);
     await markerNote.getByRole('button', { name: '再次点击删除这条标记' }).click();
     await expect(overlay).toContainText('本文暂无标记');
@@ -2950,7 +3125,7 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await expect(reader.locator('.pdf-page[data-page-number="1"]'))
       .toHaveAttribute('data-rendered', 'ready');
     const initialZoom = await reader.locator('#zoom-value').textContent();
-    await reader.locator('#fit-width').click();
+    await clickPdfReaderAction(reader,'fit-width');
     await expect(reader.locator('#zoom-value')).not.toHaveText(initialZoom ?? '');
     await expect(reader.locator('.pdf-page[data-page-number="1"]'))
       .toHaveAttribute('data-rendered', 'ready');
@@ -3034,7 +3209,7 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
     const removeReady = overlay.locator('.marker-note').filter({ hasText: sourceText })
       .getByRole('button', { name: '删除这条标记' });
-    await removeReady.click();
+    await overlay.locator('.marker-note').filter({hasText:sourceText}).locator('.marker-note-more > summary').click();await removeReady.click();
     const confirmRemove = overlay.locator('.marker-note').filter({ hasText: sourceText })
       .getByRole('button', { name: '再次点击删除这条标记' });
     await expect(confirmRemove).toHaveText('确认');

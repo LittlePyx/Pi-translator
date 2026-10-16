@@ -34,6 +34,14 @@ const request = {
 };
 
 describe('image region translation cache', () => {
+  it('separates source-row binding contracts for the same image', async () => {
+    const provider = { apiBaseUrl: 'https://api.example.com/v1', model: 'vision-a' };
+    const source = { id: 'eq-p2-x45002-y13368', number: '1', rowHint: 'y=Ax' };
+    const plain = await imageRegionCacheKey({ ...request, visualPurpose: 'formula' }, provider);
+    const bound = await imageRegionCacheKey({ ...request, visualPurpose: 'formula', sourceEquations: [source] }, provider);
+    expect(bound).not.toBe(plain);
+    await expect(imageRegionCacheKey({ ...request, visualPurpose: 'formula', sourceEquations: [{ ...source, number: '2' }] }, provider)).resolves.not.toBe(bound);
+  });
   it('keys pixels and translation behavior without retaining the image', async () => {
     const provider = { apiBaseUrl: 'https://api.example.com/v1', model: 'vision-a' };
     const key = await imageRegionCacheKey(request, provider);

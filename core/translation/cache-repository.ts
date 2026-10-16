@@ -1,5 +1,6 @@
 import type { PdfSourceLocation, TranslateRequest, TranslateResult } from './types';
 import { isLexicalLookupCandidate } from './lexical-lookup';
+import { DEFAULT_TRANSLATION_CHUNK_SIZE } from './text-chunker';
 
 const CACHE_KEY = 'translationCacheByTab';
 const MAX_CACHE_ENTRIES = 20;
@@ -45,6 +46,9 @@ export function translationCacheKey(
   },
 ): string {
   return hash(JSON.stringify({
+    // Long selections translated before TeX-aware splitting must not replay
+    // potentially split formulas from an older session cache.
+    chunkPlan: request.text.trim().length > DEFAULT_TRANSLATION_CHUNK_SIZE ? 2 : undefined,
     text: request.text.trim(),
     sourceLanguage: request.sourceLanguage,
     targetLanguage: request.targetLanguage,

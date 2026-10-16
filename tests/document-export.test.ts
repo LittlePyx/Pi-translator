@@ -5,6 +5,24 @@ import {
 } from '../core/translation/document-export';
 
 describe('document translation export', () => {
+  it('preserves source-derived paper roles in complete exports while keeping full publication text',()=>{
+    const result=buildDocumentTranslationExport([{sourceText:'Demonstration paper',translatedText:'演示论文',pageNumber:1,paperRole:'title'},{sourceText:'Alice Researcher',translatedText:'Alice Researcher · 演示大学',pageNumber:1,paperRole:'authors'},{sourceText:'DOI: 10.1000/demo',translatedText:'出版信息 DOI: 10.1000/demo',pageNumber:1,paperRole:'publication'}]);
+    expect(result.translationMarkdown).toContain('# 演示论文');expect(result.printableHtml).toContain('<h1 class="document-paper-title">演示论文</h1>');expect(result.printableHtml).toContain('data-paper-role="authors"');expect(result.printableHtml).toContain('data-paper-role="publication"');expect(result.translationText).toContain('DOI: 10.1000/demo');expect(result.printableHtml).not.toContain('<details');
+  });
+  it('preserves source heading levels in Markdown and bilingual HTML without changing plain copy text', () => {
+    const result = buildDocumentTranslationExport([
+      {sourceText: '3. Related research', translatedText: '3. 相关研究', pageNumber: 3, headingLevel: 1},
+      {sourceText: '3.1. Gaussian Processes', translatedText: '3.1. 高斯过程', pageNumber: 3, headingLevel: 2},
+      {sourceText: 'A normal paragraph.', translatedText: '普通段落 $f \\sim P$。', pageNumber: 3},
+    ]);
+    expect(result.translationMarkdown).toContain('### 3. 相关研究\n\n#### 3.1. 高斯过程');
+    expect(result.bilingualMarkdown).toContain('### 3. Related research\n\n> ### 3. 相关研究');
+    expect(result.printableHtml).toContain('<h2 class="document-section-title">3. 相关研究</h2>');
+    expect(result.printableHtml).toContain('<h3 class="document-section-title">3.1. Gaussian Processes</h3>');
+    expect(result.translationText).toBe('3. 相关研究\n\n3.1. 高斯过程\n\n普通段落 $f \\sim P$。');
+    expect(result.blockCount).toBe(3);
+  });
+
   it('copies only completed blocks and preserves formulas and code', () => {
     const result = buildDocumentTranslationExport([
       {

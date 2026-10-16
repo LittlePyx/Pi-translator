@@ -1,3 +1,6 @@
+import { bindAnchoredMenus } from '../../ui/anchored-menu';
+import {bindWebExcerptLibrary} from '../../ui/web-excerpt-library';
+bindWebExcerptLibrary();
 import type {
   ApiDiagnosticReport,
   ApiDiagnosticResponse,
@@ -58,6 +61,9 @@ import {
   BILINGUAL_PAGE_RETAINED_STORAGE_KEY,
 } from '../../core/translation/bilingual-page-session';
 import type { RetainedTranslationStorageSummary } from '../../core/translation/retained-storage-summary';
+import { listRetainedDocuments, renameRetainedDocument, deleteRetainedDocument, setRetainedDocumentPinned, pruneRetainedDocumentNames, RETAINED_DOCUMENT_NAMES_KEY, type RetainedLibraryEntry } from '../../core/translation/retained-document-library';
+import {exportDocumentLibraryBackup,importDocumentLibraryBackup} from '../../core/translation/document-library-backup';
+import { normalizeModelPrices, type ModelTokenPrice } from '../../core/translation/cost-estimate';
 import type { TranslationStyle } from '../../core/translation/types';
 import {
   assignedTranslationShortcut,
@@ -173,6 +179,17 @@ const clearRetainedWebButton=element<HTMLButtonElement>('clear-retained-web');
 const clearRetainedPdfButton=element<HTMLButtonElement>('clear-retained-pdf');
 const clearAllRetainedStorageButton=element<HTMLButtonElement>('clear-all-retained-storage');
 const retainedStorageActionStatus=element<HTMLElement>('retained-storage-action-status');
+const retainedLibrary=element<HTMLElement>('retained-document-library');
+const retainedLibrarySearch=element<HTMLInputElement>('retained-library-search');
+const retainedLibraryFilter=element<HTMLSelectElement>('retained-library-filter');
+const priceProfile=element<HTMLSelectElement>('price-profile');
+const priceModel=element<HTMLInputElement>('price-model');
+const priceCurrency=element<HTMLSelectElement>('price-currency');
+const priceInput=element<HTMLInputElement>('price-input');
+const priceOutput=element<HTMLInputElement>('price-output');
+const addModelPriceButton=element<HTMLButtonElement>('add-model-price');
+const modelPriceList=element<HTMLElement>('model-price-list');
+const modelPriceStatus=element<HTMLElement>('model-price-status');
 const navProfileName=element<HTMLElement>('nav-profile-name');
 const navKeyStatus=element<HTMLElement>('nav-key-status');
 const saveState=element<HTMLElement>('save-state');
@@ -184,6 +201,9 @@ const settingsSections=[...document.querySelectorAll<HTMLElement>('[data-setting
 let originalMode:ApiKeyStorageMode='session';
 let loadedSettingsBaseline:ExtensionSettings|undefined;
 let profiles:ApiProfile[]=[];
+let modelPrices:ModelTokenPrice[]=[];
+let libraryEntries:RetainedLibraryEntry[]=[];
+const libraryNameDrafts=new Map<string,string>();
 let currentProfileId='default';
 let activeTextProfileId='default';
 let visionProfileId='';
@@ -365,7 +385,7 @@ function setApiConnectionSaved():void{
   if(nonConnectionDirty){formDirty=true;saveState.textContent='API 已保存，其他更改未保存';saveState.classList.add('unsaved');saveButton.disabled=false;saveButton.textContent='保存其他更改';return}
   setSaved();
 }
-function showSettingsSection(target:string):void{for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`);if(target==='storage')void refreshRetainedStorageSummary()}
+function showSettingsSection(target:string):void{document.body.dataset.section=target;for(const button of settingsNavButtons){const active=button.dataset.settingsTarget===target;button.classList.toggle('active',active);button.setAttribute('aria-selected',String(active));button.tabIndex=active?0:-1}for(const section of settingsSections)section.hidden=section.dataset.settingsSection!==target;if(location.hash!==`#${target}`)history.replaceState(null,'',`#${target}`);if(target==='storage')void refreshRetainedStorageSummary()}
 
 const retainedStorageNumberFormat=new Intl.NumberFormat('zh-CN');
 function formatRetainedStorageBytes(bytes:number):string{
@@ -375,7 +395,7 @@ function formatRetainedStorageBytes(bytes:number):string{
 }
 function retainedStorageKindStatus(summary:RetainedTranslationStorageSummary):string{
   if(!summary.documentCount)return '未保留任何译文';
-  return `${retainedStorageNumberFormat.format(summary.documentCount)} 份 · ${retainedStorageNumberFormat.format(summary.translationCharacters)} 字 · ${formatRetainedStorageBytes(summary.estimatedBytes)}`;
+  return `${summary.fixedDocuments} 份固定 · ${summary.recentDocuments}/${summary.maximumDocuments} 份最近译文 · 容量 ${retainedStorageNumberFormat.format(summary.capacityCharacters)} / ${retainedStorageNumberFormat.format(summary.maximumTranslationCharacters)} 字符（含公式与历史） · ${formatRetainedStorageBytes(summary.estimatedBytes)} / ${formatRetainedStorageBytes(summary.maximumBytes)}`;
 }
 function setRetainedStorageActionStatus(message:string,error=false):void{
   retainedStorageActionStatus.textContent=message;
@@ -403,11 +423,14 @@ async function refreshRetainedStorageSummary():Promise<void>{
   retainedStorageSummary.setAttribute('aria-busy','true');
   refreshRetainedStorageButton.disabled=true;
   try{
-    const [web,pdf]=await Promise.all([
+    const [web,pdf,entries]=await Promise.all([
       getRetainedBilingualPageStorageSummary(),
       getRetainedPdfDocumentTranslationStorageSummary(),
+      listRetainedDocuments(),
     ]);
     if(revision!==retainedStorageRevision)return;
+    libraryEntries=entries;
+    renderRetainedLibrary();
     const documentCount=web.documentCount+pdf.documentCount;
     const characters=web.translationCharacters+pdf.translationCharacters;
     const bytes=web.estimatedBytes+pdf.estimatedBytes;
@@ -435,6 +458,110 @@ async function refreshRetainedStorageSummary():Promise<void>{
     }
   }
 }
+
+function appendLibraryMatch(container:HTMLElement,text:string,query:string):void{
+  const index=query?text.toLocaleLowerCase().indexOf(query):-1;
+  if(index<0){container.textContent=text;return}
+  const mark=document.createElement('mark');mark.textContent=text.slice(index,index+query.length);
+  container.append(document.createTextNode(text.slice(0,index)),mark,document.createTextNode(text.slice(index+query.length)));
+}
+
+function renderRetainedLibrary():void{
+  const query=retainedLibrarySearch.value.trim().toLocaleLowerCase();
+  const filter=retainedLibraryFilter.value;
+  const languages:Record<string,string>={'zh-CN':'简体中文',en:'English',ja:'日本語',de:'Deutsch',fr:'Français'};
+  const entries=libraryEntries.filter(entry=>(filter==='all'||filter===entry.kind||filter==='pinned'&&entry.pinned||filter==='review'&&entry.reviewCount>0||filter==='incomplete'&&entry.state!=='complete')&&`${entry.name} ${entry.kind} ${entry.kind==='web'?'网页':''} ${entry.targetLanguage} ${languages[entry.targetLanguage]??''} ${entry.text}`.toLocaleLowerCase().includes(query));
+  element<HTMLElement>('retained-library-count').textContent=query||filter!=='all'?`${entries.length} / ${libraryEntries.length} 份`:`${libraryEntries.length} 份`;
+  retainedLibrary.replaceChildren();
+  if(!entries.length){
+    const empty=document.createElement('div');empty.className='library-empty';
+    const message=document.createElement('p');message.textContent=libraryEntries.length?'没有匹配的译文。可以调整关键词或筛选条件。':'还没有保留的译文。在全文阅读器中开启“关闭后保留”，译文就会出现在这里。';
+    const action=document.createElement('button');action.type='button';action.textContent=libraryEntries.length?(filter==='all'?'清除搜索':'清除筛选'):'打开 PDF';
+    action.addEventListener('click',()=>{if(libraryEntries.length){retainedLibrarySearch.value='';retainedLibraryFilter.value='all';renderRetainedLibrary();retainedLibrarySearch.focus()}else{void browser.tabs.create({url:browser.runtime.getURL('/pdf.html')})}});
+    empty.append(message,action);retainedLibrary.append(empty);return;
+  }
+  for(const entry of entries){
+    const row=document.createElement('article');row.className='library-entry';row.dataset.libraryId=entry.id;row.dataset.kind=entry.kind;
+    const preview=document.createElement('div');preview.className='library-preview';
+    const summary=document.createElement('a');summary.className='library-open';summary.title=`继续阅读 ${entry.name}`;
+    summary.href=browser.runtime.getURL(`/pdf.html?library=${encodeURIComponent(entry.id)}${query?`&query=${encodeURIComponent(query)}`:''}`);summary.target='_blank';summary.rel='noopener';
+    const kind=document.createElement('span');kind.className='library-kind';kind.textContent=entry.kind==='pdf'?'PDF':'WEB';kind.ariaHidden='true';
+    const description=document.createElement('span');description.className='library-description';
+    const title=document.createElement('strong');title.className='library-title';appendLibraryMatch(title,entry.name,query);
+    const coverage=entry.coverageKnown?`${entry.processedCount}/${entry.totalBlocks} 段已处理`:`${entry.blockCount} 段已保存`;
+    const task=entry.state==='complete'?(entry.coverageKnown?'处理完成':'任务已结束') :entry.state==='paused'?'已暂停':entry.state==='active'?'翻译中':entry.state==='incomplete'?'未完成':'已停止';
+    const meta=document.createElement('span');meta.className='library-meta';meta.textContent=`${entry.pinned?'已固定 · ':''}${languages[entry.targetLanguage]??entry.targetLanguage} · ${coverage} · ${task}${entry.reviewCount?` · ${entry.reviewCount} 段待核对`:''}${entry.confirmedCount?` · ${entry.confirmedCount} 段已核对`:''}`;meta.title=`更新于 ${new Date(entry.updatedAt).toLocaleString()}${entry.preservedCount?`；${entry.preservedCount} 段参考文献保留原文`:''}`;
+    description.append(title,meta);summary.append(kind,description);
+    const hit=query?entry.blocks.find(block=>block.text.toLocaleLowerCase().includes(query)):undefined;
+    if(hit){const index=hit.text.toLocaleLowerCase().indexOf(query),start=Math.max(0,index-30),end=Math.min(hit.text.length,index+query.length+65);const snippet=document.createElement('span');snippet.className='library-match-snippet';appendLibraryMatch(snippet,`${start?'…':''}${hit.text.slice(start,end)}${end<hit.text.length?'…':''}`,query);description.append(snippet)}
+    const readLabel=document.createElement('span');readLabel.className='library-continue';readLabel.textContent=hit?'阅读匹配段落':'继续阅读';description.append(readLabel);
+    if(hit)summary.href+=`&block=${encodeURIComponent(hit.signature)}`;
+    preview.append(summary);
+    const menu=document.createElement('details');menu.className='library-menu';
+    const menuToggle=document.createElement('summary');menuToggle.textContent='···';menuToggle.ariaLabel=`${entry.name} 的更多操作`;
+    const actions=document.createElement('div');actions.className='library-actions';
+    const storageDetail=document.createElement('p');storageDetail.className='library-storage-detail';storageDetail.textContent=`本机记录 ${formatRetainedStorageBytes(entry.estimatedBytes)}（含公式与历史）\n更新于 ${new Date(entry.updatedAt).toLocaleString()}`;actions.append(storageDetail);
+    const nameEditor=document.createElement('div');nameEditor.className='library-name-editor';nameEditor.hidden=true;
+    const name=document.createElement('input');name.type='text';name.maxLength=120;name.value=libraryNameDrafts.get(entry.id)??entry.name;name.ariaLabel='文档名称';name.addEventListener('input',()=>libraryNameDrafts.set(entry.id,name.value));
+    const rename=document.createElement('button');rename.type='button';rename.textContent='重命名';rename.addEventListener('click',()=>{menu.open=false;nameEditor.hidden=false;name.focus();name.select()});
+    const saveName=document.createElement('button');saveName.type='button';saveName.textContent='保存名称';saveName.addEventListener('click',()=>{saveName.disabled=true;void renameRetainedDocument(entry.id,name.value).then(async()=>{libraryNameDrafts.delete(entry.id);setRetainedStorageActionStatus('名称已保存到本机。');await refreshRetainedStorageSummary();Array.from(retainedLibrary.querySelectorAll<HTMLElement>('.library-entry')).find(item=>item.dataset.libraryId===entry.id)?.querySelector<HTMLElement>('.library-open')?.focus()}).catch(error=>{setRetainedStorageActionStatus(error instanceof Error?error.message:'命名失败，请重试。',true);saveName.disabled=false})});
+    const cancelName=document.createElement('button');cancelName.type='button';cancelName.textContent='取消';cancelName.addEventListener('click',()=>{libraryNameDrafts.delete(entry.id);name.value=entry.name;nameEditor.hidden=true;menuToggle.focus()});
+    name.addEventListener('keydown',event=>{if(event.key==='Enter'){event.preventDefault();saveName.click()}else if(event.key==='Escape'){event.preventDefault();cancelName.click()}});
+    nameEditor.append(name,saveName,cancelName);
+    const exportButton=document.createElement('button');exportButton.type='button';exportButton.textContent='导出 Markdown';exportButton.addEventListener('click',()=>{menu.open=false;const url=URL.createObjectURL(new Blob([entry.markdown],{type:'text/markdown;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download=`${entry.name.replace(/[<>:"/\\|?*\u0000-\u001f]/gu,'_').slice(0,80)||'pi-translation'}.md`;anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setRetainedStorageActionStatus('译文已导出；不含原文和来源。')});
+    const remove=document.createElement('button');remove.type='button';remove.className='danger-text';remove.textContent='删除';remove.addEventListener('click',()=>{if(remove.dataset.confirm!=='true'){remove.dataset.confirm='true';remove.textContent='确认删除';return}remove.disabled=true;void deleteRetainedDocument(entry.id).then(async()=>{libraryNameDrafts.delete(entry.id);setRetainedStorageActionStatus('这份本机译文已删除。');await refreshRetainedStorageSummary()}).catch(()=>{setRetainedStorageActionStatus('删除失败，请重试。',true);remove.disabled=false})});remove.addEventListener('blur',()=>{delete remove.dataset.confirm;remove.textContent='删除'});
+    menu.addEventListener('keydown',event=>{if(event.key==='Escape'){event.preventDefault();menu.open=false;menuToggle.focus()}});
+    menu.addEventListener('toggle',()=>{if(menu.open){retainedLibrary.querySelectorAll<HTMLDetailsElement>('.library-menu[open]').forEach(other=>{if(other!==menu)other.open=false})}});
+    const pin=document.createElement('button');pin.type='button';pin.textContent=entry.pinned?'取消固定':'固定保存';pin.addEventListener('click',()=>{menu.open=false;void setRetainedDocumentPinned(entry.id,!entry.pinned).then(async()=>{setRetainedStorageActionStatus(entry.pinned?'已取消固定，可按最近使用规则清理。':'已固定，不会被自动清理。');await refreshRetainedStorageSummary()}).catch(error=>setRetainedStorageActionStatus(error instanceof Error?error.message:'固定失败，请重试。',true))});
+    actions.append(pin);
+    if(entry.kind==='pdf'){
+      const restore=document.createElement('button');restore.type='button';restore.textContent='选择原 PDF 恢复阅读';restore.addEventListener('click',()=>{menu.open=false;void browser.tabs.create({url:browser.runtime.getURL(`/pdf.html?restore=${encodeURIComponent(entry.id)}${hit?`&block=${encodeURIComponent(hit.signature)}`:''}`)})});actions.append(restore);
+    }
+    actions.append(exportButton,rename,remove);menu.append(menuToggle,actions);row.append(preview,menu,nameEditor);retainedLibrary.append(row);
+  }
+}
+retainedLibrarySearch.addEventListener('input',renderRetainedLibrary);
+retainedLibraryFilter.addEventListener('change',renderRetainedLibrary);
+const settingsMenuSelector='.library-menu, #library-storage-tools, #profile-menu';
+document.addEventListener('click',event=>{document.querySelectorAll<HTMLDetailsElement>(settingsMenuSelector).forEach(menu=>{if(!(event.target instanceof Node)||!menu.contains(event.target)||(menu.id==='profile-menu'&&event.target instanceof Element&&event.target.closest('button')))menu.open=false})});
+bindAnchoredMenus(settingsMenuSelector, ':scope > .library-actions, :scope > .disclosure-content, :scope > .profile-menu-actions');
+element<HTMLButtonElement>('export-library-backup').addEventListener('click',()=>{
+  element<HTMLDetailsElement>('library-storage-tools').open=false;
+  void exportDocumentLibraryBackup().then(text=>{
+    const url=URL.createObjectURL(new Blob([text],{type:'application/json;charset=utf-8'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='pi-translator-document-library.json';anchor.click();setTimeout(()=>URL.revokeObjectURL(url),1000);setRetainedStorageActionStatus('备份已导出，包含译文、校订历史、阅读位置、书签、本文术语、PDF 标记和已保存网页摘录。');
+  }).catch(error=>setRetainedStorageActionStatus(error instanceof Error?error.message:'备份失败。',true));
+});
+const libraryBackupInput=element<HTMLInputElement>('library-backup-input');
+element<HTMLButtonElement>('import-library-backup').addEventListener('click',()=>libraryBackupInput.click());
+libraryBackupInput.addEventListener('change',()=>{
+  element<HTMLDetailsElement>('library-storage-tools').open=false;
+  const file=libraryBackupInput.files?.[0];libraryBackupInput.value='';if(!file)return;
+  if(file.size>20_000_000){setRetainedStorageActionStatus('备份文件超过 20 MB。',true);return}
+  void file.text().then(importDocumentLibraryBackup).then(async count=>{await refreshRetainedStorageSummary();setRetainedStorageActionStatus(`${count?`已恢复 ${count} 份文档，网页摘录已合并`:'备份已合并（含已保存网页摘录）'}；保留较新的记录，未调用翻译接口。`)}).catch(error=>setRetainedStorageActionStatus(error instanceof Error?error.message:'导入失败，现有记录未改变。',true));
+});
+
+function renderModelPrices():void{
+  modelPriceList.replaceChildren();
+  for(const price of modelPrices){
+    const row=document.createElement('article');row.className='model-price-entry';
+    const description=document.createElement('div');
+    const model=document.createElement('strong');model.textContent=price.model;
+    const source=document.createElement('small');source.textContent=new URL(price.apiBaseUrl).host;
+    const rates=document.createElement('span');rates.textContent=`${price.currency} / 百万 tokens · 输入 ${price.inputPerMillion} · 输出 ${price.outputPerMillion}`;
+    description.append(model,source,rates);
+    const remove=document.createElement('button');remove.type='button';remove.className='text-button danger-text';remove.textContent='删除单价';remove.addEventListener('click',()=>{modelPrices=modelPrices.filter(item=>item!==price);renderModelPrices();nonConnectionDirty=true;setDirty()});row.append(description,remove);modelPriceList.append(row);
+  }
+}
+priceProfile.addEventListener('change',()=>{priceModel.value=profiles.find(profile=>profile.id===priceProfile.value)?.model??''});
+addModelPriceButton.addEventListener('click',()=>{
+  const profile=profiles.find(profile=>profile.id===priceProfile.value);
+  const priceBase=profile?.id===currentProfileId?apiBaseUrl.value.trim():profile?.apiBaseUrl;
+  const price=normalizeModelPrices([{apiBaseUrl:priceBase,model:priceModel.value,currency:priceCurrency.value,inputPerMillion:priceInput.valueAsNumber,outputPerMillion:priceOutput.valueAsNumber}])[0];
+  if(!price){modelPriceStatus.textContent='请填写模型 ID 和有效的非负单价；空值表示未知，免费模型请填 0。';return}
+  const previous=modelPrices.filter(item=>!(item.apiBaseUrl===price.apiBaseUrl&&item.model===price.model));
+  if(previous.length>=30){modelPriceStatus.textContent='最多保存 30 个模型单价，请先删除不用的记录。';return}
+  modelPrices=[...previous,price];renderModelPrices();nonConnectionDirty=true;setDirty();modelPriceStatus.textContent='单价已加入草稿，点击“保存设置”生效。';
+});
 async function clearRetainedStorage(kind:'web'|'pdf'|'all'):Promise<void>{
   retainedStoragePending=true;
   setRetainedStorageControls(undefined,undefined);
@@ -447,6 +574,7 @@ async function clearRetainedStorage(kind:'web'|'pdf'|'all'):Promise<void>{
       clearRetainedBilingualPageSession(),
       clearRetainedPdfDocumentTranslationSession(),
     ]);
+    await pruneRetainedDocumentNames();
     resetRetainedStorageConfirmation();
     setRetainedStorageActionStatus(
       kind==='web'
@@ -600,6 +728,10 @@ function updateCurrentProfile(normalize=false):void {
 function renderProfileSelect():void {
   profileSelect.replaceChildren(...profiles.map(profile=>{const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name;return option}));
   profileSelect.value=currentProfileId;deleteProfileButton.disabled=profiles.length<=1;navProfileName.textContent=activeTextProfile()?.name??'未命名配置';renderVisionProfileSelect();
+  const previous=priceProfile.value;
+  priceProfile.replaceChildren(...profiles.map(profile=>{const option=document.createElement('option');option.value=profile.id;option.textContent=profile.name;return option}));
+  priceProfile.value=profiles.some(profile=>profile.id===previous)?previous:activeTextProfileId;
+  if(!priceModel.value)priceModel.value=profiles.find(profile=>profile.id===priceProfile.value)?.model??'';
 }
 
 function renderProfileRole():void {
@@ -621,6 +753,7 @@ async function refreshVisionSetupStatus():Promise<void>{
   const profile=profiles.find(item=>item.id===visionProfileId);
   const pendingProfile=profiles.find(item=>item.id===visionSetupIntentProfileId);
   if(!profile){
+    element<HTMLElement>('vision-setup-overview').textContent=pendingProfile?'配置中':'尚未配置';
     setupQwenButton.textContent='配置 Qwen';
     if(pendingProfile){
       const pendingKeyConfigured=(currentProfileId===pendingProfile.id&&Boolean(apiKeyInput.value.trim()))||await hasApiKey(pendingProfile.id);
@@ -637,6 +770,7 @@ async function refreshVisionSetupStatus():Promise<void>{
   const keyConfigured=(currentProfileId===profileId&&Boolean(apiKeyInput.value.trim()))||await hasApiKey(profileId);
   if(profileId!==visionProfileId)return;
   const model=visionModel.value.trim()||profile.model;
+  element<HTMLElement>('vision-setup-overview').textContent=keyConfigured&&model?'已配置':'待补充';
   const scope=isOfficialQwenProfile(profile)?'框选翻译与“识别本页”':'可用于框选翻译；“识别本页”仍需官方 Qwen';
   visionSetupStatus.textContent=`已配置：${profile.name} · ${model||'待选择模型'} · ${keyConfigured?'Key 已配置':'Key 尚未配置'} · ${scope}`;
   setupQwenButton.textContent=isOfficialQwenProfile(profile)?'管理 Qwen':'配置 Qwen';
@@ -645,6 +779,7 @@ async function refreshVisionSetupStatus():Promise<void>{
 async function loadProfile(profileId:string):Promise<void>{
   const profile=profiles.find(item=>item.id===profileId);if(!profile)return;currentProfileId=profile.id;profileName.value=profile.name;apiBaseUrl.value=profile.apiBaseUrl;modelInput.value=profile.model;apiPreset.value=API_PRESETS.find(preset=>preset.apiBaseUrl===profile.apiBaseUrl)?.id??'custom';connectionAdvanced.open=apiPreset.value==='custom';refreshProviderHint();apiKeyInput.value='';renderProfileSelect();diagnosticReport.hidden=true;await Promise.all([refreshKeyState(),refreshApiPermissionState()]);
   connectionSummary.hidden=true;
+  connectionAdvanced.open=false;
 }
 
 function refreshPageModeFields():void {
@@ -745,6 +880,7 @@ async function removeUnusedApiAccess(previous:ApiProfile[],next:ApiProfile[],act
 }
 
 async function load():Promise<void>{
+  modelPrices=normalizeModelPrices((await getSettings()).modelPrices);renderModelPrices();element<HTMLDetailsElement>('model-price-editor').open=modelPrices.length===0;
   const [settings]=await Promise.all([getSettings(),refreshTranslationShortcut()]);loadedSettingsBaseline=settings;profiles=settings.apiProfiles.map(profile=>({...profile}));activeTextProfileId=settings.activeApiProfileId;currentProfileId=activeTextProfileId;visionProfileId=settings.visionApiProfileId;visionSelectionTouched=false;visionSetupIntentProfileId='';visionModel.value=settings.visionModel;originalMode=settings.apiKeyStorage;persistKey.checked=settings.apiKeyStorage==='local';sourceLanguage.value=settings.sourceLanguage;targetLanguage.value=settings.targetLanguage;styleSelect.value=settings.style;contentMode.value=settings.contentMode;academicGlossary.value=formatGlossaryEntries(settings.academicGlossary);rememberHistory.checked=settings.rememberRecentTranslations;historyLimit.value=String(settings.historyLimit);sessionCache.checked=settings.enableSessionCache;alignmentDefault.checked=settings.sentenceAlignmentDefault;autoRenderLatex.checked=settings.autoRenderLatex;sidebarMode.value=settings.sidebarMode;sidebarSide.value=settings.sidebarSide;contextMode.value=settings.contextMode;enableStreaming.checked=settings.enableStreaming;protectSensitiveFields.checked=settings.protectSensitiveFields;pdfKeyboardShortcuts.checked=settings.pdfKeyboardShortcutsEnabled;pdfRegionShortcutKey.value=settings.pdfRegionShortcutKey.toUpperCase();refreshPdfShortcutField();generalPageMode.value=settings.generalPageMode;siteAllowlist.value=settings.siteAllowlist.join('\n');floatingButton.checked=settings.showFloatingButtonOnOverleaf;hideTargetLanguageTrigger.checked=settings.hideFloatingButtonForTargetLanguage;contextMenu.checked=settings.enableContextMenu;refreshPageModeFields();await loadProfile(currentProfileId);setSaved();if(!settings.onboardingCompleted&&!onboardingDialog.open){onboardingPreset.value=API_PRESETS[0]?.id??'';applyOnboardingPreset();showOnboardingStep(1);onboardingDialog.showModal()}
 }
 
@@ -783,12 +919,13 @@ clearAllRetainedStorageButton.addEventListener('click',()=>{
 browser.storage.onChanged.addListener((changes,areaName)=>{
   if(areaName!=='local'||!(
     BILINGUAL_PAGE_RETAINED_STORAGE_KEY in changes||
-    PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY in changes
+    PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY in changes||RETAINED_DOCUMENT_NAMES_KEY in changes||Object.keys(changes).some(key=>key.startsWith('fixedDocumentTranslationV1:'))
   ))return;
   void refreshRetainedStorageSummary();
 });
 function markFormDirty(event:Event):void{
   const target=event.target;
+  if(target instanceof Element&&target.closest('#settings-storage'))return;
   if(target instanceof Element&&!target.closest('#settings-connection'))nonConnectionDirty=true;
   setDirty();
 }
@@ -873,6 +1010,7 @@ form.addEventListener('submit',event=>{event.preventDefault();const mode=general
       ...baseline,
       schemaVersion:8,
       apiProfiles:profiles.map(profile=>({...profile})),
+      modelPrices:normalizeModelPrices(modelPrices),
       activeApiProfileId:active.id,
       visionApiProfileId:visionProfileId,
       visionModel:visionModel.value.trim()||visionProfile?.model||active.model,
@@ -1145,7 +1283,7 @@ async function applyRequestedSettingsFocus():Promise<void>{
     showSettingsSection('storage');
     await refreshRetainedStorageSummary();
     retainedStorageTitle.scrollIntoView({block:'start'});
-    queueMicrotask(()=>refreshRetainedStorageButton.focus());
+    queueMicrotask(()=>retainedLibrarySearch.focus());
     return;
   }
   if(focus==='pages'){

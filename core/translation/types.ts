@@ -1,3 +1,6 @@
+import type { FormulaDocument } from './formula-document';
+import type { SourceEquation } from './source-equations';
+
 export type TranslationStyle = 'academic' | 'general' | 'literal';
 export type TranslationContentMode = 'auto' | 'plain' | 'latex';
 
@@ -154,6 +157,7 @@ export interface TranslateImageRegionRequest {
   /** Selects a constrained visual-output contract; omitted for ordinary user selections. */
   visualPurpose?: ImageTranslationPurpose;
   recognizedTextHint?: string;
+  sourceEquations?: readonly SourceEquation[];
   /** Nearby document text used only for terminology and tone consistency. */
   contextText?: string;
   pageUrl: string;
@@ -179,6 +183,9 @@ export interface TranslationWarning {
 }
 
 export interface TranslateResult {
+  usageSource?: import('./cost-estimate').UsageSource;
+  usage?: import('./provider-usage').ProviderTokenUsage;
+  formulaDocument?: FormulaDocument;
   requestId: string;
   /** Stable local-only identity used to keep later revisions attached to the source document. */
   documentId?: string;
@@ -211,6 +218,7 @@ export interface TranslateResult {
 }
 
 export interface ProviderImageTranslationResult {
+  formulaDocument?: FormulaDocument;
   recognizedText: string;
   translatedText: string;
   uncertainSpans: string[];
@@ -224,6 +232,7 @@ export interface ImageTranslationInput {
   imageHeight: number;
   visualPurpose?: ImageTranslationPurpose;
   recognizedTextHint?: string;
+  sourceEquations?: readonly SourceEquation[];
   contextText?: string;
 }
 
@@ -287,6 +296,8 @@ export interface PreparedTranslationInput {
   contextText?: string;
   lexicalLookup?: boolean;
   strictPlaceholderPreservation?: boolean;
+  /** Internal complete-sentence repair; tokens remain bound to their source unit. */
+  allowPlaceholderReordering?: boolean;
   adjustmentInstruction?: string;
   previousTranslation?: string;
 }

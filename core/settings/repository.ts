@@ -6,6 +6,7 @@ import {
   type ExtensionSettings,
 } from './schema';
 import { normalizeGlossaryEntries } from '../translation/glossary';
+import { normalizeModelPrices } from '../translation/cost-estimate';
 import type { GlossaryEntry } from '../translation/types';
 import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
 import {
@@ -140,6 +141,7 @@ export async function getSettings(): Promise<ExtensionSettings> {
   return {
     ...DEFAULT_SETTINGS,
     ...value,
+    modelPrices: normalizeModelPrices(value.modelPrices),
     schemaVersion: 8,
     provider: 'openai-compatible',
     apiProfiles,

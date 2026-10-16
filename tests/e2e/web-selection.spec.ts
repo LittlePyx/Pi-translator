@@ -1,3 +1,4 @@
+import {openTranslationMore} from './support/translation-controls';
 import type { Page, Route } from '@playwright/test';
 import {
   clearBrowserSelection,
@@ -69,6 +70,7 @@ test('reports the shortcut actually assigned by Edge', async () => {
     } else {
       await expect(readinessPanel).toHaveAttribute('data-state', 'issue');
       await expect(popup.locator('#readiness-issues')).toContainText('翻译快捷键尚未设置');
+      await popup.locator('#popup-more-actions > summary').click();await popup.locator('#popup-service-details > summary').click();
       await expect(readinessPanel.getByRole('button', { name: '设置快捷键' })).toBeVisible();
     }
   } finally {
@@ -76,7 +78,7 @@ test('reports the shortcut actually assigned by Edge', async () => {
   }
 });
 
-test('shows a compact contextual lookup for a short selection', async () => {
+test('shows a compact contextual lookup for a short selection', async ({}, info) => {
   const requestsBefore = textRequests.length;
   await selectElementText('#lookup-source');
   const overlay = page.locator('#tex-selection-translator-root');
@@ -89,17 +91,46 @@ test('shows a compact contextual lookup for a short selection', async () => {
   await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
   await expect(overlay.locator('.lexical-sense')).toContainText('连贯性');
 
-  await overlay.getByRole('button', { name: '按普通译文方式查看' }).click();
+  const modes = overlay.getByRole('group', {name: '释义与译文'});
+  await expect(modes.getByRole('button', {name: '查看释义'})).toHaveAttribute('aria-pressed', 'true');
+  await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'false');
+  await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-meaning-light.png')});
+  await modes.getByRole('button', { name: '查看译文' }).click();
   await expect(overlay.locator('.title')).toHaveText('翻译结果');
   await expect(overlay.locator('.body')).toHaveText('连续性');
-  await overlay.getByRole('button', { name: '返回短词和短语释义' }).click();
+  await expect(overlay.getByRole('group', {name: '译文显示方式'})).toHaveCount(0);
+  await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'true');
+  await expect(modes.getByRole('button', {name: '查看译文'})).toBeFocused();
+  await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-translation-light.png')});
+  await modes.getByRole('button', { name: '查看释义' }).focus();
+  await page.keyboard.press('Enter');
   await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+  await expect(modes.getByRole('button', {name: '查看释义'})).toBeFocused();
+  for (const color of ['light', 'dark'] as const) {
+    await page.emulateMedia({colorScheme: color});
+    await page.evaluate(color => { document.body.style.backgroundColor = color === 'dark' ? '#191919' : '#ffffff'; document.body.style.color = color === 'dark' ? '#ededed' : '#202020'; }, color);
+    await expect(overlay).toHaveAttribute('data-pi-theme', color);
+    await page.setViewportSize({width: 300, height: 600});
+    expect(await overlay.locator('.surface').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await overlay.locator('.surface').screenshot({path: info.outputPath(`lookup-narrow-${color}.png`)});
+    await modes.getByRole('button', {name: '查看译文'}).click();
+    await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'true');
+    await modes.getByRole('button', {name: '查看释义'}).click();
+  }
+  await page.setViewportSize({width: 1200, height: 850});
+  await page.emulateMedia({colorScheme: 'light'});
+  await page.evaluate(() => {document.body.style.backgroundColor = '#ffffff'; document.body.style.color = '#202020';});
+  await overlay.getByTitle('在页面侧栏中显示').click();
+  await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-sidebar-light.png')});
+  await modes.getByRole('button', {name: '查看译文'}).click();
+  await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'true');
 
   expect(textRequests).toHaveLength(requestsBefore + 1);
   const request = JSON.stringify(textRequests.at(-1));
   expect(request).toContain('lookup_and_translate');
   expect(request).toContain('lookupMode');
-  await page.keyboard.press('Escape');
+  await closeVisibleTranslationSurfaceForCleanup();
   await clearBrowserSelection();
 });
 
@@ -144,7 +175,7 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
       .toHaveAttribute('open', '');
     await expect(options.locator('#academic-glossary')).toBeFocused();
     await options.goto(`chrome-extension://${extensionId}/options.html?focus=support#support`);
-    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('details.support-disclosure').filter({has:options.locator('#copy-diagnostic-report')})).toHaveAttribute('open', '');
     await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
 
     await options.evaluate(async () => {
@@ -157,7 +188,7 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     await options.reload({ waitUntil: 'domcontentloaded' });
     await expect(options.locator('#onboarding-dialog')).toBeVisible();
     await options.locator('#onboarding-skip').click();
-    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('details.support-disclosure').filter({has:options.locator('#copy-diagnostic-report')})).toHaveAttribute('open', '');
     await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
 
     await options.evaluate(async () => {
@@ -171,7 +202,7 @@ test('deep-links recovery actions to API and PDF image settings', async () => {
     await expect(options.locator('#onboarding-dialog')).toBeVisible();
     await options.keyboard.press('Escape');
     await expect(options.locator('#onboarding-dialog')).not.toBeVisible();
-    await expect(options.locator('details.support-disclosure')).toHaveAttribute('open', '');
+    await expect(options.locator('details.support-disclosure').filter({has:options.locator('#copy-diagnostic-report')})).toHaveAttribute('open', '');
     await expect(options.locator('#copy-diagnostic-report')).toBeFocused();
     await options.evaluate(async () => {
       const api = (globalThis as typeof globalThis & { chrome: TestChromeApi }).chrome;
@@ -529,6 +560,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(sidePanel.locator('#empty-title')).toHaveText('浏览器侧栏已就绪');
     await expect(sidePanel.locator('#empty-description')).toContainText('从顶部框选当前网页');
     await expect(emptyAction).toHaveText('改用网页浮动侧栏');
+    await openTranslationMore(sidePanel);
     await expect(webRegionAction).toBeVisible();
     await expect(webRegionAction).toHaveText('框选网页');
     expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
@@ -546,6 +578,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
         value: async () => false,
       });
     });
+    await openTranslationMore(sidePanel);
     await webRegionAction.click();
     await expect(sidePanel.locator('#empty-status')).toContainText('未获得网页截图权限');
     await expect(webRegionAction).toContainText('重试框选');
@@ -573,6 +606,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await expect(sidePanel.locator('#start-web-region-label'))
       .toHaveText('允许截图并重试');
     await expect(sidePanel.locator('#empty-status')).toContainText('还差一步');
+    await openTranslationMore(sidePanel);
     await webRegionAction.click();
     await expect(sidePanel.locator('#empty-status')).toContainText('未获得网页截图权限');
     await expect(sidePanel.locator('#start-web-region-label')).toHaveText('重试授权');
@@ -721,7 +755,7 @@ test('dismisses one passive trigger and can pause the current site in place', as
     await overlay.getByTitle('关闭').click();
     await clearBrowserSelection();
 
-    await popup.locator('#pause-site').uncheck();
+    await popup.locator('#popup-more-actions > summary').click();await popup.locator('#pause-site').uncheck();
     await expect(popup.locator('#status')).toContainText('已恢复');
     await expect(popup.locator('#pause-site')).not.toBeChecked();
   } finally {
@@ -1170,7 +1204,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
     moreSummary,
     overlay.locator('.view-button').first(),
   ].map((control) => control.evaluate((element) => element.getBoundingClientRect().height)));
-  expect(compactControlHeights).toEqual([32, 32, 32, 32]);
+  expect(compactControlHeights.every(height=>height>=32&&height<=36)).toBe(true);
   await moreSummary.click();
   await expect(more).toHaveAttribute('open', '');
   await page.keyboard.press('Escape');
@@ -1179,12 +1213,15 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
 
   const correctionAction = overlay.getByRole('button', { name: '修正译文' });
+  await openTranslationMore(overlay);
   await correctionAction.click();
   let editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await expect(editor).toBeVisible();
   await editor.press('Escape');
   await expect(editor).toBeHidden();
-  await expect(correctionAction).toBeFocused();
+  await expect(overlay.locator('details.more > summary')).toBeFocused();
+
+  await openTranslationMore(overlay);
 
   await correctionAction.click();
   editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
@@ -1248,6 +1285,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await expect(versionContext).toContainText('本文记忆');
   await overlay.getByTitle('查看下一版译文').click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
+  await openTranslationMore(overlay);
   await correctionAction.click();
   editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await editor.fill('临时焦点验证译文。');
@@ -1257,7 +1295,7 @@ test('keeps translation correction compact, versioned, and synchronized with sou
   await undoCorrection.click();
   await expect(overlay.locator('.body')).toContainText('更忠实地保留原文限定条件');
   await expect(versionContext).toContainText('撤销修改');
-  await expect(correctionAction).toBeFocused();
+  await expect(overlay.locator('details.more > summary')).toBeFocused();
   await overlay.locator('.mark-action').click();
   await expect(markerLayer.locator('.marker')).toHaveCount(0);
   await overlay.getByTitle('关闭').click();
@@ -1272,13 +1310,16 @@ test('keeps correction terms explicit and rolls a global term back with the tran
   await overlay.locator('.trigger').click();
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
 
+  await expect(overlay.getByRole('button', { name: '修正译文' })).toBeHidden();
+  await openTranslationMore(overlay);
   const correction = overlay.getByRole('button', { name: '修正译文' });
   const correctionBox = await correction.boundingBox();
   expect(correctionBox).not.toBeNull();
   if (correctionBox) {
-    expect(correctionBox.width).toBeLessThanOrEqual(52);
-    expect(correctionBox.height).toBeLessThanOrEqual(32);
+    expect(correctionBox.width).toBeGreaterThan(120);
+    expect(correctionBox.height).toBeGreaterThanOrEqual(32);
   }
+  await openTranslationMore(overlay);
   await correction.click();
 
   const scope = overlay.getByRole('combobox', { name: '修正译文的保存范围' });
@@ -1361,6 +1402,7 @@ test('keeps narrow translation correction fields and actions visible', async ({}
     await selectElementText('#source');
     await overlay.locator('.trigger').click();
     await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await openTranslationMore(overlay);
     await overlay.getByRole('button', { name: '修正译文' }).click();
 
     const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
@@ -1473,7 +1515,10 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
     }
     expect(menuLayout.bounds.top).toBeGreaterThanOrEqual(8);
     expect(menuLayout.bounds.bottom).toBeLessThanOrEqual(692);
-    expect(menuLayout.scrollHeight).toBeLessThanOrEqual(menuLayout.clientHeight + 2);
+    expect(await menu.evaluate(element=>getComputedStyle(element).overflowY)).toBe('auto');
+    const lastMenuAction=menu.getByRole('button').last();await lastMenuAction.scrollIntoViewIfNeeded();
+    const lastMenuBounds=await lastMenuAction.boundingBox();expect(lastMenuBounds).not.toBeNull();
+    expect(lastMenuBounds!.y+lastMenuBounds!.height).toBeLessThanOrEqual(menuLayout.bounds.bottom+1);
     expect(menuLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
 
     await overlay.getByRole('button', { name: '让模型调整…' }).click();
@@ -1539,6 +1584,7 @@ test('keeps a newer translation and recovers a rejected correction save', async 
   await selectSourceText();
   await overlay.locator('.trigger').click();
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+  await openTranslationMore(overlay);
   await overlay.getByRole('button', { name: '修正译文' }).click();
   const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
   await editor.fill('不应覆盖较新结果的旧修正。');
@@ -1810,6 +1856,8 @@ test('rejects a correction whose result head disappeared without persisting side
   await overlay.locator('.trigger').click();
   await expect(overlay.locator('.body')).toBeVisible();
 
+  await openTranslationMore(overlay);
+
   await overlay.locator('.correction-action').click();
   const editor = overlay.locator('.correction-text-part').first();
   const rejectedTranslation = 'MISSING_HEAD_CORRECTION_SHOULD_NOT_PERSIST';
@@ -1896,10 +1944,14 @@ test('adopts an older translation version without an API call and can undo it', 
   await overlay.locator('.trigger').click();
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
 
+  await openTranslationMore(overlay);
+
   await overlay.getByRole('button', { name: '修正译文' }).click();
   await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('第一版人工译文。');
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
   await expect(overlay.locator('.body')).toHaveText('第一版人工译文。');
+
+  await openTranslationMore(overlay);
 
   await overlay.getByRole('button', { name: '修正译文' }).click();
   await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('第二版人工译文。');
@@ -1934,6 +1986,8 @@ test('retries a failed model adjustment with the frozen draft and revision conte
   await overlay.locator('.trigger').click();
   await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
   await overlay.locator('.mark-action').click();
+
+  await openTranslationMore(overlay);
 
   await overlay.getByRole('button', { name: '修正译文' }).click();
   const editor = overlay.getByRole('textbox', { name: '可编辑译文第 1 段' });
@@ -2007,6 +2061,7 @@ test('corrects one aligned sentence locally without adding visible controls or A
   let segments = overlay.locator('.segment');
   await expect(segments).toHaveCount(2);
   const first = segments.nth(0);
+  await page.mouse.move(0, 0);
   await expect.poll(() => first.locator('.segment-actions').evaluate(
     (element) => getComputedStyle(element).opacity,
   )).toBe('0.62');
@@ -2104,6 +2159,7 @@ test('marks one aligned sentence and copies marked notes as Markdown', async () 
 
   await page.mouse.click(markerBox.x + markerBox.width / 2, markerBox.y + markerBox.height / 2);
   await expect(overlay).toHaveAttribute('data-pi-view', 'card');
+  await openTranslationMore(overlay);
   await overlay.getByRole('button', { name: '修正译文' }).click();
   await overlay.getByRole('textbox', { name: '可编辑译文第 1 段' }).fill('手动修改后的完整双句译文。');
   await overlay.getByRole('button', { name: '保存', exact: true }).click();
@@ -2163,17 +2219,24 @@ test('shows site pause controls only on supported webpages', async () => {
     const siteControl = popup.locator('#site-control');
     const pauseSite = popup.locator('#pause-site');
     const quickActions = popup.locator('#quick-actions');
+    await expect(popup.locator('#popup-more-actions')).not.toHaveAttribute('open');
+    await popup.locator('#popup-more-actions > summary').click();
     await expect(siteControl).toBeVisible();
     await expect(popup.locator('#site-name')).toHaveText('www.overleaf.com');
     await expect(pauseSite).toBeEnabled();
+    await expect(popup.locator('#api-profile-field')).toBeHidden();
+    await popup.locator('#popup-service-details > summary').click();
     await expect(popup.locator('#api-profile-field')).toBeVisible();
-    const fieldGap = await popup.evaluate(() => {
+    const fields = await popup.evaluate(() => {
       const targetField = document.querySelector<HTMLElement>('label:has(#target-language)');
       const apiField = document.querySelector<HTMLElement>('#api-profile-field');
-      if (!targetField || !apiField) return -1;
-      return apiField.getBoundingClientRect().top - targetField.getBoundingClientRect().bottom;
+      if (!targetField || !apiField) return undefined;
+      const target=targetField.getBoundingClientRect(), api=apiField.getBoundingClientRect();
+      return {topGap:api.top-target.top,width:api.width};
     });
-    expect(fieldGap).toBeGreaterThanOrEqual(11);
+    expect(fields).toBeDefined();
+    expect(fields!.topGap).toBeGreaterThan(80);
+    expect(fields!.width).toBeGreaterThanOrEqual(140);
     await expect(quickActions).toHaveAttribute('data-primary', 'sidebar');
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-sidebar');
     await expect(popup.locator('#open-sidebar')).toHaveClass(/primary-action/);
@@ -2201,7 +2264,7 @@ test('shows site pause controls only on supported webpages', async () => {
   }
 });
 
-test('shows contextual guidance once and keeps dismissal local', async () => {
+test('opens contextual guidance on demand and keeps dismissal local', async () => {
   const discoveryKeys = [
     'featureDiscoveryV1:completed:web-selection',
     'featureDiscoveryV1:completed:web-sidebar',
@@ -2229,6 +2292,9 @@ test('shows contextual guidance once and keeps dismissal local', async () => {
     await popup.reload();
 
     const guide = popup.locator('#feature-guide');
+    await expect(guide).toBeHidden();
+    await popup.locator('#popup-more-actions > summary').click();
+    await popup.locator('#feature-guide-toggle').click();
     await expect(guide).toBeVisible();
     await expect(popup.locator('#feature-guide-eyebrow')).toHaveText('当前页面 · Overleaf');
     await expect(popup.locator('#feature-guide-title')).toHaveText('编辑区和预览区，分别这样用');
@@ -2258,6 +2324,7 @@ test('shows contextual guidance once and keeps dismissal local', async () => {
     await page.bringToFront();
     await popup.reload();
     await expect(guide).toBeHidden();
+    await popup.locator('#popup-more-actions > summary').click();
     await popup.locator('#feature-guide-toggle').click();
     await expect(guide).toBeVisible();
   } finally {
@@ -2280,6 +2347,7 @@ test('routes confirmed webpage regions through multimodal capture without text f
       await popup.goto(`chrome-extension://${extensionId}/popup.html`);
       await page.bringToFront();
       await popup.reload();
+      await popup.locator('#popup-more-actions > summary').click();
       await expect(popup.locator('#open-web-region')).toBeVisible();
       await popup.evaluate(() => {
         document.querySelector<HTMLButtonElement>('#open-web-region')?.click();

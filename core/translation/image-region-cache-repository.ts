@@ -40,6 +40,11 @@ export async function imageRegionCacheKey(
     imageWidth: request.imageWidth,
     imageHeight: request.imageHeight,
     visualPurpose: request.visualPurpose,
+    // New document images use occurrence identities, including unclassified inline math in titles.
+    visualValidation: 6,
+    ...(['formula','document'].includes(request.visualPurpose??'')?{formulaOccurrences:1}:{}),
+    ...(request.visualPurpose === 'formula' ? { formulaFormat: 'refs-v1', equationBinding: 2, identifierRecovery: 1,
+      sourceEquations: request.sourceEquations } : {}),
     sourceLanguage: request.sourceLanguage,
     targetLanguage: request.targetLanguage,
     style: request.style,

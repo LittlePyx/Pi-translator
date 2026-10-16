@@ -1,0 +1,24 @@
+.bar { padding: 10px 72px 10px 12px; border: 1px solid var(--pi-line); border-radius: var(--pi-radius-panel); color: var(--pi-text); background: var(--pi-surface); box-shadow: var(--pi-shadow); font-family: var(--pi-font); }
+.mark { filter: grayscale(1); }
+.control-title { color: var(--pi-text); font-size: 12px; font-weight: 550; }
+output, .language, .display { color: var(--pi-muted); font-size: 11px; }
+select { min-height: 30px; padding: 5px 20px 5px 7px; border-radius: var(--pi-radius); color: var(--pi-text); background: transparent; font-size: 12px; font-weight: 450; }
+button, details.more > summary { min-height: 30px; border-radius: var(--pi-radius); color: var(--pi-muted); background: transparent; font-size: 12px; font-weight: 450; }
+button:hover, select:hover, details.more > summary:hover, details.more[open] > summary { color: var(--pi-text); background: var(--pi-subtle); }
+.progress { height: 3px; background: var(--pi-line); }
+.progress i { background: var(--pi-primary); }
+.bar[data-phase="complete"] .progress i { background: var(--pi-success); }
+.menu { padding: 6px; border-color: var(--pi-line); border-radius: var(--pi-radius-panel); color: var(--pi-text); background: var(--pi-surface); box-shadow: var(--pi-shadow); }
+.menu button { color: var(--pi-text); }
+.menu button:hover { color: var(--pi-text); background: var(--pi-subtle); }
+button[data-action="pause"] { color: var(--pi-text); background: var(--pi-subtle); }
+button[data-action="pause"]:hover { color: var(--pi-text); background: var(--pi-hover); }
+.language-confirmation, .scope-panel, .start-confirmation { border-color: var(--pi-line); color: var(--pi-muted); }
+.scope-presets button { border-radius: 0; }
+.scope-presets button[aria-pressed="true"] { color: var(--pi-text); background: transparent; box-shadow: inset 0 -2px var(--pi-text); }
+.start-confirmation button[data-action="confirm-start"] { color: var(--pi-primary-text); background: var(--pi-primary); }
+.start-confirmation button[data-action="confirm-start"]:hover { color: var(--pi-primary-text); background: var(--pi-primary-hover); }
+@media(prefers-color-scheme:dark) { .mark { filter: grayscale(1) invert(.85); } }
+
+.launcher, .bar[data-collapsed="true"] { border-radius: var(--pi-radius-panel); }
+.launcher { border-color: var(--pi-line); color: var(--pi-text); background: var(--pi-surface); box-shadow: var(--pi-shadow); backdrop-filter: none; }

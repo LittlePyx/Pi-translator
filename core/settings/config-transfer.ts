@@ -1,4 +1,5 @@
 import { normalizeGlossaryEntries } from '../translation/glossary';
+import { normalizeModelPrices } from '../translation/cost-estimate';
 import { normalizeApiBaseUrl } from './api-access';
 import { normalizeSiteAllowlist } from './site-access';
 import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
@@ -32,6 +33,7 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
     exportedAt: new Date().toISOString(),
     containsApiKeys: false,
     settings: {
+      modelPrices: normalizeModelPrices(settings.modelPrices),
       apiProfiles: settings.apiProfiles.map(({ name, apiBaseUrl, model }) => ({
         name,
         apiBaseUrl,
@@ -124,6 +126,7 @@ export function importSettingsConfiguration(
     : [];
   return {
     ...current,
+    modelPrices: normalizeModelPrices(source.modelPrices),
     schemaVersion: 8,
     provider: 'openai-compatible',
     apiProfiles,

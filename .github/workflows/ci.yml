@@ -45,6 +45,9 @@ jobs:
       - name: Run Edge end-to-end tests
         run: npm run test:e2e:built
 
+      - name: Check product states and narrow layouts
+        run: npm run test:layout:built
+
       - name: Upload Edge end-to-end diagnostics
         if: failure()
         uses: actions/upload-artifact@v6

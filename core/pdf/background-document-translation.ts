@@ -1,4 +1,15 @@
 import type { PdfDocumentTranslationSourceRegion } from './document-translation';
+import { validPdfRequestLimit, validPdfRequestUsage, type PdfRequestUsage } from './request-budget';
+import type { PdfDocumentVisualUnit } from './document-translation';
+import { pdfEquationCoverageIssues } from './visual-unit-translation';
+import { bindPdfEquationNumbers } from './equation-binding';
+import { pdfHasTargetProse, pdfTranslationProseIssues } from './translation-completeness';
+import {pdfCitationIssues,pdfFormulaProseIssues} from './prose-bindings';
+import {pdfMathFontIssues,validPdfMathFontHints,type PdfMathFontHint} from './math-font-evidence';
+import { validSourceEquations, type SourceEquation } from '../translation/source-equations';
+import { extractFormulaReviewProse, hasFormulaTranslationProse, validateImageFigureResult } from '../translation/formula-output-validation';
+import { compactFormulaDocument, formulaDocumentIssues, formulaDocumentParts, formulaDocumentText, isFormulaDocument, recoverLegacyFormulaDocument,
+  type FormulaDocument } from '../translation/formula-document';
 import type {
   ImageTranslationPurpose,
   TranslateBatchRequest,
@@ -9,6 +20,7 @@ export const PDF_BACKGROUND_DOCUMENT_PATH = '/pdf-background.html';
 export const PDF_BACKGROUND_CACHE_NAME = 'pi-pdf-background-v1';
 
 export interface PdfBackgroundTranslationBlock {
+  sourceFontHints?:readonly PdfMathFontHint[];
   id: string;
   pageNumber: number;
   text: string;
@@ -16,11 +28,16 @@ export interface PdfBackgroundTranslationBlock {
   preserveInTextMode: boolean;
   visualPurpose: ImageTranslationPurpose;
   sourceRegions: PdfDocumentTranslationSourceRegion[];
+  visualUnits?: readonly PdfDocumentVisualUnit[];
+  equationNumbers?: readonly string[];
+  sourceEquations?: readonly SourceEquation[];
   previousBlockId?: string;
   contextText?: string;
 }
 
 export interface PdfBackgroundTranslationSettings {
+  requestLimit?: number;
+  requestUsage?: PdfRequestUsage;
   documentId?: string;
   pageUrl: string;
   sourceLabel?: string;
@@ -31,13 +48,22 @@ export interface PdfBackgroundTranslationSettings {
 }
 
 export interface PdfBackgroundTranslationOutcome {
+  formulaDocument?: FormulaDocument;
   blockId: string;
   translatedText: string;
   visualProcessed: boolean;
   visualFallbackMessage?: string;
+  formulaReviewMessage?: string;
+  /** Opaque model text, not safe to render as validated math. */
+  formulaReviewDraft?: true;
 }
 
 export interface PdfBackgroundTranslationSnapshot {
+  revision?: number;
+  requestUsage?: PdfRequestUsage;
+  /** Aggregate local timings only; no document text, images or credentials. */
+  performance?: { captures: number; prefetched: number; pageRenderMs: number; cropEncodeMs: number;
+    captureWaitMs: number; requestMs: number; validationMs: number };
   jobId: string;
   documentSessionId: string;
   phase: 'running' | 'paused' | 'stopped' | 'complete' | 'error';
@@ -47,12 +73,17 @@ export interface PdfBackgroundTranslationSnapshot {
 }
 
 interface PdfVisualStructureBlock {
+  sourceFontHints?:readonly PdfMathFontHint[];
+  equationNumbers?: readonly string[];
+  sourceEquations?: readonly SourceEquation[];
   containsFormula: boolean;
   visualPurpose: ImageTranslationPurpose;
   text?: string;
 }
 
 interface PdfVisualStructureResult {
+  formulaDocument?: FormulaDocument;
+  originalText?: string;
   formulaNeedsReview?: boolean;
   formulaLatex?: readonly string[];
   recognizedText?: string;
@@ -98,7 +129,12 @@ export function pdfBackgroundVisualResultIsStructurallySafe(
   block: PdfVisualStructureBlock,
   result: PdfVisualStructureResult,
 ): boolean {
-  if (block.visualPurpose === 'figure' || block.visualPurpose === 'table') return true;
+  if (block.visualPurpose === 'figure' && result.formulaNeedsReview && result.recognizedText && result.translatedText &&
+      result.uncertainSpans?.every(issue => issue.startsWith('公式 LaTeX 未通过自动校验：'))) {
+    return validateImageFigureResult({ recognizedText: result.recognizedText, translatedText: result.translatedText,
+      formulaLatex: [...(result.formulaLatex ?? [])], uncertainSpans: [] }).valid;
+  }
+  if (block.visualPurpose === 'figure' || block.visualPurpose === 'table') return !result.formulaNeedsReview;
   return !result.formulaNeedsReview && (
     !block.containsFormula || Boolean(result.formulaLatex?.length) ||
     preservesEverySimplePlainFormula(block, result)
@@ -109,14 +145,107 @@ export function pdfBackgroundVisualFallbackMessage(
   block: PdfVisualStructureBlock,
   result: PdfVisualStructureResult,
 ): string {
-  if (!block.containsFormula) return '视觉模型没有返回可靠译文';
-  if (!result.formulaLatex?.length) return '模型未返回可核对的公式结构';
   const validationIssue = result.uncertainSpans?.find((issue) => (
     issue.startsWith('公式 LaTeX 未通过自动校验：')
   ));
-  return validationIssue
-    ? validationIssue.replace('公式 LaTeX 未通过自动校验：', '公式结构未通过校验：')
-    : '含公式段落的视觉结果未通过结构校验';
+  if (validationIssue) return validationIssue.replace('公式 LaTeX 未通过自动校验：', '公式结构未通过校验：');
+  if (result.uncertainSpans?.some(issue => issue.trim())) return `模型报告局部内容不确定：${result.uncertainSpans.filter(Boolean).join('；')}`;
+  if (!block.containsFormula && !result.formulaNeedsReview) return '视觉结果未通过正文校验';
+  if (!result.formulaLatex?.length) return '模型未返回可核对的公式结构';
+  return '含公式段落的视觉结果未通过结构校验';
+}
+
+/** Text batches, legacy restores and visual prose share the same evidence.
+ * A returned candidate is retained for review; a source echo is never success. */
+export function pdfBackgroundTextOutcome(block: { id: string; text: string }, translatedText: string,
+  targetLanguage: string): PdfBackgroundTranslationOutcome {
+  const issues = pdfTranslationProseIssues(block.text, translatedText, targetLanguage);
+  if (!issues.length) return { blockId: block.id, translatedText: translatedText.trim(), visualProcessed: false };
+  if (pdfHasTargetProse(translatedText, targetLanguage) &&
+      !issues.some(issue => issue.includes('与原文相同'))) {
+    return { blockId: block.id, translatedText: translatedText.trim(), visualProcessed: false,
+      formulaReviewMessage: issues.join('；'), formulaReviewDraft: true };
+  }
+  return { blockId: block.id, translatedText: block.text, visualProcessed: false, visualFallbackMessage: issues.join('；') };
+}
+
+/** One outcome policy shared by the offscreen worker and foreground fallback. */
+export function pdfBackgroundVisualOutcome(
+  block: PdfVisualStructureBlock & { id: string; text: string },
+  result: PdfVisualStructureResult,
+  targetLanguage: string,
+): PdfBackgroundTranslationOutcome {
+  // Provider replies use recognizedText; persisted/runtime TranslateResult
+  // carries the same recognition as originalText.
+  if (!result.recognizedText && result.originalText) result = { ...result, recognizedText: result.originalText };
+  const translatedText = result.translatedText?.trim();
+  let formulaDocument = result.formulaDocument && isFormulaDocument(result.formulaDocument)
+    ? result.formulaDocument : undefined;
+  // A text-layer classifier can miss inline mathematics that the image reveals.
+  // Recovery still requires exact source/translation formula matches.
+  if (!formulaDocument && translatedText && result.formulaNeedsReview) {
+    formulaDocument = recoverLegacyFormulaDocument(result.recognizedText ?? result.originalText ?? '', translatedText);
+  }
+  if (formulaDocument) {
+    formulaDocument = bindPdfEquationNumbers(formulaDocument, block.sourceEquations);
+    const prose = formulaDocumentParts(formulaDocument).flatMap((part) => 'text' in part ? [part.text] : []).join(' ');
+    const sourceProse = formulaDocumentParts(formulaDocument, true)
+      .flatMap((part) => 'text' in part ? [part.text] : []).join(' ');
+    const proseIssues = pdfTranslationProseIssues(block.text, formulaDocumentText(formulaDocument), targetLanguage,
+      result.recognizedText ?? sourceProse);
+    if (proseIssues.length && !pdfHasTargetProse(prose, targetLanguage)) {
+      const mathIssues = formulaDocumentIssues(formulaDocument);
+      return { blockId: block.id, translatedText: block.text, visualProcessed: false,
+        visualFallbackMessage: [...proseIssues, `公式登记 ${formulaDocument.formulas.length} 项`, ...mathIssues]
+          .join('；').slice(0, 1800) };
+    }
+    const issues = [...formulaDocumentIssues(formulaDocument), ...proseIssues,...pdfFormulaProseIssues(formulaDocument,targetLanguage),...(block.containsFormula?pdfMathFontIssues(block.sourceFontHints,formulaDocument):[])];
+    issues.push(...(result.uncertainSpans ?? []).filter(issue => !issue.startsWith('公式 LaTeX 未通过自动校验：'))
+      .map(issue => `模型报告局部内容不确定：${issue}`));
+    // A correctly bound number remains known even when its mathematical body
+    // is a review placeholder. Do not misreport a symbol issue as a missing tag.
+    const reviewedNumbers = formulaDocumentParts(formulaDocument).flatMap((part) => 'formula' in part &&
+      part.formula.review && part.formula.equationNumber ? [`\\tag{${part.formula.equationNumber}}`] : []);
+    issues.push(...pdfEquationCoverageIssues(block.equationNumbers, formulaDocumentText(formulaDocument) + reviewedNumbers.join('')));
+    if (block.containsFormula && !formulaDocument.formulas.length) issues.push('模型未登记本段公式');
+    return { blockId: block.id, translatedText: formulaDocumentText(formulaDocument), formulaDocument: compactFormulaDocument(formulaDocument),
+      visualProcessed: issues.length === 0,
+      ...(issues.length ? { formulaReviewMessage: issues.join('；').slice(0, 1800) } : {}) };
+  }
+  const proseIssues = pdfTranslationProseIssues(block.text, translatedText ?? '', targetLanguage, result.recognizedText);
+  const modelUncertainty = (result.uncertainSpans ?? []).filter(issue => !issue.startsWith('公式 LaTeX 未通过自动校验：'));
+  if (translatedText && !proseIssues.length && pdfBackgroundVisualResultIsStructurallySafe(block, result)) {
+    const issues = [...pdfEquationCoverageIssues(block.equationNumbers, translatedText),...pdfCitationIssues(result.recognizedText??'',translatedText),
+      ...modelUncertainty.map(issue => `模型报告局部内容不确定：${issue}`)];
+    return { blockId: block.id, translatedText, visualProcessed: !issues.length,
+      ...(issues.length ? { formulaReviewMessage: issues.join('；') } : {}) };
+  }
+  const structuralIssues = pdfBackgroundVisualResultIsStructurallySafe(block, result) ? []
+    : [pdfBackgroundVisualFallbackMessage(block, result)];
+  const reason = [...new Set([...proseIssues, ...structuralIssues,
+    ...modelUncertainty.map(issue => `模型报告局部内容不确定：${issue}`)])].join('；');
+  const prose = block.containsFormula && translatedText
+    ? extractFormulaReviewProse(translatedText, targetLanguage)
+    : undefined;
+  if (prose && prose === translatedText && prose !== block.text.trim()) {
+    return { blockId: block.id, translatedText: prose, visualProcessed: false,
+      formulaReviewMessage: reason };
+  }
+  // Never erase readable translated prose merely because math could not be
+  // isolated. Keep the exact candidate as an explicitly unverified draft.
+  const sourceEcho = translatedText?.replace(/\s+/gu, '') === block.text.replace(/\s+/gu, '');
+  if (translatedText && !sourceEcho && (pdfHasTargetProse(translatedText, targetLanguage) ||
+      hasFormulaTranslationProse(translatedText, targetLanguage))) {
+    return { blockId: block.id, translatedText, visualProcessed: false,
+      formulaReviewMessage: `${structuralIssues.length ? '数学内容无法安全分离，请对照原文核对。' : ''}${reason}`,
+      formulaReviewDraft: true };
+  }
+  const proseReason = !translatedText || proseIssues.length ? '' : sourceEcho
+    ? '模型返回内容与原文相同，未取得新的正文译文。'
+    : !hasFormulaTranslationProse(translatedText, targetLanguage)
+      ? '模型结果中未检测到足够的目标语言正文。' : '';
+  return { blockId: block.id, translatedText: block.text, visualProcessed: false,
+    visualFallbackMessage: `${proseReason}${reason}` };
 }
 
 export type PdfBackgroundDocumentMessage =
@@ -138,6 +267,7 @@ export type PdfBackgroundDocumentMessage =
       payload: {
         jobId: string;
         action: 'pause' | 'resume' | 'stop' | 'dispose';
+        requestLimit?: number;
       };
     }
   | {
@@ -193,8 +323,33 @@ function validBackgroundTranslationBlock(value: unknown): boolean {
     typeof block.containsFormula === 'boolean' &&
     typeof block.preserveInTextMode === 'boolean' &&
     ['document', 'formula', 'figure', 'table'].includes(String(block.visualPurpose)) &&
-    Array.isArray(block.sourceRegions),
+    Array.isArray(block.sourceRegions) && validVisualPlan(block),
   );
+}
+
+function validVisualPlan(block: Record<string, unknown>): boolean {
+  const validNumbers = (value: unknown) => value === undefined || (Array.isArray(value) && value.length <= 64 &&
+    value.every((number) => typeof number === 'string' && /^\d{1,4}[a-z]?$/iu.test(number)));
+  if (!validNumbers(block.equationNumbers) || !validSourceEquations(block.sourceEquations)||!validPdfMathFontHints(block.sourceFontHints)) return false;
+  if (block.visualUnits === undefined) return true;
+  if (!Array.isArray(block.visualUnits) || !block.visualUnits.length || block.visualUnits.length > 32) return false;
+  const units = block.visualUnits.map(record);
+  const owners = (block.sourceRegions as unknown[]).map(record);
+  if (!units.every((unit) => unit && nonEmptyString(unit.text, 12_000) && validNumbers(unit.equationNumbers) && validSourceEquations(unit.sourceEquations) &&validPdfMathFontHints(unit.sourceFontHints)&&
+    Array.isArray(unit.sourceRegions) && unit.sourceRegions.length > 0 && unit.sourceRegions.length <= 32 &&
+    unit.sourceRegions.every((value) => {
+      const region = record(value), a = record(region?.sourceAnchor);
+      if (!a || !['leftRatio', 'topRatio', 'widthRatio', 'heightRatio'].every((key) =>
+        typeof a[key] === 'number' && Number.isFinite(a[key])) || Number(a.widthRatio) <= 0 || Number(a.heightRatio) <= 0) return false;
+      return owners.some((owner) => {
+        const b = record(owner?.sourceAnchor);
+        return b && owner?.pageNumber === region?.pageNumber && Number(a.leftRatio) >= Number(b.leftRatio) - .001 &&
+          Number(a.topRatio) >= Number(b.topRatio) - .001 &&
+          Number(a.leftRatio) + Number(a.widthRatio) <= Number(b.leftRatio) + Number(b.widthRatio) + .001 &&
+          Number(a.topRatio) + Number(a.heightRatio) <= Number(b.topRatio) + Number(b.heightRatio) + .001;
+      });
+    }))) return false;
+  return units.map((unit) => unit!.text).join('').replace(/\s+/gu, '') === String(block.text).replace(/\s+/gu, '');
 }
 
 export function isPdfBackgroundProxyMessage(
@@ -242,7 +397,8 @@ export function isPdfBackgroundDocumentMessage(
   if (!payload || !nonEmptyString(payload.jobId, 256)) return false;
   if (message.type === 'GET_PDF_BACKGROUND_DOCUMENT_TRANSLATION') return true;
   if (message.type === 'CONTROL_PDF_BACKGROUND_DOCUMENT_TRANSLATION') {
-    return ['pause', 'resume', 'stop', 'dispose'].includes(String(payload.action));
+    return ['pause', 'resume', 'stop', 'dispose'].includes(String(payload.action)) &&
+      (payload.requestLimit === undefined || validPdfRequestLimit(payload.requestLimit));
   }
   return message.type === 'START_PDF_BACKGROUND_DOCUMENT_TRANSLATION' && Boolean(
     nonEmptyString(payload.documentSessionId, 256) &&
@@ -250,6 +406,8 @@ export function isPdfBackgroundDocumentMessage(
     (payload.mode === 'text' || nonEmptyString(payload.pdfResourceUrl, 8_192)) &&
     Array.isArray(payload.blocks) && payload.blocks.length > 0 &&
     payload.blocks.every(validBackgroundTranslationBlock) &&
-    record(payload.settings),
+    record(payload.settings) &&
+    (record(payload.settings)!.requestLimit === undefined || validPdfRequestLimit(record(payload.settings)!.requestLimit)) &&
+    (record(payload.settings)!.requestUsage === undefined || validPdfRequestUsage(record(payload.settings)!.requestUsage)),
   );
 }

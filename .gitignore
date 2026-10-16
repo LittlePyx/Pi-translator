@@ -1,5 +1,6 @@
 node_modules/
 .output/
+output/
 .wxt/
 coverage/
 test-results/
@@ -10,3 +11,4 @@ playwright-report/
 !.env.example
 web-ext.config.ts
 *.log
+public/build-info.json

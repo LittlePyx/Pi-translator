@@ -199,12 +199,12 @@ describe('LaTeX result display', () => {
     const rendered = renderLatexMathMl(parts.tex, formula.displayMode) ?? '';
     expect(rendered).toContain('<munder>');
     expect(rendered).toMatch(
-      /<munder>[\s\S]*?arg[^<]*min[\s\S]*?mathvariant="double-struck">P<\/mi>[\s\S]*?<\/munder>/u,
+      /<munder>[\s\S]*?arg[^<]*min[\s\S]*?mathvariant="double-struck">ℙ<\/mi>[\s\S]*?<\/munder>/u,
     );
     expect(rendered).toContain('mathvariant="double-struck"');
-    expect(rendered).toContain('>P</mi>');
-    expect(rendered).toContain('>Q</mi>');
-    expect(rendered).toContain('>E</mi>');
+    expect(rendered).toContain('>ℙ</mi>');
+    expect(rendered).toContain('>ℚ</mi>');
+    expect(rendered).toContain('>𝔼</mi>');
     expect(source).toContain(String.raw`\mathop{\rm argmin}`);
   });
 
@@ -301,8 +301,8 @@ describe('LaTeX result display', () => {
     const rendered = renderLatexMathMl(source, true) ?? '';
     expect(rendered).toContain('<math');
     expect(rendered).toContain('<munder>');
-    expect(rendered).toContain('mathvariant="double-struck">P</mi>');
-    expect(rendered).toContain('mathvariant="double-struck">Q</mi>');
+    expect(rendered).toContain('mathvariant="double-struck">ℙ</mi>');
+    expect(rendered).toContain('mathvariant="double-struck">ℚ</mi>');
     expect(rendered).toContain('<mtext>(12)</mtext>');
     expect(rendered).toContain('<mtext>(13)</mtext>');
   });

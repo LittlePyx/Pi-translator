@@ -4,6 +4,12 @@ import {
   type RetainedTranslationStorageSummary,
 } from '../translation/retained-storage-summary';
 import type { TranslationContentMode, TranslationStyle } from '../translation/types';
+import { compactFormulaDocument, isFormulaDocument, type FormulaDocument } from '../translation/formula-document';
+import { validPdfRequestLimit } from './request-budget';
+import {fixedDocumentKey,readFixedDocumentRecords,retainDocumentSessions} from '../translation/fixed-document-storage';
+import {withDocumentStorageLock} from '../translation/document-storage-lock';
+import {paragraphValue,withParagraphHistory,validParagraphRevision,MAX_PDF_PARAGRAPH_REVISIONS,type PdfParagraphRevision} from './paragraph-history';
+import {isPdfPaperRole,type PdfPaperRole} from './paper-metadata';
 
 export const PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY =
   'pdfDocumentTranslationSessionsV1';
@@ -32,24 +38,75 @@ export interface PdfDocumentTranslationSessionDescriptor {
 }
 
 export interface PdfDocumentTranslationSessionBlock {
+  manualCorrection?:true;
+  retranslation?:true;
+  revisions?:PdfParagraphRevision[];
+  pageNumber?:number;
+  headingLevel?:1|2|3;
+  paperRole?:PdfPaperRole;
+  reviewConfirmation?: string;
+  formulaDocument?: FormulaDocument;
   signature: string;
   translatedText: string;
+  formulaReviewMessage?: string;
+  formulaReviewDraft?: true;
+  visualFallbackMessage?: string;
+}
+
+function compactBlock(block: PdfDocumentTranslationSessionBlock): PdfDocumentTranslationSessionBlock {
+  return { ...block, translatedText: block.formulaDocument?.translationTemplate ?? block.translatedText.trim(),
+    ...(block.revisions?{revisions:block.revisions.map(revision=>({...revision,...paragraphValue(revision)}))}:{}),
+    ...(block.formulaDocument ? { formulaDocument: compactFormulaDocument(block.formulaDocument) } : {}) };
+}
+
+export interface PdfDocumentTranslationPlan {
+  mode: 'all' | 'current' | 'custom';
+  pages: number[];
+  skipReferences: boolean;
+  skipAppendix: boolean;
+  multimodal: boolean;
+  requestLimit: number;
+}
+
+function validPlan(value: unknown): value is PdfDocumentTranslationPlan {
+  if (!value || typeof value !== 'object') return false;
+  const plan = value as Record<string, unknown>;
+  return Object.keys(plan).every(key => ['mode', 'pages', 'skipReferences', 'skipAppendix', 'multimodal', 'requestLimit'].includes(key)) &&
+    ['all', 'current', 'custom'].includes(String(plan.mode)) && Array.isArray(plan.pages) && plan.pages.length <= MAX_DOCUMENT_SIGNATURES &&
+    plan.pages.every(page => Number.isSafeInteger(page) && page >= 1 && page <= 100_000) && new Set(plan.pages).size === plan.pages.length &&
+    (plan.mode === 'all' ? plan.pages.length === 0 : plan.mode === 'current' ? plan.pages.length === 1 : plan.pages.length > 0) &&
+    ['skipReferences', 'skipAppendix', 'multimodal'].every(key => typeof plan[key] === 'boolean') && validPdfRequestLimit(plan.requestLimit);
+}
+
+function clonePlan(plan: PdfDocumentTranslationPlan): PdfDocumentTranslationPlan {
+  return {...plan, pages: [...plan.pages]};
 }
 
 export interface PdfDocumentTranslationSessionSnapshot
   extends PdfDocumentTranslationSessionDescriptor {
   documentSignatures: string[];
+  scopeSignatures?: string[];
+  preservedSignatures?: string[];
   blocks: PdfDocumentTranslationSessionBlock[];
+  /** Previous segmentation results, kept for inspection rather than presented as current translations. */
+  archivedBlocks?: PdfDocumentTranslationSessionBlock[];
   activity: PdfDocumentTranslationSessionActivity;
   updatedAt: number;
+  plan?: PdfDocumentTranslationPlan;
+  sourceFingerprint?: string;
 }
 
 export interface PdfDocumentTranslationSessionUpdate {
   descriptor: PdfDocumentTranslationSessionDescriptor;
   documentSignatures: string[];
+  scopeSignatures?: string[];
+  preservedSignatures?: string[];
   blocks?: PdfDocumentTranslationSessionBlock[];
+  archivedBlocks?: PdfDocumentTranslationSessionBlock[];
   replaceBlocks?: boolean;
   activity: PdfDocumentTranslationSessionActivity;
+  plan?: PdfDocumentTranslationPlan;
+  sourceFingerprint?: string;
 }
 
 interface StoredPdfDocumentTranslationSession
@@ -60,7 +117,7 @@ interface StoredPdfDocumentTranslationSession
 let sessionWriteTail: Promise<void> = Promise.resolve();
 
 function serializeSessionOperation<T>(operation: () => Promise<T>): Promise<T> {
-  const next = sessionWriteTail.catch(() => undefined).then(operation);
+  const next = sessionWriteTail.catch(() => undefined).then(()=>withDocumentStorageLock(operation));
   sessionWriteTail = next.then(
     () => undefined,
     () => undefined,
@@ -159,7 +216,23 @@ export function isPdfDocumentTranslationSessionBlock(
   if (!value || typeof value !== 'object') return false;
   const block = value as Record<string, unknown>;
   return Boolean(
-    Object.keys(block).every((key) => ['signature', 'translatedText'].includes(key)) &&
+    Object.keys(block).every((key) => [
+      'signature', 'translatedText', 'formulaReviewMessage', 'visualFallbackMessage', 'formulaReviewDraft', 'formulaDocument', 'reviewConfirmation','manualCorrection','retranslation','revisions','pageNumber','headingLevel','paperRole',
+    ].includes(key)) &&
+    (block.manualCorrection===undefined||block.manualCorrection===true)&&
+    (block.retranslation===undefined||block.retranslation===true)&&
+    (block.pageNumber===undefined||Number.isSafeInteger(block.pageNumber)&&Number(block.pageNumber)>=1&&Number(block.pageNumber)<=100_000)&&
+    (block.headingLevel===undefined||[1,2,3].includes(Number(block.headingLevel)))&&
+    (block.paperRole===undefined||isPdfPaperRole(block.paperRole))&&
+    (block.revisions===undefined||Array.isArray(block.revisions)&&block.revisions.length<=MAX_PDF_PARAGRAPH_REVISIONS&&block.revisions.every(validParagraphRevision)&&new Set(block.revisions.map(item=>item.id)).size===block.revisions.length)&&
+    (block.formulaDocument === undefined || isFormulaDocument(block.formulaDocument)) &&
+    (block.reviewConfirmation === undefined || (typeof block.reviewConfirmation === 'string' && /^review-[a-f0-9]{1,8}$/u.test(block.reviewConfirmation))) &&
+    (block.formulaReviewDraft === undefined ||
+      (block.formulaReviewDraft === true && typeof block.formulaReviewMessage === 'string')) &&
+    ['formulaReviewMessage', 'visualFallbackMessage'].every((key) => (
+      block[key] === undefined || (typeof block[key] === 'string' &&
+        (block[key] as string).trim().length > 0 && (block[key] as string).length <= 2_000)
+    )) &&
     validBlockSignature(block.signature) &&
     typeof block.translatedText === 'string' &&
     block.translatedText.trim().length > 0 &&
@@ -178,6 +251,62 @@ function descriptorMatches(
     session.contentMode === descriptor.contentMode;
 }
 
+export function pdfTranslationSourceCompatible(
+  saved: PdfDocumentTranslationSessionSnapshot,
+  documentSignatures: readonly string[],
+  sourceFingerprint: string | undefined,
+): boolean {
+  if (saved.sourceFingerprint) return saved.sourceFingerprint === sourceFingerprint;
+  return JSON.stringify(saved.documentSignatures) === JSON.stringify(documentSignatures);
+}
+
+export function reusablePdfTranslationBlocks(
+  saved: PdfDocumentTranslationSessionSnapshot | undefined,
+  documentSignatures: readonly string[],
+  sourceFingerprint: string | undefined,
+  options: {allowUpdatedDocument?: boolean} = {},
+): PdfDocumentTranslationSessionBlock[] {
+  if (!saved) return [];
+  const sameSource = pdfTranslationSourceCompatible(saved, documentSignatures, sourceFingerprint);
+  if (!sameSource && !options.allowUpdatedDocument) return [];
+  const current = new Set(documentSignatures);
+  // Updated documents may reuse unchanged active paragraphs at the same identity;
+  // archived results require the original file fingerprint/structure gate.
+  return [...saved.blocks, ...(sameSource ? saved.archivedBlocks ?? [] : [])].filter(block => current.has(block.signature));
+}
+
+export function archivedPdfTranslationBlocks(
+  saved: PdfDocumentTranslationSessionSnapshot | undefined,
+  documentSignatures: readonly string[],
+  sourceFingerprint: string | undefined,
+): PdfDocumentTranslationSessionBlock[] {
+  if (!saved?.sourceFingerprint || saved.sourceFingerprint !== sourceFingerprint) return [];
+  const current = new Set(documentSignatures);
+  const archived = new Map((saved.archivedBlocks ?? []).map(block => [block.signature, block]));
+  saved.blocks.forEach(block => archived.set(block.signature, block));
+  return [...archived.values()].filter(block => !current.has(block.signature)).map(compactBlock);
+}
+
+function preservedArchive(previous: StoredPdfDocumentTranslationSession | undefined, update: PdfDocumentTranslationSessionUpdate): PdfDocumentTranslationSessionBlock[] {
+  const blocks = new Map(archivedPdfTranslationBlocks(previous, update.documentSignatures, update.sourceFingerprint).map(block => [block.signature, block]));
+  update.archivedBlocks?.forEach(block => blocks.set(block.signature, compactBlock(block)));
+  return [...blocks.values()];
+}
+
+function validArchiveUpdate(update: PdfDocumentTranslationSessionUpdate): boolean {
+  return update.archivedBlocks === undefined || (Array.isArray(update.archivedBlocks) &&
+    update.archivedBlocks.length <= MAX_DOCUMENT_SIGNATURES &&
+    (!update.archivedBlocks.length || Boolean(update.sourceFingerprint)) &&
+    update.archivedBlocks.every(isPdfDocumentTranslationSessionBlock) &&
+    new Set(update.archivedBlocks.map(block => block.signature)).size === update.archivedBlocks.length &&
+    update.archivedBlocks.every(block => !update.documentSignatures.includes(block.signature)));
+}
+
+function validProgressSignatures(value: {documentSignatures: string[]; scopeSignatures?: unknown; preservedSignatures?: unknown}): boolean {
+  return [value.scopeSignatures, value.preservedSignatures].every(signatures => signatures === undefined ||
+    (uniqueSignatures(signatures) && signatures.every(signature => value.documentSignatures.includes(signature))));
+}
+
 function validStoredSession(value: unknown): value is StoredPdfDocumentTranslationSession {
   if (!value || typeof value !== 'object') return false;
   const session = value as Record<string, unknown>;
@@ -191,6 +320,7 @@ function validStoredSession(value: unknown): value is StoredPdfDocumentTranslati
   return Boolean(
     isPdfDocumentTranslationSessionDescriptor(descriptor) &&
     uniqueSignatures(session.documentSignatures) &&
+    validProgressSignatures(session as unknown as PdfDocumentTranslationSessionSnapshot) &&
     Array.isArray(session.blocks) &&
     session.blocks.length <= MAX_DOCUMENT_SIGNATURES &&
     session.blocks.every(isPdfDocumentTranslationSessionBlock) &&
@@ -199,7 +329,17 @@ function validStoredSession(value: unknown): value is StoredPdfDocumentTranslati
         (block as PdfDocumentTranslationSessionBlock).signature,
       )
     )) &&
+    new Set(session.blocks.map(block => (block as PdfDocumentTranslationSessionBlock).signature)).size === session.blocks.length &&
+    (session.archivedBlocks === undefined || (
+      typeof session.sourceFingerprint === 'string' &&
+      Array.isArray(session.archivedBlocks) && session.archivedBlocks.length <= MAX_DOCUMENT_SIGNATURES &&
+      session.archivedBlocks.every(isPdfDocumentTranslationSessionBlock) &&
+      new Set(session.archivedBlocks.map(block => block.signature)).size === session.archivedBlocks.length &&
+      session.archivedBlocks.every(block => !(session.documentSignatures as string[]).includes(block.signature))
+    )) &&
     validActivity(session.activity) &&
+    (session.sourceFingerprint === undefined || (typeof session.sourceFingerprint === 'string' && /^[a-f0-9]{64}$/u.test(session.sourceFingerprint))) &&
+    (session.plan === undefined || validPlan(session.plan)) &&
     typeof session.updatedAt === 'number' &&
     Number.isFinite(session.updatedAt) &&
     validBehaviorKey(session.behaviorKey)
@@ -211,6 +351,12 @@ function storedSessions(value: unknown): StoredPdfDocumentTranslationSession[] {
   return value.filter(validStoredSession);
 }
 
+export function sanitizeRetainedPdfRecord(value:unknown):StoredPdfDocumentTranslationSession|undefined{
+  if(!validStoredSession(value)||!Object.keys(value).every(key=>['documentKey','targetLanguage','sourceLanguage','style','contentMode','documentSignatures','scopeSignatures','preservedSignatures','blocks','archivedBlocks','activity','updatedAt','plan','behaviorKey','sourceFingerprint'].includes(key)))return undefined;
+  return {...value,documentSignatures:[...value.documentSignatures],...(value.scopeSignatures?{scopeSignatures:[...value.scopeSignatures]}:{}),...(value.preservedSignatures?{preservedSignatures:[...value.preservedSignatures]}:{}),blocks:value.blocks.map(compactBlock),...(value.archivedBlocks?{archivedBlocks:value.archivedBlocks.map(compactBlock)}:{}),...(value.plan?{plan:clonePlan(value.plan)}:{})};
+}
+export async function retainedPdfRecordsForBackup():Promise<StoredPdfDocumentTranslationSession[]>{return (await readRetained()).flatMap(value=>{const record=sanitizeRetainedPdfRecord(value);return record?[record]:[]})}
+
 function cloneSession(
   session: StoredPdfDocumentTranslationSession,
 ): PdfDocumentTranslationSessionSnapshot {
@@ -218,7 +364,11 @@ function cloneSession(
   return {
     ...snapshot,
     documentSignatures: [...snapshot.documentSignatures],
+    ...(snapshot.scopeSignatures ? {scopeSignatures:[...snapshot.scopeSignatures]} : {}),
+    ...(snapshot.preservedSignatures ? {preservedSignatures:[...snapshot.preservedSignatures]} : {}),
     blocks: snapshot.blocks.map((block) => ({ ...block })),
+    ...(snapshot.archivedBlocks ? {archivedBlocks: snapshot.archivedBlocks.map(compactBlock)} : {}),
+    ...(snapshot.plan ? {plan: clonePlan(snapshot.plan)} : {}),
   };
 }
 
@@ -238,8 +388,8 @@ function prunedSessions(
   const retained: StoredPdfDocumentTranslationSession[] = [];
   let retainedCharacters = 0;
   for (const session of ordered) {
-    const characters = session.blocks.reduce(
-      (total, block) => total + block.translatedText.length,
+    const characters = [...session.blocks, ...(session.archivedBlocks ?? [])].reduce(
+      (total, block) => total + block.translatedText.length + (block.formulaDocument ? JSON.stringify(block.formulaDocument).length : 0)+(block.revisions?JSON.stringify(block.revisions).length:0),
       0,
     );
     if (
@@ -252,6 +402,19 @@ function prunedSessions(
   return retained;
 }
 
+/** Only restore local task choices here. Translation reuse still requires the
+ * active behavior key, and visual sending still requires the Start action. */
+export function getPdfDocumentTranslationPlan(
+  descriptor: PdfDocumentTranslationSessionDescriptor,
+): Promise<PdfDocumentTranslationPlan | undefined> {
+  return serializeSessionOperation(async () => {
+    const [session, retained] = await Promise.all([readAll(), readRetained()]);
+    const latest = [...session, ...retained].filter(candidate => descriptorMatches(candidate, descriptor) && candidate.plan)
+      .sort((a, b) => b.updatedAt - a.updatedAt)[0];
+    return latest?.plan ? clonePlan(latest.plan) : undefined;
+  });
+}
+
 export function getPdfDocumentTranslationSession(
   descriptor: PdfDocumentTranslationSessionDescriptor,
   behaviorKey: string,
@@ -261,14 +424,6 @@ export function getPdfDocumentTranslationSession(
     const session = sessions.find((candidate) => descriptorMatches(candidate, descriptor));
     if (!session) return undefined;
     if (session.behaviorKey === behaviorKey) return cloneSession(session);
-    const retained = sessions.filter((candidate) => candidate !== session);
-    if (retained.length) {
-      await browser.storage.session.set({
-        [PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY]: retained,
-      });
-    } else {
-      await browser.storage.session.remove(PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY);
-    }
     return undefined;
   });
 }
@@ -279,9 +434,11 @@ export function savePdfDocumentTranslationSession(
 ): Promise<PdfDocumentTranslationSessionSnapshot> {
   if (
     !isPdfDocumentTranslationSessionDescriptor(update.descriptor) ||
-    !uniqueSignatures(update.documentSignatures) ||
-    !validActivity(update.activity) ||
+    !uniqueSignatures(update.documentSignatures) || !validProgressSignatures(update) ||
+    !validActivity(update.activity) || !validArchiveUpdate(update) ||
+    (update.sourceFingerprint !== undefined && !/^[a-f0-9]{64}$/u.test(update.sourceFingerprint)) ||
     !validBehaviorKey(behaviorKey) ||
+    (update.plan !== undefined && !validPlan(update.plan)) ||
     (update.replaceBlocks !== undefined && typeof update.replaceBlocks !== 'boolean') ||
     (update.blocks !== undefined && (
       !Array.isArray(update.blocks) ||
@@ -296,37 +453,36 @@ export function savePdfDocumentTranslationSession(
 
   return serializeSessionOperation(async () => {
     const sessions = await readAll();
-    const previous = sessions.find((candidate) => (
-      descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
-    ));
-    let blocks = update.replaceBlocks
-      ? []
-      : previous?.blocks
-        .filter((block) => documentSet.has(block.signature))
-        .map((block) => ({ ...block })) ?? [];
+    const previousRecord = sessions.find(candidate => descriptorMatches(candidate, update.descriptor));
+    const previous = previousRecord?.behaviorKey === behaviorKey ? previousRecord : undefined;
+    const archivedBlocks = preservedArchive(previousRecord, update);
+    if (archivedBlocks.length > MAX_DOCUMENT_SIGNATURES) throw new Error('旧分段译文超过保存上限，请先备份当前文档。原记录尚未改动。');
+    let blocks = update.replaceBlocks ? [] : reusablePdfTranslationBlocks(previous, update.documentSignatures, update.sourceFingerprint, {allowUpdatedDocument:true}).map(compactBlock);
     for (const block of update.blocks ?? []) {
       blocks = [
-        { ...block, translatedText: block.translatedText.trim() },
+        compactBlock(withParagraphHistory(previousRecord?.blocks.find(old=>old.signature===block.signature),block,block.manualCorrection?'correction':'translation')),
         ...blocks.filter((candidate) => candidate.signature !== block.signature),
       ];
     }
     const next: StoredPdfDocumentTranslationSession = {
       ...update.descriptor,
       documentSignatures: [...update.documentSignatures],
+      ...((update.scopeSignatures ?? previous?.scopeSignatures) ? {scopeSignatures: [...(update.scopeSignatures ?? previous!.scopeSignatures!)].filter(signature => documentSet.has(signature))} : {}),
+      ...((update.preservedSignatures ?? previous?.preservedSignatures) ? {preservedSignatures: [...(update.preservedSignatures ?? previous!.preservedSignatures!)].filter(signature => documentSet.has(signature))} : {}),
       blocks: blocks.slice(0, MAX_DOCUMENT_SIGNATURES),
+      ...(archivedBlocks.length ? {archivedBlocks} : {}),
       activity: update.activity,
+      ...((update.plan ?? previous?.plan) ? {plan: clonePlan((update.plan ?? previous?.plan)!)} : {}),
       behaviorKey,
+      ...((update.sourceFingerprint ?? previous?.sourceFingerprint) ? {sourceFingerprint: (update.sourceFingerprint ?? previous?.sourceFingerprint)!} : {}),
       updatedAt: Date.now(),
     };
     const retained = prunedSessions([
       next,
       ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
     ]);
-    if (retained.includes(next)) {
-      await browser.storage.session.set({
-        [PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY]: retained,
-      });
-    }
+    if (!retained.includes(next)) throw new Error('会话保存空间不足，原记录尚未改动。请先导出备份。');
+    await browser.storage.session.set({[PDF_DOCUMENT_TRANSLATION_SESSIONS_STORAGE_KEY]: retained});
     return cloneSession(next);
   });
 }
@@ -356,7 +512,9 @@ async function readRetained(): Promise<StoredPdfDocumentTranslationSession[]> {
   const stored = await browser.storage.local.get(
     PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,
   );
-  return storedSessions(stored[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]);
+  const fixed = storedSessions(Object.values(await readFixedDocumentRecords('pdf')));
+  const fixedIds = new Set(fixed.map(session=>fixedDocumentKey('pdf',session)));
+  return [...fixed,...storedSessions(stored[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]).filter(session=>!fixedIds.has(fixedDocumentKey('pdf',session)))];
 }
 
 /**
@@ -385,7 +543,12 @@ export function getRetainedPdfDocumentTranslationStorageSummary(): Promise<
     PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,
     MAX_RETAINED_SESSIONS,
     MAX_RETAINED_TRANSLATION_CHARACTERS,
+    Object.values(await readFixedDocumentRecords('pdf')).filter(validStoredSession).length,
   ));
+}
+
+export function listRetainedPdfDocumentTranslations(): Promise<PdfDocumentTranslationSessionSnapshot[]> {
+  return serializeSessionOperation(async () => (await readRetained()).map(cloneSession));
 }
 
 export function saveRetainedPdfDocumentTranslationSession(
@@ -394,9 +557,11 @@ export function saveRetainedPdfDocumentTranslationSession(
 ): Promise<PdfDocumentTranslationSessionSnapshot> {
   if (
     !isPdfDocumentTranslationSessionDescriptor(update.descriptor) ||
-    !uniqueSignatures(update.documentSignatures) ||
-    !validActivity(update.activity) ||
+    !uniqueSignatures(update.documentSignatures) || !validProgressSignatures(update) ||
+    !validActivity(update.activity) || !validArchiveUpdate(update) ||
+    (update.sourceFingerprint !== undefined && !/^[a-f0-9]{64}$/u.test(update.sourceFingerprint)) ||
     !validBehaviorKey(behaviorKey) ||
+    (update.plan !== undefined && !validPlan(update.plan)) ||
     (update.replaceBlocks !== undefined && typeof update.replaceBlocks !== 'boolean') ||
     (update.blocks !== undefined && (
       !Array.isArray(update.blocks) ||
@@ -411,37 +576,41 @@ export function saveRetainedPdfDocumentTranslationSession(
 
   return serializeSessionOperation(async () => {
     const sessions = await readRetained();
-    const previous = sessions.find((candidate) => (
-      descriptorMatches(candidate, update.descriptor) && candidate.behaviorKey === behaviorKey
-    ));
-    let blocks = update.replaceBlocks
-      ? []
-      : previous?.blocks
-        .filter((block) => documentSet.has(block.signature))
-        .map((block) => ({ ...block })) ?? [];
+    const previousRecord = sessions.find(candidate => descriptorMatches(candidate, update.descriptor));
+    const previous = previousRecord?.behaviorKey === behaviorKey ? previousRecord : undefined;
+    const archivedBlocks = preservedArchive(previousRecord, update);
+    if (archivedBlocks.length > MAX_DOCUMENT_SIGNATURES) throw new Error('旧分段译文超过保存上限，请先备份当前文档。原记录尚未改动。');
+    let blocks = update.replaceBlocks ? [] : reusablePdfTranslationBlocks(previous, update.documentSignatures, update.sourceFingerprint, {allowUpdatedDocument:true}).map(compactBlock);
     for (const block of update.blocks ?? []) {
       blocks = [
-        { ...block, translatedText: block.translatedText.trim() },
+        compactBlock(withParagraphHistory(previousRecord?.blocks.find(old=>old.signature===block.signature),block,block.manualCorrection?'correction':'translation')),
         ...blocks.filter((candidate) => candidate.signature !== block.signature),
       ];
     }
     const next: StoredPdfDocumentTranslationSession = {
       ...update.descriptor,
       documentSignatures: [...update.documentSignatures],
+      ...((update.scopeSignatures ?? previous?.scopeSignatures) ? {scopeSignatures: [...(update.scopeSignatures ?? previous!.scopeSignatures!)].filter(signature => documentSet.has(signature))} : {}),
+      ...((update.preservedSignatures ?? previous?.preservedSignatures) ? {preservedSignatures: [...(update.preservedSignatures ?? previous!.preservedSignatures!)].filter(signature => documentSet.has(signature))} : {}),
       blocks: blocks.slice(0, MAX_DOCUMENT_SIGNATURES),
+      ...(archivedBlocks.length ? {archivedBlocks} : {}),
       activity: update.activity,
+      ...((update.plan ?? previous?.plan) ? {plan: clonePlan((update.plan ?? previous?.plan)!)} : {}),
       behaviorKey,
+      ...((update.sourceFingerprint ?? previous?.sourceFingerprint) ? {sourceFingerprint: (update.sourceFingerprint ?? previous?.sourceFingerprint)!} : {}),
       updatedAt: Date.now(),
     };
-    const retained = prunedSessions([
+    const fixed = await readFixedDocumentRecords('pdf');
+    const retained = retainDocumentSessions('pdf',[
       next,
       ...sessions.filter((candidate) => !descriptorMatches(candidate, update.descriptor)),
-    ], MAX_RETAINED_SESSIONS, MAX_RETAINED_TRANSLATION_CHARACTERS);
+    ], new Set(Object.keys(fixed)), MAX_RETAINED_SESSIONS, MAX_RETAINED_TRANSLATION_CHARACTERS);
     if (!retained.includes(next)) {
-      throw new Error('This PDF translation is too large to retain locally.');
+      throw new Error('保存空间不足，请先取消固定或备份清理其他文档。当前会话中的译文仍可阅读。');
     }
     await browser.storage.local.set({
-      [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained,
+      [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained.filter(record=>!fixed[fixedDocumentKey('pdf',record)]),
+      ...(fixed[fixedDocumentKey('pdf',next)] ? {[fixedDocumentKey('pdf',next)]:next} : {}),
     });
     return cloneSession(next);
   });
@@ -451,6 +620,8 @@ export function clearRetainedPdfDocumentTranslationSession(
   descriptor?: PdfDocumentTranslationSessionDescriptor,
 ): Promise<void> {
   return serializeSessionOperation(async () => {
+    const fixed = await readFixedDocumentRecords('pdf');
+    for(const [key,value] of Object.entries(fixed))if(!descriptor||(validStoredSession(value)&&descriptorMatches(value,descriptor)))await browser.storage.local.remove(key);
     if (!descriptor) {
       await browser.storage.local.remove(PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY);
       return;
@@ -460,10 +631,23 @@ export function clearRetainedPdfDocumentTranslationSession(
     if (retained.length === sessions.length) return;
     if (retained.length) {
       await browser.storage.local.set({
-        [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained,
+        [PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]: retained.filter(record=>!fixed[fixedDocumentKey('pdf',record)]),
       });
     } else {
       await browser.storage.local.remove(PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY);
     }
+  });
+}
+
+export function setRetainedPdfDocumentPinned(descriptor:PdfDocumentTranslationSessionDescriptor,pinned:boolean):Promise<void>{
+  return serializeSessionOperation(async()=>{
+    const sessions=await readRetained();const session=sessions.find(item=>descriptorMatches(item,descriptor));
+    if(!session)throw new Error('这份译文已被移除，请刷新。');
+    const key=fixedDocumentKey('pdf',session);const fixed=await readFixedDocumentRecords('pdf');
+    session.updatedAt=Date.now();
+    if(pinned)fixed[key]=session;else delete fixed[key];
+    const retained=retainDocumentSessions('pdf',sessions,new Set(Object.keys(fixed)),MAX_RETAINED_SESSIONS,MAX_RETAINED_TRANSLATION_CHARACTERS);
+    await browser.storage.local.set({[PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY]:retained.filter(record=>!fixed[fixedDocumentKey('pdf',record)]),...(pinned?{[key]:session}:{})});
+    if(!pinned)await browser.storage.local.remove(key);
   });
 }

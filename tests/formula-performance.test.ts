@@ -92,14 +92,14 @@ describe('offline academic formula performance regression', () => {
     expect(output.rendered[0]?.equationTag).toBe('8');
 
     const identityHtml = output.rendered[0]?.html ?? '';
-    expect(identityHtml).toContain('mathvariant="double-struck">Q</mi>');
+    expect(identityHtml).toContain('mathvariant="double-struck">ℚ</mi>');
 
     const variationalHtml = output.rendered[1]?.html ?? '';
     expect(variationalHtml).toContain('<munder>');
     expect(variationalHtml).not.toContain('<msub><mo>arg');
-    expect(variationalHtml).toContain('mathvariant="double-struck">P</mi>');
-    expect(variationalHtml).toContain('mathvariant="double-struck">Q</mi>');
-    expect(variationalHtml).toContain('mathvariant="double-struck">E</mi>');
+    expect(variationalHtml).toContain('mathvariant="double-struck">ℙ</mi>');
+    expect(variationalHtml).toContain('mathvariant="double-struck">ℚ</mi>');
+    expect(variationalHtml).toContain('mathvariant="double-struck">𝔼</mi>');
     expect(variationalHtml).toContain('<mtext>(12)</mtext>');
     expect(variationalHtml).toContain('<mtext>(13)</mtext>');
   });

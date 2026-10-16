@@ -4,6 +4,7 @@ import { sanitizeLexicalLookup } from './lexical-lookup';
 
 interface CompatibleApiEnvelope {
   choices?: Array<{
+    finish_reason?: unknown;
     message?: {
       content?: string | null;
     };
@@ -21,6 +22,13 @@ export function parseCompatibleApiEnvelope(value: unknown): string {
     throw new TranslationError('INVALID_RESPONSE', 'The API returned an invalid response.');
   }
   const envelope = value as CompatibleApiEnvelope;
+  const finishReason = envelope.choices?.[0]?.finish_reason;
+  if (typeof finishReason === 'string' && finishReason !== 'stop') {
+    throw new TranslationError(finishReason === 'error' ? 'PROVIDER_ERROR' : 'INVALID_RESPONSE',
+      finishReason === 'length' ? 'The API stopped because the output token limit was reached.'
+        : finishReason === 'content_filter' ? 'The API stopped because the response was blocked by a content filter.'
+          : `The API response ended with an unsupported reason: ${finishReason}.`, false);
+  }
   const content = envelope.choices?.[0]?.message?.content;
   if (typeof content !== 'string' || !content.trim()) {
     throw new TranslationError('EMPTY_RESPONSE', 'The API returned an empty response.', true);

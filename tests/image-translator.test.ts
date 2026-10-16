@@ -40,6 +40,40 @@ function stubCapabilityStorage(): void {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('image region translator', () => {
+  it.each([false,true])('keeps diagram mathematics in original pixels without dropping caption math or unknown expressions, unknown=%s',async(unknown)=>{
+    stubCapabilityStorage();
+    const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({recognizedText:'Figure 1. Output $x=y$.\n\n[Diagram Labels]: Divergence $D(q;p)$',translation:`图 1. 输出 $x=y$。\n图内标签：散度 $${unknown?'z':'D(q;p)'}$`,formulaLatex:['x=y','D(q;p)'],uncertainSpans:[]})}}]}),{status:200,headers:{'Content-Type':'application/json'}}));
+    vi.stubGlobal('fetch',fetchMock);
+    const result=await new OpenAiCompatibleTranslator().translateImageRegion({...input,visualPurpose:'figure'},options,{apiKey:'test-key',apiBaseUrl:'https://api.example.com/v1'},new AbortController().signal);
+    expect(result.translatedText).toContain('$x=y$');
+    if(unknown)expect(result.formulaNeedsReview).toBe(true);
+    else{expect(result.translatedText).not.toContain('D(q;p)');expect(result.formulaNeedsReview).not.toBe(true);expect(result.recognizedText).toContain('$D(q;p)$')}
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it('uses occurrence references for document titles and preserves source case with one request',async()=>{
+    const fetchMock=vi.fn().mockResolvedValue(new Response(JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'N',display:false}],recognizedText:'EQUILIBRIUM IN {{m1}}-PERSON GAMES',translation:'{{m1}} 人博弈中的均衡',uncertainSpans:[]})}}]}),{status:200,headers:{'Content-Type':'application/json'}}));
+    vi.stubGlobal('fetch',fetchMock);
+    const result=await new OpenAiCompatibleTranslator().translateImageRegion({...input,visualPurpose:'document'},options,{apiKey:'test-key',apiBaseUrl:'https://api.example.com/v1'},new AbortController().signal);
+    expect(result.translatedText).toBe('$N$ 人博弈中的均衡');expect(result.formulaDocument?.formulas[0]?.latex).toBe('N');
+    const prompt=JSON.parse(String(fetchMock.mock.calls[0]![1].body)).messages[0].content.find((item:any)=>item.type==='text').text;
+    expect(prompt).toContain('不能嵌套登记');expect(prompt).toContain('禁止保留未引用的子式登记');
+    expect(prompt).toContain('formulaFormat');expect(prompt).toContain('每一次出现都分配独立 id');expect(prompt).toContain('不得额外展开');expect(prompt).not.toContain('可以复用内容编号');expect(fetchMock).toHaveBeenCalledOnce();
+  });
+  it('sends bounded row identities as data and parses a tag-free row reference without another request', async () => {
+    const source = { id: 'eq-p2-x45002-y13368', number: '1', rowHint: 'y=Ax' };
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({ choices: [{ message: { content: JSON.stringify({
+      formulaFormat: 'refs-v1', formulas: [{ id: 'm1', latex: 'y=Ax', display: true, sourceEquationId: source.id }],
+      recognizedText: '{{m1}}', translation: '线性系统如下：{{m1}}', uncertainSpans: [],
+    }) } }] }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const result = await new OpenAiCompatibleTranslator().translateImageRegion({ ...input, visualPurpose: 'formula', sourceEquations: [source] },
+      options, { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' }, new AbortController().signal);
+    expect(result.formulaDocument?.formulas[0]).toMatchObject({ sourceEquationId: source.id, latex: 'y=Ax' });
+    expect(result.formulaDocument?.formulas[0]!.equationNumber).toBeUndefined();
+    const body = JSON.parse(String(fetchMock.mock.calls[0]![1].body));
+    expect(body.messages[0].content.find((item: { type: string }) => item.type === 'text').text).toContain(`sourceEquations=${JSON.stringify([source])}`);
+    expect(fetchMock).toHaveBeenCalledOnce();
+  });
   it('tests image-input capability with a bundled visual challenge', async () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
       choices: [{ message: { content: 'K7M2' } }],
@@ -658,7 +692,7 @@ describe('image region translator', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
-  it('repairs same-count formula drift locally without a second vision request', async () => {
+  it('flags same-count formula drift without overwriting it or making a second vision request', async () => {
     const drifted = JSON.stringify({
       translation: '译文 $R=\\frac{a-b}{c}$',
       recognizedText: 'Source $R=\\frac{a+b}{c}$',
@@ -676,8 +710,9 @@ describe('image region translator', () => {
       { apiKey: 'test-key', apiBaseUrl: 'https://api.example.com/v1' },
       new AbortController().signal,
     )).resolves.toMatchObject({
-      translatedText: '译文 $R=\\frac{a+b}{c}$',
-      formulaLatex: ['R=\\frac{a+b}{c}'],
+      translatedText: '译文 $R=\\frac{a-b}{c}$',
+      formulaLatex: ['R=\\frac{a-b}{c}'],
+      formulaNeedsReview: true,
     });
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });

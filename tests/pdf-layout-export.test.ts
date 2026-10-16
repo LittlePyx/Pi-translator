@@ -2,6 +2,59 @@ import { describe, expect, it } from 'vitest';
 import { buildPdfLayoutTranslationExport } from '../core/translation/pdf-layout-export';
 
 describe('PDF layout translation export', () => {
+  it('prints the paper hierarchy and complete publication details without a disclosure control', () => {
+    const result=buildPdfLayoutTranslationExport([
+      {id:'title',pageNumber:1,translatedText:'演示论文题名',paperRole:'title'},
+      {id:'authors',pageNumber:1,translatedText:'作者 · 演示大学 · author@example.edu',paperRole:'authors'},
+      {id:'publication',pageNumber:1,translatedText:'演示期刊 2024. DOI: 10.1000/example',paperRole:'publication'},
+    ],[]);
+    expect(result.html).toContain('data-paper-role="title"><h1 class="pdf-layout-block-content">演示论文题名</h1>');
+    expect(result.html).toContain('data-paper-role="authors"');
+    expect(result.html).toContain('data-paper-role="publication"');
+    expect(result.html).toContain('DOI: 10.1000/example');
+    expect(result.html).not.toContain('<details');
+  });
+  it('renders explicit source section depths as headings and keeps them out of numbered lists', () => {
+    const result = buildPdfLayoutTranslationExport([
+      {id: 'h1', pageNumber: 3, translatedText: '3. 相关研究', headingLevel: 1},
+      {id: 'h2', pageNumber: 3, translatedText: '3.1. 高斯过程', headingLevel: 2},
+      {id: 'h3', pageNumber: 3, translatedText: '3.1.1. 训练', headingLevel: 3},
+      {id: 'p', pageNumber: 3, translatedText: '普通正文 $f \\sim P$。'},
+      {id: 'next', pageNumber: 3, translatedText: '4. 实验', headingLevel: 1},
+    ], []);
+    expect(result.html).toContain('<h2 class="pdf-layout-block-content">3. 相关研究</h2>');
+    expect(result.html).toContain('<h3 class="pdf-layout-block-content">3.1. 高斯过程</h3>');
+    expect(result.html).toContain('<h4 class="pdf-layout-block-content">3.1.1. 训练</h4>');
+    expect(result.html).not.toContain('class="pdf-layout-list" data-layout-list');
+    expect(result.html).not.toContain('<span>正文</span>');
+    expect(result.blockCount).toBe(5);
+  });
+
+  it('typesets prose continuously and keeps consecutive list items together without task labels', () => {
+    const result = buildPdfLayoutTranslationExport([
+      { id: 'p', pageNumber: 1, translatedText: '下面概括这个模型的三个特点。' },
+      { id: 'a', pageNumber: 1, translatedText: '1. CNP 建模函数 $f \\sim P$ 的条件分布。' },
+      { id: 'b', pageNumber: 1, translatedText: '2. CNP 具有置换不变性。' },
+      { id: 'c', pageNumber: 1, translatedText: '3. CNP 的复杂度为 $O(n+m)$。', role: 'formula' },
+      { id: 'q', pageNumber: 1, translatedText: '之后继续讨论模型的实现方式。' },
+    ], []);
+    expect(result.html).toContain('class="pdf-layout-list" data-layout-list');
+    expect(result.html).not.toContain('<span>正文</span>');
+    expect(result.html).not.toContain('<small>1/5</small>');
+    expect(result.html).not.toContain('border-left:2pt solid');
+    expect(result.html.indexOf('data-layout-block-id="a"')).toBeLessThan(result.html.indexOf('data-layout-block-id="c"'));
+    expect(result.html).toContain('data-layout-block-id="q"');
+    expect(result).toMatchObject({ blockCount: 5, complete: true });
+  });
+
+  it('does not group section numbers, interrupted lists or repeated item numbers', () => {
+    for (const lines of [
+      ['2.1. 模型', '2.2. 训练'], ['1. 第一个条目', '普通段落。', '2. 第二个条目'], ['1. 一个条目', '1. 新的列表'],
+    ]) {
+      const result = buildPdfLayoutTranslationExport(lines.map((translatedText, index) => ({ id: String(index), pageNumber: 1, translatedText })), []);
+      expect(result.html).not.toContain('class="pdf-layout-list" data-layout-list');
+    }
+  });
   it('keeps each trusted source page intact and follows it with a readable translation page', () => {
     const result = buildPdfLayoutTranslationExport([{
       id: 'P2B1',

@@ -9,6 +9,7 @@ export interface LocalDiagnosticReportInput {
   generatedAt: string;
   version: string;
   manifestVersion: number;
+  build?: { buildId: string; builtAt: string; commit?: string };
   apiState: {
     profileCount: number;
     apiKeyConfigured: boolean;
@@ -42,6 +43,11 @@ export function buildLocalDiagnosticReport(input: LocalDiagnosticReportInput): s
     generatedAt,
     version,
     manifestVersion,
+    ...(input.build ? { build: {
+      buildId: input.build.buildId,
+      builtAt: input.build.builtAt,
+      ...(input.build.commit ? { commit: input.build.commit } : {}),
+    } } : {}),
     apiState,
     performanceContext,
     recentErrors,

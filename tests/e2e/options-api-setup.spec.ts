@@ -96,10 +96,12 @@ test.afterAll(async () => {
 });
 
 test('offers a focused Qwen setup without replacing the text API', async () => {
-  await expect(options.getByRole('heading', { name: '文字翻译 API（必需）' })).toBeVisible();
+  await expect(options.getByRole('heading', { name: '翻译接口' })).toBeVisible();
   await expect(options.locator('#vision-setup-status')).toContainText('不影响普通文字翻译');
   await expect(options.locator('#api-preset option[value="qwen"]')).toContainText('图像翻译推荐');
 
+  await expect(options.locator('#setup-qwen')).toBeHidden();
+  await options.locator('#vision-setup-details > summary').click();
   await options.locator('#setup-qwen').click();
 
   await expect(options.locator('#api-preset')).toHaveValue('qwen');
@@ -136,7 +138,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     const textStatus = popup.locator('#text-api-status');
     const visionStatus = popup.locator('#vision-api-status');
 
-    await expect(statusRow).toBeVisible();
+    await expect(statusRow).toBeHidden();
     await expect(textStatus).toContainText('文字翻译');
     await expect(visionStatus).toContainText('图像翻译');
     await expect(visionStatus).toContainText('按需配置');
@@ -167,11 +169,11 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-pdf');
     await expect(popup.locator('#open-sidebar')).toBeHidden();
     await expect(popup.locator('#open-pdf')).toHaveClass(/primary-action/);
-    await expect(popup.locator('#open-settings')).toHaveClass(/utility-action/);
+    await expect(popup.locator('#open-settings')).toHaveClass(/settings-icon/);
     await expect(popup.locator('#page-context')).toContainText('普通网页');
     const actionLayout = await quickActions.evaluate((actions) => {
       const primary = actions.querySelector<HTMLElement>('.primary-action');
-      const utility = actions.querySelector<HTMLElement>('.utility-action');
+      const utility = document.querySelector<HTMLElement>('#open-settings');
       if (!primary || !utility) return undefined;
       const primaryRect = primary.getBoundingClientRect();
       const utilityRect = utility.getBoundingClientRect();
@@ -187,7 +189,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     expect(actionLayout).toBeDefined();
     expect(actionLayout!.actionsScrollWidth).toBeLessThanOrEqual(actionLayout!.actionsWidth + 1);
     expect(actionLayout!.primaryWidth).toBeGreaterThanOrEqual(actionLayout!.actionsWidth - 1);
-    expect(actionLayout!.primaryBottom).toBeLessThanOrEqual(actionLayout!.utilityTop);
+    expect(actionLayout!.utilityTop).toBeLessThan(actionLayout!.primaryBottom);
     expect(actionLayout!.utilityWidth).toBeLessThan(actionLayout!.actionsWidth / 2);
 
     await popup.emulateMedia({ reducedMotion: 'reduce' });
@@ -264,10 +266,11 @@ test('summarizes and clears explicitly retained translations without identifying
   );
 
   await expect(options.locator('#settings-storage')).toBeVisible();
-  await expect(options.locator('#refresh-retained-storage')).toBeFocused();
+  await expect(options.locator('#retained-library-search')).toBeFocused();
   await expect(options.locator('#retained-storage-documents')).toHaveText('2 份');
-  await expect(options.locator('#retained-web-storage-status')).toContainText('1 份');
-  await expect(options.locator('#retained-pdf-storage-status')).toContainText('1 份');
+  await options.locator('#library-storage-tools > summary').click();
+  await expect(options.locator('#retained-web-storage-status')).toContainText('1/6 份最近');
+  await expect(options.locator('#retained-pdf-storage-status')).toContainText('1/6 份最近');
   await expect(options.locator('#retained-storage-bytes')).not.toHaveText('0 B');
   await expect(options.locator('#settings-storage')).not.toContainText('page-web1');
   await expect(options.locator('#settings-storage')).not.toContainText('pdf-file1');
@@ -308,7 +311,7 @@ test('summarizes and clears explicitly retained translations without identifying
   await openExtensionPage(options, `chrome-extension://${extensionId}/options.html#connection`);
 });
 
-test('keeps settings interaction surfaces dark on hover and keyboard focus', async () => {
+test('keeps neutral dark surfaces and distinct primary actions on hover and keyboard focus', async () => {
   await options.emulateMedia({ colorScheme: 'dark' });
   await options.reload();
 
@@ -323,15 +326,35 @@ test('keeps settings interaction surfaces dark on hover and keyboard focus', asy
   };
 
   await expect.poll(() => backgroundAfter('#api-preset', 'hover'))
-    .toBe('rgb(32, 41, 56)');
+    .toBe('rgb(34, 34, 34)');
   await expect.poll(() => backgroundAfter('#refresh-models', 'focus'))
-    .toBe('rgb(32, 41, 56)');
+    .toBe('rgb(237, 237, 237)');
   await expect.poll(() => backgroundAfter(
     '.settings-nav-item[data-settings-target="translation"]',
     'hover',
-  )).toBe('rgb(22, 31, 44)');
+  )).toBe('rgba(0, 0, 0, 0)');
   await expect.poll(() => backgroundAfter('#connection-advanced > summary', 'hover'))
-    .toBe('rgb(23, 31, 44)');
+    .toBe('rgb(44, 44, 44)');
 
   await options.emulateMedia({ colorScheme: 'light' });
+});
+
+test('opens the PDF reader from an empty document library without starting translation', async ({}, testInfo) => {
+  await options.evaluate(async () => {
+    await (globalThis as typeof globalThis & {chrome: TestChromeApi}).chrome.storage.local.set({
+      pdfDocumentTranslationRetainedV1: [], bilingualPageRetainedV1: [],
+    });
+  });
+  await options.reload();
+  await options.locator('[data-settings-target="storage"]').click();
+  await expect(options.locator('#retained-document-library .library-empty')).toContainText('还没有保留的译文');
+  await options.screenshot({path: testInfo.outputPath('first-use-library.png')});
+  const opening = context.waitForEvent('page');
+  await options.getByRole('button', {name: '打开 PDF', exact: true}).click();
+  const reader = await opening;
+  try {
+    await expect(reader).toHaveURL(`chrome-extension://${extensionId}/pdf.html`);
+    await expect(reader.locator('#empty-state')).toBeVisible();
+    await expect(reader.locator('#pdf-document-translation')).toBeHidden();
+  } finally {await reader.close();}
 });

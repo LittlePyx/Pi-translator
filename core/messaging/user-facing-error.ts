@@ -52,6 +52,22 @@ export function translationErrorMessage(
   code: TranslationErrorCode,
   fallback?: string,
 ): string {
+  if(code==='LATEX_VALIDATION_FAILED'&&fallback&&fallback.length<=1500&&/^正文修复未通过语义单元校验（PDF_SENTENCE_[1-9]\d?(?:_(?:HEAD|IF|THEN))?）：/u.test(fallback))return fallback;
+  if (code === 'LATEX_VALIDATION_FAILED' && fallback && (
+    fallback === '正文修复未通过公式对应校验：文字片段缺失或重复。' ||
+    fallback === '正文修复未通过公式对应校验：文字片段新增了数学内容。' ||
+    fallback === '正文修复未通过公式对应校验：模型返回了待核对提示。' ||
+    fallback === '正文修复未通过公式对应校验：公式或脚注离开了所属句子。' ||
+    fallback === '正文修复未通过公式对应校验：出现未绑定的变量。' ||
+    fallback === '正文修复未通过完整性校验：文字片段可能错位或漏译。' ||
+    fallback === '正文修复未通过公式对应校验。'
+  )) return fallback;
+  if (code === 'INVALID_RESPONSE' && fallback?.includes('output token limit was reached')) {
+    return '模型达到输出长度上限，本次结果不完整，未计为可靠译文。已完成的其他段落会保留。';
+  }
+  if (code === 'INVALID_RESPONSE' && fallback?.includes('blocked by a content filter')) {
+    return '接口的内容过滤中断了本次输出，未取得完整译文。已完成的其他段落会保留。';
+  }
   const base = ERROR_MESSAGES[code] ?? fallback ?? ERROR_MESSAGES.UNKNOWN_ERROR;
   if (
     fallback &&

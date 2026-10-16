@@ -1,4 +1,5 @@
-const PDF_READING_STATES_KEY = 'piPdfReadingStatesV1';
+import {withDocumentStorageLock} from '../translation/document-storage-lock';
+export const PDF_READING_STATES_KEY = 'piPdfReadingStatesV1';
 const MAX_PDF_READING_STATES = 30;
 
 export interface PdfReadingState {
@@ -8,6 +9,24 @@ export interface PdfReadingState {
   fitWidth: boolean;
   sidebarExpanded: boolean;
   updatedAt: number;
+  translation?: PdfTranslationReadingAnchor;
+}
+
+export interface PdfTranslationReadingAnchor {
+  mode: 'reading' | 'compare';
+  signature?: string;
+  pageNumber: number;
+  offsetRatio: number;
+}
+
+export function normalizePdfTranslationReadingAnchor(value: unknown): PdfTranslationReadingAnchor | undefined {
+  if (!value || typeof value !== 'object') return undefined;
+  const anchor = value as Partial<PdfTranslationReadingAnchor>;
+  if (!['reading', 'compare'].includes(anchor.mode ?? '') || !Number.isFinite(anchor.pageNumber) ||
+      !Number.isFinite(anchor.offsetRatio)) return undefined;
+  return {mode: anchor.mode!, pageNumber: Math.max(1, Math.round(anchor.pageNumber!)),
+    offsetRatio: Math.max(0, Math.min(1, anchor.offsetRatio!)),
+    ...(typeof anchor.signature === 'string' && /^block-[a-z0-9]+$/u.test(anchor.signature) ? {signature: anchor.signature} : {})};
 }
 
 type PdfReadingStateMap = Record<string, PdfReadingState>;
@@ -23,16 +42,18 @@ export function normalizePdfReadingState(value: unknown): PdfReadingState | unde
     typeof state.zoomLevel !== 'number' ||
     !Number.isFinite(state.zoomLevel)
   ) return undefined;
+  const translation=normalizePdfTranslationReadingAnchor(state.translation);
   return {
     pageNumber: Math.max(1, Math.round(state.pageNumber)),
     pageRatio: Math.min(1, Math.max(0, state.pageRatio)),
-    zoomLevel: Math.min(3, Math.max(0.5, state.zoomLevel)),
+    zoomLevel: Math.min(3, Math.max(state.fitWidth === true ? 0.1 : 0.5, state.zoomLevel)),
     fitWidth: state.fitWidth === true,
     sidebarExpanded: state.sidebarExpanded === true,
     updatedAt:
       typeof state.updatedAt === 'number' && Number.isFinite(state.updatedAt)
         ? state.updatedAt
         : Date.now(),
+    ...(translation ? {translation} : {}),
   };
 }
 
@@ -64,10 +85,12 @@ export async function getPdfReadingState(
   return stateMap(stored[PDF_READING_STATES_KEY])[id];
 }
 
-export async function savePdfReadingState(
+let readingWriteTail: Promise<unknown> = Promise.resolve();
+export function savePdfReadingState(
   identity: string,
   state: PdfReadingState,
 ): Promise<void> {
+  const write = async () => {
   const [id, stored] = await Promise.all([
     pdfReadingStateId(identity),
     browser.storage.local.get(PDF_READING_STATES_KEY),
@@ -80,4 +103,8 @@ export async function savePdfReadingState(
       .slice(0, MAX_PDF_READING_STATES),
   );
   await browser.storage.local.set({ [PDF_READING_STATES_KEY]: retained });
+  };
+  const run = readingWriteTail.catch(() => undefined).then(()=>withDocumentStorageLock(write));
+  readingWriteTail = run;
+  return run;
 }

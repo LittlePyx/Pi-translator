@@ -1,3 +1,4 @@
+import {openTranslationMore} from './support/translation-controls';
 import type { Route } from '@playwright/test';
 import {
   clearBrowserSelection,
@@ -93,11 +94,13 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('第 6 页');
   const contextLayout = await sidePanel.locator('.session-context').evaluate((context) => ({
     height: context.getBoundingClientRect().height,
-    buttonHeight: context.querySelector('button')?.getBoundingClientRect().height,
+    buttonCount: context.querySelectorAll('button').length,
   }));
   expect(contextLayout.height).toBeLessThanOrEqual(51);
-  expect(contextLayout.buttonHeight).toBeGreaterThanOrEqual(32);
-  expect(contextLayout.buttonHeight).toBeLessThanOrEqual(33);
+  expect(contextLayout.buttonCount).toBe(0);
+  await openTranslationMore(sidePanel);
+  await expect(sidePanel.locator('#open-pi-reader')).toBeVisible();
+  await sidePanel.keyboard.press('Escape');
 
   const sendStreamingPartial = async (partialText: string) => messageSender.evaluate(
     async ({ session, partial }) => {
@@ -244,15 +247,19 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#translation-view-switch')).toBeHidden();
   await expect(sidePanel.locator('#translation-state'))
     .toHaveText('850 毫秒');
+  await expect(sidePanel.locator('#correct')).toBeHidden();
+  await openTranslationMore(sidePanel);
   await expect(sidePanel.locator('#correct')).toBeVisible();
   await expect(sidePanel.getByLabel('目标语言')).toBeEnabled();
   await expect(sidePanel.locator('#correction-undo')).toBeHidden();
   await expect(sidePanel.locator('#translation-text .pi-math-inline math')).toBeVisible();
   await expect(sidePanel.locator('#formula-view')).toHaveText('源码');
+  await openTranslationMore(sidePanel);
   await sidePanel.locator('#formula-view').click();
   await expect(sidePanel.locator('#translation-text'))
     .toHaveText('流式译文应当显示在原生 PDF 阅读器旁边，其中 $E=mc^2$。');
   await expect(sidePanel.locator('#formula-view')).toHaveText('公式');
+  await openTranslationMore(sidePanel);
   await sidePanel.locator('#formula-view').click();
   // Exercise the same constrained width as Edge's native side panel. The
   // formula itself may scroll, but its equation number must remain in the
@@ -407,6 +414,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   expect(footerLayout.right).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
   expect(footerLayout.pageScrollWidth).toBeLessThanOrEqual(footerLayout.viewportWidth + 1);
   await sidePanel.setViewportSize({ width: 360, height: 420 });
+  await openTranslationMore(sidePanel);
   await sidePanel.locator('#correct').click();
   const nativeCorrection = sidePanel.getByRole('group', { name: '修正译文，公式已锁定' });
   await expect(nativeCorrection).toBeVisible();
@@ -580,7 +588,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(nativeCorrectionFeedback).toBeEmpty();
   await expect(nativeCorrection.getByRole('button', { name: '保存', exact: true })).toBeVisible();
   await nativeCorrection.press('Escape');
-  await expect(sidePanel.locator('#correct')).toBeFocused();
+  await expect(sidePanel.locator('#panel-more > summary')).toBeFocused();
   await expect(sidePanel.locator('#session-actions')).toBeVisible();
   await expect(sidePanel.locator('#copy')).toBeEnabled();
   await expect(sidePanel.locator('#translation-text .pi-math-scroll math')).toHaveCount(3);
@@ -662,6 +670,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     await sidePanel.emulateMedia({ colorScheme: 'light' });
   }
   const inheritedReaderPromise = context.waitForEvent('page');
+  await openTranslationMore(sidePanel);
   await sidePanel.locator('#open-pi-reader').click();
   const inheritedReader = await inheritedReaderPromise;
   await inheritedReader.waitForURL((url) => url.pathname === '/pdf.html');
@@ -1105,6 +1114,14 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
     await api.storage.local.remove(storageKey);
   }, obstructionHintStorageKey);
   await page.reload();
+  await expect(page.locator('#tex-selection-translator-root')).toBeAttached();
+  // Await translator initialization and start this scene with the browser sidebar closed.
+  // Selecting immediately after reload can precede the asynchronous listener setup.
+  await worker!.evaluate(async (url) => {
+    const api=(globalThis as any).chrome;
+    const tab=(await api.tabs.query({url}))[0];
+    await api.tabs.sendMessage(tab.id,{type:'BROWSER_SIDEBAR_CLOSED'});
+  },page.url());
   await page.locator('#blank').focus();
   await selectElementText('#source');
   const overlay = page.locator('#tex-selection-translator-root');
@@ -1173,12 +1190,13 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await expect(overlay.getByRole('button', {
     name: '暂停当前标签页的自动连续翻译',
   })).toHaveText('自动翻译中');
+  await openTranslationMore(overlay);
   const webRegionAction = overlay.getByRole('button', {
     name: '框选当前网页中的文字、公式、图表或图像',
   });
   await expect(webRegionAction).toBeVisible();
   await expect(webRegionAction).toContainText('框选网页');
-  await expect(webRegionAction).toContainText('文字 · 公式 · 图表');
+  await expect(webRegionAction).toHaveAttribute('title','框选当前网页中的文字、公式、图表或图像');
   expect(await webRegionAction.evaluate((element) => element.getBoundingClientRect().height))
     .toBeGreaterThanOrEqual(33);
   if (process.env.PI_VISUAL_ARTIFACTS === '1') {
@@ -1236,6 +1254,7 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   await page.keyboard.press('Escape');
   await expect(webRegion).toHaveCount(0);
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await openTranslationMore(overlay);
   await expect(overlay.locator('.sidebar-region-action')).toBeVisible();
   expect(textRequests).toHaveLength(requestsBeforeRegionSelection);
   await worker!.evaluate(() => {

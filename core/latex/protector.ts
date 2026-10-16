@@ -55,6 +55,12 @@ interface ScanState {
   namespace: string;
   fragments: ProtectedFragment[];
   warnings: TranslationWarning[];
+  ranges?: LatexSourceRange[];
+}
+
+export interface LatexSourceRange {
+  start: number;
+  end: number;
 }
 
 interface CommandToken {
@@ -300,6 +306,7 @@ function scanRange(state: ScanState, start: number, end: number): string {
     if (character === '%' && !isEscaped(state.source, cursor)) {
       const newline = state.source.indexOf('\n', cursor);
       const commentEnd = newline >= 0 && newline < end ? newline : end;
+      state.ranges?.push({ start: cursor, end: commentEnd });
       output += addFragment(state, state.source.slice(cursor, commentEnd));
       cursor = commentEnd;
       continue;
@@ -307,6 +314,7 @@ function scanRange(state: ScanState, start: number, end: number): string {
 
     if (character === '$' && !isEscaped(state.source, cursor)) {
       const math = protectMathDollar(state, cursor);
+      state.ranges?.push({ start: cursor, end: math.end });
       output += math.text;
       cursor = Math.min(math.end, end);
       continue;
@@ -315,6 +323,7 @@ function scanRange(state: ScanState, start: number, end: number): string {
     if (state.source.startsWith('\\(', cursor) || state.source.startsWith('\\[', cursor)) {
       const opener = state.source.slice(cursor, cursor + 2) as '\\(' | '\\[';
       const math = protectSlashMath(state, cursor, opener);
+      state.ranges?.push({ start: cursor, end: math.end });
       output += math.text;
       cursor = Math.min(math.end, end);
       continue;
@@ -322,6 +331,7 @@ function scanRange(state: ScanState, start: number, end: number): string {
 
     if (character === '\\') {
       const command = protectCommand(state, cursor);
+      state.ranges?.push({ start: cursor, end: command.end });
       output += command.text;
       cursor = Math.min(command.end, end);
       continue;
@@ -347,6 +357,20 @@ export function protectLatex(sourceText: string, namespace?: string): ProtectedL
     fragments: state.fragments,
     warnings: state.warnings,
   };
+}
+
+/** Reuses the protection scanner so chunk boundaries never split a TeX unit. */
+export function latexSourceRanges(source: string): LatexSourceRange[] {
+  const state: ScanState = { source, namespace: createNamespace(source, 'CHUNK'),
+    fragments: [], warnings: [], ranges: [] };
+  scanRange(state, 0, source.length);
+  const merged: LatexSourceRange[] = [];
+  for (const range of state.ranges!.sort((a, b) => a.start - b.start || b.end - a.end)) {
+    const last = merged.at(-1);
+    if (last && range.start < last.end) last.end = Math.max(last.end, range.end);
+    else merged.push({ ...range });
+  }
+  return merged;
 }
 
 function countOccurrences(text: string, token: string): number {

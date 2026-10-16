@@ -1,3 +1,4 @@
+import { bindAnchoredMenus } from '../../ui/anchored-menu';
 import type {
   OpenOptionsPageResponse,
   BilingualPageExportResponse,
@@ -812,7 +813,15 @@ function syncBilingualPageControl(): void {
   bilingualPageDisplay.value = bilingualPageDisplayMode(state);
   bilingualPageDisplayControl.hidden = state.phase === 'idle' || state.translated === 0;
   bilingualPageDisplay.disabled = bilingualPagePending || state.pauseReason === 'interactive';
-  bilingualPageCopyMenu.hidden = state.translated === 0;
+  bilingualPageCopyMenu.hidden = state.phase === 'idle' || state.phase === 'preview';
+  element<HTMLElement>('bilingual-page-export-actions').hidden = state.translated === 0;
+  const clearHome = state.phase === 'preview'
+    ? bilingualPageControl.querySelector('.bilingual-page-footer')!
+    : element<HTMLElement>('bilingual-page-more-actions');
+  if (bilingualPageClear.parentElement !== clearHome) clearHome.append(bilingualPageClear);
+  const retentionError = element<HTMLElement>('bilingual-page-retention-error');
+  retentionError.hidden = !state.retentionError;
+  retentionError.textContent = state.retentionError ? state.retentionMessage ?? '未能保存译文，请在更多中检查。' : '';
   for (const button of [
     bilingualPageCopyTranslation,
     bilingualPageCopyBilingual,
@@ -1275,6 +1284,16 @@ function providerErrorContext(session: PdfSidePanelSession): string | undefined 
 function syncSessionActions(): void {
   const hasAction = !copy.hidden || !correct.hidden || !correctionUndo.hidden;
   sessionActions.hidden = !hasAction && !status.textContent;
+  const more = element<HTMLDetailsElement>('panel-more');
+  const inFooter = !sessionSection.hidden && !sessionActions.hidden;
+  more.classList.toggle('in-footer', inFooter);
+  const parent = inFooter ? sessionActions : element<HTMLElement>('panel-more-home');
+  if (more.parentElement !== parent) {
+    const restoreFocus = more.contains(document.activeElement);
+    more.open = false;
+    parent.append(more);
+    if (restoreFocus) more.querySelector<HTMLElement>(':scope > summary')?.focus({preventScroll:true});
+  }
 }
 
 function setStatus(message: string, timeoutMs = 2_200): void {
@@ -1523,13 +1542,14 @@ function updateReadingNavigation(): void {
 function applyReadingPosition(
   session: PdfSidePanelSession,
   intent: ResolvedReadingRenderIntent,
+  savedPosition?: SidePanelReadingPosition,
 ): void {
   if (intent === 'none') return;
   const identity = readingIdentity(session);
   const bounds = readingBounds();
   const scrollRoot = document.scrollingElement;
   if (!identity || !bounds || !scrollRoot) return;
-  const position = intent === 'restore' ? readingPositions.get(identity) : undefined;
+  const position = intent === 'restore' ? savedPosition ?? readingPositions.get(identity) : undefined;
   if (!position) {
     setReadingScrollTop(bounds.top);
     if (session.status === 'complete' && pendingReadingStartIdentity === identity) {
@@ -1565,13 +1585,15 @@ function scheduleReadingState(
   intent: ResolvedReadingRenderIntent,
   interactionRevision: number,
 ): void {
+  const identity = readingIdentity(session);
+  const savedPosition = intent === 'restore' && identity ? readingPositions.get(identity) : undefined;
   window.requestAnimationFrame(() => {
     if (
       renderRevision !== translationRenderRevision
       || readingIdentity(currentSession) !== readingIdentity(session)
     ) return;
     if (interactionRevision === readingInteractionRevision) {
-      applyReadingPosition(session, intent);
+      applyReadingPosition(session, intent, savedPosition);
     }
     updateReadingNavigation();
   });
@@ -1697,6 +1719,8 @@ function render(
   );
   const readingInteractionAtRender = readingInteractionRevision;
   const sameSession = Boolean(session && isSamePdfSidePanelSession(currentSession, session));
+  if (!sameSession) element<HTMLDetailsElement>('panel-more').open = false;
+  openPiReader.hidden = !session;
   const scrollRoot = document.scrollingElement;
   const followStreamOutput = Boolean(
     sameSession
@@ -1756,6 +1780,9 @@ function render(
     correctionUndo.hidden = true;
     copy.hidden = true;
     sessionActions.hidden = true;
+    element<HTMLDetailsElement>('panel-more').open = false;
+    element<HTMLElement>('panel-more-home').append(element<HTMLDetailsElement>('panel-more'));
+    element<HTMLDetailsElement>('panel-more').classList.remove('in-footer');
     sourceToggle.hidden = true;
     sourceText.classList.remove('expanded');
     return;
@@ -2277,7 +2304,7 @@ function openCorrectionEditor(): void {
   cancel.addEventListener('click', () => {
     if (!isSamePdfSidePanelSession(currentSession, session)) return;
     render(currentSession, 'restore');
-    queueMicrotask(() => correct.focus());
+    queueMicrotask(() => document.querySelector<HTMLElement>('#panel-more > summary')?.focus());
   });
   panel.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return;
@@ -2487,7 +2514,7 @@ function undoCurrentCorrection(): void {
       partialText: response.data.result.translatedText,
     };
     render(currentSession);
-    queueMicrotask(() => correct.focus());
+    queueMicrotask(() => document.querySelector<HTMLElement>('#panel-more > summary')?.focus());
     const rollbackSkipped = Boolean(response.data.termRollbackSkipped);
     setStatus(
       rollbackSkipped
@@ -2533,6 +2560,13 @@ function openFullSettings(
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
+const panelMore = element<HTMLDetailsElement>('panel-more');
+bindAnchoredMenus('#panel-more, #bilingual-page-copy-menu', ':scope > div');
+panelMore.addEventListener('click', event => {
+  if (!(event.target instanceof Element) || !event.target.closest('button')) return;
+  panelMore.open = false;
+  if (event.target.closest('#formula-view')) queueMicrotask(() => panelMore.querySelector('summary')?.focus({preventScroll:true}));
+});
 targetLanguage.addEventListener('change', () => {
   if (!isSupportedTargetLanguage(targetLanguage.value)) {
     syncTargetLanguageControl(currentSession);

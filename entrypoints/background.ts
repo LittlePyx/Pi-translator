@@ -1,4 +1,8 @@
 import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/protector';
+import {listWebExcerpts,saveWebExcerpt,removeWebExcerpt,webExcerptPageUrl} from '../core/content/web-excerpt-repository';
+import {listDocumentTermSources,reuseDocumentTerms} from '../core/document/document-memory-repository';
+import {DocumentTermReuseError} from '../core/document/term-provenance';
+const termMemoryErrorResponse=(error:unknown)=>errorResponse(new TranslationError('INVALID_RESPONSE',error instanceof DocumentTermReuseError||error instanceof DocumentTermCapacityError?error.message:'本机术语读取或保存失败，请检查容量后刷新；现有记录未改变。'));
 import {
   getLocalDiagnosticEvents,
   getLocalPerformanceSamples,
@@ -8,6 +12,9 @@ import {
   type PerformancePhase,
 } from '../core/diagnostics/event-log';
 import { buildLocalDiagnosticReport } from '../core/diagnostics/local-report';
+import { reportedProviderUsage } from '../core/translation/provider-usage';
+import {preparePdfFormulaProseRepair,finishPdfFormulaProseRepair,type RepairPdfFormulaProseRequest} from '../core/pdf/formula-prose-repair';
+import {formulaDocumentText} from '../core/translation/formula-document';
 import { bilingualSessionMessageHandlers } from '../core/background/bilingual-session-message-handlers';
 import { createPdfSessionMessageHandlers } from '../core/background/pdf-session-message-handlers';
 import { preferenceMessageHandlers } from '../core/background/preference-message-handlers';
@@ -424,6 +431,8 @@ function toPublicSettings(
     pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
     pdfRegionShortcutKey: settings.pdfRegionShortcutKey,
     activeApiProfileId: settings.activeApiProfileId,
+    modelPrices: settings.modelPrices ?? [],
+    costTextSource: { apiBaseUrl: settings.apiBaseUrl, model: settings.model },
     visionApiProfileId: settings.visionApiProfileId,
     visionModel: settings.visionModel,
     apiProfiles: settings.apiProfiles.map(({ id, name, model }) => ({ id, name, model })),
@@ -1634,10 +1643,21 @@ async function localDiagnosticReport(): Promise<string> {
     getLocalPerformanceSamples(),
   ]);
   const manifest = browser.runtime.getManifest();
+  const build = await fetch(browser.runtime.getURL('/build-info.json'))
+    .then((response) => response.ok ? response.json() : undefined)
+    .then((value: unknown) => {
+      if (!value || typeof value !== 'object') return undefined;
+      const info = value as Record<string, unknown>;
+      if (typeof info.buildId !== 'string' || !/^[a-f0-9]{64}$/u.test(info.buildId) ||
+        typeof info.builtAt !== 'string' || !Number.isFinite(Date.parse(info.builtAt))) return undefined;
+      return { buildId: info.buildId, builtAt: info.builtAt,
+        ...(typeof info.commit === 'string' && /^[a-f0-9]{40}$/u.test(info.commit) ? { commit: info.commit } : {}) };
+    }).catch(() => undefined);
   return buildLocalDiagnosticReport({
     generatedAt: new Date().toISOString(),
     version: manifest.version,
     manifestVersion: manifest.manifest_version,
+    ...(build ? { build } : {}),
     apiState: {
       profileCount: settings.apiProfiles.length,
       apiKeyConfigured,
@@ -1845,6 +1865,7 @@ async function translate(
     const scopedGlossary = mergeDocumentGlossaryWithScope(
       settings.academicGlossary,
       documentMemory,
+      request.targetLanguage,
     );
     const glossary = scopedGlossary.map(({ source, target }) => ({ source, target }));
     const contextText = buildDocumentReferenceContext(
@@ -2214,6 +2235,8 @@ async function translate(
     const sourceHost = sourceHostForRequest(request);
     const translatedText = translatedChunks.join('\n\n');
     const result = withGlossaryTermEvidence({
+      ...(reportedProviderUsage(controller.signal) ? { usage: reportedProviderUsage(controller.signal)! } : {}),
+      usageSource: { apiBaseUrl: provider.apiBaseUrl, model: provider.model },
       requestId: request.requestId,
       documentId: identity.documentId,
       originalText: text,
@@ -2390,6 +2413,8 @@ async function translateDocumentBatch(
       missingItemIds: items
         .filter((item) => !returned.has(item.id))
         .map((item) => item.id),
+      ...(!response.data.result.cached && response.data.result.usage ? { usage: response.data.result.usage } : {}),
+      ...(response.data.result.usageSource ? { usageSource: response.data.result.usageSource } : {}),
     },
   };
 }
@@ -2679,7 +2704,7 @@ async function updateTranslationResultCommitted(
     const memoryForGlossary = await getDocumentMemory(documentIdentity(payload));
     options?.assertCurrent?.();
     const effectiveGlossary = effectiveGlossaryForTranslationMutation(
-      mergeDocumentGlossaryWithScope(settings.academicGlossary, memoryForGlossary),
+      mergeDocumentGlossaryWithScope(settings.academicGlossary, memoryForGlossary, result.targetLanguage),
       termScope,
       correctionTerm,
       options?.glossaryUndo,
@@ -3320,6 +3345,25 @@ async function recognizePdfPage(
   }
 }
 
+async function repairPdfFormulaProse(request:RepairPdfFormulaProseRequest,tabId:number):Promise<TranslateRuntimeResponse>{
+  const controller=beginActiveRequest(tabId,request.requestId),lifecycle=tabLifecycles.capture(tabId),started=performance.now();
+  const current=()=>{assertTabLifecycleCurrent(lifecycle);assertActiveRequest(tabId,request.requestId,controller)};
+  try{
+    const prepared=preparePdfFormulaProseRepair(request.document,request.targetLanguage);if(!prepared)throw new TranslationError('INVALID_RESPONSE','本段缺少可安全修复的公式来源。');
+    const settings=await getSettings();current();
+    const configured=settings.apiProfiles.find(profile=>profile.id===settings.visionApiProfileId);
+    const profile=configured??settings.apiProfiles.find(profile=>profile.id===settings.activeApiProfileId);
+    const model=configured&&settings.visionModel.trim()?settings.visionModel.trim():profile?.model.trim();
+    if(!profile||!model)throw new TranslationError('VISION_NOT_CONFIGURED','请先配置本文使用的视觉模型。');
+    const apiKey=await getApiKey(profile.id);current();if(!apiKey)throw new TranslationError('NO_API_KEY','当前模型未配置 API Key。');
+    if(!await browser.permissions.contains({origins:[apiOriginPattern(profile.apiBaseUrl)]}))throw new TranslationError('API_PERMISSION_REQUIRED','当前 API 尚未授权。');
+    current();const translated=await translator.translate(prepared.input,{model,targetLanguage:request.targetLanguage,sourceLanguage:request.sourceLanguage,style:request.style,glossary:settings.academicGlossary},{apiBaseUrl:profile.apiBaseUrl,apiKey},controller.signal,{onPartialText:()=>undefined});current();
+    const document=finishPdfFormulaProseRepair(prepared.document,translated.alignedSegments,translated.warnings,request.targetLanguage);
+    return{ok:true,data:{history:[],result:{requestId:request.requestId,originalText:formulaDocumentText(document,true),translatedText:formulaDocumentText(document),formulaDocument:document,formulaLatex:document.formulas.map(entry=>entry.latex),warnings:[],sourceKind:'image-region',targetLanguage:request.targetLanguage,style:request.style,completedAt:Date.now(),cached:false,latencyMs:Math.round(performance.now()-started),contextUsed:false,chunkCount:1,usageSource:{apiBaseUrl:profile.apiBaseUrl,model},...(reportedProviderUsage(controller.signal)?{usage:reportedProviderUsage(controller.signal)!}:{})}}};
+  }catch(error){return errorResponse(toTranslationError(error))}
+  finally{if(activeRequests.get(tabId)?.controller===controller)activeRequests.delete(tabId)}
+}
+
 async function translateImageRegion(
   request: TranslateImageRegionRequest,
   tabId: number,
@@ -3384,6 +3428,7 @@ async function translateImageRegion(
     const scopedGlossary = mergeDocumentGlossaryWithScope(
       settings.academicGlossary,
       documentMemory,
+      request.targetLanguage,
     );
     const glossary = scopedGlossary.map(({ source, target }) => ({ source, target }));
     const configuredVisionProfile = settings.apiProfiles.find(
@@ -3506,6 +3551,7 @@ async function translateImageRegion(
             ...(request.recognizedTextHint
               ? { recognizedTextHint: request.recognizedTextHint }
               : {}),
+            ...(request.sourceEquations ? { sourceEquations: request.sourceEquations } : {}),
             ...(request.contextText ? { contextText: request.contextText } : {}),
           },
           {
@@ -3564,6 +3610,9 @@ async function translateImageRegion(
       requestId: request.requestId,
       documentId: identity.documentId,
       originalText: providerResult.recognizedText,
+      usageSource: { apiBaseUrl: profile.apiBaseUrl, model: visionModel },
+      ...(reportedProviderUsage(controller.signal) ? { usage: reportedProviderUsage(controller.signal)! } : {}),
+      ...(providerResult.formulaDocument ? { formulaDocument: providerResult.formulaDocument } : {}),
       translatedText: providerResult.translatedText,
       warnings: [],
       ...(providerResult.uncertainSpans.length
@@ -5096,6 +5145,32 @@ export default defineBackground(() => {
           .catch((error: unknown) => errorResponse(error));
       }
 
+      if(message.type==='LIST_DOCUMENT_TERM_SOURCES'||message.type==='REUSE_DOCUMENT_TERMS'){
+        return (async()=>{
+          if(!sender.url?.startsWith(browser.runtime.getURL('/pdf.html'))||!message.payload||typeof message.payload.pageUrl!=='string')throw new Error('请从 PDF 阅读器选择要复用的词条。');
+          const identity=documentIdentity(message.payload);
+          if(message.type==='LIST_DOCUMENT_TERM_SOURCES')return {ok:true as const,data:{sources:await listDocumentTermSources(identity,message.payload.targetLanguage)}};
+          return {ok:true as const,data:{memory:await reuseDocumentTerms(identity,message.payload.context,message.payload.targetLanguage,message.payload.selections)}};
+        })().catch((error:unknown)=>termMemoryErrorResponse(error));
+      }
+
+      if(['GET_WEB_EXCERPTS','SAVE_WEB_EXCERPT','REMOVE_WEB_EXCERPT'].includes(message.type)){
+        const request=message as Extract<RuntimeMessage,{type:'GET_WEB_EXCERPTS'|'SAVE_WEB_EXCERPT'|'REMOVE_WEB_EXCERPT'}>;
+        return (async()=>{
+          if(!request.payload||typeof request.payload.pageUrl!=='string')throw new Error('网页地址无效。');
+          const url=webExcerptPageUrl(request.payload.pageUrl);
+          if(sender.url&&!sender.url.startsWith(browser.runtime.getURL(''))&&webExcerptPageUrl(sender.url)!==url)throw new Error('网页摘录与当前页面不匹配。');
+          if(request.type==='SAVE_WEB_EXCERPT'){
+            if(!request.payload.excerpt||webExcerptPageUrl(request.payload.excerpt.pageUrl)!==url)throw new Error('网页摘录来源不匹配。');
+            await saveWebExcerpt(request.payload.excerpt);
+          }else if(request.type==='REMOVE_WEB_EXCERPT'){
+            if(typeof request.payload.markerId!=='string')throw new Error('摘录标识无效。');
+            await removeWebExcerpt(url,request.payload.markerId);
+          }
+          return {ok:true as const,data:{excerpts:await listWebExcerpts(url)}};
+        })().catch((error:unknown)=>errorResponse(error));
+      }
+
       if (message.type === 'CONFIRM_DOCUMENT_TERM') {
         return confirmDocumentTerm(
           documentIdentity(message.payload),
@@ -5109,7 +5184,7 @@ export default defineBackground(() => {
           documentIdentity(message.payload),
           message.payload.term,
         ).then((memory) => ({ ok: true as const, data: { memory } }))
-          .catch((error: unknown) => errorResponse(error));
+          .catch((error: unknown) => termMemoryErrorResponse(error));
       }
 
       if (message.type === 'REMOVE_DOCUMENT_TERM') {
@@ -5315,6 +5390,15 @@ export default defineBackground(() => {
         return translateImageRegion(message.payload, tabId, 'none', true);
       }
 
+      if(message.type==='REPAIR_PDF_FORMULA_PROSE'){
+        const tabId=sender.tab?.id;
+        if(tabId!==undefined&&isExtensionPdfReaderUrl(sender.url??sender.tab?.url,PI_PDF_READER_URL))return repairPdfFormulaProse(message.payload,tabId);
+        if(sender.url===browser.runtime.getURL(PDF_BACKGROUND_DOCUMENT_PATH)&&message.payload.sourceTabId!==undefined){
+          const sourceTabId=message.payload.sourceTabId;
+          return browser.tabs.get(sourceTabId).then(tab=>isExtensionPdfReaderUrl(tab.url,PI_PDF_READER_URL)?repairPdfFormulaProse(message.payload,sourceTabId):errorResponse(new TranslationError('UNSUPPORTED_PAGE','正文修复来源已关闭。',false))).catch(error=>errorResponse(toTranslationError(error)));
+        }
+        return Promise.resolve(errorResponse(new TranslationError('UNSUPPORTED_PAGE','正文修复请求必须来自 Pi PDF。',false)));
+      }
       if (message.type === 'TRANSLATE_IMAGE_REGION') {
         const tabId = sender.tab?.id;
         if (tabId === undefined) {

@@ -1,5 +1,6 @@
 import type { ProviderImageTranslationResult } from './types';
 import { containsLatexRowStructure } from './latex-structure';
+import { isLikelyTargetLanguage } from '../language/target-language';
 
 export interface FormulaValidationResult {
   valid: boolean;
@@ -14,14 +15,19 @@ function isEscaped(text: string, index: number): boolean {
   return slashes % 2 === 1;
 }
 
-function normalizeFormula(value: string): string {
-  return value
+export function normalizeFormula(value: string): string {
+  const normalized = value
     .replaceAll(/\s+/gu, ' ')
     .replaceAll(/\s*([=+\-*/^_{}()[\],;:<>])\s*/gu, '$1')
     .trim();
+  if (/\\(?:text|mbox|hbox|verb)\b/u.test(normalized)) return normalized;
+  // TeX ignores ordinary math whitespace, but a separator after a control
+  // word can be essential: "\\alpha b" must not become "\\alphab".
+  return normalized.replace(/\s+/gu, (space, offset: number) =>
+    /\\[A-Za-z]+$/u.test(normalized.slice(0, offset)) && /[A-Za-z]/u.test(normalized[offset + space.length] ?? '') ? ' ' : '');
 }
 
-function extractDelimitedFormulae(text: string): {
+export function extractDelimitedFormulae(text: string): {
   formulae: string[];
   snippets: string[];
   balanced: boolean;
@@ -80,6 +86,97 @@ function appendRecognizedFormulaSnippets(text: string, snippets: string[]): stri
   }, text.trimEnd());
 }
 
+/** Keep prose only when formula boundaries and the output language are clear.
+ * No inferred TeX or positional formula substitution is used in this fallback.
+ */
+export function extractFormulaReviewProse(text: string, targetLanguage: string): string | undefined {
+  const parsed = extractDelimitedFormulae(text);
+  if (!parsed.balanced || parsed.formulae.some((formula) => (
+    /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(formula)
+  ))) return undefined;
+  let prose = text;
+  for (const snippet of parsed.snippets) prose = prose.replace(snippet, '〔公式见原文〕');
+  const languageSample = prose.replaceAll('〔公式见原文〕', '').trim();
+  // Unmarked/unterminated math cannot be separated from prose reliably. In
+  // particular, never present a plain-text equation as validated translation.
+  if (/[\\$\p{Sm}\p{Script=Greek}_^{}]|```/u.test(languageSample) ||
+      (languageSample.match(/\p{L}/gu)?.length ?? 0) < 12 ||
+      !hasFormulaTranslationProse(languageSample, targetLanguage)) return undefined;
+  return prose.trim() || undefined;
+}
+
+/** Recovery-only language evidence. Do not use the passive-selection language
+ * filter here: academic translations legitimately retain names and symbols.
+ * This establishes that a draft contains prose, not that it is correct.
+ */
+export function hasFormulaTranslationProse(text: string, targetLanguage: string): boolean {
+  let sample = text.replace(/https?:\/\/\S+/gu, '')
+    .replace(/\[(?:无法辨认|公式待核对)\]|〔公式见原文〕/gu, '');
+  const math = extractDelimitedFormulae(sample);
+  for (const [index, snippet] of math.snippets.entries()) {
+    if (!/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u.test(math.formulae[index]!)) {
+      sample = sample.replace(snippet, ' ');
+    }
+  }
+  sample = sample.replace(/\\[A-Za-z]+/gu, ' ');
+  const letters = sample.match(/\p{L}/gu)?.length ?? 0;
+  if (targetLanguage === 'zh-CN' || targetLanguage === 'zh') {
+    const han = sample.match(/\p{Script=Han}/gu)?.length ?? 0;
+    const phrases = sample.match(/\p{Script=Han}{4,}/gu)?.length ?? 0;
+    return han >= 12 && (phrases >= 2 || /\p{Script=Han}{12,}/u.test(sample)) &&
+      !/[\p{Script=Hiragana}\p{Script=Katakana}]/u.test(sample) &&
+      han / Math.max(1, letters) >= .25;
+  }
+  if (targetLanguage === 'ja') {
+    const kana = sample.match(/[\p{Script=Hiragana}\p{Script=Katakana}]/gu)?.length ?? 0;
+    const japanese = sample.match(/[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/gu)?.length ?? 0;
+    return kana >= 4 && japanese >= 12 && japanese / Math.max(1, letters) >= .25;
+  }
+  return isLikelyTargetLanguage(sample, targetLanguage);
+}
+
+/** A deliberately small spelling comparison, not symbolic/algebraic equivalence. */
+function simpleFormulaSpelling(value: string): string | undefined {
+  let text = value.replace(/\\tag\s*\{[^{}]+\}/gu, '').replace(/\s*\(\d+[a-z]?\)\s*$/iu, '');
+  for (let pass = 0; pass < 4; pass += 1) {
+    text = text.replace(/\\(?:mathrm|mathbf|mathit|operatorname)\*?\s*\{([^{}]+)\}/gu, '$1');
+  }
+  text = text
+    .replace(/\\(?:left|right)\b/gu, '')
+    .replace(/\\(?:ast|star)\b|[∗⋆]/gu, '*')
+    .replace(/\\(?:,|!|;|:| )/gu, '')
+    .replace(/([_^])\{([A-Za-z0-9])\}/gu, '$1$2')
+    .replace(/[−–]/gu, '-')
+    .replace(/\s+/gu, '')
+    .replace(/[,.]$/u, '');
+  // Unknown TeX constructs, grouping and prose cannot be safely equated.
+  return text.includes('=') && !/[\\{}]/u.test(text) ? text : undefined;
+}
+
+function samePlainFormulaLine(line: string, formula: string): boolean {
+  const expected = simpleFormulaSpelling(formula);
+  const sourceTag = /\\tag\s*\{([^{}]+)\}/u.exec(formula)?.[1];
+  const lineTag = /\((\d+[a-z]?)\)\s*$/iu.exec(line)?.[1];
+  return Boolean(expected && expected === simpleFormulaSpelling(line) &&
+    !(lineTag && sourceTag && lineTag !== sourceTag));
+}
+
+function removeAdjacentPlainFormulaCopies(text: string): string {
+  const lines = text.split('\n');
+  const removed = new Set<number>();
+  for (let index = 0; index < lines.length; index += 1) {
+    const parsed = extractDelimitedFormulae(lines[index]!.trim());
+    if (parsed.snippets.length !== 1 || parsed.snippets[0] !== lines[index]!.trim()) continue;
+    for (const direction of [-1, 1]) {
+      let neighbor = index + direction;
+      while (neighbor >= 0 && neighbor < lines.length && !lines[neighbor]!.trim()) neighbor += direction;
+      if (neighbor < 0 || neighbor >= lines.length) continue;
+      if (samePlainFormulaLine(lines[neighbor]!, parsed.formulae[0]!)) removed.add(neighbor);
+    }
+  }
+  return lines.filter((_line, index) => !removed.has(index)).join('\n');
+}
+
 function isSafeTrailingDisplayFormulaOmission(
   recognizedText: string,
   translatedText: string,
@@ -102,7 +199,8 @@ function isSafeTrailingDisplayFormulaOmission(
   // plain characters but forgot only the TeX delimiters.
   const compactFormula = normalizeFormula(formula).replaceAll(/\s+/gu, '');
   const compactTranslation = normalizeFormula(translatedText).replaceAll(/\s+/gu, '');
-  return compactFormula.length >= 2 && !compactTranslation.includes(compactFormula);
+  return compactFormula.length >= 2 && !compactTranslation.includes(compactFormula) &&
+    !/[=≈≠≤≥_^]/u.test(translatedText);
 }
 
 function replaceDelimitedFormulae(text: string, replacements: string[]): string | undefined {
@@ -146,7 +244,7 @@ function replaceDelimitedFormulae(text: string, replacements: string[]): string 
   return output + text.slice(cursor);
 }
 
-function structuralIssues(formula: string): string[] {
+export function structuralIssues(formula: string): string[] {
   const issues: string[] = [];
   if (!formula.trim()) return ['公式内容为空'];
   if (/```|`/u.test(formula)) issues.push('公式包含 Markdown 标记');
@@ -432,7 +530,9 @@ export function normalizeVisionLatexText(text: string): string {
   );
   const parsed = extractDelimitedFormulae(numbered);
   if (!parsed.balanced || !parsed.formulae.length) return numbered;
-  return replaceDelimitedFormulae(numbered, parsed.formulae.map(repairCommonVisionLatex)) ?? numbered;
+  return removeAdjacentPlainFormulaCopies(
+    replaceDelimitedFormulae(numbered, parsed.formulae.map(repairCommonVisionLatex)) ?? numbered,
+  );
 }
 
 function repairImageFormulaResult(
@@ -447,16 +547,80 @@ function repairImageFormulaResult(
 }
 
 /**
- * The OCR text is the source of truth for formula bodies. Vision models often
- * preserve the meaning while changing harmless LaTeX spelling in the
- * translation or the metadata list. When the formula count and recognized
- * structure are reliable, restore the exact recognized bodies locally instead
- * of paying for a second image request.
+ * Legacy compatibility: reconcile only equivalent spellings or a narrowly
+ * unambiguous trailing omission. Equal counts never establish correspondence
+ * and cannot justify changing a sign, variable, font, or formula order.
  */
+function reconcileAffiliationMarkers(result: ProviderImageTranslationResult): ProviderImageTranslationResult {
+  if (!/\b(?:University|School|Department|Institute|College|Laboratory|Faculty)\b/iu.test(result.recognizedText)) return result;
+  const source = extractDelimitedFormulae(result.recognizedText), translated = extractDelimitedFormulae(result.translatedText);
+  if (!source.balanced || !translated.balanced || !source.formulae.length || translated.formulae.length) return result;
+  const superscripts = [...'⁰¹²³⁴⁵⁶⁷⁸⁹'];
+  const markers = source.formulae.map(latex => {
+    const match = /^\s*\{\}\s*\^\s*(?:\{(\d{1,3})\}|(\d))\s*$/u.exec(latex);
+    return match ? [...(match[1] ?? match[2]!)].map(digit => superscripts[Number(digit)]).join('') : undefined;
+  });
+  const targetMarkers = [...result.translatedText.matchAll(/[⁰¹²³⁴⁵⁶⁷⁸⁹]+|(?<![\p{L}\d])\d{1,3}(?=\s*\p{Script=Han})/gu)];
+  const normalized = targetMarkers.map(match => /^\d+$/u.test(match[0]) ? [...match[0]].map(digit => superscripts[Number(digit)]).join('') : match[0]);
+  if (markers.some(marker => !marker) || markers.join('|') !== normalized.join('|')) return result;
+  if (result.formulaLatex.some(latex => !source.formulae.some(entry => normalizeFormula(entry) === normalizeFormula(latex)))) return result;
+  let recognizedText = result.recognizedText;
+  source.snippets.forEach((snippet, index) => {recognizedText = recognizedText.replace(snippet, markers[index]!)});
+  let translatedText = result.translatedText;
+  for (let index = targetMarkers.length - 1; index >= 0; index--) {
+    const match = targetMarkers[index]!;
+    translatedText = translatedText.slice(0, match.index) + normalized[index] + translatedText.slice(match.index! + match[0].length);
+  }
+  return {...result, recognizedText, translatedText, formulaLatex: []};
+}
+
+/** Conference ordinal superscripts are prose, with the same ordinal in Chinese. */
+function reconcilePublicationOrdinal(result: ProviderImageTranslationResult): ProviderImageTranslationResult {
+  if (!/^Proceedings of\b/iu.test(result.recognizedText) || !/\bConference\b/u.test(result.recognizedText)) return result;
+  const source = extractDelimitedFormulae(result.recognizedText);
+  const target = extractDelimitedFormulae(result.translatedText);
+  if (!source.balanced || !target.balanced || !source.formulae.length || target.formulae.length) return result;
+  const ordinals = source.formulae.map(latex => /^(\d{1,4})\s*\^\s*\{(st|nd|rd|th)\}$/u.exec(latex.trim()));
+  if (ordinals.some(value => !value) || result.formulaLatex.some(latex => !source.formulae.some(entry => normalizeFormula(entry) === normalizeFormula(latex)))) return result;
+  const translated = [...result.translatedText.matchAll(/第\s*(\d{1,4})\s*届/gu)].map(match => match[1]);
+  if (translated.join('|') !== ordinals.map(value => value![1]).join('|')) return result;
+  let recognizedText = result.recognizedText;
+  source.snippets.forEach((snippet,index) => {recognizedText = recognizedText.replace(snippet, `${ordinals[index]![1]}${ordinals[index]![2]}`)});
+  return {...result, recognizedText, formulaLatex: []};
+}
+
+/** A figure caption may spell an upright percentage label as ordinary text.
+ * Recover only the exact ASCII label, equality and numeric percentage; never
+ * infer expressions, mathematical fonts, or a different value. */
+function reconcilePlainPercentageLabels(result: ProviderImageTranslationResult): ProviderImageTranslationResult {
+  let recognizedText = result.recognizedText;
+  const target = extractDelimitedFormulae(result.translatedText);
+  if (!target.balanced) return result;
+  for (const latex of new Set(result.formulaLatex)) {
+    const match = /^\\mathrm\{([A-Z]{2,4})\}\s*=\s*(\d{1,3}(?:\.\d{1,4})?)\s*\\%$/u.exec(latex.trim());
+    if (!match || Number(match[2]) > 100) continue;
+    const source = extractDelimitedFormulae(recognizedText);
+    if (!source.balanced) continue;
+    const protectedRanges: {start:number;end:number}[] = [];
+    let cursor = 0;
+    for (const snippet of source.snippets) {
+      const start = recognizedText.indexOf(snippet, cursor);
+      protectedRanges.push({start,end:start+snippet.length});cursor=start+snippet.length;
+    }
+    for (const entry of recognizedText.matchAll(/(?:https?:\/\/|www\.)\S+|`[^`]*`/gu)) protectedRanges.push({start:entry.index!,end:entry.index!+entry[0].length});
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}\\\\$^_{}])${match[1]}\\s*=\\s*${match[2]!.replace('.', '\\.')}\\s*%(?![\\p{L}\\p{N}])`, 'gu');
+    const plain = [...recognizedText.matchAll(pattern)].filter(entry=>!protectedRanges.some(range=>entry.index!>=range.start&&entry.index!<range.end));
+    const same = (value:string) => normalizeFormula(value)===normalizeFormula(latex);
+    if (!plain.length || plain.length + source.formulae.filter(same).length !== target.formulae.filter(same).length) continue;
+    for (const entry of plain.reverse()) recognizedText=recognizedText.slice(0,entry.index)+`$${latex}$`+recognizedText.slice(entry.index!+entry[0].length);
+  }
+  return {...result,recognizedText};
+}
+
 export function reconcileImageFormulaResult(
   result: ProviderImageTranslationResult,
 ): ProviderImageTranslationResult {
-  const repaired = repairImageFormulaResult(result);
+  const repaired = reconcilePlainPercentageLabels(reconcilePublicationOrdinal(reconcileAffiliationMarkers(repairImageFormulaResult(result))));
   const recognized = extractDelimitedFormulae(repaired.recognizedText);
   const translated = extractDelimitedFormulae(repaired.translatedText);
   const recognizedFormulaeAreSafe = (
@@ -464,6 +628,17 @@ export function reconcileImageFormulaResult(
     recognized.formulae.length > 0 &&
     recognized.formulae.every((formula) => structuralIssues(formula).length === 0)
   );
+  if (recognizedFormulaeAreSafe && recognized.formulae.length === 1 &&
+    translated.balanced && translated.formulae.length === 0) {
+    const lines = repaired.translatedText.split('\n');
+    const matches = lines.flatMap((line, index) => (
+      samePlainFormulaLine(line, recognized.formulae[0]!) ? [index] : []
+    ));
+    if (matches.length === 1) {
+      lines[matches[0]!] = recognized.snippets[0]!;
+      return { ...repaired, translatedText: lines.join('\n'), formulaLatex: recognized.formulae };
+    }
+  }
   if (
     recognizedFormulaeAreSafe &&
     translated.balanced &&
@@ -488,7 +663,8 @@ export function reconcileImageFormulaResult(
     !recognized.balanced ||
     !translated.balanced ||
     recognized.formulae.length !== translated.formulae.length ||
-    recognized.formulae.some((formula) => structuralIssues(formula).length > 0)
+    recognized.formulae.some((formula) => structuralIssues(formula).length > 0) ||
+    !sameFormulae(recognized.formulae, translated.formulae)
   ) {
     return repaired;
   }
@@ -526,4 +702,62 @@ export function validateImageFormulaResult(
     valid: issues.length === 0,
     issues: [...new Set(issues)],
   };
+}
+
+/** Keep only translated natural labels when the model repeats known diagram
+ * math despite the source-only contract. Never touch caption math, unknown
+ * expressions or saved/user-corrected targets. Raw replies remain auditable. */
+export function keepImageFigureMathInOriginal(result:ProviderImageTranslationResult,captionHint?:string):ProviderImageTranslationResult{
+  const hint=captionHint?.trim(),captionAt=hint?result.recognizedText.indexOf(hint):-1;
+  if(hint&&/^Figure\s+\d+[.:]/iu.test(hint)&&captionAt>0){
+    const prefix=result.recognizedText.slice(0,captionAt).trim(),suffix=result.recognizedText.slice(captionAt+hint.length).trim();
+    // A model may place the explicit (a)/(b)/(c) panel labels before a caption
+    // copied exactly from the native PDF. Retain all those labels, in their
+    // diagram field, instead of interpreting their OCR math as caption math.
+    if(prefix.length<=1200&&/^\([a-z]\)\s/u.test(prefix)&&!/[\n.!?]/u.test(prefix)&&/^\[Diagram Labels\]:/u.test(suffix)){
+      result={...result,recognizedText:`${hint}\n\n[Diagram Labels]: ${prefix}; ${suffix.slice('[Diagram Labels]:'.length).trim()}`};
+    }
+  }
+  const boundary=/\n\s*\n/u.exec(result.recognizedText),label=/\n\s*图内标签\s*[:：]/u.exec(result.translatedText);
+  if(!boundary||!label)return result;
+  const caption=result.recognizedText.slice(0,boundary.index),diagram=result.recognizedText.slice(boundary.index+boundary[0].length).trim();
+  if(!/^Figure\s+\d+[.:]/iu.test(caption)||!/^\[Diagram Labels\]:/iu.test(diagram))return result;
+  const text=result.translatedText.slice(label.index+label[0].length),math=extractDelimitedFormulae(text),original=extractDelimitedFormulae(diagram);
+  if(!math.balanced||!original.balanced||!math.formulae.length)return result;
+  if((text.match(/(?<!\\)\$(?:\\.|[^$])*(?<!\\)\$/gu)?.length??0)!==math.formulae.length)return result;
+  const counts=(values:string[],value:string)=>values.filter(f=>normalizeFormula(f)===normalizeFormula(value)).length;
+  if(math.formulae.some(f=>counts(math.formulae,f)>counts(original.formulae,f)))return result;
+  const labels=text.replace(/(?<!\\)\$(?:\\.|[^$])*(?<!\\)\$/gu,'').replace(/[ \t]+/gu,' ').trim();
+  // A display or other delimiter is not a natural-language label; leave it for
+  // the strict validator instead of deleting an ambiguous mathematical block.
+  if(extractDelimitedFormulae(labels).formulae.length)return result;
+  return{...result,translatedText:result.translatedText.slice(0,label.index+label[0].length)+labels};
+}
+
+/** Diagram-only mathematics stays in the original pixels: a second OCR-based
+ * transcription could silently change its font. Caption math stays editable. */
+export function validateImageFigureResult(result: ProviderImageTranslationResult): FormulaValidationResult {
+  const boundary = /\n\s*\n/u.exec(result.recognizedText);
+  const caption = boundary ? result.recognizedText.slice(0, boundary.index) : '';
+  const diagram = boundary ? result.recognizedText.slice(boundary.index + boundary[0].length).trim() : '';
+  if (!/^Figure\s+\d+[.:]/iu.test(caption) ||
+      !/^(?:\[(?:Diagram|Figure)\s+Labels\]|(?:[a-z]\s+)?Data\s*:|(?:Diagram\s+)?Labels\s*:|图内(?:标签|文字)\s*[:：])/iu.test(diagram)) {
+    return validateImageFormulaResult(result);
+  }
+  const source = extractDelimitedFormulae(result.recognizedText);
+  const target = extractDelimitedFormulae(result.translatedText);
+  const captionMath = extractDelimitedFormulae(caption);
+  const issues: string[] = [];
+  if (!source.balanced) issues.push('识别原文中的公式分隔符没有闭合');
+  if (!target.balanced) issues.push('译文中的公式分隔符没有闭合');
+  const count = (values: string[], formula: string) => values.filter(value => normalizeFormula(value) === normalizeFormula(formula)).length;
+  for (const formula of captionMath.formulae) {
+    if (count(target.formulae, formula) < count(captionMath.formulae, formula)) issues.push('图注中的公式在译文中缺失或被改写');
+  }
+  for (const formula of target.formulae) {
+    issues.push(...structuralIssues(formula));
+    if (count(target.formulae, formula) > count(source.formulae, formula)) issues.push('图形译文中的公式无法与识别原文可靠对应');
+    if (count(target.formulae, formula) > count(captionMath.formulae, formula)) issues.push('图内数学标签应保留在原图中，不能在图注译文中重新转写，以免改变符号字体');
+  }
+  return { valid: !issues.length, issues: [...new Set(issues)] };
 }

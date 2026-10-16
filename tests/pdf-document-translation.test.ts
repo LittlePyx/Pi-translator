@@ -4,9 +4,11 @@ import {
   comparePdfDocumentTranslationPriority,
   groupPdfDocumentTranslationVisualObjects,
   mergePdfDocumentTranslationContinuationBlocks,
+  mergePdfCrossPageContinuations,
   pdfDocumentTranslationBlockContainsFormula,
   pdfDocumentTranslationBlockKind,
   pdfDocumentTranslationContinuity,
+  pdfDocumentTranslationHeadingLevel,
   pdfDocumentTranslationItemsFromOcr,
   pdfDocumentTranslationBlocks,
   preparePdfDocumentTranslationPages,
@@ -15,6 +17,14 @@ import {
 } from '../core/pdf/document-translation';
 
 describe('PDF document translation OCR input', () => {
+  it('keeps Qwen mixed prose as prose while preserving actual standalone equations',()=>{
+    const base={confidence:.9,confidenceSource:'trusted-adapter' as const,kind:'formula' as const};
+    const items=pdfDocumentTranslationItemsFromOcr({pageNumber:1,source:'qwen-advanced-recognition',coordinateSystem:'normalized-page',blocks:[
+      {...base,id:'prose',order:0,text:'Any $n$-tuple of strategies can be regarded as a point.',box:{left:.1,top:.1,width:.8,height:.04}},
+      {...base,id:'eq',order:1,text:'$Q_n \\to Q, P_n \\to P$',box:{left:.2,top:.2,width:.6,height:.04}},
+    ]},600,800);
+    expect(items.map(item=>item.kind)).toEqual(['text','formula']);expect(items[0]!.str).toContain('$n$');
+  });
   it('keeps trusted upright text and formulas in provider reading order', () => {
     const items = pdfDocumentTranslationItemsFromOcr({
       pageNumber: 3,
@@ -64,6 +74,100 @@ function positioned(
 ): PdfDocumentTranslationTextItem {
   return { str, hasEOL: true, left, top, width, height };
 }
+
+describe('PDF source section hierarchy', () => {
+  it('keeps chapter and subsection depths, including familiar unnumbered sections', () => {
+    for (const [text, level] of [
+      ['3. Related research', 1], ['3.1. Gaussian Processes', 2],
+      ['4.2.1. MNIST', 3], ['4.2.1.1. Detailed results', 3],
+      ['Abstract', 1], ['Acknowledgements', 1], ['References', 1], ['II. Proposed Method', 1],
+    ] as const) expect(pdfDocumentTranslationHeadingLevel({text})).toBe(level);
+  });
+
+  it('leaves numbered prose, math, footnotes, citations and uncertain body text alone', () => {
+    for (const text of [
+      '1. A CNP is a conditional distribution over functions',
+      '2. A CNP is permutation invariant in O and T.',
+      '3. The algorithm requires linear storage', 'A normal paragraph.',
+      '2021. 3', '1 School of Engineering', 'D. Author', '(4)', '[12] Related work',
+    ]) expect(pdfDocumentTranslationHeadingLevel({text})).toBeUndefined();
+    for (const kind of ['footnote', 'code', 'formula', 'figure', 'table'] as const)
+      expect(pdfDocumentTranslationHeadingLevel({text: '1. Introduction', kind})).toBeUndefined();
+  });
+});
+
+describe('PDF numbered prose list paragraphs', () => {
+  it('keeps a hyphenated word with a formula-bearing continuation across pages',()=>{
+    const result=mergePdfCrossPageContinuations([
+      {id:'a',pageNumber:2,blockIndex:0,text:'A known transformation func-',sourceAnchor:{leftRatio:.1,topRatio:.9,widthRatio:.4,heightRatio:.04}},
+      {id:'b',pageNumber:3,blockIndex:0,kind:'formula',text:'tion). For example z = mu + sigma e.',sourceAnchor:{leftRatio:.1,topRatio:.08,widthRatio:.4,heightRatio:.08}},
+    ]);
+    expect(result).toHaveLength(1);expect(result[0]!.text).toContain('function). For example');expect(result[0]!.kind).toBe('formula');expect(result[0]!.sourceRegions?.map(r=>r.pageNumber)).toEqual([2,3]);
+    expect(mergePdfCrossPageContinuations([
+      {id:'a',pageNumber:2,blockIndex:0,text:'A known transformation.',sourceAnchor:{leftRatio:.1,topRatio:.9,widthRatio:.4,heightRatio:.04}},
+      {id:'b',pageNumber:3,blockIndex:0,kind:'formula',text:'x = y + z',sourceAnchor:{leftRatio:.1,topRatio:.08,widthRatio:.4,heightRatio:.08}},
+    ])).toHaveLength(2);
+  });
+  it('keeps a wrapped scientific claim in one item without swallowing the next item or heading', () => {
+    const result = preparePdfDocumentTranslationPages([{
+      pageNumber: 1, pageWidth: 600, pageHeight: 800, items: [
+        positioned('In summary,', 54, 80, 150),
+        positioned('1. A CNP is a conditional distribution over functions', 64, 105, 290),
+        positioned('trained to model the empirical conditional distributions', 78, 120, 290),
+        positioned('of functions f ~ P.', 78, 135, 180),
+        positioned('2. A CNP is permutation invariant in O and T.', 64, 160, 290),
+        positioned('3. A CNP has linear prediction complexity.', 64, 185, 290),
+        positioned('3. Related research', 54, 220, 170, 14),
+        positioned('The next section starts a separate paragraph.', 54, 245, 300),
+      ],
+    }]);
+    expect(result.blocks.map(block => block.text)).toEqual([
+      'In summary,',
+      '1. A CNP is a conditional distribution over functions trained to model the empirical conditional distributions of functions f ~ P.',
+      '2. A CNP is permutation invariant in O and T.',
+      '3. A CNP has linear prediction complexity.',
+      '3. Related research',
+      'The next section starts a separate paragraph.',
+    ]);
+    const claim = result.blocks[1]!;
+    const regions = claim.sourceRegions ?? [{ pageNumber: 1, sourceAnchor: claim.sourceAnchor! }];
+    expect(Math.min(...regions.map(region => region.sourceAnchor.topRatio))).toBeLessThan(105 / 800);
+    expect(Math.max(...regions.map(region => region.sourceAnchor.topRatio + region.sourceAnchor.heightRatio))).toBeLessThan(160 / 800);
+  });
+
+  it('does not join different list items even when the previous item ends with a connector', () => {
+    const blocks = mergePdfDocumentTranslationContinuationBlocks([
+      { id: 'a', pageNumber: 1, blockIndex: 0, text: '1. A model has observations and', sourceAnchor: { leftRatio: .1, topRatio: .2, widthRatio: .4, heightRatio: .04 } },
+      { id: 'b', pageNumber: 1, blockIndex: 1, text: '2. A model has targets.', sourceAnchor: { leftRatio: .1, topRatio: .25, widthRatio: .4, heightRatio: .04 } },
+    ]);
+    expect(blocks).toHaveLength(2);
+  });
+
+  it('joins a wrapped pair of equation references without treating it as a numbered list', () => {
+    const merged=mergePdfDocumentTranslationContinuationBlocks([
+      {id:'a',pageNumber:1,blockIndex:0,kind:'formula',text:'We illustrate the transformations defined by',sourceAnchor:{leftRatio:.1,topRatio:.2,widthRatio:.4,heightRatio:.05}},
+      {id:'b',pageNumber:1,blockIndex:1,text:'(10) and (14) in figure 1. Both maps are invertible.',sourceAnchor:{leftRatio:.1,topRatio:.26,widthRatio:.4,heightRatio:.05}},
+    ]);
+    expect(merged).toHaveLength(1);expect(merged[0]!.text).toContain('defined by (10) and (14) in figure 1.');
+    expect(mergePdfDocumentTranslationContinuationBlocks([
+      {id:'a',pageNumber:1,blockIndex:0,text:'The first item is',sourceAnchor:{leftRatio:.1,topRatio:.2,widthRatio:.4,heightRatio:.05}},
+      {id:'b',pageNumber:1,blockIndex:1,text:'(2) a separate claim.',sourceAnchor:{leftRatio:.1,topRatio:.26,widthRatio:.4,heightRatio:.05}},
+    ])).toHaveLength(2);
+  });
+
+  it('does not mistake a wrapped author initial for the next body list item', () => {
+    const result = preparePdfDocumentTranslationPages([{
+      pageNumber: 9, pageWidth: 600, pageHeight: 800, items: [
+        positioned('Blundell, C., Cornebise, J., and Wierstra,', 54, 100, 300),
+        positioned('D. Weight uncertainty in neural networks.', 54, 115, 300),
+        positioned('arXiv preprint, 2015.', 54, 130, 180),
+      ],
+    }]);
+    expect(result.blocks.map(block => block.text)).toEqual([
+      'Blundell, C., Cornebise, J., and Wierstra, D. Weight uncertainty in neural networks. arXiv preprint, 2015.',
+    ]);
+  });
+});
 
 function page(
   pageNumber: number,
@@ -234,6 +338,31 @@ describe('PDF document translation', () => {
     ]);
   });
 
+  it('keeps a wrapped inline citation with the preceding prose line', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(2, [
+      positioned('operators (LASSO) [47]. TVAL3', 54, 100, 500),
+      positioned('[23] using total variation regularization, and D-AMP [32]', 54, 115, 500),
+      positioned('uses a denoising prior to reconstruct visual information.', 54, 130, 500),
+    ])]);
+
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      'operators (LASSO) [47]. TVAL3 [23] using total variation regularization, ' +
+        'and D-AMP [32] uses a denoising prior to reconstruct visual information.',
+    ]);
+  });
+
+  it('keeps genuine numbered reference entries as separate paragraphs', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(9, [
+      positioned('[22] J. Smith. A reconstruction method.', 54, 100, 500),
+      positioned('[23] A. Jones. A learned reconstruction method.', 54, 115, 500),
+    ])]);
+
+    expect(prepared.blocks.map((block) => block.text)).toEqual([
+      '[22] J. Smith. A reconstruction method.',
+      '[23] A. Jones. A learned reconstruction method.',
+    ]);
+  });
+
   it('keeps a prose line containing an inline equation out of table mode', () => {
     const prepared = preparePdfDocumentTranslationPages([page(5, [
       positioned('will enforce the symmetry constraint F ◦ F˜', 54, 100, 200),
@@ -246,6 +375,31 @@ describe('PDF document translation', () => {
       kind: 'formula',
       text: 'will enforce the symmetry constraint F ◦ F˜\t= I\tby incorporating it in training.',
     });
+  });
+
+  it('keeps inline superscripts and subscripts on their surrounding prose line', () => {
+    const prepared = preparePdfDocumentTranslationPages([page(4, [
+      positioned('denoiser with learnable parameters θ. The initialization in-', 50, 100, 240, 10),
+      positioned('put is', 50, 115, 24, 10),
+      positioned('X', 78, 115, 8, 10),
+      positioned('0', 86, 119.5, 4, 7),
+      positioned('=', 96, 115, 8, 10),
+      positioned('Φ', 108, 115, 8, 10),
+      positioned('⊤', 116, 113.5, 6, 7),
+      positioned('YΨ. Regarding the design of', 123, 115, 118, 10),
+      positioned('D', 244, 115, 8, 10),
+      positioned('(θ,k)', 252, 119.5, 18, 7),
+      positioned(', we', 270, 115, 18, 10),
+      positioned('propose a hybrid-attention Transformer as a building block,', 50, 130, 238, 10),
+      positioned('which will be introduced in detail in Sec. 3.2.', 50, 145, 210, 10),
+    ])]);
+
+    expect(prepared.blocks).toHaveLength(1);
+    expect(prepared.blocks[0]!.text).toContain(
+      'The initialization in- put is X0 = Φ⊤YΨ. Regarding the design of D(θ,k), we propose',
+    );
+    expect(prepared.blocks[0]!.sourceAnchor!.topRatio).toBeLessThan(.13);
+    expect(prepared.blocks[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.06);
   });
 
   it('starts a generic colon-led paper subsection on a new paragraph', () => {
@@ -307,6 +461,40 @@ describe('PDF document translation', () => {
     expect(text.indexOf('Left paragraph one.')).toBeLessThan(text.indexOf('Left paragraph three.'));
     expect(text.indexOf('Left paragraph three.')).toBeLessThan(text.indexOf('Right paragraph one.'));
     expect(text.indexOf('Right paragraph one.')).toBeLessThan(text.indexOf('Right paragraph three.'));
+  });
+
+  it('does not bridge staggered columns through inline script atoms', () => {
+    const leftTops = Array.from({ length: 6 }, (_, index) => 100 + index * 11.95);
+    const rightTops = leftTops.map((top) => top + 5.3);
+    const prepared = preparePdfDocumentTranslationPages([page(4, [
+      positioned('The denoiser D', 54, leftTops[0]!, 64, 10),
+      positioned('(θ,k)', 118, leftTops[0]! + 4.5, 18, 7),
+      positioned('uses trainable parameters', 139, leftTops[0]!, 110, 10),
+      ...leftTops.slice(1).map((top, index) => positioned(
+        index === 4 ? 'Left column ends here.' : `Left continuation ${index + 2}`,
+        54,
+        top,
+        220,
+        10,
+      )),
+      ...rightTops.map((top, index) => positioned(
+        index === 5 ? 'Right column ends here.' : `Right continuation ${index + 1}`,
+        330,
+        top,
+        220,
+        10,
+      )),
+    ])]);
+
+    expect(prepared.multiColumnPages).toBe(1);
+    expect(prepared.blocks[0]!.text).toBe(
+      'The denoiser D(θ,k) uses trainable parameters Left continuation 2 ' +
+      'Left continuation 3 Left continuation 4 Left continuation 5 Left column ends here.',
+    );
+    expect(prepared.blocks[1]!.text).toBe(
+      'Right continuation 1 Right continuation 2 Right continuation 3 ' +
+      'Right continuation 4 Right continuation 5 Right column ends here.',
+    );
   });
 
   it('keeps a spanning title before both body columns', () => {
@@ -466,6 +654,35 @@ describe('PDF document translation', () => {
     expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.2);
   });
 
+  it('captures a tall vector diagram with more than 28 text fragments', () => {
+    const fragments = Array.from({ length: 44 }, (_, index) => ({
+      id: `P4B${index + 1}`,
+      pageNumber: 4,
+      blockIndex: index,
+      text: `Stage ${index + 1}`,
+      kind: 'table' as const,
+      sourceAnchor: {
+        leftRatio: index % 2 ? .48 : .08,
+        topRatio: .085 + index * .01,
+        widthRatio: .28,
+        heightRatio: .009,
+      },
+    }));
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      ...fragments,
+      {
+        id: 'P4B45', pageNumber: 4, blockIndex: 44,
+        text: 'Figure 2. Illustration of the proposed reconstruction network.',
+        sourceAnchor: { leftRatio: .07, topRatio: .535, widthRatio: .84, heightRatio: .035 },
+      },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]!.kind).toBe('figure');
+    expect(grouped[0]!.sourceAnchor!.topRatio).toBeLessThan(.08);
+    expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.49);
+  });
+
   it('suppresses text-layer chart fragments contained by an inferred figure crop', () => {
     const grouped = groupPdfDocumentTranslationVisualObjects([
       {
@@ -560,6 +777,81 @@ describe('PDF document translation', () => {
     });
     expect(grouped[0]!.sourceAnchor!.topRatio).toBe(0);
     expect(grouped[0]!.sourceAnchor!.heightRatio).toBeGreaterThan(.3);
+  });
+
+  it('uses preceding prose as the upper boundary for a tall raster figure', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P4B1', pageNumber: 4, blockIndex: 0,
+        text: 'The preceding paragraph ends before the full-page figure.',
+        sourceAnchor: { leftRatio: .07, topRatio: .07, widthRatio: .84, heightRatio: .05 },
+      },
+      {
+        id: 'P4B2', pageNumber: 4, blockIndex: 1,
+        text: 'Figure 3. A tall qualitative comparison across all reconstruction stages.',
+        sourceAnchor: { leftRatio: .07, topRatio: .72, widthRatio: .84, heightRatio: .04 },
+      },
+    ]);
+
+    const figure = grouped.find((block) => block.kind === 'figure');
+    expect(figure?.sourceAnchor?.topRatio).toBeCloseTo(.128);
+    expect(figure?.sourceAnchor?.heightRatio).toBeGreaterThan(.63);
+    expect(grouped[0]!.text).toContain('preceding paragraph');
+  });
+
+  it('keeps a short structured continuation in its figure caption', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P7B1', pageNumber: 7, blockIndex: 0,
+        text: 'Figure 4. Experimental results under different illumination at',
+        sourceAnchor: { leftRatio: .08, topRatio: .28, widthRatio: .4, heightRatio: .025 },
+      },
+      {
+        id: 'P7B2', pageNumber: 7, blockIndex: 1,
+        text: 'SR = 25%.', kind: 'code',
+        sourceAnchor: { leftRatio: .08, topRatio: .305, widthRatio: .09, heightRatio: .02 },
+      },
+    ]);
+
+    expect(grouped).toHaveLength(1);
+    expect(grouped[0]).toMatchObject({
+      kind: 'figure',
+      text: 'Figure 4. Experimental results under different illumination at SR = 25%.',
+    });
+  });
+
+  it('does not extend a figure crop into a captioned table above it', () => {
+    const grouped = groupPdfDocumentTranslationVisualObjects([
+      {
+        id: 'P6B1', pageNumber: 6, blockIndex: 0,
+        text: 'Table 1. Average reconstruction performance.',
+        sourceAnchor: { leftRatio: .07, topRatio: .08, widthRatio: .84, heightRatio: .035 },
+      },
+      {
+        id: 'P6B2', pageNumber: 6, blockIndex: 1,
+        text: 'Method\t10%\t25%\t50%', kind: 'table',
+        sourceAnchor: { leftRatio: .15, topRatio: .12, widthRatio: .68, heightRatio: .05 },
+      },
+      {
+        id: 'P6B3', pageNumber: 6, blockIndex: 2,
+        text: 'HATNet\t32.26\t37.24\t42.05', kind: 'table',
+        sourceAnchor: { leftRatio: .15, topRatio: .17, widthRatio: .68, heightRatio: .11 },
+      },
+      {
+        id: 'P6B4', pageNumber: 6, blockIndex: 3,
+        text: 'Figure 3. Visualization of different reconstruction methods.',
+        sourceAnchor: { leftRatio: .2, topRatio: .62, widthRatio: .58, heightRatio: .035 },
+      },
+    ]);
+
+    const table = grouped.find((block) => block.kind === 'table');
+    const figure = grouped.find((block) => block.kind === 'figure');
+    expect(table).toBeDefined();
+    expect(figure?.sourceAnchor?.topRatio).toBeGreaterThan(.28);
+    expect(figure?.sourceAnchor?.topRatio).toBeLessThan(.32);
+    expect(figure?.sourceAnchor?.topRatio).toBeGreaterThan(
+      table!.sourceAnchor!.topRatio + table!.sourceAnchor!.heightRatio,
+    );
   });
 
   it('stops a table object before following prose and a numbered section', () => {
@@ -860,5 +1152,33 @@ describe('PDF document translation', () => {
       '2 Methods:',
       'The method description follows the heading.',
     ]);
+  });
+  it('keeps a numbered logarithmic continuation in the formula instead of creating a table row',()=>{
+    const prepared=preparePdfDocumentTranslationPages([page(1,[
+      positioned('The bound is:',54,80,90),
+      positioned('F(x)=E[log q(z)]',75,105,170),
+      positioned('− E',85,131,25),positioned('ln |1 + u ψ(z)|',150,131,120),positioned('(20)',450,131,25),
+      positioned('where the parameter is fixed.',54,165,200),
+    ])]);
+    const block=prepared.blocks.find(block=>block.text.includes('(20)'))!;
+    expect(block.kind).toBe('formula');
+    expect(block.text).toContain('F(x)');
+    expect(block.sourceEquations?.map(row=>row.number)).toEqual(['20']);
+  });
+  it('keeps panel settings, compact legend codes and subpanel labels inside the figure, with surrounding prose intact',()=>{
+    const block=(id:string,text:string,top:number,kind?:'formula'|'table')=>({id,pageNumber:1,blockIndex:0,text,...(kind?{kind}:{}),sourceAnchor:{leftRatio:.1,topRatio:top,widthRatio:.35,heightRatio:.018}});
+    const grouped=groupPdfDocumentTranslationVisualObjects([
+      block('body','The preceding paragraph remains complete.',.1),
+      block('settings','K = 2 K = 8 K = 32',.2,'formula'),
+      block('legend','PF PF PF PF 0.0',.225),
+      block('grid','Architecture\t0.5\t0.0',.25,'table'),
+      block('panels','(a) Bound F(x)',.275),
+      block('caption','Figure 1. Comparison of the distributions.',.3),
+      block('after','The following paragraph remains complete.',.36),
+    ]);
+    expect(grouped.map(b=>b.text)).toEqual(['The preceding paragraph remains complete.','Figure 1. Comparison of the distributions.','The following paragraph remains complete.']);
+    expect(grouped[1]!.kind).toBe('figure');
+    expect(grouped[1]!.sourceAnchor!.topRatio).toBeLessThanOrEqual(.2);
+    expect(groupPdfDocumentTranslationVisualObjects(grouped)).toEqual(grouped);
   });
 });

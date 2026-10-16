@@ -1,5 +1,6 @@
 import katex from 'katex';
 import { containsLatexRowStructure } from './latex-structure';
+import { mathMlFontVariants } from './mathml-font-variants';
 
 const NESTED_TAG_PATTERN = /\\tag\s*\{([^{}]{1,40})\}/gu;
 const OVERESCAPED_COMMAND_PATTERN = /(^|[^\\])(\\{2,})([A-Za-z]{2,}\*?)/gu;
@@ -25,13 +26,13 @@ function cacheMathMl(key: string, html: string | undefined): void {
 
 function renderMathMl(tex: string, displayMode: boolean): string | undefined {
   try {
-    return katex.renderToString(tex, {
+    return mathMlFontVariants(katex.renderToString(tex, {
       displayMode,
       output: 'mathml',
       throwOnError: true,
       strict: 'ignore',
       trust: false,
-    });
+    }));
   } catch {
     return undefined;
   }

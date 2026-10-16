@@ -1,6 +1,7 @@
 import { pdfReadingStateId } from './reading-state';
+import {withDocumentStorageLock} from '../translation/document-storage-lock';
 
-const PDF_READING_BOOKMARKS_KEY = 'piPdfReadingBookmarksV1';
+export const PDF_READING_BOOKMARKS_KEY = 'piPdfReadingBookmarksV1';
 export const MAX_PDF_BOOKMARK_DOCUMENTS = 30;
 export const MAX_PDF_BOOKMARKS_PER_DOCUMENT = 50;
 export const MAX_PDF_BOOKMARK_LABEL_LENGTH = 60;
@@ -131,6 +132,7 @@ export async function savePdfReadingBookmarks(
   identity: string,
   bookmarks: PdfReadingBookmark[],
 ): Promise<PdfReadingBookmarkState> {
+  return withDocumentStorageLock(async()=>{
   const [id, stored] = await Promise.all([
     pdfReadingStateId(identity),
     browser.storage.local.get(PDF_READING_BOOKMARKS_KEY),
@@ -142,4 +144,5 @@ export async function savePdfReadingBookmarks(
     [PDF_READING_BOOKMARKS_KEY]: retainPdfReadingBookmarkStates(states),
   });
   return next;
+  });
 }

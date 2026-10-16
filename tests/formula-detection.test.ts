@@ -6,6 +6,13 @@ import {
 } from '../core/translation/formula-detection';
 
 describe('rendered formula detection', () => {
+  it('distinguishes superscript bibliography labels from mathematical powers in PDFs',()=>{
+    expect(shouldUseVisionForPdfFormula('The author thanks the A. E. C. for support. ¹ Kakutani, S., Duke Math. J., 8, 457–459 (1941).')).toBe(false);
+    expect(shouldUseVisionForPdfFormula('² Von Neumann, J., and Morgenstern, O., Theory of Games.')).toBe(false);
+    expect(shouldUseVisionForPdfFormula("Kakutani's theorem simplifies the proof. ¹ Kakutani, S., Duke Math. J.")).toBe(false);
+    for(const text of ['s.t. x ≥ 0','s t x >= 0','s. t. x'])expect(shouldUseVisionForRenderedFormula(text)).toBe(true);
+    for(const text of ['x² + y² = z²','¹ x = y','The theorem¹ holds for x².','¹ Kakutani, S., writes $x^2$.'])expect(shouldUseVisionForPdfFormula(text)).toBe(true);
+  });
   it('keeps exact LaTeX source on the text translation path', () => {
     expect(containsExplicitLatex(String.raw`We minimize $\mathcal{L}=\sum_i x_i^2$.`)).toBe(true);
     expect(shouldUseVisionForRenderedFormula(

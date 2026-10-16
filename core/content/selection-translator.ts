@@ -13,6 +13,8 @@ import type {
   TranslateRuntimeResponse,
   UpdateTranslationResultResponse,
 } from '../messaging/messages';
+import { normalizeExcerptCitation, type ExcerptCitation } from './excerpt-citation';
+import {webExcerptPageUrl,type WebExcerpt} from './web-excerpt-repository';
 import {
   runtimeConnectionErrorMessage,
   type SettingsFocus,
@@ -57,6 +59,7 @@ import {
   type PersistedPdfTranslationMarker,
   type TranslationMarkerAnchor,
   type TranslationMarkerContent,
+  type TranslationMarkerEntry,
   type TranslationMarkerLocationState,
   type TranslationMarkerSummary,
 } from './session-translation-markers';
@@ -334,6 +337,7 @@ async function startSelectionTranslatorInstance(
   let persistentMarkersEnabled = false;
   let persistentStoredMarkerCount = 0;
   let storedPersistentMarkers: PersistedPdfTranslationMarker[] = [];
+  let storedWebExcerpts:WebExcerpt[]=[],webExcerptUrl='',webExcerptLoading=false;
   let persistenceRevision = 0;
   let persistenceWriteQueue: Promise<void> = Promise.resolve();
 
@@ -627,6 +631,8 @@ async function startSelectionTranslatorInstance(
     getSourceMarkSummaries: () => sourceMarkSummaries(),
     onNavigateSourceMark: (markerId) => navigateSourceMark(markerId),
     onRemoveSourceMark: (markerId) => removeSourceMark(markerId),
+    onUpdateSourceMarkCitation: (markerId, citation) => updateSourceMarkCitation(markerId, citation),
+    ...(surface!=='pdf'?{onSetSourceMarkSaved:(markerId:string,saved:boolean)=>setWebExcerptSaved(markerId,saved)}:{}),
     onGetDocumentMemory: () => documentMemoryRequest({
       type: 'GET_DOCUMENT_MEMORY',
       payload: currentDocumentLocator(),
@@ -794,6 +800,42 @@ async function startSelectionTranslatorInstance(
     onTooltipUnmark: () => overlay.refreshSourceMarkState(),
   });
 
+  function restoredWebExcerpt(item:WebExcerpt):TranslationMarkerEntry{
+    const range=document.createRange();range.selectNodeContents(document.body);range.collapse(true);
+    return {markerId:item.markerId,anchor:{kind:'dom-range',range,scope:document.body,...item.anchor},content:{...item.content},result:{requestId:item.markerId.replace(/::(?:full|segment:[^:]+)$/u,''),originalText:item.content.originalText,translatedText:item.content.translatedText,sourceHost:item.content.sourceTitle,completedAt:item.createdAt,warnings:[]}};
+  }
+  async function webExcerptRequest(message:Extract<RuntimeMessage,{type:'GET_WEB_EXCERPTS'|'SAVE_WEB_EXCERPT'|'REMOVE_WEB_EXCERPT'}>):Promise<void>{
+    const url=webExcerptPageUrl(message.payload.pageUrl);
+    const response=await browser.runtime.sendMessage(message) as RuntimeResponse<{excerpts:WebExcerpt[]}>;
+    if(!response.ok)throw new Error(response.error.message);
+    if(webExcerptPageUrl(options.pageUrl?.()??location.href)===url){storedWebExcerpts=response.data.excerpts;webExcerptUrl=url}
+  }
+  async function storeWebExcerpt(entry:TranslationMarkerEntry):Promise<void>{
+    if(entry.anchor.kind!=='dom-range')throw new Error('此标记缺少可保存的网页原文定位。');
+    const pageUrl=webExcerptPageUrl(options.pageUrl?.()??location.href);
+    const {sourceText,prefix,suffix}=entry.anchor;
+    await webExcerptRequest({type:'SAVE_WEB_EXCERPT',payload:{pageUrl,excerpt:{markerId:entry.markerId,pageUrl,anchor:{sourceText,prefix,suffix},content:entry.content,createdAt:entry.result.completedAt??Date.now(),updatedAt:Date.now()}}});
+  }
+  async function setWebExcerptSaved(markerId:string,saved:boolean):Promise<void>{
+    if(surface==='pdf')return;
+    const entry=navigatorMarkerEntries().find(entry=>entry.markerId===markerId);if(!entry)throw new Error('这条标记已被移除。');
+    if(saved)await storeWebExcerpt(entry);else await webExcerptRequest({type:'REMOVE_WEB_EXCERPT',payload:{pageUrl:webExcerptPageUrl(options.pageUrl?.()??location.href),markerId}});
+  }
+  async function refreshWebExcerpts():Promise<void>{
+    if(surface==='pdf'||webExcerptLoading)return;
+    let url:string;try{url=webExcerptPageUrl(options.pageUrl?.()??location.href)}catch{return}
+    if(url===webExcerptUrl)return;webExcerptLoading=true;
+    try{
+      if(webExcerptUrl){markerManager?.clear();storedWebExcerpts=[];persistedMarkerHistory=[]}
+      await webExcerptRequest({type:'GET_WEB_EXCERPTS',payload:{pageUrl:url}});
+      if(webExcerptUrl===url){
+        for(const item of storedWebExcerpts)markerManager?.add(restoredWebExcerpt(item));
+        // add() deliberately does not emit an edit event during restoration.
+        // Rebuild the navigation history explicitly, as PDF restoration does.
+        persistedMarkerHistory=markerHistoryFromEntries(navigatorMarkerEntries());
+      }
+    }finally{webExcerptLoading=false}
+  }
   function overlayHistoryForResult(result: TranslateResult): TranslationHistoryEntry[] {
     const history = combinedOverlayHistory();
     return history.some((entry) => entry.requestId === result.requestId) ? history : [];
@@ -962,6 +1004,7 @@ async function startSelectionTranslatorInstance(
 
   function navigatorMarkerEntries() {
     const entries = markerManager?.entries() ?? [];
+    if(surface!=='pdf'){const ids=new Set(entries.map(entry=>entry.markerId));return [...entries,...storedWebExcerpts.filter(item=>!ids.has(item.markerId)).map(restoredWebExcerpt)]}
     const keys = new Set(entries.flatMap((entry) => {
       const persisted = persistPdfTranslationMarker(entry);
       return persisted ? [persistedPdfMarkerKey(persisted.anchor, persisted.content)] : [];
@@ -982,12 +1025,12 @@ async function startSelectionTranslatorInstance(
       (markerManager?.summaries() ?? []).map((summary) => [summary.markerId, summary]),
     );
     return navigatorMarkerEntries()
-      .map((entry) => active.get(entry.markerId) ?? {
+      .map((entry) => ({...(active.get(entry.markerId) ?? {
         markerId: entry.markerId,
         ...entry.content,
         createdAt: entry.result.completedAt ?? 0,
         locationState: markerManager?.locationStateForEntry(entry) ?? 'pending' as const,
-      })
+      }),...(surface!=='pdf'?{retained:storedWebExcerpts.some(item=>item.markerId===entry.markerId&&(['originalText','translatedText','sourceTitle','sourceUrl','doi','note'] as const).every(key=>item.content[key]===entry.content[key]))}:{})}))
       .sort((left, right) => (
         (left.pageNumber ?? Number.MAX_SAFE_INTEGER) -
           (right.pageNumber ?? Number.MAX_SAFE_INTEGER) ||
@@ -999,6 +1042,7 @@ async function startSelectionTranslatorInstance(
     markerId: string,
   ): Promise<TranslationMarkerLocationState> {
     let entry = markerManager?.entries().find((candidate) => candidate.markerId === markerId);
+    if(!entry&&surface!=='pdf'){const saved=storedWebExcerpts.find(item=>item.markerId===markerId);if(saved){entry=restoredWebExcerpt(saved);markerManager?.add(entry)}}
     if (!entry) {
       const stored = storedPersistentMarkers.find((candidate) => candidate.markerId === markerId);
       const documentId = options.pdfMarkerPersistence?.currentDocumentId();
@@ -1020,6 +1064,7 @@ async function startSelectionTranslatorInstance(
   }
 
   async function removeSourceMark(markerId: string): Promise<void> {
+    if(surface!=='pdf'){if(storedWebExcerpts.some(item=>item.markerId===markerId))await setWebExcerptSaved(markerId,false);markerManager?.remove(markerId);return}
     const activeEntry = markerManager?.entries().find((entry) => entry.markerId === markerId);
     const storedEntry = storedPersistentMarkers.find((marker) => marker.markerId === markerId);
     const target = activeEntry
@@ -1057,6 +1102,35 @@ async function startSelectionTranslatorInstance(
       storedPersistentMarkers = markers;
       persistentStoredMarkerCount = markers.length;
     });
+  }
+
+  async function updateSourceMarkCitation(markerId: string, value: ExcerptCitation): Promise<void> {
+    const citation = normalizeExcerptCitation(value);
+    const entry = navigatorMarkerEntries().find(candidate=>candidate.markerId===markerId);
+    if (!entry) throw new Error('这条标记已被移除。');
+    const {sourceTitle: _title, sourceUrl: _url, doi: _doi, note: _note, ...excerpt} = entry.content;
+    const updated = {...entry, content: {...excerpt, ...citation}};
+    if(surface!=='pdf'){
+      if(storedWebExcerpts.some(item=>item.markerId===markerId))await storeWebExcerpt(updated);
+      markerManager?.add(updated);return;
+    }
+    const adapter = options.pdfMarkerPersistence;
+    const persisted = persistPdfTranslationMarker(updated);
+    const revision = persistenceRevision;
+    const existingKey = persisted ? persistedPdfMarkerKey(persisted.anchor, persisted.content) : undefined;
+    const wasStored = existingKey && storedPersistentMarkers.some(marker=>persistedPdfMarkerKey(marker.anchor,marker.content)===existingKey);
+    if (persisted && adapter?.isAvailable() && (persistentMarkersEnabled || wasStored)) {
+      await enqueuePersistenceWrite(async()=>{
+        if(revision!==persistenceRevision || !adapter.isAvailable()) throw new Error('文档已变化，请重新编辑出处。');
+        const markers = persistentMarkersEnabled
+          ? navigatorMarkerEntries().map(candidate=>persistPdfTranslationMarker(candidate.markerId===markerId?updated:candidate)).filter((marker):marker is PersistedPdfTranslationMarker=>Boolean(marker))
+          : storedPersistentMarkers.map(marker=>persistedPdfMarkerKey(marker.anchor,marker.content)===existingKey?{...marker,content:updated.content}:marker);
+        await adapter.save(markers);
+        storedPersistentMarkers=markers;persistentStoredMarkerCount=markers.length;
+      });
+    }
+    if(revision!==persistenceRevision) throw new Error('文档已变化，请重新编辑出处。');
+    markerManager?.add(updated);
   }
 
   function enqueuePersistenceWrite(task: () => Promise<void>): Promise<void> {
@@ -1439,6 +1513,7 @@ async function startSelectionTranslatorInstance(
   }
 
   function scheduleRefresh(): void {
+    if(surface!=='pdf')void refreshWebExcerpts().catch(()=>undefined);
     if (refreshTimer) clearTimeout(refreshTimer);
     if (surface === 'pdf' && pdfSelectionInProgress) return;
     refreshTimer = setTimeout(refreshSelection, surface === 'pdf' ? 100 : 60);
@@ -2483,6 +2558,8 @@ async function startSelectionTranslatorInstance(
       activeWebRegionSelection?.cancel();
       activeWebRegionSelection = undefined;
       overlay.openSidebar();
+      const firstPersisted=persistedMarkerHistory[0];
+      if(!activeSelection&&firstPersisted)overlay.showResult(firstPersisted,undefined,combinedOverlayHistory(),false);
       refreshSelection();
       return;
     }
@@ -2570,12 +2647,13 @@ async function startSelectionTranslatorInstance(
     })();
   };
 
-  initializationPromise = initializeTranslator();
-  // General webpages need the runtime listener immediately so the background
-  // can detect an in-flight content-script startup without injecting a second
-  // instance. Pi PDF and Overleaf keep their original ordering: finish restore
-  // work before selection listeners become interactive, otherwise a late reset
-  // can erase the retry context created by a user's first translation.
+  initializationPromise = initializeTranslator().then(()=>refreshWebExcerpts().catch(()=>undefined));
+  // Runtime actions queue behind initialization, including an immediate open
+  // after reloading a page with saved excerpts. Selection events still wait
+  // for restore on Pi PDF and Overleaf so a late reset cannot erase a user's
+  // first translation. General webpages also expose readiness during startup
+  // to avoid duplicate injection.
+  browser.runtime.onMessage.addListener(messageListener);
   if (surface !== 'general') {
     await initializationPromise;
   }
@@ -2588,7 +2666,6 @@ async function startSelectionTranslatorInstance(
   document.addEventListener('keyup', scheduleRefresh, true);
   window.addEventListener('resize', scheduleRefresh);
   window.addEventListener('scroll', scheduleRefresh, true);
-  browser.runtime.onMessage.addListener(messageListener);
 
   ctx.onInvalidated(() => {
     if (refreshTimer) clearTimeout(refreshTimer);

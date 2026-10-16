@@ -11,8 +11,12 @@ import type {
 import type { DocumentIdentity } from './document-identity';
 import { normalizeGlossaryTermKey } from '../translation/glossary';
 import { sanitizeLexicalLookup } from '../translation/lexical-lookup';
+import {withDocumentStorageLock} from '../translation/document-storage-lock';
+import {validTermProvenance,normalizeReusedTermKey,termAppliesToLanguage,DocumentTermReuseError,type TermProvenance,type TermSource} from './term-provenance';
+import {isSupportedTargetLanguage,type SupportedTargetLanguage} from '../language/supported-target-languages';
 
-const STORAGE_KEY = 'documentTranslationMemoryV1';
+export const DOCUMENT_MEMORY_STORAGE_KEY = 'documentTranslationMemoryV1';
+const STORAGE_KEY = DOCUMENT_MEMORY_STORAGE_KEY;
 const SCHEMA_VERSION = 1;
 const MAX_DOCUMENTS = 40;
 const MAX_TRANSLATIONS = 20;
@@ -33,6 +37,15 @@ export interface DocumentConfirmedTerm extends GlossaryEntry {
   id: string;
   createdAt: number;
   updatedAt: number;
+  provenance?:TermProvenance;
+}
+export interface DocumentTermInput {id?:string;source:string;target:string;provenance?:TermProvenance}
+export interface DocumentTermSource {documentId:string;label:string;terms:DocumentConfirmedTerm[]}
+export interface DocumentTermSelection {documentId:string;term:DocumentConfirmedTerm}
+export function validConfirmedDocumentTerm(value:unknown):value is DocumentConfirmedTerm{
+  if(!value||typeof value!=='object')return false;
+  const term=value as DocumentConfirmedTerm;
+  return typeof term.id==='string'&&term.id.length>0&&term.id.length<=120&&typeof term.source==='string'&&term.source.trim().length>0&&term.source.length<=120&&typeof term.target==='string'&&term.target.trim().length>0&&term.target.length<=120&&Number.isFinite(term.createdAt)&&Number.isFinite(term.updatedAt)&&(term.provenance===undefined||validTermProvenance(term.provenance));
 }
 
 export interface DocumentTermCandidate extends GlossaryEntry {
@@ -245,7 +258,8 @@ function sameConfirmedTerm(
     left.source === right.source &&
     left.target === right.target &&
     left.createdAt === right.createdAt &&
-    left.updatedAt === right.updatedAt
+    left.updatedAt === right.updatedAt &&
+    JSON.stringify(left.provenance) === JSON.stringify(right.provenance)
   );
 }
 
@@ -419,14 +433,14 @@ function publicSnapshot(memory: StoredDocumentMemory): DocumentMemorySnapshot {
 
 async function mutateWithValue<T>(
   identity: DocumentIdentity,
-  updater: (memory: StoredDocumentMemory) => { memory: StoredDocumentMemory; value: T },
+  updater: (memory: StoredDocumentMemory, all:StoredDocumentMemories) => { memory: StoredDocumentMemory; value: T },
 ): Promise<{ snapshot: DocumentMemorySnapshot; value: T }> {
   let snapshot = publicSnapshot(emptyMemory(identity));
   let value: T | undefined;
-  const operation = writeQueue.then(async () => {
+  const operation = writeQueue.then(()=>withDocumentStorageLock(async () => {
     const all = await readAll();
     const current = sanitizeMemory(all[identity.documentId], identity);
-    const update = updater(current);
+    const update = updater(current,all);
     const proposed = update.memory;
     value = update.value;
     const newestStoredTimestamp = Object.values(all).reduce(
@@ -451,7 +465,7 @@ async function mutateWithValue<T>(
     const compacted = Object.fromEntries(ordered.map((memory) => [memory.documentId, memory]));
     await browser.storage.local.set({ [STORAGE_KEY]: compacted });
     snapshot = publicSnapshot(next);
-  });
+  }));
   writeQueue = operation.catch(() => undefined);
   await operation;
   return { snapshot, value: value as T };
@@ -474,6 +488,49 @@ export async function getDocumentMemory(
   await writeQueue;
   const all = await readAll();
   return publicSnapshot(sanitizeMemory(all[identity.documentId], identity));
+}
+
+/** Read-only suggestions; candidates and recent translations never enter this catalog. */
+export async function listDocumentTermSources(identity:DocumentIdentity,targetLanguage:SupportedTargetLanguage):Promise<DocumentTermSource[]>{
+  if(!isSupportedTargetLanguage(targetLanguage))throw new DocumentTermReuseError('目标语言无效。');
+  await writeQueue;
+  const all=await readAll();
+  return Object.entries(all).filter(([id])=>id!==identity.documentId&&/^doc-[a-z0-9]{1,8}$/u.test(id)).flatMap(([id,raw])=>{
+    const memory=sanitizeMemory(raw,{documentId:id,label:'未记录标题的文档'});
+    const terms=memory.confirmedTerms.filter(validConfirmedDocumentTerm).filter(term=>!term.provenance||term.provenance.confirmed.documentId===id&&term.provenance.confirmed.targetLanguage===targetLanguage);
+    const label=terms.find(term=>term.provenance?.confirmed.documentId===id)?.provenance?.confirmed.title??memory.label;
+    return terms.length?[{documentId:id,label,terms}]:[];
+  });
+}
+
+/** Recheck source snapshots and destination conflicts under the same storage lock. */
+export async function reuseDocumentTerms(identity:DocumentIdentity,context:TermSource,targetLanguage:SupportedTargetLanguage,selections:DocumentTermSelection[]):Promise<DocumentMemorySnapshot>{
+  const now=Date.now();
+  if(!isSupportedTargetLanguage(targetLanguage)||!validTermProvenance({origin:context,confirmed:{...context,targetLanguage,at:now}})||context.documentId!==identity.documentId||!Array.isArray(selections)||!selections.length||selections.length>100)throw new DocumentTermReuseError('请选择并核对要复用的词条。');
+  const result=await mutateWithValue(identity,(memory,all)=>{
+    if(!all[identity.documentId]&&Object.keys(all).length>=MAX_DOCUMENTS)throw new DocumentTermReuseError('本文术语已达 40 份文档，请先备份并清理；现有记录未改变。');
+    const keys=new Set(memory.confirmedTerms.map(term=>normalizeReusedTermKey(term.source)));
+    const additions:DocumentConfirmedTerm[]=[];
+    for(const selection of selections){
+      if(!selection||selection.documentId===identity.documentId||!validConfirmedDocumentTerm(selection.term))throw new DocumentTermReuseError('词条来源无效，请刷新后重新选择。');
+      const source=sanitizeMemory(all[selection.documentId],{documentId:selection.documentId,label:'未记录标题的文档'});
+      const current=source.confirmedTerms.find(term=>term.id===selection.term.id);
+      if(!current||JSON.stringify(current)!==JSON.stringify(selection.term))throw new DocumentTermReuseError('来源词条已变化，请刷新后重新核对；本文未改变。');
+      if(current.provenance&&current.provenance.confirmed.targetLanguage!==targetLanguage)throw new DocumentTermReuseError('词条目标语言不匹配；本文未改变。');
+      if(current.provenance&&current.provenance.confirmed.documentId!==source.documentId)throw new DocumentTermReuseError('词条来源记录不匹配；本文未改变。');
+      const key=normalizeReusedTermKey(current.source);
+      if(keys.has(key))throw new DocumentTermReuseError('本文已有同名术语，请保留现有约定并重新选择；本文未改变。');
+      keys.add(key);
+      const sourceTitle=source.label.trim()||'未记录标题的文档';
+      const origin=current.provenance?.origin??{documentId:source.documentId,title:sourceTitle};
+      const via={documentId:source.documentId,title:current.provenance?.confirmed.documentId===source.documentId?current.provenance.confirmed.title:sourceTitle,termId:current.id,termUpdatedAt:current.updatedAt};
+      additions.push({source:current.source,target:current.target,id:stableId('term',key),createdAt:now,updatedAt:now,provenance:{origin,confirmed:{...context,targetLanguage,at:now},via}});
+    }
+    if(memory.confirmedTerms.length+additions.length>MAX_CONFIRMED_TERMS)throw new DocumentTermCapacityError();
+    const addedKeys=new Set(additions.map(term=>normalizeReusedTermKey(term.source)));
+    return {memory:{...memory,confirmedTerms:[...additions,...memory.confirmedTerms],candidateTerms:memory.candidateTerms.filter(term=>!addedKeys.has(normalizeReusedTermKey(term.source))),updatedAt:now},value:undefined};
+  });
+  return result.snapshot;
 }
 
 function withRememberedDocumentTranslationChange(
@@ -650,6 +707,7 @@ export async function confirmDocumentTerm(
     const confirmed: DocumentConfirmedTerm = existing
       ? { ...existing, target: candidate.target, updatedAt: now }
       : { ...candidate, id: stableId('term', normalizedTerm(candidate.source)), updatedAt: now };
+    if(existing&&existing.target!==candidate.target)delete confirmed.provenance;
     return {
       ...memory,
       updatedAt: now,
@@ -664,20 +722,21 @@ export async function confirmDocumentTerm(
 
 export async function upsertDocumentTerm(
   identity: DocumentIdentity,
-  input: { id?: string; source: string; target: string },
+  input: DocumentTermInput,
 ): Promise<DocumentMemorySnapshot> {
   return (await upsertDocumentTermWithReceipt(identity, input)).memory;
 }
 
 function withUpsertedDocumentTerm(
   memory: StoredDocumentMemory,
-  input: { id?: string; source: string; target: string },
+  input: DocumentTermInput,
 ): {
   memory: StoredDocumentMemory;
   receipt?: TranslationCorrectionTermReceipt;
   change?: DocumentTermChangeReceipt;
 } {
   const clean = sanitizeConfirmedTerm(input.source, input.target);
+  if(input.provenance!==undefined&&!validTermProvenance(input.provenance))throw new DocumentTermReuseError('术语来源记录无效。');
   if (!clean) return { memory };
   const sourceKey = normalizedTerm(clean.source);
   const existingBySource = memory.confirmedTerms.find(
@@ -694,6 +753,7 @@ function withUpsertedDocumentTerm(
     id,
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
+    ...(input.provenance?{provenance:input.provenance}:existing&&existing.source===clean.source&&existing.target===clean.target&&existing.provenance?{provenance:existing.provenance}:{}),
   };
   const removedCandidates = memory.candidateTerms.filter(
     (candidate) => normalizedTerm(candidate.source) === sourceKey,
@@ -731,12 +791,14 @@ function withUpsertedDocumentTerm(
  */
 export async function upsertDocumentTermWithReceipt(
   identity: DocumentIdentity,
-  input: { id?: string; source: string; target: string },
+  input: DocumentTermInput,
 ): Promise<{
   memory: DocumentMemorySnapshot;
   termChange?: TranslationCorrectionTermReceipt;
 }> {
-  const update = await mutateWithValue(identity, (memory) => {
+  if(input.provenance&&(input.provenance.confirmed.documentId!==identity.documentId||input.provenance.origin.documentId!==identity.documentId||input.provenance.via))throw new DocumentTermReuseError('直接保存词条时，来源必须是本文。');
+  const update = await mutateWithValue(identity, (memory,all) => {
+    if(input.provenance&&!all[identity.documentId]&&Object.keys(all).length>=MAX_DOCUMENTS)throw new DocumentTermReuseError('本文术语已达 40 份文档，请先备份并清理；现有记录未改变。');
     const next = withUpsertedDocumentTerm(memory, input);
     return { memory: next.memory, value: next.receipt };
   });
@@ -1230,10 +1292,12 @@ export function mergeDocumentGlossary(
 export function mergeDocumentGlossaryWithScope(
   globalGlossary: GlossaryEntry[],
   memory: Pick<DocumentMemorySnapshot, 'confirmedTerms'>,
+  targetLanguage?:string,
 ): AppliedGlossaryTerm[] {
-  const documentSources = new Set(memory.confirmedTerms.map((term) => normalizedTerm(term.source)));
+  const terms=targetLanguage?memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,targetLanguage)):memory.confirmedTerms;
+  const documentSources = new Set(terms.map((term) => normalizedTerm(term.source)));
   return [
-    ...memory.confirmedTerms.map(({ source, target }) => ({
+    ...terms.map(({ source, target }) => ({
       source,
       target,
       scope: 'document' as const,

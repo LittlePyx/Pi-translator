@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Pi PDF - Pi Translator</title>
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="../../ui/product-theme.css" />
+    <link rel="stylesheet" href="./design.css" />
   </head>
   <body>
     <header id="pdf-toolbar" class="toolbar">
@@ -14,24 +16,14 @@
       </div>
       <div class="document-actions">
         <input id="file-input" type="file" accept="application/pdf,.pdf" hidden />
-        <button id="choose-file" class="primary" type="button">打开 PDF</button>
+
         <label id="page-jump" class="page-jump" title="跳转到页码" hidden>
           <input id="page-number" type="number" min="1" value="1" inputmode="numeric" aria-label="当前页码" />
           <span aria-hidden="true">/</span>
           <output id="page-count" aria-label="总页数">0</output>
         </label>
-        <button
-          id="open-outline"
-          class="outline-open"
-          type="button"
-          title="打开文档导航"
-          aria-label="打开文档导航"
-          aria-controls="pdf-outline"
-          aria-expanded="false"
-          disabled
-          hidden
-        >导航</button>
-        <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
+
+
         <button
           id="translate-document"
           class="document-translate"
@@ -44,14 +36,7 @@
         >译全文</button>
       </div>
       <div class="region-tools">
-        <button
-          id="recognize-page"
-          class="region-action"
-          type="button"
-          title="用 Qwen OCR 识别当前页并生成临时文字层"
-          disabled
-          hidden
-        >识别本页</button>
+
         <button
           id="region-translate"
           class="region-action"
@@ -76,13 +61,49 @@
           <div id="region-queue-list" class="queue-list"></div>
         </section>
       </div>
+
+
+      <details id="pdf-reader-menu" class="pdf-reader-menu">
+        <summary aria-label="更多阅读操作">更多</summary>
+        <div class="pdf-reader-menu-content">
+          <div class="pdf-reader-menu-group"><span>文档</span>
+        <button id="choose-file" class="primary" type="button">打开 PDF</button>
+        <button
+          id="open-outline"
+          class="outline-open"
+          type="button"
+          title="打开文档导航"
+          aria-label="打开文档导航"
+          aria-controls="pdf-outline"
+          aria-expanded="false"
+          disabled
+          hidden
+        >导航</button>
+        <button id="open-search" class="search-open" type="button" title="搜索 PDF（Ctrl+F）" aria-label="搜索 PDF" disabled>搜索</button>
+          </div>
+          <div class="pdf-reader-menu-group" id="pdf-reader-view-tools"><span>阅读</span>
       <div class="zoom-controls" aria-label="缩放控制">
         <button id="zoom-out" type="button" title="缩小" disabled>−</button>
         <output id="zoom-value">125%</output>
         <button id="zoom-in" type="button" title="放大" disabled>＋</button>
         <button id="fit-width" type="button" title="适合宽度" aria-label="适合宽度" disabled>↔</button>
       </div>
+          </div>
+          <div class="pdf-reader-menu-group" id="pdf-reader-recognition-tools"><span>识别</span>
+        <button
+          id="recognize-page"
+          class="region-action"
+          type="button"
+          title="用 Qwen OCR 识别当前页并生成临时文字层"
+          disabled
+          hidden
+        >识别本页</button>
+          </div>
+          <div class="pdf-reader-menu-group">
       <button id="open-settings" class="quiet" type="button">设置</button>
+          </div>
+        </div>
+      </details>
     </header>
 
     <aside
@@ -99,7 +120,7 @@
           </span>
           <span>
             <strong>PDF 全文翻译</strong>
-            <small id="pdf-document-translation-status" aria-live="polite">准备文档内容…</small>
+            <small id="pdf-document-translation-document-name"></small>
           </span>
         </div>
         <div class="pdf-document-translation-view-switch" role="group" aria-label="PDF 阅读视图">
@@ -115,21 +136,17 @@
             aria-label="对照原文与译文"
             aria-pressed="true"
           >对照</button>
-          <button
-            id="pdf-document-translation-view-source"
-            type="button"
-            aria-label="只看 PDF 原页"
-            aria-pressed="false"
-          >原页</button>
         </div>
         <button
           id="pdf-document-translation-close"
           type="button"
-          title="关闭全文翻译面板"
-          aria-label="关闭全文翻译面板"
-        >×</button>
+          title="返回 PDF 原页"
+          aria-label="返回 PDF 原页"
+        >返回原页</button>
       </header>
       <section class="pdf-document-translation-overview" aria-label="PDF 全文翻译进度与操作">
+        <button id="pdf-research-return" class="pdf-research-return" type="button" hidden>← 返回阅读处</button>
+        <small id="pdf-document-translation-status" class="pdf-document-translation-task-status" aria-live="polite">准备文档内容…</small>
         <div
           id="pdf-document-translation-progress"
           class="pdf-document-translation-progress"
@@ -144,26 +161,38 @@
           <button id="pdf-document-translation-primary" class="primary" type="button">开始翻译</button>
           <button id="pdf-document-translation-stop" type="button" hidden>停止</button>
           <details id="pdf-document-translation-copy-menu" class="pdf-document-translation-copy-menu" hidden>
-            <summary>导出</summary>
+            <summary>更多</summary>
             <div>
-              <button id="pdf-document-translation-copy-translation" type="button">复制纯译文</button>
-              <button id="pdf-document-translation-copy-bilingual" type="button">复制双语 Markdown</button>
-              <span role="separator"></span>
-              <button id="pdf-document-translation-download-translation" type="button">下载纯译文 .md</button>
-              <button
-                id="pdf-document-translation-download-bilingual"
-                type="button"
-                title="将已检测到的图表和表格截图内嵌到对应双语段落"
-              >下载图文双语 .md</button>
-              <button id="pdf-document-translation-download-html" type="button">下载带原页图的 HTML</button>
-              <button
-                id="pdf-document-translation-print-layout"
-                type="button"
-                title="完整保留每张原页，并在其后生成对应译文页"
-              >生成原页对照 PDF…</button>
+              <button id="pdf-library-search" type="button">搜索译文</button>
+              <button id="pdf-library-source" type="button" hidden>选择原 PDF 对照</button>
+              <button id="pdf-library-back" type="button" hidden>返回文档库</button>
+              <button id="pdf-document-translation-show-settings" type="button">翻译设置</button>
+              <button id="pdf-document-undo-correction" type="button" hidden>撤销上次段落修正</button>
+              <span id="pdf-document-translation-settings-separator" role="separator" hidden></span>
+              <div id="pdf-document-translation-export-actions" class="pdf-document-translation-export-actions">
+                <button id="pdf-document-translation-copy-translation" type="button">复制纯译文</button>
+                <button id="pdf-document-translation-copy-bilingual" type="button">复制双语 Markdown</button>
+                <span role="separator"></span>
+                <button id="pdf-document-translation-download-archive" type="button" hidden>下载旧分段译文 .md</button>
+                <button id="pdf-document-translation-download-translation" type="button">下载纯译文 .md</button>
+                <button
+                  id="pdf-document-translation-download-bilingual"
+                  type="button"
+                  title="将已检测到的图表和表格截图内嵌到对应双语段落"
+                >下载图文双语 .md</button>
+                <button id="pdf-document-translation-download-html" type="button">下载带原页图的 HTML</button>
+                <button
+                  id="pdf-document-translation-print-layout"
+                  type="button"
+                  title="完整保留每张原页，并在其后生成对应译文页"
+                >生成原页对照 PDF…</button>
+              </div>
+              <span id="pdf-document-translation-restart-separator" role="separator" hidden></span>
+              <button id="pdf-document-history" type="button" hidden>校订历史</button>
+              <button id="pdf-document-terms" type="button" hidden>检查术语</button>
+              <button id="pdf-document-translation-clear" type="button" hidden title="保留人工修正；其他段落的新译文通过校验并保存后替换旧稿">重新翻译</button>
             </div>
           </details>
-          <button id="pdf-document-translation-clear" type="button" hidden>重新翻译</button>
         </div>
         <small id="pdf-document-translation-copy-feedback" class="pdf-document-translation-copy-feedback" aria-live="polite"></small>
       </section>
@@ -200,35 +229,8 @@
               />
               <button type="submit">应用</button>
             </form>
-            <div class="pdf-document-translation-section-options">
-              <label title="参考文献条目默认保留原文；勾选后从结果与导出中排除，遇到附录标题后停止">
-                <input id="pdf-document-translation-skip-references" type="checkbox" disabled />
-                <span>跳过参考文献</span>
-              </label>
-              <label title="从识别到的 Appendix、Supplementary Materials 或附录标题开始跳过">
-                <input id="pdf-document-translation-skip-appendix" type="checkbox" disabled />
-                <span>跳过附录</span>
-              </label>
-            </div>
             <small id="pdf-document-translation-range-feedback" aria-live="polite"></small>
           </section>
-          <div id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
-            <span>
-              <strong>关闭后保留译文</strong>
-              <small id="pdf-document-translation-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
-            </span>
-            <span class="pdf-document-translation-retention-actions">
-              <button id="pdf-document-translation-retention-manage" type="button">管理</button>
-              <label class="pdf-document-translation-retention-switch">
-                <input
-                  id="pdf-document-translation-retention-toggle"
-                  type="checkbox"
-                  role="switch"
-                  aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
-                />
-              </label>
-            </span>
-          </div>
           <section
             id="pdf-document-translation-multimodal"
             class="pdf-document-translation-multimodal"
@@ -241,7 +243,7 @@
                 checked
               />
               <span>
-                <strong>公式文档统一多模态（推荐）</strong>
+                <strong>智能处理公式与图表</strong>
                 <small id="pdf-document-translation-multimodal-status" aria-live="polite">
                   检测到公式后，当前翻译范围全部使用视觉模型
                 </small>
@@ -261,10 +263,67 @@
             </span>
             <button id="pdf-document-translation-ocr-action" type="button"></button>
           </section>
+          <details id="pdf-document-options-more" class="pdf-document-options-more"><summary>更多选项</summary><div class="pdf-document-options-more-body">
+          <div id="pdf-document-translation-retention" class="pdf-document-translation-retention" hidden>
+            <span>
+              <strong>关闭后保留译文</strong>
+              <small id="pdf-document-translation-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
+            </span>
+            <span class="pdf-document-translation-retention-actions">
+              <button id="pdf-document-translation-retention-manage" type="button">管理</button>
+              <label class="pdf-document-translation-retention-switch">
+                <input
+                  id="pdf-document-translation-retention-toggle"
+                  type="checkbox"
+                  role="switch"
+                  aria-label="关闭 Edge 后仍在本机保留这份 PDF 的全文译文"
+                />
+              </label>
+            </span>
+          </div>
+            <div class="pdf-document-translation-section-options">
+              <label title="参考文献条目默认保留原文；勾选后从结果与导出中排除，遇到附录标题后停止">
+                <input id="pdf-document-translation-skip-references" type="checkbox" disabled />
+                <span>跳过参考文献</span>
+              </label>
+              <label title="从识别到的 Appendix、Supplementary Materials 或附录标题开始跳过">
+                <input id="pdf-document-translation-skip-appendix" type="checkbox" disabled />
+                <span>跳过附录</span>
+              </label>
+            </div>
+          <details id="pdf-document-budget-details" class="pdf-document-advanced"><summary>请求上限与用量</summary>
+          <section class="pdf-document-request-budget" aria-label="任务请求上限">
+            <label>任务请求上限 <input id="pdf-document-request-limit" type="number" min="0" max="100000" step="1" value="0" aria-label="任务请求上限，0为不限" /></label>
+            <small>0 为不限。按文字批次、视觉区域和 OCR 页计数。公式对应失败时，可能补一次仅正文修复，也计入上限；接口自动重试可能额外计费。</small>
+            <output id="pdf-document-request-usage" aria-live="polite">本次尚未发送请求</output>
+            <p class="field-help">文字粗估不含提示词、图片、OCR 和自动重试。已报告用量按设置中的单价计算；缓存复用不重复计入。未报告或失败请求可能仍有费用，请以服务商账单为准。</p>
+          </section>
+          </details>
+        <details id="pdf-document-cost-details" class="pdf-document-cost-details"><summary>费用</summary><div>
+        <output id="pdf-document-cost-estimate" class="pdf-document-cost-estimate" aria-live="polite" title="已报告用量按自填单价计算；文字粗估不含提示词、图片、OCR 和重试。未报告请求的费用未知，以服务商账单为准。">费用尚未知</output>
+        </div></details>
+          <details class="pdf-document-advanced"><summary>处理说明</summary>
+            <p id="pdf-document-processing-details" class="pdf-document-translation-note"></p>
+          </details>
+          </div></details>
           <p id="pdf-document-translation-note" class="pdf-document-translation-note">
-            预览和范围调整只在本地完成；点击开始即授权当前范围在本次任务中按上方方式发送。
+            预览在本地完成；开始后将按当前范围和方式发送内容。
           </p>
+          <details id="pdf-document-trial" class="pdf-document-trial" hidden aria-label="先试译一段"><summary>先试译一段</summary><div class="pdf-document-trial-body">
+            <label>试译段落 <select id="pdf-document-trial-block" aria-label="选择试译段落"></select></label>
+            <button id="pdf-document-trial-start" type="button">试译本段</button>
+            <small id="pdf-document-trial-note"></small>
+          </div></details>
         </div>
+      </details>
+      <details id="pdf-document-review" class="pdf-document-review" hidden>
+        <summary id="pdf-document-review-summary">核对清单</summary>
+        <label>筛选 <select id="pdf-document-review-filter" aria-label="核对清单筛选">
+          <option value="all">全部待处理</option><option value="untranslated">尚未翻译</option>
+          <option value="failed">翻译失败</option><option value="formula">译文待核对</option>
+          <option value="original">保留原文</option>
+        </select></label>
+        <div id="pdf-document-review-list" class="pdf-document-review-list"></div>
       </details>
       <section id="pdf-document-translation-reader" class="pdf-document-translation-reader" aria-label="PDF 译文阅读">
         <header>
@@ -327,6 +386,7 @@
         aria-label="搜索当前 PDF"
         placeholder="搜索当前 PDF"
       />
+      <label class="pdf-search-scope"><span class="visually-hidden">搜索范围</span><select id="pdf-search-scope" aria-label="搜索范围"><option value="source">原文</option><option value="translation">译文</option><option value="all">原文与译文</option></select></label>
       <output id="pdf-search-status" class="pdf-search-status" aria-live="polite">输入关键词</output>
       <button id="pdf-search-previous" type="button" title="上一个结果（Shift+Enter）" aria-label="上一个搜索结果" disabled>↑</button>
       <button id="pdf-search-next" type="button" title="下一个结果（Enter）" aria-label="下一个搜索结果" disabled>↓</button>
@@ -370,6 +430,32 @@
       </div>
     </section>
 
+    <dialog id="pdf-paragraph-editor" class="pdf-paragraph-editor" aria-labelledby="pdf-paragraph-editor-title">
+      <form id="pdf-paragraph-edit-form">
+        <header><div><h2 id="pdf-paragraph-editor-title">修正本段</h2><p id="pdf-paragraph-editor-context">只修改文字，公式和命令保持锁定。</p></div><button id="pdf-paragraph-editor-close" type="button" aria-label="关闭段落修正">×</button></header>
+        <div id="pdf-paragraph-editor-parts" class="pdf-paragraph-editor-parts"></div>
+        <footer><p id="pdf-paragraph-editor-status" role="status" aria-live="polite"></p><button id="pdf-paragraph-editor-cancel" type="button">取消</button><button id="pdf-paragraph-editor-save" class="primary" type="submit">保存修正</button></footer>
+      </form>
+    </dialog>
+    <dialog id="pdf-history-dialog" class="pdf-paragraph-editor" aria-labelledby="pdf-history-title">
+      <header><h2 id="pdf-history-title">校订历史</h2><button id="pdf-history-close" type="button" aria-label="关闭校订历史">×</button></header>
+      <div class="pdf-history-controls"><label>段落<select id="pdf-history-paragraph"></select></label><label>历史版本<select id="pdf-history-version"></select></label></div>
+      <div class="pdf-history-comparison"><section><h3>当前译文</h3><div id="pdf-history-current"></div></section><section><h3>历史译文</h3><div id="pdf-history-previous"></div></section></div>
+      <footer><p id="pdf-history-status" role="status"></p><button id="pdf-history-restore" type="button" class="primary">恢复此版本</button></footer>
+    </dialog>
+    <dialog id="pdf-terms-dialog" class="pdf-paragraph-editor" aria-labelledby="pdf-terms-title">
+      <header><div><h2 id="pdf-terms-title">检查术语</h2><p>按已确认词条做本地核对；候选不代表译文一定有误。</p></div><button id="pdf-terms-close" type="button" aria-label="关闭术语检查">×</button></header>
+      <div class="pdf-terms-content">
+        <details id="pdf-terms-manage"><summary>本文术语</summary><p class="pdf-term-source-note">保存词条时，本机会记录本文标题、可用出处、可确定的页码和确认语言。</p><form id="pdf-terms-add"><label>原文术语<input id="pdf-term-source" maxlength="120" required></label><label>约定译法<input id="pdf-term-target" maxlength="120" required></label><button type="submit">保存词条</button></form><div id="pdf-confirmed-terms-list"></div></details>
+        <details id="pdf-term-reuse"><summary>从其他论文复用</summary><p>只复用已确认词条。请结合本文判断适用性；不覆盖本文已有约定，不自动替换旧译文。来源仅存于本机，翻译时仅使用术语与译法。</p><label>来源文档<select id="pdf-term-reuse-source"></select></label><div id="pdf-term-reuse-list"></div><label class="pdf-term-reuse-confirm"><input id="pdf-term-reuse-confirm" type="checkbox"><span id="pdf-term-reuse-language"></span></label><div class="pdf-term-reuse-actions"><button id="pdf-term-reuse-refresh" type="button">刷新来源</button><button id="pdf-term-reuse-apply" type="button" disabled>确认复用</button></div><p id="pdf-term-reuse-status" role="status" aria-live="polite"></p></details>
+        <label class="pdf-terms-select">待核对段落<select id="pdf-terms-candidate"></select></label>
+        <p id="pdf-terms-explanation"></p><div id="pdf-terms-context" class="pdf-terms-context"></div>
+        <section><h3>当前译文</h3><div id="pdf-terms-current"></div></section>
+        <div id="pdf-terms-edit"><label>本段现有译法<input id="pdf-terms-from" maxlength="120" placeholder="填写需要修改的词语"></label><label>改为<input id="pdf-terms-to" maxlength="120"></label></div>
+        <section id="pdf-terms-preview" hidden><h3>修改预览</h3><div></div></section>
+      </div>
+      <footer><p id="pdf-terms-status" role="status" aria-live="polite"></p><button id="pdf-terms-apply" class="primary" type="button">预览修改</button></footer>
+    </dialog>
     <script type="module" src="./main.ts"></script>
   </body>
 </html>

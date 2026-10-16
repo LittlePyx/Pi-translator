@@ -6,6 +6,8 @@
     <meta name="manifest.open_in_tab" content="true" />
     <title>Pi Translator 设置</title>
     <link rel="stylesheet" href="./style.css" />
+    <link rel="stylesheet" href="../../ui/product-theme.css" />
+    <link rel="stylesheet" href="./design.css" />
   </head>
   <body>
     <dialog id="onboarding-dialog" class="onboarding-dialog" aria-labelledby="onboarding-title">
@@ -91,10 +93,13 @@
         <div class="brand-row">
           <span class="brand-mark" aria-hidden="true"><img src="/brand/pi_logo.png" alt="" /></span>
           <div class="hero-title">
-            <p class="eyebrow">Microsoft Edge 扩展 · v<span id="extension-version">0.10.0</span></p>
             <h1>Pi Translator</h1>
           </div>
           <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab" /></span>
+        </div>
+        <div class="save-dock">
+          <div class="save-feedback"><strong id="save-state">所有设置已保存</strong><p id="status" class="status" role="status" aria-live="polite"></p></div>
+          <button id="save-button" class="primary save-button" type="submit" form="settings-form" disabled>已保存</button>
         </div>
         <div class="hero-bottom">
           <p class="intro">从普通网页到科研 PDF，选中文字或框选内容即可翻译；Overleaf 中自动保护 LaTeX 结构。</p>
@@ -102,10 +107,6 @@
         </div>
       </header>
 
-      <section class="privacy-strip" aria-label="数据说明">
-        <span class="privacy-icon">i</span>
-        <p>只发送你主动触发的内容；API Key 不会暴露给网页。译文默认仅保留在当前会话，只有你主动开启保留时才写入本机。</p>
-      </section>
 
       <div class="settings-workspace">
         <aside class="settings-nav" aria-label="设置分区">
@@ -115,12 +116,16 @@
             <small id="nav-key-status">正在检查 Key…</small>
           </div>
           <div class="settings-nav-list" role="tablist" aria-orientation="vertical">
+            <span class="nav-group-label" role="presentation">阅读</span>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="storage">文档库</button>
+            <span class="nav-group-label" role="presentation">设置</span>
             <button class="settings-nav-item active" type="button" role="tab" aria-selected="true" data-settings-target="connection"><span>01</span>连接 API</button>
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="translation"><span>02</span>翻译偏好</button>
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="results"><span>03</span>结果与侧栏</button>
             <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="pages"><span>04</span>页面范围</button>
-            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="storage"><span>05</span>本机数据</button>
-            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="support"><span>06</span>支持与迁移</button>
+            <span class="nav-group-label" role="presentation">其他</span>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="cost"><span>05</span>费用估算</button>
+            <button class="settings-nav-item" type="button" role="tab" aria-selected="false" data-settings-target="support"><span>07</span>支持与迁移</button>
           </div>
         </aside>
 
@@ -137,14 +142,20 @@
               <p id="settings-recovery-status" class="settings-recovery-status" role="status" aria-live="polite"></p>
             </aside>
             <div class="section-heading">
-              <div><span class="section-kicker">连接</span><h2>文字翻译 API（必需）</h2></div>
+              <div><span class="section-kicker">连接</span><h2>翻译接口</h2></div>
               <span class="protocol-badge">OpenAI 兼容协议</span>
             </div>
             <p class="section-intro">选择服务商，粘贴 Key，再连接保存。Key 只会发送到当前选择的接口。</p>
             <div class="profile-bar">
               <label><span>API 配置</span><select id="api-profile"></select></label>
-              <button id="add-profile" class="small-button" type="button">新增</button>
-              <button id="delete-profile" class="small-button danger-text" type="button">删除</button>
+              <details id="profile-menu" class="profile-menu">
+                <summary aria-label="管理 API 配置" title="管理配置">···</summary>
+                <div class="profile-menu-actions">
+                  <button id="add-profile" type="button">新增配置</button>
+                  <button id="clear-key" class="danger-text" type="button">清除当前 Key</button>
+                  <button id="delete-profile" class="danger-text" type="button">删除当前配置</button>
+                </div>
+              </details>
             </div>
             <div class="profile-role-line">
               <span id="profile-role-status" aria-live="polite">当前配置用途：文字翻译</span>
@@ -164,7 +175,6 @@
                 <div class="connection-step-body">
                   <div class="key-field-row">
                     <label><span>API Key</span><input id="api-key" type="password" autocomplete="off" placeholder="粘贴服务商提供的 API Key" /><small id="api-key-state">尚未配置</small></label>
-                    <button id="clear-key" class="danger subtle-danger" type="button">清除</button>
                   </div>
                   <button id="open-provider-key-page" class="provider-key-link text-button" type="button" hidden>还没有 Key？前往官方页面获取 ↗</button>
                   <label class="check-row compact-check"><input id="persist-key" type="checkbox" /><span>在本机持久保存；不勾选则仅保留到浏览器会话结束</span></label>
@@ -174,10 +184,11 @@
               <div class="connection-step">
                 <span class="connection-step-number">03</span>
                 <div class="connection-step-body">
-                  <div class="field-heading"><label for="model">翻译模型</label><button id="refresh-models" class="connect-model-button" type="button">连接并保存</button></div>
+                  <div class="field-heading"><label for="model">翻译模型</label></div>
                   <input id="model" type="text" list="model-list" spellcheck="false" placeholder="连接后选择，或手动填写模型 ID" />
                   <datalist id="model-list"></datalist>
-                  <small>自动读取模型、验证文字翻译并保存当前 API；无需再点击页面底部的“保存设置”。无法读取时仍可手动填写。</small>
+                  <small>连接会读取模型、验证文字翻译并保存接口；也可手动填写模型 ID。</small>
+                  <button id="refresh-models" class="connect-model-button" type="button">连接并保存</button>
                 </div>
               </div>
             </div>
@@ -186,18 +197,14 @@
               <div><span>兼容能力</span><strong id="connection-format-status">尚未检测</strong></div>
               <div><span>图像翻译</span><strong id="connection-vision-status">尚未检测</strong></div>
             </section>
-            <section class="vision-setup" aria-labelledby="vision-setup-title">
+            <details id="vision-setup-details" class="vision-setup-details">
+              <summary><span id="vision-setup-title">图像翻译与扫描件</span><small id="vision-setup-overview">尚未配置</small></summary>
+              <div class="vision-setup-content">
               <div class="vision-setup-heading">
-                <div>
-                  <span class="optional-label">可选</span>
-                  <strong id="vision-setup-title">图像翻译与扫描件</strong>
-                </div>
+                <span class="optional-label">可选；普通文字翻译无需配置</span>
                 <button id="setup-qwen" class="text-button vision-setup-button" type="button">配置 Qwen</button>
               </div>
               <div id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
-              <details id="vision-setup-details" class="vision-setup-details">
-                <summary><span>手动选择或检查视觉配置</span></summary>
-                <div class="vision-setup-content">
                   <p id="vision-setup-guide" class="vision-setup-guide">普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
                   <div class="grid">
                     <label><span>视觉 API 配置</span><select id="vision-api-profile"><option value="">尚未配置</option></select><small>可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。</small></label>
@@ -207,9 +214,8 @@
                     <button id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
                     <span id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 130×58 高对比字符测试图，不含文档内容。</span>
                   </div>
-                </div>
-              </details>
-            </section>
+              </div>
+            </details>
             <details id="connection-advanced" class="connection-advanced">
               <summary><span><strong>高级与诊断</strong><small>自定义地址、仅验证与兼容性检查</small></span></summary>
               <div class="connection-advanced-content">
@@ -231,10 +237,16 @@
             <div class="grid">
               <label><span>源语言</span><select id="source-language"><option value="auto">自动识别</option><option value="en">English</option><option value="zh-CN">简体中文</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
               <label><span>目标语言</span><select id="target-language"><option value="zh-CN">简体中文</option><option value="en">English</option><option value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
+            </div>
+            <details class="disclosure-panel">
+              <summary><span><strong>翻译方式</strong><small>风格与内容模式</small></span></summary>
+              <div class="disclosure-content"><div class="grid">
               <label><span>翻译风格</span><select id="style"><option value="academic">学术</option><option value="general">通用</option><option value="literal">直译</option></select></label>
               <label><span>内容模式</span><select id="content-mode"><option value="auto">自动判断</option><option value="plain">纯文本</option><option value="latex">LaTeX</option></select></label>
             </div>
             <p class="field-help">“自动判断”会在 Overleaf 中启用 LaTeX 保护，在普通网页检测到公式或命令时自动保护。</p>
+              </div>
+            </details>
             <details class="disclosure-panel">
               <summary><span><strong>术语与翻译约束</strong><small>可选；用于保持术语一致</small></span></summary>
               <div class="disclosure-content">
@@ -246,20 +258,26 @@
           <section id="settings-results" class="card settings-section" role="tabpanel" data-settings-section="results" hidden>
             <div class="section-heading"><div><span class="section-kicker">体验</span><h2>结果与连续侧栏</h2></div></div>
             <div class="preference-panel">
-              <label class="check-row preference-row"><input id="remember-history" type="checkbox" /><span><strong>记住最近翻译</strong><small>仅限当前标签页和浏览器会话。</small></span></label>
               <label class="check-row preference-row"><input id="alignment-default" type="checkbox" /><span><strong>默认打开逐句对照</strong><small>仍可在翻译卡片中即时切换。</small></span></label>
               <label class="check-row preference-row"><input id="auto-render-latex" type="checkbox" /><span><strong>自动渲染 LaTeX 公式</strong><small>复制时仍保留可编辑的 LaTeX 源码；公式结果中可临时切换。</small></span></label>
             </div>
+            <div class="settings-field-group"><h3>侧栏</h3><div class="grid">
+              <label><span>侧栏显示方式</span><select id="sidebar-mode"><option value="floating">浮动在网页上</option><option value="browser">浏览器侧栏（不遮挡网页）</option></select></label>
+              <label><span>浮动侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
+            </div></div>
             <details class="advanced-panel">
-              <summary><span><strong>更多结果设置</strong><small>历史数量、侧栏、上下文与流式显示</small></span></summary>
-              <div class="advanced-grid">
+              <summary><span><strong>更多结果设置</strong><small>历史数量、上下文与流式显示</small></span></summary>
+              <div class="result-advanced-group"><h3>最近翻译</h3>
+                <label class="check-row compact-check"><input id="remember-history" type="checkbox" /><span>记住最近翻译；仅限当前标签页和浏览器会话。</span></label><div class="grid">
                 <label><span>最近翻译数量</span><select id="history-limit"><option value="5">5 条</option><option value="10">10 条</option><option value="20">20 条</option></select></label>
-                <label><span>侧栏显示方式</span><select id="sidebar-mode"><option value="floating">浮动在网页上</option><option value="browser">浏览器侧栏（不遮挡网页）</option></select></label>
-                <label><span>浮动侧栏位置</span><select id="sidebar-side"><option value="right">页面右侧</option><option value="left">页面左侧</option></select></label>
+              </div></div>
+              <div class="result-advanced-group"><h3>翻译过程</h3>
                 <label class="check-row compact-check"><input id="session-cache" type="checkbox" /><span>重复选区使用会话缓存，减少等待和 API 消耗</span></label>
                 <label><span>上下文辅助</span><select id="context-mode"><option value="off">关闭（最少发送）</option><option value="sentence">使用所在句子</option><option value="paragraph">使用所在段落</option></select><small>上下文只用于消歧；最多发送 2,000 个字符。</small></label>
                 <label class="check-row compact-check"><input id="enable-streaming" type="checkbox" /><span>接口支持时流式显示译文；LaTeX 最终仍会完整校验</span></label>
                 <label class="check-row compact-check"><input id="protect-sensitive-fields" type="checkbox" /><span>连续翻译时跳过密码、验证码和支付字段</span></label>
+              </div>
+              <div class="result-advanced-group"><h3>PDF 框选</h3>
                 <label class="check-row compact-check"><input id="pdf-keyboard-shortcuts" type="checkbox" /><span>在 Pi PDF 阅读区启用单键框选</span></label>
                 <label id="pdf-region-shortcut-field"><span>Pi PDF 框选键</span><input id="pdf-region-shortcut-key" type="text" maxlength="1" inputmode="text" autocomplete="off" spellcheck="false" aria-describedby="pdf-region-shortcut-help" /><small id="pdf-region-shortcut-help">按此键框选一次；Shift + 此键切换连续框选。输入框中不会触发。</small></label>
               </div>
@@ -272,27 +290,31 @@
             <label><span>普通网页支持</span><select id="general-page-mode"><option value="off">仅 Overleaf</option><option value="on-demand">普通网页按需翻译（推荐）</option><option value="allowlist">在指定网站显示划词按钮</option><option value="all-sites">在所有网站显示划词按钮</option></select></label>
             <p id="page-mode-help" class="field-help"></p>
             <label id="site-allowlist-field" hidden><span>指定网站</span><textarea id="site-allowlist" rows="5" spellcheck="false" placeholder="每行一个域名，例如：&#10;arxiv.org&#10;wikipedia.org"></textarea><small>保存时浏览器会请求这些网站的访问权限。子域名会一并包含。</small></label>
+            <details class="disclosure-panel"><summary><span><strong>触发方式与快捷键</strong></span></summary><div class="disclosure-content">
             <div class="toggle-stack">
               <label class="check-row preference-row"><input id="floating-button" type="checkbox" /><span><strong>Overleaf 浮动按钮</strong><small>选中文字后显示 Pi Translator 图标。</small></span></label>
               <label class="check-row preference-row"><input id="hide-target-language-trigger" type="checkbox" /><span><strong>智能隐藏重复翻译</strong><small>选区已是目标语言时隐藏普通网页浮动按钮。</small></span></label>
               <label class="check-row preference-row"><input id="context-menu" type="checkbox" /><span><strong>右键翻译菜单</strong><small>仅在存在文本选区时显示。</small></span></label>
             </div>
             <div class="inline-guide"><strong>快捷方式</strong><p id="translation-shortcut-help">正在读取浏览器实际分配的快捷键…</p><button id="open-shortcuts" type="button">管理快捷键</button></div>
+            </div></details>
           </section>
 
           <section id="settings-storage" class="card settings-section" role="tabpanel" data-settings-section="storage" hidden aria-labelledby="retained-storage-title">
             <div class="section-heading">
-              <div><span class="section-kicker">本机</span><h2 id="retained-storage-title" tabindex="-1">保留的全文译文</h2></div>
-              <button id="refresh-retained-storage" class="text-button storage-refresh" type="button">刷新</button>
-            </div>
-            <p class="section-intro">汇总你主动选择“关闭后保留”的网页和 PDF 全文译文；不展示或保存网址、网页标题、PDF 文件名和原文。</p>
-
-            <div id="retained-storage-summary" class="retained-storage-summary" aria-live="polite" aria-busy="true">
-              <div><span>保留文档</span><strong id="retained-storage-documents">—</strong></div>
-              <div><span>译文字数</span><strong id="retained-storage-characters">—</strong></div>
-              <div><span>占用空间</span><strong id="retained-storage-bytes">—</strong></div>
-            </div>
-
+              <div><span class="section-kicker">本机</span><h2 id="retained-storage-title" tabindex="-1">文档库</h2></div>
+<div class="library-heading-tools">
+            <details id="library-storage-tools" class="disclosure-panel library-storage-tools">
+              <summary aria-label="文档库管理" title="存储与清理">···</summary>
+              <div class="disclosure-content">
+                <button id="refresh-retained-storage" class="text-button storage-refresh" type="button">刷新文档库</button>
+                <div class="library-backup-actions"><button id="export-library-backup" type="button">导出文档库备份</button><button id="import-library-backup" type="button">导入备份</button><input id="library-backup-input" type="file" accept="application/json,.json" hidden /></div>
+                <button id="export-web-excerpts" type="button" title="按当前来源与搜索条件导出已保存的摘录和笔记">导出摘录 Markdown</button>
+                <div class="library-storage-metrics">
+                  <span>文档 <strong id="retained-storage-documents">—</strong></span>
+                  <span>译文字数 <strong id="retained-storage-characters">—</strong></span>
+                  <span>记录数据 <strong id="retained-storage-bytes">—</strong></span>
+                </div>
             <div class="retained-storage-list">
               <article class="retained-storage-row">
                 <div class="retained-storage-kind"><span class="retained-storage-kind-mark" aria-hidden="true">WEB</span><div><strong>网页全文译文</strong><small id="retained-web-storage-status">正在读取…</small></div></div>
@@ -303,13 +325,56 @@
                 <button id="clear-retained-pdf" class="danger-text retained-storage-clear" type="button" disabled>清除 PDF 译文</button>
               </article>
             </div>
-
-            <p id="retained-storage-capacity" class="retained-storage-capacity" hidden>已接近本机保留上限；继续保留时会优先移除较早的匿名译文记录。</p>
-            <div class="retained-storage-privacy"><strong>这里保存什么</strong><p>只保存用于恢复全文翻译的匿名文档指纹、译文和显示状态。网页与 PDF 各最多保留 6 份、100 万译文字符，超出时自动移除较早的记录。</p></div>
+            <details class="library-storage-note"><summary>存储与备份说明</summary><div class="retained-storage-privacy"><p>网页与 PDF 各保留最近 6 份未固定译文，固定文档另存，不占这 6 份名额，也不会被自动淘汰。每类合计上限为 100 万容量字符（含公式、校订历史与旧分段）或约 3 MB 结构数据，以先达到的为准；本机空间不足时会提示保存失败并保留已有记录。备份含保留译文、校订历史、公式与核对状态、名称、阅读位置、书签、本文术语、PDF 标记和已保存网页摘录，不含 API 配置、Key 或原文件。全文记录不含原文；保存的摘录包含原文、译文、出处与笔记。网页摘录最多保存 30 个页面、每页 100 条，合计约 4 MB；达到上限时会提示清理，不自动删除已有摘录。导入不自动翻译，超过容量时不改动现有记录。点击文档进入统一阅读页并继续上次位置；在更多菜单中选择原 PDF 并核验文件后可恢复对照阅读。若文档仍在翻译并保留，新结果可能再次写入。</p></div></details>
             <div class="retained-storage-actions">
               <button id="clear-all-retained-storage" class="danger subtle-danger" type="button" disabled>清除全部本机译文</button>
-              <span id="retained-storage-action-status" role="status" aria-live="polite"></span>
             </div>
+              </div>
+            </details>
+</div>
+            </div>
+            <p class="section-intro">你保留的译文，仅存于本机。点击文档继续阅读，搜索可定位到译文段落。</p>
+
+            <div class="library-toolbar">
+              <label><span class="visually-hidden">搜索本机译文</span><input id="retained-library-search" type="search" placeholder="搜索名称或译文内容" /></label>
+              <select id="retained-library-filter" aria-label="筛选文档"><option value="all">全部文档</option><option value="pdf">PDF</option><option value="web">网页</option><option value="pinned">已固定</option><option value="review">待核对</option><option value="incomplete">未完成</option></select>
+            <div id="retained-storage-summary" class="retained-storage-summary" aria-live="polite" aria-busy="true">
+              <span id="retained-library-count">—</span>
+            </div>
+            </div>
+            <p id="retained-storage-capacity" class="retained-storage-capacity" hidden>已接近保存上限（含公式、校订历史与旧分段）。请先在文档库管理中导出备份，再按需清理记录。固定文档不会自动移除；取消固定不会立即释放空间。</p>
+            <div id="retained-document-library" class="document-library" aria-live="polite"></div>
+            <p id="retained-storage-action-status" class="library-feedback" role="status" aria-live="polite"></p>
+            <details id="web-excerpts-library"><summary><strong>摘录与笔记</strong><span id="web-excerpts-count" hidden></span><svg class="web-excerpts-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m6 9 6 6 6-6" /></svg></summary><div class="web-excerpts-content">
+              <div class="web-excerpts-toolbar"><label id="web-excerpts-search-field"><span class="visually-hidden">搜索已保存摘录</span><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4.5 4.5" /></svg><input id="web-excerpts-search" type="search" placeholder="搜索摘录" /></label><select id="research-excerpts-kind" aria-label="摘录来源"><option value="all">全部来源</option><option value="pdf">PDF</option><option value="web">网页</option></select><span id="web-excerpts-matches" hidden></span></div>
+              <p id="web-excerpts-status" role="status" aria-live="polite" hidden></p><div id="web-excerpts-list"></div>
+            </div></details>
+
+          </section>
+
+          <section id="settings-cost" class="card settings-section" role="tabpanel" data-settings-section="cost" hidden>
+            <div class="section-heading"><div><span class="section-kicker">用量</span><h2>费用估算</h2></div></div>
+            <p class="section-intro">填写模型单价，PDF 全文翻译时即可查看费用估算。</p>
+            <details id="model-price-editor" class="disclosure-panel" open>
+              <summary><span><strong>添加或更新单价</strong></span></summary>
+              <div class="disclosure-content"><div class="price-editor">
+              <label><span>接口配置</span><select id="price-profile"></select></label>
+              <label><span>计价模型 ID</span><input id="price-model" type="text" maxlength="200" spellcheck="false" placeholder="需与实际请求的模型 ID 一致" /></label>
+            </div>
+            <div class="price-rate-editor">
+              <label><span>币种</span><select id="price-currency"><option value="CNY">人民币 CNY</option><option value="USD">美元 USD</option></select></label>
+              <label><span>输入 / 百万 tokens</span><input id="price-input" type="number" min="0" max="1000000" step="any" placeholder="例如 2" /></label>
+              <label><span>输出 / 百万 tokens</span><input id="price-output" type="number" min="0" max="1000000" step="any" placeholder="例如 8" /></label>
+            </div>
+            <button id="add-model-price" type="button">添加或更新单价</button>
+            <p id="model-price-status" class="field-help" role="status">添加后保存设置生效；未填写的模型费用显示未知。</p>
+              </div>
+            </details>
+            <div id="model-price-list" class="document-library"></div>
+            <details class="disclosure-panel">
+              <summary><span><strong>估算范围</strong><small>用量来源与未计入的费用</small></span></summary>
+              <div class="disclosure-content"><p class="field-help">按实际请求的接口和模型计算已报告 token；剩余文字仅提供粗略范围。不同币种分别显示，不自动换汇。未包含缓存优惠、阶梯价格、图片和 OCR 的未知用量，也不能覆盖接口未报告的失败请求费用；最终以服务商账单为准。</p></div>
+            </details>
           </section>
 
           <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>
@@ -317,24 +382,28 @@
             <details class="support-disclosure">
               <summary><span><strong>配置迁移与故障排查</strong><small>导入、导出、诊断报告与首次向导</small></span></summary>
               <div class="support-content">
-                <p>配置文件不包含 API Key。诊断报告仅含会话内错误类型与分阶段耗时，不包含 Key、API 地址、模型、选区、译文、页面地址、术语、截图或公式。</p>
-                <div class="support-actions">
-                  <button id="restart-onboarding" type="button">重新运行首次设置</button>
+                <div class="support-task"><div><h3>配置迁移</h3><p>配置文件不包含 API Key，导入后需重新填写。</p></div><div class="support-task-actions">
                   <button id="export-settings" type="button">导出配置</button>
                   <button id="import-settings" type="button">导入配置</button>
                   <input id="import-settings-file" type="file" accept="application/json,.json" hidden />
+                </div></div>
+                <div class="support-task"><div><h3>故障排查</h3><p>报告仅含错误类型与耗时，不含 Key、接口地址或翻译内容。</p></div><div class="support-task-actions">
                   <button id="copy-diagnostic-report" type="button">复制诊断报告</button>
-                </div>
+                </div></div>
+                <div class="support-task"><div><h3>首次设置</h3><p>重新检查连接，完成一次示例翻译。</p></div><div class="support-task-actions"><button id="restart-onboarding" type="button">重新运行向导</button></div></div>
                 <p id="support-status" class="status" role="status" aria-live="polite"></p>
               </div>
             </details>
             <div class="privacy-summary"><strong>本地优先</strong><p>无广告、分析或遥测；翻译请求直接发送到你选择的 API。</p></div>
+            <details class="support-disclosure"><summary><span><strong>关于与数据说明</strong></span></summary><div class="support-content">
+            <p class="eyebrow">Microsoft Edge 扩展 · v<span id="extension-version">0.10.0</span></p>
+      <section class="privacy-strip" aria-label="数据说明">
+        <span class="privacy-icon">i</span>
+        <p>仅将主动翻译的内容发送到你选择的 API。Key 保存在扩展中；译文默认只保留在当前会话。</p>
+      </section>
+            </div></details>
           </section>
 
-          <div class="save-dock">
-            <div class="save-feedback"><strong id="save-state">所有设置已保存</strong><p id="status" class="status" role="status" aria-live="polite"></p></div>
-            <button id="save-button" class="primary save-button" type="submit" disabled>已保存</button>
-          </div>
         </form>
       </div>
     </main>

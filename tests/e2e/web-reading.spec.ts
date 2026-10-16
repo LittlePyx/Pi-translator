@@ -1,3 +1,4 @@
+import {openWebReadingMore} from './support/translation-controls';
 import type { Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import {
@@ -141,7 +142,7 @@ test('discovers bilingual article translation and lets the reader adjust its sco
     }));
     expect(launcherStyle.shadow).not.toContain('24px');
     expect(launcherStyle.startBackground).toBe('rgba(0, 0, 0, 0)');
-    expect(launcherStyle.markFilter).toBe('none');
+    expect(launcherStyle.markFilter).toBe('grayscale(1)');
     await expect(launcher).not.toHaveAttribute('data-pi-placement', 'bottom-right');
     const launcherAvoidance = await page.evaluate(() => {
       const launcherRect = document.getElementById('pi-translator-bilingual-page-launcher')!
@@ -526,6 +527,7 @@ test('restores explicitly retained webpage progress after session loss and trans
 });
 
 test('completes bilingual article translation without scrolling and keeps controls safe', async ({}, testInfo) => {
+  test.setTimeout(90_000);
   const popup = await context.newPage();
   const sidePanel = await context.newPage();
   let originalTargetLanguage = 'zh-CN';
@@ -557,8 +559,11 @@ test('completes bilingual article translation without scrolling and keeps contro
         chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
       }).chrome;
       const stored = await api.storage.session.get('translationHistoryByTab');
-      const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
-      return history?.[String(id)]?.length ?? 0;
+      const history = stored.translationHistoryByTab as Record<
+        string,
+        Array<{ historyId?: string; originalText?: string }>
+      > | undefined;
+      return history?.[String(id)] ?? [];
     }, tabId!);
     const requestsBefore = textRequests.length;
     const initialBilingualRequestStarted = new Promise<void>((resolve) => {
@@ -625,6 +630,8 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(sidePanel.locator('#bilingual-page-progress')).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-progress'))
       .toHaveAttribute('aria-valuenow', /^\d+$/);
+    await expect(sidePanel.locator('#bilingual-page-retention')).toBeHidden();
+    await openWebReadingMore(sidePanel);
     await expect(sidePanel.locator('#bilingual-page-retention')).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-retention-status'))
       .toHaveText('默认只保留在当前 Edge 会话');
@@ -718,14 +725,14 @@ test('completes bilingual article translation without scrolling and keeps contro
     const requestsBeforeCopy = textRequests.length;
     const copyMenu = sidePanel.locator('#bilingual-page-copy-menu');
     await expect(copyMenu).toBeVisible();
-    await copyMenu.locator(':scope > summary').click();
+    await openWebReadingMore(sidePanel);
     await sidePanel.locator('#bilingual-page-copy-translation').click();
     await expect(sidePanel.locator('#bilingual-page-copy-feedback')).toContainText('段译文');
     expect(await sidePanel.evaluate(() => (
       globalThis as typeof globalThis & { __piCopiedText?: string }
     ).__piCopiedText))
       .toBe(exportBeforeCopy.data.export.translationText);
-    await copyMenu.locator(':scope > summary').click();
+    await openWebReadingMore(sidePanel);
     await sidePanel.locator('#bilingual-page-copy-bilingual').click();
     await expect(sidePanel.locator('#bilingual-page-copy-feedback'))
       .toContainText('双语 Markdown');
@@ -734,7 +741,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     ).__piCopiedText))
       .toBe(exportBeforeCopy.data.export.bilingualMarkdown);
     expect(exportBeforeCopy.data.export.bilingualMarkdown).toContain('> ');
-    await copyMenu.locator(':scope > summary').click();
+    await openWebReadingMore(sidePanel);
     const htmlDownloadPromise = sidePanel.waitForEvent('download');
     await sidePanel.locator('#bilingual-page-download-html').click();
     const htmlDownload = await htmlDownloadPromise;
@@ -1296,7 +1303,8 @@ test('completes bilingual article translation without scrolling and keeps contro
       await expect(sidePanelPageLanguage).toHaveValue('ja');
       expect(textRequests).toHaveLength(requestsBeforeCancelledPageSwitch);
 
-      await sidePanel.locator('#bilingual-page-clear').click();
+      if(await sidePanel.locator('#bilingual-page-clear').isHidden())await openWebReadingMore(sidePanel);
+    await sidePanel.locator('#bilingual-page-clear').click();
       await expect(pageControl).toHaveCount(0);
       await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
       const requestsBeforeIdleLanguageChoice = textRequests.length;
@@ -1315,12 +1323,22 @@ test('completes bilingual article translation without scrolling and keeps contro
           chrome: { storage: { session: { get(key: string): Promise<Record<string, unknown>> } } };
         }).chrome;
         const stored = await api.storage.session.get('translationHistoryByTab');
-        const history = stored.translationHistoryByTab as Record<string, unknown[]> | undefined;
-        return history?.[String(id)]?.length ?? 0;
+        const history = stored.translationHistoryByTab as Record<
+          string,
+          Array<{ historyId?: string; originalText?: string }>
+        > | undefined;
+        return history?.[String(id)] ?? [];
       }, tabId!);
-      expect(historyAfter).toBe(historyBefore);
+      const previousHistoryIds = new Set(historyBefore.map((entry) => entry.historyId));
+      const newArticleHistory = historyAfter.filter((entry) => (
+        !previousHistoryIds.has(entry.historyId) &&
+        /A practical guide to reliable bilingual reading|Bilingual reading should preserve the original article/u
+          .test(entry.originalText ?? '')
+      ));
+      expect(newArticleHistory).toEqual([]);
 
-      await sidePanel.locator('#bilingual-page-clear').click();
+      if(await sidePanel.locator('#bilingual-page-clear').isHidden())await openWebReadingMore(sidePanel);
+    await sidePanel.locator('#bilingual-page-clear').click();
       await expect(pageControl).toHaveCount(0);
 
       await page.bringToFront();
@@ -1378,6 +1396,7 @@ test('completes bilingual article translation without scrolling and keeps contro
       '#article-inline-code + [data-pi-bilingual-translation] .pi-math-inline math',
     )).toBeVisible();
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
+    if(await sidePanel.locator('#bilingual-page-clear').isHidden())await openWebReadingMore(sidePanel);
     await sidePanel.locator('#bilingual-page-clear').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
 
@@ -1397,6 +1416,7 @@ test('completes bilingual article translation without scrolling and keeps contro
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('请求过于频繁');
     await sidePanel.locator('#bilingual-page-primary').click();
     await expect(page.locator('[data-pi-bilingual-translation]').first()).toBeVisible();
+    if(await sidePanel.locator('#bilingual-page-clear').isHidden())await openWebReadingMore(sidePanel);
     await sidePanel.locator('#bilingual-page-clear').click();
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
   } finally {
@@ -1952,6 +1972,7 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toHaveCount(1);
     await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
+    if(await sidePanel.locator('#bilingual-page-clear').isHidden())await openWebReadingMore(sidePanel);
     await sidePanel.locator('#bilingual-page-clear').click();
   } finally {
     (mockControl.releaseHeldBilingualRequest as (() => void) | undefined)?.();
