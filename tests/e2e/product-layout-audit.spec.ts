@@ -8,6 +8,10 @@ installEdgeExtensionHooks();
 const sizes=[{width:1360,height:900},{width:360,height:700},{width:300,height:420}];
 type Evidence={state:string;overflow:number;clipped:string[];occluded:string[];menu?:{x:number;y:number;width:number;height:number}};
 async function inspect(target:Page,state:string,evidence:Evidence[],menu?:Locator):Promise<void>{
+  await target.evaluate(async () => {
+    await document.fonts.ready;
+    await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
+  });
   const layout=await target.evaluate(()=>({
     overflow:location.protocol==='chrome-extension:'?document.documentElement.scrollWidth-innerWidth:0,
     clipped:[...document.querySelectorAll<HTMLElement>('button,summary')].filter(element=>{
