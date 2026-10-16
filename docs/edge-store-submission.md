@@ -27,6 +27,8 @@ Pi Translator translates user-selected content and explicitly requested webpage/
 
 ## 3. 权限说明
 
+版本对照：与已发布 0.15.0 ZIP 相比，0.16.0 增加 `offscreen` 以支持已授权 PDF 后台队列；必要网站权限仍仅为 Overleaf，可选 `<all_urls>` 范围不变。不能将“本轮未改权限代码”写成“相较旧发布包无新增权限”。
+
 ### Host permission justification
 
 ```text
