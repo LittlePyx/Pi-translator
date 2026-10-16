@@ -249,7 +249,7 @@ function element<T extends HTMLElement>(id: string): T {
 const fileInput = element<HTMLInputElement>('file-input');
 const toolbar = element<HTMLElement>('pdf-toolbar');
 const readerMenu = element<HTMLDetailsElement>('pdf-reader-menu');
-bindAnchoredMenus('#pdf-reader-menu', ':scope > .pdf-reader-menu-content');
+bindAnchoredMenus('#pdf-reader-menu, #pdf-document-translation-copy-menu', ':scope > div');
 readerMenu.addEventListener('click', event => {
   if (!(event.target instanceof Element)) return;
   const button = event.target.closest('button');

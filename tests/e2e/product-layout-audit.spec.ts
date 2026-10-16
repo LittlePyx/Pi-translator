@@ -77,7 +77,9 @@ test('audits PDF empty, reading and full translation states with short-window me
     const readerMore=target.locator('#pdf-reader-menu');await readerMore.locator(':scope > summary').click();await inspect(target,'pdf-reader-more-short',evidence,readerMore.locator(':scope > div'));await target.screenshot({path:info.outputPath('pdf-reader-more-short.png')});await target.keyboard.press('Escape');
     await target.locator('#translate-document').click();await expect(target.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/^(idle|preparing)$/);await inspect(target,'pdf-ready-short',evidence);await target.screenshot({path:info.outputPath('pdf-ready-short.png')});
     await target.locator('#pdf-document-trial > summary').click();await target.locator('#pdf-document-trial-start').click();await expect(target.locator('#pdf-document-translation')).toHaveAttribute('data-phase','paused');await target.locator('#pdf-document-translation-view-reading').click();await inspect(target,'pdf-paused-short',evidence);await target.screenshot({path:info.outputPath('pdf-paused-short.png')});
-    const more=target.locator('#pdf-document-translation-copy-menu');await more.locator(':scope > summary').click();await inspect(target,'pdf-more-short',evidence,more.locator(':scope > div'));await target.keyboard.press('Escape');await target.locator('#pdf-document-translation-primary').click();await expect(target.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');await inspect(target,'pdf-complete-short',evidence);await target.screenshot({path:info.outputPath('pdf-complete-short.png')});
+    const more=target.locator('#pdf-document-translation-copy-menu');await more.locator(':scope > summary').click();
+    await expect(more.locator(':scope > div')).toHaveCSS('position', 'fixed');
+    await inspect(target,'pdf-more-short',evidence,more.locator(':scope > div'));await target.keyboard.press('Escape');await target.locator('#pdf-document-translation-primary').click();await expect(target.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');await inspect(target,'pdf-complete-short',evidence);await target.screenshot({path:info.outputPath('pdf-complete-short.png')});
   }finally{await save(info,evidence);await target.close()}
 });
 
@@ -98,6 +100,42 @@ test('audits native sidebar translating, partial error, complete and correction 
       await expect(target.locator('#panel-more')).toHaveClass(/in-footer/);await expect(target.locator('#panel-more')).not.toHaveAttribute('open');await expect(target.locator('#panel-more > summary')).toBeFocused();
     }
   }finally{await save(info,evidence);await target.close();await sender.close()}
+});
+
+test('keeps an open sidebar menu anchored when its contents change size', async () => {
+  const target = await context.newPage();
+  const sender = await context.newPage();
+  try {
+    await target.setViewportSize({ width: 300, height: 420 });
+    await target.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await sender.goto(`chrome-extension://${extensionId}/popup.html`);
+    const tabId = await sender.evaluate(async () => (await (globalThis as any).chrome.tabs.getCurrent()).id);
+    const payload = {
+      tabId, requestId: 'menu-resize-audit', status: 'complete', targetLanguage: 'zh-CN',
+      sourceText: 'A saved research paragraph.', pageUrl: 'https://www.overleaf.com/menu-audit.pdf',
+      sourceLabel: 'menu-audit.pdf', pageNumber: 1, startedAt: Date.now(),
+      result: { requestId: 'menu-resize-audit', originalText: 'A saved research paragraph.',
+        translatedText: '科研段落译文。', warnings: [], latencyMs: 1, completedAt: Date.now() },
+    };
+    await sender.evaluate(async payload => {
+      await (globalThis as any).chrome.runtime.sendMessage({ type: 'PDF_SIDE_PANEL_SESSION_UPDATED', payload });
+    }, payload);
+    await expect(target.locator('#panel-more')).toHaveClass(/in-footer/);
+    await openTranslationMore(target);
+    await target.locator('.panel-menu button').evaluateAll(buttons => {
+      for (const button of buttons) (button as HTMLElement).style.minHeight = '64px';
+    });
+    await expect.poll(async () => {
+      const box = await target.locator('.panel-menu').boundingBox();
+      return Boolean(box && box.x >= 0 && box.y >= 0 && box.x + box.width <= 301 && box.y + box.height <= 421);
+    }).toBe(true);
+    await expect(target.locator('#panel-more')).toHaveAttribute('open');
+    await target.keyboard.press('Escape');
+    await expect(target.locator('#panel-more > summary')).toBeFocused();
+  } finally {
+    await target.close();
+    await sender.close();
+  }
 });
 
 test('audits webpage reading controls and their coexistence with selected text',async({},info)=>{

@@ -26,6 +26,29 @@ export function bindAnchoredMenus(menuSelector: string, panelSelector: string): 
   function openMenus(): HTMLDetailsElement[] {
     return [...document.querySelectorAll<HTMLDetailsElement>(menuSelector)].filter(menu => menu.open);
   }
+  let placementFrame: number | undefined;
+  function schedulePlacement(): void {
+    if (placementFrame !== undefined) return;
+    placementFrame = requestAnimationFrame(() => {
+      placementFrame = undefined;
+      openMenus().forEach(place);
+    });
+  }
+  // Font metrics, visible actions and viewport scrollbars can change after the
+  // activation task. Re-measure open menus instead of retaining old geometry.
+  const sizes = new ResizeObserver(schedulePlacement);
+  function observeOpenMenus(): void {
+    sizes.disconnect();
+    sizes.observe(document.documentElement);
+    sizes.observe(document.body);
+    for (const menu of openMenus()) {
+      const anchor = menu.querySelector(':scope > summary');
+      const panel = menu.querySelector(panelSelector);
+      if (anchor) sizes.observe(anchor);
+      if (panel) sizes.observe(panel);
+    }
+    schedulePlacement();
+  }
   // Native details toggles are delivered in a later task. Position on activation
   // before the unconstrained absolute panel can affect scrolling or be measured.
   document.addEventListener('click', event => {
@@ -39,12 +62,16 @@ export function bindAnchoredMenus(menuSelector: string, panelSelector: string): 
       for (const other of openMenus()) if (other !== menu) other.open = false;
       place(menu);
     }
+    observeOpenMenus();
   });
   document.addEventListener('toggle', event => {
     const menu = event.target;
-    if (!(menu instanceof HTMLDetailsElement) || !menu.matches(menuSelector) || !menu.open) return;
-    for (const other of openMenus()) if (other !== menu) other.open = false;
-    place(menu);
+    if (!(menu instanceof HTMLDetailsElement) || !menu.matches(menuSelector)) return;
+    if (menu.open) {
+      for (const other of openMenus()) if (other !== menu) other.open = false;
+      place(menu);
+    }
+    observeOpenMenus();
   }, true);
   document.addEventListener('pointerdown', event => {
     for (const menu of openMenus()) if (event.target instanceof Node && !menu.contains(event.target)) menu.open = false;
@@ -57,7 +84,8 @@ export function bindAnchoredMenus(menuSelector: string, panelSelector: string): 
     menu.open = false;
     menu.querySelector<HTMLElement>(':scope > summary')?.focus({preventScroll: true});
   });
-  window.addEventListener('resize', () => openMenus().forEach(place));
+  window.addEventListener('resize', () => { openMenus().forEach(place); schedulePlacement(); });
+  document.fonts.addEventListener('loadingdone', schedulePlacement);
   document.addEventListener('scroll', event => {
     for (const menu of openMenus()) {
       const panel = menu.querySelector(panelSelector);
