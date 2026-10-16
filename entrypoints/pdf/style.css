@@ -15,7 +15,7 @@ button { color: inherit; font: inherit; cursor: pointer; }
 
 .toolbar {
   position: relative;
-  z-index: 10;
+  z-index: 30;
   display: grid;
   grid-template-columns: minmax(180px, 1fr) auto auto auto auto;
   align-items: center;
@@ -29,6 +29,12 @@ button { color: inherit; font: inherit; cursor: pointer; }
 }
 
 .brand { display: flex; align-items: center; gap: 9px; min-width: 0; }
+/* Pi PDF owns both surfaces: reader controls must stay above its translation
+   overlay. Ordinary webpages retain the overlay's isolated maximum layer. */
+#tex-selection-translator-root { z-index: 20; }
+/* Keep a confirmed region and its actions visible without changing the pinned
+   sidebar's saved state or resizing the PDF while the user checks the crop. */
+html:has(.region-confirm) #tex-selection-translator-root { visibility: hidden; }
 .brand img { width: 25px; height: 22px; object-fit: contain; }
 .brand > span { display: grid; min-width: 0; }
 .brand strong { font-size: 14px; letter-spacing: -.01em; white-space: nowrap; }

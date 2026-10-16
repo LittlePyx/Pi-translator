@@ -116,9 +116,9 @@ Credential expiration date:
 [PASTE A DATE AFTER THE EXPECTED REVIEW WINDOW]
 
 Test steps:
-1. Install the extension. The options page opens automatically with a three-step setup wizard.
-2. Select the service provider that matches the credential above. For a custom provider, choose “自定义 OpenAI 兼容 API” and enter the Base URL under “高级接口设置”.
-3. Paste the review API Key and click “连接并自动配置”. The extension requests access only to the displayed API origin, reads the models available to this Key, recommends and verifies a text model, and tests whether an available model supports PDF image input. If the API does not expose a model list, enter the exact model ID above and click “仅验证当前模型”. Save settings after the capability summary appears.
+1. Install the extension. Settings opens with a three-step wizard. Complete it, or skip to the full settings page for the steps below.
+2. Select the provider matching the review credential. For a custom provider, choose “自定义 OpenAI 兼容 API” and enter the Base URL under “高级与诊断”.
+3. Paste the review API Key and click “连接并保存”. The extension requests the displayed API origin, reads available models, verifies a text model and saves the connection. If no model list is available, enter the exact model ID and use “仅验证当前模型” under “高级与诊断”, then save. Configure the image model separately under “图像翻译与扫描件” for optional vision tests.
 4. Open any public HTTPS article that does not require an account, select an English sentence, and use the context menu item “使用 Pi Translator 翻译选中文本” or Alt+Shift+T.
 5. Verify that the result streams into a translation card, can be copied, and can be switched between full translation and sentence alignment.
 6. Click “固定侧栏”, select another sentence, and verify that the pinned sidebar translates the new selection. Collapse and close the sidebar.

@@ -1,11 +1,44 @@
 import {clickPdfReaderAction} from './support/translation-controls';
 import {writeFile} from 'node:fs/promises';
 import type {Locator,Page,TestInfo} from '@playwright/test';
-import {ARTICLE_FIXTURE_URL,context,createTwoPageTextPdf,expect,extensionId,installEdgeExtensionHooks,page,selectElementText,setStoredSidebarMode,test} from './support/edge-extension-fixture';
+import {ARTICLE_FIXTURE_URL,context,createRasterPdf,createTwoPageTextPdf,expect,extensionId,installEdgeExtensionHooks,page,selectElementText,setStoredSidebarMode,test,textRequests,visionRequests} from './support/edge-extension-fixture';
 import {openTranslationMore} from './support/translation-controls';
 import {pdfDocumentTranslationSessionDocumentKey,pdfDocumentTranslationSessionBlockSignature,pdfDocumentTranslationSessionBehaviorKey} from '../../core/pdf/document-translation-session';
 installEdgeExtensionHooks();
 const sizes=[{width:1360,height:900},{width:360,height:700},{width:300,height:420}];
+
+test('keeps PDF reader menu actions reachable above an expanded translation sidebar', async ({}, info) => {
+  const target = await context.newPage();
+  try {
+    await target.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await target.locator('#file-input').setInputFiles({ name: 'menu-sidebar.pdf',
+      mimeType: 'application/pdf', buffer: createRasterPdf() });
+    await expect(target.locator('.pdf-page').first()).toHaveAttribute('data-has-text', 'false');
+    const tabId = await target.evaluate(async () => (await (globalThis as any).chrome.tabs.getCurrent()).id);
+    await expect(target.locator('#tex-selection-translator-root')).toBeAttached();
+    await context.serviceWorkers()[0]!.evaluate(async id => {
+      await (globalThis as any).chrome.tabs.sendMessage(id, { type: 'OPEN_SIDEBAR' });
+    }, tabId);
+    await expect(target.locator('#tex-selection-translator-root')).toHaveAttribute('data-pi-view', 'sidebar');
+    const requests = textRequests.length + visionRequests.length;
+    for (const width of [1280, 360]) {
+      await target.setViewportSize({ width, height: 720 });
+      await target.locator('#pdf-reader-menu > summary').click();
+      await expect(target.locator('#recognize-page')).toBeVisible();
+      await target.screenshot({ path: info.outputPath(`reader-menu-sidebar-${width}.png`) });
+      await target.locator('#recognize-page').click({ timeout: 4000 });
+      const pageRegion = target.locator('.pdf-page').first();
+      await expect(pageRegion.locator('.region-confirm-note')).toContainText('qwen3.5-ocr');
+      await expect(target.locator('#tex-selection-translator-root .sidebar')).not.toBeVisible();
+      await pageRegion.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(pageRegion.locator('.region-confirm-note')).not.toBeVisible();
+      await expect(target.locator('#tex-selection-translator-root .sidebar')).toBeVisible();
+    }
+    expect(textRequests.length + visionRequests.length).toBe(requests);
+  } finally {
+    await target.close();
+  }
+});
 type Evidence={state:string;overflow:number;clipped:string[];occluded:string[];menu?:{x:number;y:number;width:number;height:number}};
 async function inspect(target:Page,state:string,evidence:Evidence[],menu?:Locator):Promise<void>{
   await target.evaluate(async () => {
