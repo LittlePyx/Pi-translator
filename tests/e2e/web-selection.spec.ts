@@ -1517,8 +1517,16 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
     expect(menuLayout.bounds.bottom).toBeLessThanOrEqual(692);
     expect(await menu.evaluate(element=>getComputedStyle(element).overflowY)).toBe('auto');
     const lastMenuAction=menu.getByRole('button').last();await lastMenuAction.scrollIntoViewIfNeeded();
-    const lastMenuBounds=await lastMenuAction.boundingBox();expect(lastMenuBounds).not.toBeNull();
-    expect(lastMenuBounds!.y+lastMenuBounds!.height).toBeLessThanOrEqual(menuLayout.bounds.bottom+1);
+    // Scrolling can reposition the menu. Compare the action and its current
+    // scroll container in the same layout snapshot, rather than pre-scroll bounds.
+    await expect.poll(() => lastMenuAction.evaluate(button => {
+      const panel = button.closest<HTMLElement>('.menu');
+      if (!panel) return false;
+      const action = button.getBoundingClientRect();
+      const current = panel.getBoundingClientRect();
+      return action.top >= current.top - 1 && action.bottom <= current.bottom + 1 &&
+        current.top >= 8 && current.bottom <= innerHeight - 8 + 1;
+    })).toBe(true);
     expect(menuLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
 
     await overlay.getByRole('button', { name: '让模型调整…' }).click();

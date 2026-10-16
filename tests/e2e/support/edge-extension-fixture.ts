@@ -699,6 +699,9 @@ export function installEdgeExtensionHooks(): void {
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
     headless: false,
+    // Fit the default page inside the hosted Windows runner's native window.
+    // Tests for wide and narrow layouts still select their own viewport sizes.
+    viewport: { width: 960, height: 600 },
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,

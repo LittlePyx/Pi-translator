@@ -343,7 +343,7 @@ test('uses and remembers a visual-capable active API on the first image translat
   await extensionPage.close();
 });
 
-test('persists and undoes a native PDF correction through the real background session', async () => {
+test('persists and undoes a native PDF correction through the real background session', async ({}, testInfo) => {
   const sourceUrl = 'https://www.overleaf.com/native-correction-success.pdf';
   const source = 'A durable correction should survive a background restart.';
   const originalTranslation = '原始 PDF 译文保留公式 $E=mc^2$。';
@@ -427,15 +427,22 @@ test('persists and undoes a native PDF correction through the real background se
       requestId: sessionRequestId,
     });
 
+    let restartCount = 0;
     const restartBackground = async (): Promise<void> => {
       const cdp = await context.newCDPSession(sidePanel);
+      const stoppedVersions = new Set<string>();
+      const lifecycle: Array<{ versionId: string; status: string }> = [];
       const workerVersions = new Map<string, {
         versionId: string;
         scriptURL: string;
         runningStatus: 'stopped' | 'starting' | 'running' | 'stopping';
       }>();
       cdp.on('ServiceWorker.workerVersionUpdated', ({ versions }) => {
-        versions.forEach((version) => workerVersions.set(version.versionId, version));
+        versions.forEach((version) => {
+          workerVersions.set(version.versionId, version);
+          lifecycle.push({ versionId: version.versionId, status: version.runningStatus });
+          if (version.runningStatus === 'stopped') stoppedVersions.add(version.versionId);
+        });
       });
       try {
         await cdp.send('ServiceWorker.enable');
@@ -447,9 +454,11 @@ test('persists and undoes a native PDF correction through the real background se
           && version.runningStatus === 'running'
         ));
         expect(activeVersion).toBeDefined();
+        stoppedVersions.delete(activeVersion!.versionId);
         await cdp.send('ServiceWorker.stopWorker', { versionId: activeVersion!.versionId });
-        await expect.poll(() => workerVersions.get(activeVersion!.versionId)?.runningStatus)
-          .toBe('stopped');
+        // An extension event may restart the worker before the next poll. Keep
+        // proof of the actual stopped event instead of losing it to the latest state.
+        await expect.poll(() => stoppedVersions.has(activeVersion!.versionId)).toBe(true);
         const response = await sidePanel.evaluate(async (id) => {
           const api = (globalThis as typeof globalThis & {
             chrome: { runtime: { sendMessage(message: unknown): Promise<unknown> } };
@@ -465,6 +474,9 @@ test('persists and undoes a native PDF correction through the real background se
         ))).toBe(true);
         expect(response).toMatchObject({ ok: true });
       } finally {
+        await testInfo.attach(`background-lifecycle-${++restartCount}`, {
+          body: JSON.stringify(lifecycle, null, 2), contentType: 'application/json',
+        });
         await cdp.detach();
       }
     };
