@@ -694,8 +694,9 @@ export function installEdgeExtensionHooks(): void {
     textRequests.length = 0;
     visionRequests.length = 0;
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-e2e-'));
-  const extensionPath = path.resolve(process.env.PI_LIVE_PRODUCT_ACCEPTANCE === '1' && process.env.PI_LIVE_EXTENSION_PATH
-    ? process.env.PI_LIVE_EXTENSION_PATH : '.output/edge-mv3');
+  const extensionPath = path.resolve(process.env.PI_E2E_EXTENSION_PATH ??
+    (process.env.PI_LIVE_PRODUCT_ACCEPTANCE === '1' && process.env.PI_LIVE_EXTENSION_PATH
+      ? process.env.PI_LIVE_EXTENSION_PATH : '.output/edge-mv3'));
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
     headless: false,

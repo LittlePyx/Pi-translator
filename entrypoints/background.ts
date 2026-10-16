@@ -244,7 +244,6 @@ function withGlossaryTermEvidence(
   else delete evidenced.glossaryTermsNeedingReview;
   return evidenced;
 }
-const LEGACY_FAVORITES_KEY = 'translationFavorites';
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
 const pendingTranslationRequests = new Map<number, string>();
@@ -4168,9 +4167,8 @@ export default defineBackground(() => {
   browser.runtime.onInstalled.addListener((details) => {
     void synchronizeContextMenu();
     scheduleGeneralPageAccessSync();
-    // Favorites were removed from the product UI. Delete the now-inaccessible
-    // legacy records on upgrade instead of retaining hidden page content.
-    void browser.storage.local.remove(LEGACY_FAVORITES_KEY);
+    // An update must not delete saved translations, including legacy records
+    // whose interface is no longer exposed. Cleanup requires a user action.
     if (details.reason === 'install') {
       void browser.runtime.openOptionsPage();
     }
