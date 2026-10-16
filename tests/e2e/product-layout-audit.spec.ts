@@ -23,6 +23,11 @@ test('keeps PDF reader menu actions reachable above an expanded translation side
     const requests = textRequests.length + visionRequests.length;
     for (const width of [1280, 360]) {
       await target.setViewportSize({ width, height: 720 });
+      await clickPdfReaderAction(target, 'open-search');
+      await expect(target.locator('#pdf-search')).toBeVisible();
+      await target.locator('#pdf-search-query').press('Escape');
+      await expect(target.locator('#pdf-search')).not.toBeVisible({ timeout: 2000 });
+      await expect(target.locator('#tex-selection-translator-root .sidebar')).toBeVisible();
       await target.locator('#pdf-reader-menu > summary').click();
       await expect(target.locator('#recognize-page')).toBeVisible();
       await target.screenshot({ path: info.outputPath(`reader-menu-sidebar-${width}.png`) });

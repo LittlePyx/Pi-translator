@@ -6432,7 +6432,9 @@ searchQuery.addEventListener('keydown', (event) => {
   event.preventDefault();
   focusPdfSearchResult(Math.max(0, searchResultIndex));
 });
-document.addEventListener('keydown', (event) => {
+// Register before the selection overlay's window capture handler so Escape in
+// the active PDF search closes search rather than collapsing the idle sidebar.
+window.addEventListener('keydown', (event) => {
   if(paragraphEditor.open||pdfHistoryDialog.open||pdfTermsDialog.open)return;
   const searchShortcut = (event.ctrlKey || event.metaKey) &&
     !event.altKey && event.key.toLocaleLowerCase() === 'f';

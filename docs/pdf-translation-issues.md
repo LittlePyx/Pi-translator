@@ -1,5 +1,12 @@
 # PDF 全文翻译问题台账
 
+## 2026-10-17：搜索 Escape 被页面侧栏提前截获
+
+- 第二轮 0.16.0 CI run `38926628434`（`8301275`）仍为 189 功能通过 / 8 可选跳过 / 1 失败，但已经通过原“识别本页”菜单点击。此次失败发生于 OCR 后搜索、Escape、放大、再次识别的取消操作：日志明确为 `#pdf-search` 搜索结果 / 范围控件截获指针，不是此前的页面侧栏。原始日志 `output/edge-0.16.0-2026-10-16/ci-second.log` 与 `ci-second-diagnostics/` 保留。
+- 原因：PDF 搜索的 Escape 监听在 document 捕获阶段，而翻译 overlay 在 window 捕获阶段先拦截 Escape 并收起侧栏。焦点在搜索输入框时也会发生，搜索未关闭，之后遮挡 OCR 取消。新增完整步骤在未修复候选中确定失败，见 `search-escape-before/`，不是用重试掩盖。
+- 仅将 PDF 搜索键盘监听移到先注册的 window 捕获阶段，优先关闭当前搜索浮层；不改搜索查询、译文、公式、历史或模型逻辑。新增回归在桌面和 360px 中检查展开侧栏、打开搜索、Escape 关闭搜索、侧栏保持、打开 OCR、取消与恢复，确认前零请求。
+- 本地修复候选的全部 PDF 区域 / OCR 与布局、设计共 31 项通过，TypeScript、包结构一致性通过，证据 `search-layering-final.log` / `typecheck-search.log` / `candidate-search-fixed.log`。完整远程门禁与最终精确 ZIP 尚须新轮结果，不将本地 31 项替代全量，也不增加实际模型质量结论。
+
 ## 2026-10-16：0.16.0 CI 的 PDF 菜单与已展开侧栏遮挡
 
 - 远程 run `38924043831`（`7c220a6`）单元 1088 / 6 跳过，功能 189 通过 / 8 可选跳过 / 1 失败，尚未打包。失败为扫描页 OCR 用例在点击 `#recognize-page` 时，被 `#tex-selection-translator-root[data-pi-view="sidebar"]` 截获指针。日志 `output/edge-0.16.0-2026-10-16/ci-first-failed.log`、下载诊断和 `ci-first-trace/` 截图显示侧栏确实展开；不能归为模型返回错误或仅靠重跑。
