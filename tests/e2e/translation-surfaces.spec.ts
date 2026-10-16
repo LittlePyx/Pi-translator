@@ -1235,7 +1235,11 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
       value: async () => false,
     });
   });
-  await preflightFrame!.getByRole('button', { name: /允许截图并开始框选/ }).click();
+  // CI's native Edge window can clip the right side of its 1280px emulated
+  // viewport. Keep the trusted pointer click inside the visible part of this
+  // cross-origin iframe; its default button center can lie outside that window.
+  await preflightFrame!.getByRole('button', { name: /允许截图并开始框选/ })
+    .click({ position: { x: 12, y: 20 } });
   await expect(preflightFrame!.locator('#label')).toHaveText('未允许，点击重试');
   await expect(page.locator('#pi-web-region-selection-root')).toHaveCount(0);
   await preflightFrame!.evaluate(() => {
