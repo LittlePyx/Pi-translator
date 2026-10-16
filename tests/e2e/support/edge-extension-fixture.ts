@@ -699,9 +699,6 @@ export function installEdgeExtensionHooks(): void {
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
     headless: false,
-    // Fit the default page inside the hosted Windows runner's native window.
-    // Tests for wide and narrow layouts still select their own viewport sizes.
-    viewport: { width: 960, height: 600 },
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -720,9 +717,12 @@ export function installEdgeExtensionHooks(): void {
   await bootstrapPage.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(bootstrapPage.locator('#api-profile option')).not.toHaveCount(0);
   const onboarding = bootstrapPage.locator('#onboarding-dialog');
-  if (await onboarding.isVisible()) {
-    await bootstrapPage.locator('#onboarding-skip').click();
-  }
+  // This is a fresh profile. Wait for onboarding and its asynchronous settings
+  // write to finish before seeding the test configuration into the same store.
+  await expect(onboarding).toBeVisible();
+  await bootstrapPage.locator('#onboarding-skip').click();
+  await expect(onboarding).not.toBeVisible();
+  await expect(bootstrapPage.locator('#status')).toContainText('已进入完整设置');
   await bootstrapPage.evaluate(async () => {
     const extensionChrome = (
       globalThis as typeof globalThis & { chrome: TestChromeApi }

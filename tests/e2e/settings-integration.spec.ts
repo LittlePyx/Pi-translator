@@ -15,6 +15,9 @@ installEdgeExtensionHooks();
 test('keeps advanced options collapsed until requested', async ({}, testInfo) => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
+  // Static controls can appear before saved settings and listeners are ready.
+  await expect(options.locator('#api-profile')).toHaveValue('default');
+  await expect(options.locator('#model')).toHaveValue('e2e-model');
   const onboarding = options.locator('#onboarding-dialog');
   await expect(onboarding).not.toBeVisible();
   await expect(options.locator('[data-settings-section="connection"]')).toBeVisible();
