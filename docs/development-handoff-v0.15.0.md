@@ -6,6 +6,10 @@
 
 此次同步不改变 `0.15.0` 版本，不移动历史 tag、不创建 Release、不提交 Edge 商店。GitHub 推送不等于商店更新；Edge 新包须先确定更高版本号、准备对应审核说明，完成最终 ZIP 一致性与实际加载验收，再送 Partner Center 审核。当前商店后台状态尚未核对。此前冻结构建与旧译文保护验收继续有效；不得因新增 Git 提交导致旧验收脚本的历史 HEAD 断言失败，就覆盖或改写旧证据。
 
+首次同步提交 `69e9dc9` 已推送。远程 CI `38897793076` 在干净检出时的类型检查失败：`public/build-info.json` 按设计不入库，但原 `wxt prepare` 早于构建时的元数据生成，`browser.runtime.getURL('/build-info.json')` 因缺少对应 PublicPath 报 TS2769。本地此前由生产构建生成该文件，不能替代干净检出验证。现将元数据生成纳入 prepare，并让 typecheck 复用 prepare；保留原类型约束，不用类型断言绕过错误。原冻结产物不重建覆盖，失败日志保存在 `output/github-sync-2026-10-16/ci-failed.log`，后续独立复验。
+
+修复已在 `git archive` 导出的独立源码目录复验：起初没有 `.wxt/` 或 `public/build-info.json`，只复用本机依赖目录；完整 `npm run typecheck` 退出 0，日志 `output/github-sync-2026-10-16/clean-typecheck.log`。此处不是重跑全部本地功能验收；远程全量门禁仍须单独通过。
+
 ## 2026-10-16：带来源与人工确认的跨论文术语复用
 
 当前生产构建 `4dd052e034b559bf180824f902b49e25276d572c97b4f7dcfcae7b2bf4972585`，版本仍为 0.15.0；下方工作记录保留为历史。用户授权本轮实现术语复用，继续要求简洁界面、保留旧译文 / 人工修正、不提交 / 推送 / 发布。

@@ -9,10 +9,10 @@
   },
   "scripts": {
     "dev": "wxt -b edge",
-    "prepare": "wxt prepare",
+    "prepare": "node tools/write-build-info.mjs && wxt prepare",
     "build:edge": "node tools/write-build-info.mjs && wxt build -b edge",
     "zip:edge": "node tools/write-build-info.mjs && wxt zip -b edge",
-    "typecheck": "wxt prepare && tsc --noEmit",
+    "typecheck": "npm run prepare && tsc --noEmit",
     "test": "vitest run",
     "test:e2e": "npm run build:edge && npm run test:e2e:built",
     "test:e2e:built": "playwright test tests/e2e/web-reading.spec.ts tests/e2e/web-selection.spec.ts tests/e2e/pdf-document.spec.ts tests/e2e/pdf-math-regression.spec.ts tests/e2e/pdf-translation-reliability.spec.ts tests/e2e/pdf-paragraph-flow.spec.ts tests/e2e/pdf-paper-metadata.spec.ts tests/e2e/pdf-equation-numbering.spec.ts tests/e2e/pdf-product-workflow.spec.ts tests/e2e/pdf-library-cost-excerpts.spec.ts tests/e2e/pdf-reading-workflow.spec.ts tests/e2e/term-excerpts.spec.ts tests/e2e/term-reuse.spec.ts tests/e2e/research-reading.spec.ts tests/e2e/pdf-region-ocr.spec.ts tests/e2e/translation-surfaces.spec.ts tests/e2e/browser-sidebar.spec.ts tests/e2e/settings-integration.spec.ts tests/e2e/release-upgrade.spec.ts tests/e2e/options-api-setup.spec.ts tests/e2e/pdf-wheel-zoom.spec.ts",
