@@ -1,0 +1,199 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-10-17T10:44:06.125Z",
+  "note": "24 fixed live-page samples; manual review checks, not automatic expected translations. Review source hashes when pages change. No credentials.",
+  "samples": [
+    {
+      "id": "react-negation",
+      "url": "https://react.dev/learn/state-as-a-snapshot",
+      "model": "qwen3.6-flash",
+      "selection": "State variables might look like regular JavaScript variables that you can read and write to. However, state behaves more like a snapshot. Setting it does not change the state variable you already have, but instead triggers a re-render.",
+      "sourceParagraphSha256": "e6773bb9a4e70a78a3f860739649fe9a10f215d3c6c987f4978c499e633ac782",
+      "qualityCheck": "状态快照与不直接改变当前状态的否定关系；首句中文略生硬。"
+    },
+    {
+      "id": "react-cross-inline",
+      "url": "https://react.dev/learn/state-as-a-snapshot",
+      "model": "qwen3.6-flash",
+      "selection": "You might think of your user interface as changing directly in response to the user event like a click. In React, it works a little differently from this mental model. On the previous page, you saw that setting state requests a re-render from React. This means that for an interface to react to the event, you need to update the state.",
+      "sourceParagraphSha256": "8ab39b5c7c1d3b651030c490a84c3e3dd6d853ec1f10434c7596b2bc23093e5a",
+      "qualityCheck": "跨行内链接完整选区；更新状态后请求重渲染。"
+    },
+    {
+      "id": "react-snapshot-term",
+      "url": "https://react.dev/learn/state-as-a-snapshot",
+      "model": "qwen3.6-flash",
+      "selection": "snapshot",
+      "sourceParagraphSha256": "e6773bb9a4e70a78a3f860739649fe9a10f215d3c6c987f4978c499e633ac782",
+      "qualityCheck": "当前语境给出“快照”，不作为所有次要词义的词典校审。"
+    },
+    {
+      "id": "react-deepseek-render",
+      "url": "https://react.dev/learn/state-as-a-snapshot",
+      "model": "deepseek-v4.1-flash",
+      "selection": "“Rendering” means that React is calling your component, which is a function. The JSX you return from that function is like a snapshot of the UI in time. Its props, event handlers, and local variables were all calculated using its state at the time of the render.",
+      "sourceParagraphSha256": "929c5e7d6b8b4316a03443422b36ce61f9925b8f0c7a6b6b94dc68dae28ba92a",
+      "qualityCheck": "组件调用、JSX 和渲染时状态关系保留。"
+    },
+    {
+      "id": "nasa-distance",
+      "url": "https://science.nasa.gov/missions/webb/nasas-webb-discovers-new-feature-in-jupiters-atmosphere/",
+      "model": "qwen3.6-flash",
+      "selection": "NASA’s James Webb Space Telescope has discovered a new, never-before-seen feature in Jupiter’s atmosphere. The high-speed jet stream, which spans more than 3,000 miles (4,800 kilometers) wide, sits over Jupiter’s equator above the main cloud decks. The discovery of this jet is giving insights into how the layers of Jupiter’s famously turbulent atmosphere interact with each other, and how Webb is uniquely capable of tracking those features.",
+      "sourceParagraphSha256": "a45eed2142ccc258867b2926e06a09c6cf9638a9df790aa27d06b406a9a0219b",
+      "qualityCheck": "3000 英里 / 4800 公里宽度、所在高度关系保留。"
+    },
+    {
+      "id": "nasa-speed-units",
+      "url": "https://science.nasa.gov/missions/webb/nasas-webb-discovers-new-feature-in-jupiters-atmosphere/",
+      "model": "qwen3.6-flash",
+      "selection": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth. It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere.",
+      "sourceParagraphSha256": "64b7968f8d9c8735043a8a3946476f4e844fe4a592b8e2b2d622711657a57fbc",
+      "qualityCheck": "严重质量问题：Category 5 被译为一级。原输出留档；不得据 HTTP 200 判定译文通过。"
+    },
+    {
+      "id": "nasa-conditional",
+      "url": "https://science.nasa.gov/missions/webb/nasas-webb-discovers-new-feature-in-jupiters-atmosphere/",
+      "model": "deepseek-v4.1-flash",
+      "selection": "“Jupiter has a complicated but repeatable pattern of winds and temperatures in its equatorial stratosphere, high above the winds in the clouds and hazes measured at these wavelengths,” explained team member Leigh Fletcher of the University of Leicester in the United Kingdom. “If the strength of this new jet is connected to this oscillating stratospheric pattern, we might expect the jet to vary considerably over the next 2 to 4 years – it’ll be really exciting to test this theory in the years to come.”",
+      "sourceParagraphSha256": "d31240dcd6e142415744230744399aa6530aaee6349b74cf76aa88de333469ad",
+      "qualityCheck": "如果 / 可能、2 到 4 年的条件和不确定性保留。"
+    },
+    {
+      "id": "nasa-jet-term",
+      "url": "https://science.nasa.gov/missions/webb/nasas-webb-discovers-new-feature-in-jupiters-atmosphere/",
+      "model": "qwen3.6-flash",
+      "selection": "jet stream",
+      "sourceParagraphSha256": "64b7968f8d9c8735043a8a3946476f4e844fe4a592b8e2b2d622711657a57fbc",
+      "qualityCheck": "主释义回显英文 jet stream，中文次要释义存在，需核对。"
+    },
+    {
+      "id": "arxiv-attention-negation",
+      "url": "https://arxiv.org/html/1706.03762v7",
+      "model": "qwen3.6-flash",
+      "selection": "Attention mechanisms have become an integral part of compelling sequence modeling and transduction models in various tasks, allowing modeling of dependencies without regard to their distance in the input or output sequences [2, 19]. In all but a few cases [27], however, such attention mechanisms are used in conjunction with a recurrent network.",
+      "sourceParagraphSha256": "3383f719286f420021a5b32d092e99b0615b8c4ac9e7355398da6d3b4fba0412",
+      "qualityCheck": "距离无关和绝大多数情况下与循环网络结合的限定保留。"
+    },
+    {
+      "id": "arxiv-math-inline",
+      "url": "https://arxiv.org/html/1706.03762v7",
+      "model": "qwen3.6-flash",
+      "selection": "Recurrent models typically factor computation along the symbol positions of the input and output sequences. Aligning the positions to steps in computation time, they generate a sequence of hidden states \nℎ\n𝑡\n, as a function of the previous hidden state \nℎ\n𝑡\n−\n1\n and the input for position \n𝑡\n. This inherently sequential nature precludes parallelization within training examples, which becomes critical at longer sequence lengths, as memory constraints limit batching across examples. Recent work has achieved significant improvements in computational efficiency through factorization tricks [21] and conditional computation [32], while also improving model performance in case of the latter. The fundamental constraint of sequential computation, however, remains.",
+      "sourceParagraphSha256": "59b0e8b08e8cddfb98d709da761d07f9afd843938fdf9f5853533b39b262c0cc",
+      "qualityCheck": "截图核对 h_t、h_{t-1} 和 t 已正确渲染；innerText 的逐行数学不是源公式丢失。仅网页 HTML，未重验全文 PDF。"
+    },
+    {
+      "id": "arxiv-training-numbers",
+      "url": "https://arxiv.org/html/1706.03762v7",
+      "model": "deepseek-v4.1-flash",
+      "selection": "In this work we propose the Transformer, a model architecture eschewing recurrence and instead relying entirely on an attention mechanism to draw global dependencies between input and output. The Transformer allows for significantly more parallelization and can reach a new state of the art in translation quality after being trained for as little as twelve hours on eight P100 GPUs.",
+      "sourceParagraphSha256": "ea07473b48f37e4eeb4f615ef9e50958919bac1de2e0979f9402771589979fa9",
+      "qualityCheck": "摒弃循环、完全注意力、8 块 P100 / 12 小时保留。"
+    },
+    {
+      "id": "arxiv-transduction-term",
+      "url": "https://arxiv.org/html/1706.03762v7",
+      "model": "qwen3.6-flash",
+      "selection": "transduction",
+      "sourceParagraphSha256": "2ce06fd8b1281c69103914b4bbb234529d85bdda797b10e44ff41000571c0fa0",
+      "qualityCheck": "主释义回显英文 transduction，中文释义列表存在，需核对。"
+    },
+    {
+      "id": "mdn-sort-cross-code",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort",
+      "model": "qwen3.6-flash",
+      "selection": "The sort() method of Array instances sorts the elements of an array in place and returns the reference to the same array, now sorted. The default sort order is ascending, built upon converting the elements into strings, then comparing their sequences of UTF-16 code unit values.",
+      "sourceParagraphSha256": "48ef94c7324d5abb9fcedacd6c2495a406c151f131ad48067596b3ceef798bb1",
+      "qualityCheck": "跨 code、strong、链接、em 的原地排序 / 同一数组 / UTF-16 保留。"
+    },
+    {
+      "id": "mdn-sort-complexity",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort",
+      "model": "deepseek-v4.1-flash",
+      "selection": "The time and space complexity of the sort cannot be guaranteed as it depends on the implementation.",
+      "sourceParagraphSha256": "4e8cba3b747dd042d2d7fd11881d24a350ab5013ada50bda077efb51ac1d3edd",
+      "qualityCheck": "不能保证时空复杂度、依赖实现，否定关系保留。"
+    },
+    {
+      "id": "mdn-sort-nonmutation",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort",
+      "model": "qwen3.6-flash",
+      "selection": "To sort the elements in an array without mutating the original array, use toSorted().",
+      "sourceParagraphSha256": "7d13e96f955154fc086931678f4e138f67fcc60a06b09910646f6998f051b438",
+      "qualityCheck": "不修改原数组与 toSorted() 保留。"
+    },
+    {
+      "id": "mdn-sort-ascending",
+      "url": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array/sort",
+      "model": "qwen3.6-flash",
+      "selection": "To memorize this, remember that (a, b) => a - b sorts numbers in ascending order.",
+      "sourceParagraphSha256": "961328ff1378818c1edff77547e8276ce628d3ac0af0c164d55c1ce0a0f348a8",
+      "qualityCheck": "比较器 (a, b) => a - b 源码与升序保留。"
+    },
+    {
+      "id": "python-binary-fractions",
+      "url": "https://docs.python.org/3/tutorial/floatingpoint.html",
+      "model": "qwen3.6-flash",
+      "selection": "Floating-point numbers are represented in computer hardware as base 2 (binary) fractions. For example, the decimal fraction 0.625 has value 6/10 + 2/100 + 5/1000, and in the same way the binary fraction 0.101 has value 1/2 + 0/4 + 1/8. These two fractions have identical values, the only real difference being that the first is written in base 10 fractional notation, and the second in base 2.",
+      "sourceParagraphSha256": "7be7016f8923eb0af89f69a3240ce27a689ccfa6b5d05aa404ea8677c97fde4c",
+      "qualityCheck": "0.625、0.101、两组分数和十 / 二进制对应保留。"
+    },
+    {
+      "id": "python-not-exact",
+      "url": "https://docs.python.org/3/tutorial/floatingpoint.html",
+      "model": "qwen3.6-flash",
+      "selection": "Unfortunately, most decimal fractions cannot be represented exactly as binary fractions. A consequence is that, in general, the decimal floating-point numbers you enter are only approximated by the binary floating-point numbers actually stored in the machine.",
+      "sourceParagraphSha256": "449f7e872564525532b3ccda74d315da675566ce63b090eac22d4f37c4ceed6b",
+      "qualityCheck": "多数不能精确表示、实际只能近似，限定保留。"
+    },
+    {
+      "id": "python-53-bits",
+      "url": "https://docs.python.org/3/tutorial/floatingpoint.html",
+      "model": "deepseek-v4.1-flash",
+      "selection": "Stop at any finite number of bits, and you get an approximation. On most machines today, floats are approximated using a binary fraction with the numerator using the first 53 bits starting with the most significant bit and with the denominator as a power of two. In the case of 1/10, the binary fraction is 3602879701896397 / 2 ** 55 which is close to but not exactly equal to the true value of 1/10.",
+      "sourceParagraphSha256": "564fcec10051a4554f8ef6db89febcafe0eb8f24ddb47846fe8cd50c6c723b79",
+      "qualityCheck": "53 位、3602879701896397 / 2 ** 55、接近但不等于保留。"
+    },
+    {
+      "id": "python-approximation-term",
+      "url": "https://docs.python.org/3/tutorial/floatingpoint.html",
+      "model": "qwen3.6-flash",
+      "selection": "approximation",
+      "sourceParagraphSha256": "caa88294f5b3f0f724c7a2d0baee97b4ef4895ef0107d6eb6bc48c08a77eaa0e",
+      "qualityCheck": "当前语境“近似”合理，未逐条权威词典校审。"
+    },
+    {
+      "id": "wiki-test-definition",
+      "url": "https://en.wikipedia.org/wiki/Statistical_hypothesis_test",
+      "model": "qwen3.6-flash",
+      "selection": "A statistical hypothesis test is a method of statistical inference used to decide whether the data provides sufficient evidence to reject a particular hypothesis. A statistical hypothesis test typically involves a calculation of a test statistic. Then a decision is made, either by comparing the test statistic to a critical value or equivalently by evaluating a p-value computed from the test statistic. Roughly 100 specialized statistical tests are in use.[1][2]",
+      "sourceParagraphSha256": "c170a7b93859d6db3183d3d6d4890a6aff13477fb6e30a0033282d01aa9573b7",
+      "qualityCheck": "足够证据拒绝假设、统计量 / 临界值 / p 值流程保留。"
+    },
+    {
+      "id": "wiki-mutually-exclusive",
+      "url": "https://en.wikipedia.org/wiki/Statistical_hypothesis_test",
+      "model": "qwen3.6-flash",
+      "selection": "The test compares two hypotheses: a default null hypothesis (denoted H0) and its negation, the alternative hypothesis (H1).[4][5] It is usually consistent with the research hypothesis because it is constructed from literature review, previous studies, etc. However, the research hypothesis is sometimes consistent with the null hypothesis. The null hypothesis and alternative hypothesis are two mutually exclusive statements.",
+      "sourceParagraphSha256": "bd1b539731f8eff89aa0ea362e41a937da894330f5b8c4d7593f909ca251bda2",
+      "qualityCheck": "原假设、备择假设与互斥关系保留；原文 itself 的指代不增补推断。"
+    },
+    {
+      "id": "wiki-not-rejected",
+      "url": "https://en.wikipedia.org/wiki/Statistical_hypothesis_test",
+      "model": "deepseek-v4.1-flash",
+      "selection": "If the sample data are consistent with the null hypothesis, then the null hypothesis is not rejected; if the sample data are inconsistent with the null hypothesis, then the null hypothesis is rejected, therefore, the alternative hypothesis is true.[7]",
+      "sourceParagraphSha256": "da31bff9e0c362b9db2977c4d135f349f545c9c95eb264853e8d230c72366673",
+      "qualityCheck": "一致时不拒绝、不一致时拒绝保留；忠实转述来源，不替来源声明统计结论正确。"
+    },
+    {
+      "id": "wiki-null-term",
+      "url": "https://en.wikipedia.org/wiki/Statistical_hypothesis_test",
+      "model": "qwen3.6-flash",
+      "selection": "null hypothesis",
+      "sourceParagraphSha256": "bd1b539731f8eff89aa0ea362e41a937da894330f5b8c4d7593f909ca251bda2",
+      "qualityCheck": "当前语境“原假设”合理，次要释义仍为模型生成。"
+    }
+  ]
+}

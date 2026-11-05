@@ -1,3 +1,4 @@
+import { t, uiHtml } from '../i18n/ui-language';
 import { isSensitiveTextControl } from '../selection/selection-context';
 import { type ViewportRect } from '../selection/types';
 
@@ -242,8 +243,8 @@ export function createWebRegionSelection(
   stage.className = 'stage';
   stage.tabIndex = -1;
   stage.setAttribute('role', 'dialog');
-  stage.setAttribute('aria-label', '框选网页区域');
-  stage.innerHTML = `
+  stage.setAttribute('aria-label', t('框选网页区域'));
+  stage.innerHTML = uiHtml`
     <div class="intro">拖动框选网页文字、公式、图表或图像 · Esc 取消</div>
     <span class="reticle" aria-hidden="true"><span class="reticle-dot"></span></span>
     <div class="selection" data-visible="false">
@@ -275,7 +276,7 @@ export function createWebRegionSelection(
   selection.setAttribute('role', 'group');
   selection.setAttribute(
     'aria-label',
-    '网页翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。',
+    t('网页翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。'),
   );
   let currentRect: ViewportRect | undefined = initialSelection
     ? fitRectToViewport(initialSelection.rect)
@@ -323,13 +324,13 @@ export function createWebRegionSelection(
     sensitive = containsSensitiveField(rect);
     controls.classList.toggle('sensitive', sensitive);
     if (sensitive) {
-      status.textContent = '框内包含密码、验证码或支付字段';
-      privacy.textContent = '为避免泄露敏感信息，此区域不能发送。请调整选框。';
+      status.textContent = t('框内包含密码、验证码或支付字段');
+      privacy.textContent = t('为避免泄露敏感信息，此区域不能发送。请调整选框。');
     } else {
-      status.textContent = '将截取框内画面并使用多模态模型翻译';
-      privacy.textContent = '确认后只截取当前可见页中的框内区域，并发送给已配置的视觉接口。';
+      status.textContent = t('将截取框内画面并使用多模态模型翻译');
+      privacy.textContent = t('确认后只截取当前可见页中的框内区域，并发送给已配置的视觉接口。');
     }
-    confirmButton.textContent = '翻译框选内容';
+    confirmButton.textContent = t('翻译框选内容');
     confirmButton.disabled = sensitive;
     const width = Math.min(CONTROLS_WIDTH, innerWidth - 24);
     const left = clamp(rect.left, 12, Math.max(12, innerWidth - width - 12));

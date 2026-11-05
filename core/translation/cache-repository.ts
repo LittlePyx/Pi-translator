@@ -43,6 +43,7 @@ export function translationCacheKey(
     apiBaseUrl: string;
     model: string;
     glossary: Array<{ source: string; target: string }>;
+    researchField?: string;
   },
 ): string {
   return hash(JSON.stringify({
@@ -71,6 +72,7 @@ export function translationCacheKey(
     apiBaseUrl: provider.apiBaseUrl,
     model: provider.model,
     glossary: provider.glossary,
+    ...(provider.researchField ? {researchField:provider.researchField} : {}),
   }));
 }
 

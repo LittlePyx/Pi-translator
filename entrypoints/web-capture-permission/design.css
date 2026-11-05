@@ -4,3 +4,14 @@ html, body { color: var(--pi-text); background: var(--pi-surface); }
 #grant strong { color: var(--pi-text); font-weight: 550; }
 #grant small { color: var(--pi-muted); font-weight: 400; }
 .region-icon, .arrow { color: var(--pi-muted); }
+
+
+/* Extension-owned permission guidance; the native permission prompt is unchanged. */
+#grant{padding:16px;gap:12px;border-radius:var(--pi-radius-panel);box-shadow:var(--pi-shadow)}
+#grant .copy{min-width:0}#grant strong{font-size:14px;line-height:1.5}#grant small{font-size:12px;line-height:1.6}
+#grant:focus-visible{outline:2px solid var(--pi-focus);outline-offset:-4px}
+html,body { height:auto; min-height:100%; overflow:auto; }
+#grant { height:auto; min-height:44px; padding:12px; gap:10px; }
+#grant :is(strong,small) { white-space:normal; overflow:visible; overflow-wrap:anywhere; text-overflow:clip; }
+body:is([data-state="denied"],[data-state="error"]) #grant { color:var(--pi-text); border-color:var(--pi-line); background:var(--pi-surface); }
+body:is([data-state="denied"],[data-state="error"]) #grant small { color:var(--pi-muted); }

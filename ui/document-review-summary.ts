@@ -1,3 +1,4 @@
+import { t, msg } from '../core/i18n/ui-language';
 import type {
   DocumentMemorySnapshot,
   DocumentMemoryTranslation,
@@ -43,14 +44,14 @@ export function summarizeDocumentReviews(
 }
 
 export function documentReviewButtonLabel(summary: DocumentReviewSummary): string {
-  return summary.totalCount ? `本文 · 待核对 ${summary.totalCount}` : '本文';
+  return summary.totalCount ? msg`本文 · 待核对 ${summary.totalCount}` : t('本文');
 }
 
 export function documentReviewDescription(summary: DocumentReviewSummary): string {
-  if (!summary.totalCount) return '查看本文术语和最近翻译';
+  if (!summary.totalCount) return t('查看本文术语和最近翻译');
   if (summary.imageCount && summary.terminologyCount) {
-    return `待核对：图像识别 ${summary.imageCount} 条，术语 ${summary.terminologyCount} 个`;
+    return msg`待核对：图像识别 ${summary.imageCount} 条，术语 ${summary.terminologyCount} 个`;
   }
-  if (summary.imageCount) return `有 ${summary.imageCount} 条图像识别结果待核对`;
-  return `有 ${summary.terminologyCount} 个术语待核对`;
+  if (summary.imageCount) return msg`有 ${summary.imageCount} 条图像识别结果待核对`;
+  return msg`有 ${summary.terminologyCount} 个术语待核对`;
 }

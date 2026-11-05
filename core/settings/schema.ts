@@ -1,4 +1,5 @@
 import type { GlossaryEntry, TranslationStyle } from '../translation/types';
+import type {GlossaryProfileSettings} from './glossary-profiles';
 
 export type ApiKeyStorageMode = 'session' | 'local';
 export type GeneralPageMode = 'off' | 'on-demand' | 'allowlist' | 'all-sites';
@@ -15,7 +16,8 @@ export interface ApiProfile {
   model: string;
 }
 
-export interface ExtensionSettingsV8 {
+export interface ExtensionSettingsV8 extends GlossaryProfileSettings {
+  purposePreferences?:import('./purpose-preferences').PurposePreferences;
   modelPrices?: import('../translation/cost-estimate').ModelTokenPrice[];
   schemaVersion: 8;
   provider: 'openai-compatible';
@@ -45,6 +47,7 @@ export interface ExtensionSettingsV8 {
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
+  paragraphShortcut?: 'off'|'alt'|'shift';
   enableStreaming: boolean;
   protectSensitiveFields: boolean;
   pdfKeyboardShortcutsEnabled: boolean;

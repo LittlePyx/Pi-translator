@@ -36,6 +36,9 @@ jobs:
       - name: Type-check
         run: npm run typecheck
 
+      - name: Check browser test ownership
+        run: npm run test:e2e:inventory
+
       - name: Run unit tests
         run: npm test
 

@@ -1,4 +1,10 @@
+import { t, msg, initializeUiLanguage, localizeUiDocument } from '../../core/i18n/ui-language';
+import {openPassageExplanation,resultPassageInput} from '../../ui/passage-explanation';
+import {bindActionHints} from '../../ui/action-feedback';
+import {bindActionGuide} from '../../ui/action-guide';
 import { bindAnchoredMenus } from '../../ui/anchored-menu';
+import {correctionTermSuggestions,deduplicateCorrectionTerms} from '../../core/translation/correction-term-suggestions';
+import {renderCorrectionTermSuggestions,renderCorrectionTermReadFailure,watchCorrectionTerms} from '../../ui/correction-term-suggestions';
 import type {
   OpenOptionsPageResponse,
   BilingualPageExportResponse,
@@ -86,6 +92,20 @@ import {
   type DocumentTranslationExportFormat,
 } from '../../core/translation/document-export';
 
+async function startUi(): Promise<void> {
+  await initializeUiLanguage();
+  localizeUiDocument();
+  bindActionHints();
+  bindActionGuide(document,['.panel-menu'],[
+    {label:t('复制译文'),selector:'#copy'},
+    {label:t('修正'),selector:'#correct'},
+    {label:t('原文'),selector:'#source-text'},
+    {label:t('框选网页'),selector:'#start-web-region'},
+    {label:t('用 Pi 打开'),selector:'#open-pi-reader'},
+    {label:t('设置'),selector:'#open-settings'},
+  ]);
+
+
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing side panel element #${id}`);
@@ -154,6 +174,8 @@ const lexicalLookup = element<HTMLElement>('lexical-lookup');
 const lexicalPronunciation = element<HTMLElement>('lexical-pronunciation');
 const lexicalPartOfSpeech = element<HTMLElement>('lexical-part-of-speech');
 const lexicalSenses = element<HTMLElement>('lexical-senses');
+const lexicalDetails = element<HTMLDetailsElement>('lexical-details');
+const lexicalSummary = element<HTMLElement>('lexical-summary');
 const speakSource = element<HTMLButtonElement>('speak-source');
 const errorMessage = element<HTMLElement>('error-message');
 const translationViewSwitch = element<HTMLElement>('translation-view-switch');
@@ -166,6 +188,7 @@ const retry = element<HTMLButtonElement>('retry');
 const copy = element<HTMLButtonElement>('copy');
 const copyFeedback = element<HTMLElement>('copy-feedback');
 const correct = element<HTMLButtonElement>('correct');
+const explainPassageButton=document.createElement('button');explainPassageButton.type='button';explainPassageButton.textContent=t('解释本段');explainPassageButton.hidden=true;correct.after(explainPassageButton);
 const correctionUndo = element<HTMLElement>('correction-undo');
 const correctionUndoMessage = element<HTMLElement>('correction-undo-message');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
@@ -181,6 +204,10 @@ const webHistoryOlder = element<HTMLButtonElement>('web-history-older');
 const webHistoryCounter = element<HTMLOutputElement>('web-history-counter');
 const webHistoryNewer = element<HTMLButtonElement>('web-history-newer');
 const readerHintText = element<HTMLElement>('reader-hint-text');
+const pdfReaderGuideAction = element<HTMLButtonElement>('pdf-reader-guide-action');
+const nativePdfReaderTip = element<HTMLElement>('native-pdf-reader-tip');
+const nativePdfReaderTipDismiss = element<HTMLButtonElement>('native-pdf-reader-tip-dismiss');
+const webSidebarSwitch = element<HTMLButtonElement>('web-sidebar-switch');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const errorSettings = element<HTMLButtonElement>('error-settings');
 const pdfAccessAlert = element<HTMLElement>('pdf-access-alert');
@@ -194,6 +221,18 @@ let activeTabId: number | undefined;
 let activeWindowId: number | undefined;
 let activeTabUrl: string | undefined;
 let currentSession: PdfSidePanelSession | undefined;
+const nativePdfTipDismissedKey = 'nativePdfReaderGuideDismissedV1';
+const pdfReaderUsedKey = 'featureDiscoveryV1:completed:pdf-reader';
+let nativePdfTipAllowed = false;
+let nativePdfTipRevision = 0;
+
+function syncNativePdfReaderTip(): void {
+  const session = currentSession;
+  nativePdfReaderTip.hidden = !nativePdfTipAllowed || !session || session.sourceKind === 'web'
+    || session.status !== 'complete' || !parsePdfSourceUrl(session.pageUrl)
+    || session.providerContext?.role === 'vision'
+    || translationText.classList.contains('correction-mode');
+}
 let latestWebSession: PdfSidePanelSession | undefined;
 let webHistory: TranslationHistoryEntry[] = [];
 let webHistoryIndex = 0;
@@ -322,7 +361,7 @@ function syncWebHistoryNavigation(session: PdfSidePanelSession | undefined): voi
   webHistoryCounter.textContent = webHistoryCounter.value;
   webHistoryCounter.setAttribute(
     'aria-label',
-    `第 ${index + 1} 条，共 ${history.length} 条最近译文`,
+    msg`第 ${index + 1} 条，共 ${history.length} 条最近译文`,
   );
   webHistoryOlder.disabled = index >= history.length - 1;
   webHistoryNewer.disabled = index <= 0;
@@ -350,6 +389,7 @@ async function refreshWebHistory(tabId: number): Promise<void> {
   if (revision !== webHistoryLoadRevision || activeTabId !== tabId) return;
   webHistory = history.slice(0, webHistoryLimit);
   if (!latestWebSession || latestWebSession.tabId !== tabId) return;
+  if (translationText.classList.contains('correction-mode')) { syncWebHistoryNavigation(currentSession); return; }
   if (latestWebSession.status !== 'complete') {
     syncWebHistoryNavigation(currentSession);
     return;
@@ -386,9 +426,12 @@ function stopSpeaking(): void {
 function renderLexicalLookup(session: PdfSidePanelSession): void {
   const result = session.result;
   const lookup = result?.lexicalLookup;
-  translationHeading.textContent = lookup ? '当前语境' : '译文';
+  translationHeading.textContent = lookup ? t('当前语境') : t('译文');
   lexicalLookup.hidden = !lookup;
   if (!lookup) {
+    lexicalDetails.hidden = true;
+    lexicalDetails.open = false;
+    delete lexicalDetails.dataset.requestId;
     lexicalPronunciation.textContent = '';
     lexicalPartOfSpeech.textContent = '';
     lexicalSenses.replaceChildren();
@@ -405,11 +448,17 @@ function renderLexicalLookup(session: PdfSidePanelSession): void {
   const senses = lookup.senses.filter((sense) => (
     sense.meaning.trim().replace(/\s+/gu, ' ').toLocaleLowerCase() !== primary
   ));
+  lexicalDetails.hidden = !senses.length;
+  lexicalSummary.textContent = msg`补充释义（${senses.length}）`;
+  if (lexicalDetails.dataset.requestId !== result.requestId) {
+    lexicalDetails.open = primary === result.originalText.trim().replace(/\s+/gu, ' ').toLocaleLowerCase();
+    lexicalDetails.dataset.requestId = result.requestId;
+  }
   lexicalSenses.replaceChildren(...senses.map((sense) => {
     const row = document.createElement('div');
     row.className = 'lexical-sense';
     const part = document.createElement('span');
-    part.textContent = sense.partOfSpeech ?? lookup.partOfSpeech ?? '释义';
+    part.textContent = sense.partOfSpeech ?? lookup.partOfSpeech ?? t('释义');
     const meaning = document.createElement('span');
     meaning.textContent = sense.meaning;
     row.append(part, meaning);
@@ -455,31 +504,31 @@ function showEmptyContext(context: SidePanelEmptyContext): void {
   syncWebRegionAction(context.kind === 'web');
   syncContinuousTranslationControl(context.kind === 'web');
   if (context.kind === 'loading') {
-    appSubtitle.textContent = '网页与 PDF 翻译';
-    emptyTitle.textContent = '正在检查当前页面…';
-    emptyDescription.textContent = '确认当前标签页可以使用哪种翻译方式。';
+    appSubtitle.textContent = t('网页与 PDF 翻译');
+    emptyTitle.textContent = t('正在检查当前页面…');
+    emptyDescription.textContent = t('确认当前标签页可以使用哪种翻译方式。');
     emptyAction.hidden = true;
     return;
   }
   emptyAction.hidden = false;
   if (context.kind === 'pdf') {
-    appSubtitle.textContent = 'PDF 划词翻译';
-    emptyTitle.textContent = '当前 PDF 已就绪';
-    emptyDescription.textContent = '选择文字后右键翻译；需要浮动按钮或更顺畅的跨行选择时，可改用 Pi PDF。';
-    emptyAction.textContent = context.sourceUrl ? '用 Pi 打开当前 PDF' : '打开 Pi PDF 阅读器';
+    appSubtitle.textContent = t('PDF 划词翻译');
+    emptyTitle.textContent = t('当前 PDF 已就绪');
+    emptyDescription.textContent = t('在 Edge 中选中文字并右键翻译，或用 Pi 阅读器使用划词、笔记和原文对照。');
+    emptyAction.textContent = context.sourceUrl ? t('用 Pi 打开当前 PDF') : t('打开 Pi PDF 阅读器');
     return;
   }
   if (context.kind === 'web') {
-    appSubtitle.textContent = '网页划词翻译';
-    emptyTitle.textContent = '浏览器侧栏已就绪';
+    appSubtitle.textContent = t('网页划词翻译');
+    emptyTitle.textContent = t('浏览器侧栏已就绪');
     emptyDescription.textContent = webContinuousTranslationDescription();
-    emptyAction.textContent = '改用网页浮动侧栏';
+    emptyAction.textContent = t('改用网页浮动侧栏');
     return;
   }
-  appSubtitle.textContent = '网页与 PDF 翻译';
-  emptyTitle.textContent = '当前没有可翻译的 PDF';
-  emptyDescription.textContent = '切换到一份 PDF 后选择文字，或直接用 Pi PDF 打开本地文件。';
-  emptyAction.textContent = '打开 Pi PDF 阅读器';
+  appSubtitle.textContent = t('网页与 PDF 翻译');
+  emptyTitle.textContent = t('当前没有可翻译的 PDF');
+  emptyDescription.textContent = t('切换到一份 PDF 后选择文字，或直接用 Pi PDF 打开本地文件。');
+  emptyAction.textContent = t('打开 Pi PDF 阅读器');
 }
 
 function setEmptyStatus(message: string, error = false): void {
@@ -495,7 +544,7 @@ async function requestEmptyPdfSourceAccess(sourceUrl: string): Promise<boolean> 
     source.protocol === 'file:' &&
     !(await browser.extension.isAllowedFileSchemeAccess())
   ) {
-    setEmptyStatus('请先在 Edge 扩展详情中开启“允许访问文件 URL”。', true);
+    setEmptyStatus(t('请先在 Edge 扩展详情中开启“允许访问文件 URL”。'), true);
     return false;
   }
   const origin = pdfPermissionPattern(sourceUrl);
@@ -507,7 +556,7 @@ async function requestEmptyPdfSourceAccess(sourceUrl: string): Promise<boolean> 
     granted = false;
   }
   if (!granted) {
-    setEmptyStatus('未获得当前 PDF 来源的读取权限，文件尚未打开。', true);
+    setEmptyStatus(t('未获得当前 PDF 来源的读取权限，文件尚未打开。'), true);
     return false;
   }
   return true;
@@ -543,6 +592,7 @@ const progressFeedback = new TranslationProgressFeedbackController((feedback) =>
     return;
   }
   activeProgressFeedback = feedback;
+  delete translationState.dataset.metadata;
   translationState.textContent = feedback.message;
 });
 
@@ -557,8 +607,8 @@ function baseTranslationProgressText(session: PdfSidePanelSession): string {
   const total = session.totalChunks ?? 1;
   const completed = session.completedChunks ?? 0;
   return total > 1
-    ? `翻译中 ${Math.min(completed + 1, total)}/${total}`
-    : '翻译中';
+    ? msg`翻译中 ${Math.min(completed + 1, total)}/${total}`
+    : t('翻译中');
 }
 
 function syncTranslationProgress(session: PdfSidePanelSession): void {
@@ -631,12 +681,12 @@ function syncWebRegionAction(available: boolean): void {
   if (webRegionStartPending) return;
   if (available) {
     startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
-      ? '允许截图并重试'
-      : '框选网页';
-    startWebRegionLabel.dataset.shortLabel = webCapturePermissionRecoveryPending ? '授权' : '框选';
+      ? t('允许截图并重试')
+      : t('框选网页');
+    startWebRegionLabel.dataset.shortLabel = webCapturePermissionRecoveryPending ? t('授权') : t('框选');
     startWebRegion.title = webCapturePermissionRecoveryPending
-      ? '点击后在 Edge 提示中选择允许，并恢复刚才的框选区域'
-      : '在当前网页拖动框选文字、公式、图表或图像';
+      ? t('点击后在 Edge 提示中选择允许，并恢复刚才的框选区域')
+      : t('在当前网页拖动框选文字、公式、图表或图像');
     return;
   }
   if (webRegionFeedbackTimer !== undefined) window.clearTimeout(webRegionFeedbackTimer);
@@ -644,15 +694,15 @@ function syncWebRegionAction(available: boolean): void {
   startWebRegion.disabled = false;
   startWebRegion.removeAttribute('aria-busy');
   webCapturePermissionRecoveryPending = false;
-  startWebRegionLabel.textContent = '框选网页';
-  startWebRegionLabel.dataset.shortLabel = '框选';
-  startWebRegion.title = '在当前网页拖动框选文字、公式、图表或图像';
+  startWebRegionLabel.textContent = t('框选网页');
+  startWebRegionLabel.dataset.shortLabel = t('框选');
+  startWebRegion.title = t('在当前网页拖动框选文字、公式、图表或图像');
 }
 
 function webContinuousTranslationDescription(): string {
   return continuousTranslationPaused
-    ? '自动划词已暂停；仍可从顶部框选网页，也可使用右键菜单或快捷键主动翻译。'
-    : '可直接从顶部框选当前网页；划选文字后，译文也会连续显示在这里。';
+    ? t('自动划词已暂停；仍可从顶部框选网页，也可使用右键菜单或快捷键主动翻译。')
+    : t('可直接从顶部框选当前网页；划选文字后，译文也会连续显示在这里。');
 }
 
 function syncContinuousTranslationControl(available: boolean): void {
@@ -661,14 +711,14 @@ function syncContinuousTranslationControl(available: boolean): void {
   continuousTranslationToggle.classList.toggle('paused', continuousTranslationPaused);
   continuousTranslationToggle.setAttribute('aria-pressed', String(continuousTranslationPaused));
   continuousTranslationLabel.textContent = continuousTranslationPending
-    ? '正在更新…'
-    : continuousTranslationPaused ? '已暂停' : '自动翻译中';
+    ? t('正在更新…')
+    : continuousTranslationPaused ? t('已暂停') : t('自动翻译中');
   continuousTranslationLabel.dataset.shortLabel = continuousTranslationPending
-    ? '稍候'
-    : continuousTranslationPaused ? '暂停' : '自动';
+    ? t('稍候')
+    : continuousTranslationPaused ? t('暂停') : t('自动');
   continuousTranslationToggle.title = continuousTranslationPaused
-    ? '继续当前标签页的自动连续翻译'
-    : '暂停当前标签页的自动连续翻译';
+    ? t('继续当前标签页的自动连续翻译')
+    : t('暂停当前标签页的自动连续翻译');
   continuousTranslationToggle.ariaLabel = continuousTranslationToggle.title;
   if (emptyContext.kind === 'web') {
     emptyDescription.textContent = webContinuousTranslationDescription();
@@ -696,13 +746,13 @@ async function setCurrentContinuousTranslationPaused(paused: boolean): Promise<v
     if (activeTabId !== tabId) return;
     continuousTranslationPaused = response.data.paused;
     const message = response.data.paused
-      ? '已暂停当前标签页的自动连续翻译'
-      : '已继续当前标签页的自动连续翻译';
+      ? t('已暂停当前标签页的自动连续翻译')
+      : t('已继续当前标签页的自动连续翻译');
     if (currentSession) setStatus(message);
     else setEmptyStatus(message);
   } catch (error) {
     if (activeTabId !== tabId) return;
-    const message = error instanceof Error ? error.message : '无法调整自动连续翻译状态。';
+    const message = error instanceof Error ? error.message : t('无法调整自动连续翻译状态。');
     if (currentSession) setStatus(message);
     else setEmptyStatus(message, true);
   } finally {
@@ -751,8 +801,8 @@ function syncBilingualPageControl(): void {
   bilingualPageProgress.setAttribute(
     'aria-valuetext',
     state.total
-      ? `已翻译 ${state.translated} 段，待处理 ${pendingCount} 段，共发现 ${state.total} 段${state.contentTruncated ? '，页面仍有后续正文' : ''}`
-      : '尚未开始',
+      ? msg`已翻译 ${state.translated} 段，待处理 ${pendingCount} 段，共发现 ${state.total} 段${state.contentTruncated ? t('，页面仍有后续正文') : ''}`
+      : t('尚未开始'),
   );
   if (
     state.phase === 'idle' ||
@@ -770,42 +820,42 @@ function syncBilingualPageControl(): void {
   bilingualPageLanguageConfirm.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   if (!languageConfirmation) pendingBilingualPageLanguageSwitch = undefined;
   const restoredPrefix = state.restored
-    ? `${state.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${state.restored} 段 · `
+    ? msg`${state.restoredFrom === 'local' ? t('已从本机恢复') : t('已恢复')} ${state.restored} 段 · `
     : '';
   bilingualPageStatus.textContent = restoredPrefix + (state.phase === 'preview'
-    ? `发现 ${state.total} 段 · 预计约 ${state.estimatedBatchCount ?? 0} 次批量请求 · 确认前不会调用接口`
+    ? msg`发现 ${state.total} 段 · 预计约 ${state.estimatedBatchCount ?? 0} 次批量请求 · 确认前不会调用接口`
     : state.phase === 'running'
-      ? `已翻译 ${state.translated} · 待处理 ${pendingCount} · 共发现 ${state.total}${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''} · 全文翻译中`
+      ? msg`已翻译 ${state.translated} · 待处理 ${pendingCount} · 共发现 ${state.total}${state.contentTruncated ? t(' · 页面仍有后续正文') : ''}${state.failed ? msg` · ${state.failed} 段待重试` : ''} · 全文翻译中`
       : state.phase === 'paused'
         ? state.pauseReason === 'interactive'
-          ? `正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
-          : `已暂停 · ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+          ? msg`正在处理划词，正文稍后继续 · ${state.translated}/${state.total} 段`
+          : msg`已暂停 · ${state.translated}/${state.total} 段${state.contentTruncated ? t(' · 页面仍有后续正文') : ''}${state.failed ? msg` · ${state.failed} 段待重试` : ''}`
         : state.phase === 'stopped'
-          ? `已停止 · 保留 ${state.translated}/${state.total} 段${state.contentTruncated ? ' · 页面仍有后续正文' : ''}${state.failed ? ` · ${state.failed} 段待重试` : ''}`
+          ? msg`已停止 · 保留 ${state.translated}/${state.total} 段${state.contentTruncated ? t(' · 页面仍有后续正文') : ''}${state.failed ? msg` · ${state.failed} 段待重试` : ''}`
           : state.phase === 'complete'
             ? state.failed
-              ? `已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
+              ? msg`已完成 ${state.translated}/${state.total} 段 · ${state.failed} 段待重试`
               : state.contentTruncated
-                ? `已完成已识别的 ${state.translated} 段 · 页面仍有后续正文`
-                : `已完成 ${state.translated}/${state.total} 段`
+                ? msg`已完成已识别的 ${state.translated} 段 · 页面仍有后续正文`
+                : msg`已完成 ${state.translated}/${state.total} 段`
             : state.phase === 'error'
-              ? state.message ?? `中断于 ${state.translated}/${state.total} 段`
-              : '在原段落下方渐进显示译文');
+              ? state.message ?? msg`中断于 ${state.translated}/${state.total} 段`
+              : t('在原段落下方渐进显示译文'));
   bilingualPagePrimary.textContent = bilingualPagePending
-    ? '稍候…'
+    ? t('稍候…')
     : state.pauseReason === 'interactive'
-      ? '稍后继续'
+      ? t('稍后继续')
       : state.phase === 'preview'
-        ? '翻译全部'
+        ? t('翻译全部')
         : state.phase === 'running'
-          ? '暂停'
+          ? t('暂停')
           : state.phase === 'paused' || state.phase === 'stopped'
-            ? '继续'
+            ? t('继续')
             : state.phase === 'error' && state.total > 0
-              ? '重试'
+              ? t('重试')
               : state.phase === 'complete' && state.failed > 0
-                ? `重试 ${state.failed} 段`
-                : '开始';
+                ? msg`重试 ${state.failed} 段`
+                : t('开始');
   bilingualPagePrimary.hidden = state.phase === 'complete' && state.failed === 0;
   bilingualPagePrimary.disabled = bilingualPagePending || state.pauseReason === 'interactive';
   bilingualPageScope.hidden = state.phase !== 'preview';
@@ -821,7 +871,7 @@ function syncBilingualPageControl(): void {
   if (bilingualPageClear.parentElement !== clearHome) clearHome.append(bilingualPageClear);
   const retentionError = element<HTMLElement>('bilingual-page-retention-error');
   retentionError.hidden = !state.retentionError;
-  retentionError.textContent = state.retentionError ? state.retentionMessage ?? '未能保存译文，请在更多中检查。' : '';
+  retentionError.textContent = state.retentionError ? state.retentionMessage ?? t('未能保存译文，请在更多中检查。') : '';
   for (const button of [
     bilingualPageCopyTranslation,
     bilingualPageCopyBilingual,
@@ -838,14 +888,14 @@ function syncBilingualPageControl(): void {
   bilingualPageRetentionStatus.textContent = state.retentionError && state.retentionMessage
     ? state.retentionMessage
     : state.retainedLocally
-      ? '仅保存匿名页面指纹和译文，不保存原文与网址'
-      : '默认只保留在当前 Edge 会话';
+      ? t('仅保存匿名页面指纹和译文，不保存原文与网址')
+      : t('默认只保留在当前 Edge 会话');
   bilingualPageClear.hidden = state.phase === 'idle';
   bilingualPageClear.disabled = bilingualPagePending;
-  bilingualPageClear.textContent = state.phase === 'preview' ? '取消' : '清除';
+  bilingualPageClear.textContent = state.phase === 'preview' ? t('取消') : t('清除');
   bilingualPageClear.title = state.phase === 'preview'
-    ? '取消本次网页全文翻译'
-    : '清除当前网页的全文译文';
+    ? t('取消本次网页全文翻译')
+    : t('清除当前网页的全文译文');
 }
 
 function setBilingualPageCopyFeedback(message: string, error = false): void {
@@ -884,8 +934,8 @@ async function handleBilingualPageExport(action: BilingualPageExportAction): Pro
     const partialLabel = result.complete
       ? ''
       : result.contentTruncated
-        ? ` · 部分结果 · 页面仍有后续正文`
-        : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+        ? t(` · 部分结果 · 页面仍有后续正文`)
+        : msg` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
     let message: string;
     if (action === 'copy-translation' || action === 'copy-bilingual') {
       const text = action === 'copy-translation'
@@ -894,23 +944,23 @@ async function handleBilingualPageExport(action: BilingualPageExportAction): Pro
       if (!text) throw new Error('当前还没有可复制的已完成译文。');
       await navigator.clipboard.writeText(text);
       message = action === 'copy-translation'
-        ? `已复制 ${result.blockCount} 段译文`
-        : `已复制双语 Markdown · ${result.blockCount} 段`;
+        ? msg`已复制 ${result.blockCount} 段译文`
+        : msg`已复制双语 Markdown · ${result.blockCount} 段`;
     } else {
       const download = documentTranslationDownload(result, action, 'webpage');
       triggerDocumentTranslationDownload(download);
       message = action === 'translation-markdown'
-        ? '已下载纯译文 Markdown'
+        ? t('已下载纯译文 Markdown')
         : action === 'bilingual-markdown'
-          ? '已下载双语 Markdown'
-          : '已下载可打印 HTML';
+          ? t('已下载双语 Markdown')
+          : t('已下载可打印 HTML');
     }
     bilingualPageCopyMenu.open = false;
     setBilingualPageCopyFeedback(`${message}${partialLabel}`);
   } catch (error) {
     if (activeTabId !== tabId) return;
     setBilingualPageCopyFeedback(
-      error instanceof Error ? error.message : '复制失败，请检查剪贴板权限。',
+      error instanceof Error ? error.message : t('复制失败，请检查剪贴板权限。'),
       true,
     );
   } finally {
@@ -968,7 +1018,7 @@ async function updateBilingualPage(
     bilingualPageState = {
       ...bilingualPageState,
       phase: 'error',
-      message: error instanceof Error ? error.message : '无法更新网页正文翻译。',
+      message: error instanceof Error ? error.message : t('无法更新网页正文翻译。'),
     };
   } finally {
     if (activeTabId === tabId) {
@@ -1021,10 +1071,10 @@ function syncTargetLanguageControl(
   );
   targetLanguage.disabled = targetLanguagePending || unavailable;
   targetLanguage.title = viewingWebHistory
-    ? '请先回到最新译文再切换目标语言'
+    ? t('请先回到最新译文再切换目标语言')
     : session.status === 'translating'
-      ? '当前翻译完成后可切换目标语言'
-      : '切换当前标签页的目标语言并重新翻译';
+      ? t('当前翻译完成后可切换目标语言')
+      : t('切换当前标签页的目标语言并重新翻译');
 }
 
 async function retranslateCurrentSessionInLanguage(
@@ -1047,7 +1097,7 @@ async function retranslateCurrentSessionInLanguage(
   targetLanguagePending = true;
   targetLanguagePendingRequestId = session.requestId;
   syncTargetLanguageControl(session);
-  setStatus(`正在切换为${supportedTargetLanguageLabel(requestedLanguage)}并重新翻译…`);
+  setStatus(msg`正在切换为${supportedTargetLanguageLabel(requestedLanguage)}并重新翻译…`);
   let started = false;
   try {
     const response = await browser.runtime.sendMessage({
@@ -1060,7 +1110,7 @@ async function retranslateCurrentSessionInLanguage(
     } satisfies RuntimeMessage) as RuntimeResponse<{ started: true }>;
     if (!response.ok) throw new Error(response.error.message);
     started = true;
-    setStatus(`已切换为${supportedTargetLanguageLabel(requestedLanguage)}`);
+    setStatus(msg`已切换为${supportedTargetLanguageLabel(requestedLanguage)}`);
     if (
       targetLanguagePending &&
       targetLanguagePendingRequestId === session.requestId
@@ -1074,7 +1124,7 @@ async function retranslateCurrentSessionInLanguage(
     }
   } catch (error) {
     targetLanguage.value = previousLanguage;
-    setStatus(error instanceof Error ? error.message : '无法切换目标语言');
+    setStatus(error instanceof Error ? error.message : t('无法切换目标语言'));
   } finally {
     if (!started) {
       clearTargetLanguagePending();
@@ -1092,7 +1142,7 @@ function showWebCapturePermissionRecovery(tabId: number): void {
   if (activeTabId !== tabId || startWebRegion.hidden) return;
   webCapturePermissionRecoveryPending = true;
   syncWebRegionAction(true);
-  setWebRegionFeedback('还差一步：点击“允许截图并重试”，然后在 Edge 权限提示中选择允许');
+  setWebRegionFeedback(t('还差一步：点击“允许截图并重试”，然后在 Edge 权限提示中选择允许'));
   queueMicrotask(() => startWebRegion.focus({ preventScroll: true }));
 }
 
@@ -1103,9 +1153,9 @@ async function startCurrentWebRegionSelection(): Promise<void> {
   webRegionFeedbackTimer = undefined;
   startWebRegion.disabled = true;
   startWebRegion.setAttribute('aria-busy', 'true');
-  startWebRegionLabel.textContent = '检查权限…';
-  startWebRegionLabel.dataset.shortLabel = '检查';
-  setWebRegionFeedback('首次使用时，Edge 会询问是否允许 Pi Translator 截取网页框内画面');
+  startWebRegionLabel.textContent = t('检查权限…');
+  startWebRegionLabel.dataset.shortLabel = t('检查');
+  setWebRegionFeedback(t('首次使用时，Edge 会询问是否允许 Pi Translator 截取网页框内画面'));
   try {
     if (!activeTabUrl || !isInjectableWebUrl(activeTabUrl)) {
       throw new Error('当前标签页不支持网页框选。');
@@ -1123,8 +1173,8 @@ async function startCurrentWebRegionSelection(): Promise<void> {
         '未获得网页截图权限。请再次点击并在 Edge 提示中选择允许；也可从工具栏面板进行一次性框选。',
       );
     }
-    startWebRegionLabel.textContent = '启动中…';
-    startWebRegionLabel.dataset.shortLabel = '启动';
+    startWebRegionLabel.textContent = t('启动中…');
+    startWebRegionLabel.dataset.shortLabel = t('启动');
     setWebRegionFeedback('');
     const response = await browser.runtime.sendMessage({
       type: 'START_WEB_REGION_SELECTION',
@@ -1136,20 +1186,20 @@ async function startCurrentWebRegionSelection(): Promise<void> {
       throw new Error(translationErrorMessage(response.error.code, response.error.message));
     }
     webCapturePermissionRecoveryPending = false;
-    startWebRegionLabel.textContent = '已进入框选';
-    startWebRegionLabel.dataset.shortLabel = '框选';
-    setWebRegionFeedback('请在当前网页拖动框选；按 Esc 可取消');
+    startWebRegionLabel.textContent = t('已进入框选');
+    startWebRegionLabel.dataset.shortLabel = t('框选');
+    setWebRegionFeedback(t('请在当前网页拖动框选；按 Esc 可取消'));
     webRegionFeedbackTimer = window.setTimeout(() => {
       webRegionFeedbackTimer = undefined;
       if (startWebRegion.hidden) return;
       syncWebRegionAction(true);
     }, 1_200);
   } catch (error) {
-    const message = error instanceof Error ? error.message : '当前网页无法开始框选。';
+    const message = error instanceof Error ? error.message : t('当前网页无法开始框选。');
     startWebRegionLabel.textContent = webCapturePermissionRecoveryPending
-      ? '重试授权'
-      : '重试框选';
-    startWebRegionLabel.dataset.shortLabel = '重试';
+      ? t('重试授权')
+      : t('重试框选');
+    startWebRegionLabel.dataset.shortLabel = t('重试');
     startWebRegion.title = message;
     setWebRegionFeedback(message, true);
   } finally {
@@ -1220,11 +1270,11 @@ function renderAlignedTranslation(
     row.dataset.segmentId = segment.id;
     const source = document.createElement('div');
     source.className = 'aligned-segment-source';
-    source.setAttribute('aria-label', `第 ${index + 1} 句原文`);
+    source.setAttribute('aria-label', msg`第 ${index + 1} 句原文`);
     source.textContent = presentationText(session, segment.originalText);
     const target = document.createElement('div');
     target.className = 'aligned-segment-target';
-    target.setAttribute('aria-label', `第 ${index + 1} 句译文`);
+    target.setAttribute('aria-label', msg`第 ${index + 1} 句译文`);
     targets.push({
       container: target,
       text: presentationText(session, segment.translatedText),
@@ -1277,8 +1327,8 @@ function providerErrorContext(session: PdfSidePanelSession): string | undefined 
     'LATEX_VALIDATION_FAILED',
   ].includes(session.error.code);
   if (!context || !providerError) return undefined;
-  const role = context.role === 'vision' ? 'PDF 公式 API' : '文字 API';
-  return `本次使用：${role}「${context.profileName}」 · ${context.model}`;
+  const role = context.role === 'vision' ? t('PDF 公式 API') : t('文字 API');
+  return msg`本次使用：${role}「${context.profileName}」 · ${context.model}`;
 }
 
 function syncSessionActions(): void {
@@ -1309,8 +1359,14 @@ function setStatus(message: string, timeoutMs = 2_200): void {
 
 function copyActionLabel(session: PdfSidePanelSession): string {
   return session.status === 'error' && session.partialText?.trim()
-    ? '复制部分译文'
-    : '复制译文';
+    ? t('复制部分译文')
+    : t('复制译文');
+}
+
+function setCopyLabel(label: string): void {
+  copy.textContent = label;
+  copy.ariaLabel = label;
+  copy.title = label;
 }
 
 function clearCopyFeedback(): void {
@@ -1325,17 +1381,17 @@ function showCopySuccess(session: PdfSidePanelSession): void {
   clearCopyFeedback();
   setStatus('');
   copy.dataset.state = 'success';
-  copy.textContent = '已复制';
+  setCopyLabel(t('已复制'));
   window.requestAnimationFrame(() => {
     if (currentSession === session && copy.dataset.state === 'success') {
-      copyFeedback.textContent = '译文已复制到剪贴板';
+      copyFeedback.textContent = t('译文已复制到剪贴板');
     }
   });
   copyResetTimer = window.setTimeout(() => {
     copyResetTimer = undefined;
     if (currentSession !== session || copy.dataset.state !== 'success') return;
     copy.removeAttribute('data-state');
-    copy.textContent = copyActionLabel(session);
+    setCopyLabel(copyActionLabel(session));
     copyFeedback.textContent = '';
   }, 1_800);
 }
@@ -1345,9 +1401,10 @@ function syncSourceDisclosure(session: PdfSidePanelSession, renderRevision: numb
   sourceLayoutFrame = undefined;
   if (!sourceExpanded) sourceText.scrollTop = 0;
   sourceText.classList.toggle('expanded', sourceExpanded);
-  sourceToggle.textContent = sourceExpanded ? '收起' : '展开';
+  sourceToggle.textContent = sourceExpanded ? t('收起') : t('展开');
   sourceToggle.setAttribute('aria-expanded', String(sourceExpanded));
-  sourceToggle.setAttribute('aria-label', sourceExpanded ? '收起原文' : '展开完整原文');
+  sourceToggle.setAttribute('aria-label', sourceExpanded ? t('收起原文') : t('展开完整原文'));
+  sourceToggle.title=sourceToggle.getAttribute('aria-label')!;
   sourceToggle.hidden = !sourceCanExpand;
   if (sourceExpanded) return;
 
@@ -1374,6 +1431,7 @@ function scheduleStreamViewportFollow(
       !scrollRoot
       || renderRevision !== translationRenderRevision
       || !isSamePdfSidePanelSession(currentSession, session)
+      || bilingualPageCopyMenu.open
     ) return;
     setReadingScrollTop(scrollRoot.scrollHeight);
   });
@@ -1531,9 +1589,9 @@ function updateReadingNavigation(): void {
   const percentage = Math.round(ratio * 100);
   const atTop = scrollRoot.scrollTop <= bounds.top + 1;
   const atBottom = bounds.bottom - scrollRoot.scrollTop <= 1;
-  readingProgress.value = atTop ? '顶部' : atBottom ? '底部' : `${percentage}%`;
+  readingProgress.value = atTop ? t('顶部') : atBottom ? t('底部') : `${percentage}%`;
   readingProgress.textContent = readingProgress.value;
-  readingProgress.setAttribute('aria-label', `译文阅读进度 ${percentage}%`);
+  readingProgress.setAttribute('aria-label', msg`译文阅读进度 ${percentage}%`);
   readingTop.disabled = atTop;
   readingBottom.disabled = atBottom;
   if (visibilityChanged) window.requestAnimationFrame(updateReadingNavigation);
@@ -1544,8 +1602,15 @@ function applyReadingPosition(
   intent: ResolvedReadingRenderIntent,
   savedPosition?: SidePanelReadingPosition,
 ): void {
-  if (intent === 'none') return;
+  if (intent === 'none' || translationText.classList.contains('correction-mode')) return;
   const identity = readingIdentity(session);
+  // A late translation render must not move the webpage menu the user opened.
+  if (bilingualPageCopyMenu.open) {
+    if (session.status === 'complete' && pendingReadingStartIdentity === identity) {
+      pendingReadingStartIdentity = undefined;
+    }
+    return;
+  }
   const bounds = readingBounds();
   const scrollRoot = document.scrollingElement;
   if (!identity || !bounds || !scrollRoot) return;
@@ -1584,14 +1649,15 @@ function scheduleReadingState(
   renderRevision: number,
   intent: ResolvedReadingRenderIntent,
   interactionRevision: number,
+  savedPosition?: SidePanelReadingPosition,
 ): void {
-  const identity = readingIdentity(session);
-  const savedPosition = intent === 'restore' && identity ? readingPositions.get(identity) : undefined;
   window.requestAnimationFrame(() => {
     if (
       renderRevision !== translationRenderRevision
       || readingIdentity(currentSession) !== readingIdentity(session)
     ) return;
+    // Navigation visibility affects the scroll range. Measure after showing it.
+    updateReadingNavigation();
     if (interactionRevision === readingInteractionRevision) {
       applyReadingPosition(session, intent, savedPosition);
     }
@@ -1638,11 +1704,11 @@ function showPdfAccessAlert(title: string, message: string, steps: string[]): vo
 
 function showHiddenPdfSourceAlert(): void {
   showPdfAccessAlert(
-    'Edge 没有提供原 PDF 地址',
-    '如果这是本地 PDF，通常是 Pi Translator 尚未获准访问文件 URL。',
+    t('Edge 没有提供原 PDF 地址'),
+    t('如果这是本地 PDF，通常是 Pi Translator 尚未获准访问文件 URL。'),
     [
-      '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
-      '开启“允许访问文件 URL”，回到原 PDF 后重新检测。',
+      t('打开 Edge 扩展管理页并进入 Pi Translator 详情。'),
+      t('开启“允许访问文件 URL”，回到原 PDF 后重新检测。'),
     ],
   );
 }
@@ -1655,11 +1721,11 @@ async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
     !(await browser.extension.isAllowedFileSchemeAccess())
   ) {
     showPdfAccessAlert(
-      '还差一步：允许读取本地 PDF',
-      'Edge 默认不允许扩展读取 file:// 文件，这不是 API 或 PDF 损坏。',
+      t('还差一步：允许读取本地 PDF'),
+      t('Edge 默认不允许扩展读取 file:// 文件，这不是 API 或 PDF 损坏。'),
       [
-        '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
-        '开启“允许访问文件 URL”，回到原 PDF 后重新检测。',
+        t('打开 Edge 扩展管理页并进入 Pi Translator 详情。'),
+        t('开启“允许访问文件 URL”，回到原 PDF 后重新检测。'),
       ],
     );
     return false;
@@ -1676,11 +1742,11 @@ async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
   }
   if (!granted) {
     showPdfAccessAlert(
-      '需要当前 PDF 所在站点的读取权限',
-      `Pi PDF 只会申请 ${source.protocol === 'file:' ? '本地文件' : source.origin}，不会因此读取其他网站。`,
+      t('需要当前 PDF 所在站点的读取权限'),
+      msg`Pi PDF 只会申请 ${source.protocol === 'file:' ? t('本地文件') : source.origin}，不会因此读取其他网站。`,
       [
-        '点击“重新检测”，并在 Edge 的权限提示中选择允许。',
-        '授权后再次点击“用 Pi 打开”。',
+        t('点击“重新检测”，并在 Edge 的权限提示中选择允许。'),
+        t('授权后再次点击“用 Pi 打开”。'),
       ],
     );
     return false;
@@ -1704,13 +1770,17 @@ async function recoverActivePdfSource(): Promise<string | undefined> {
   return sourceUrl;
 }
 
+let correctionTermsController:AbortController|undefined;
 function render(
   session: PdfSidePanelSession | null | undefined,
   readingIntent: ReadingRenderIntent = 'automatic',
 ): void {
   const previousIdentity = readingIdentity(currentSession);
   const previousComplete = currentSession?.status === 'complete';
+  // Capture the previous layout before making its completed status visible again.
   if (previousComplete) rememberCurrentReadingPosition();
+  delete translationState.dataset.metadata;
+  translationHeading.removeAttribute('title');
   const resolvedReadingIntent = resolveReadingRenderIntent(
     session,
     readingIntent,
@@ -1718,6 +1788,11 @@ function render(
     previousComplete,
   );
   const readingInteractionAtRender = readingInteractionRevision;
+  // Keep one pre-render anchor for both text and asynchronous formula rendering.
+  // Scroll events from intermediate layouts must not become the restore target.
+  const readingPositionAtRender = resolvedReadingIntent === 'restore'
+    ? readingPositions.get(readingIdentity(session)!)
+    : undefined;
   const sameSession = Boolean(session && isSamePdfSidePanelSession(currentSession, session));
   if (!sameSession) element<HTMLDetailsElement>('panel-more').open = false;
   openPiReader.hidden = !session;
@@ -1740,12 +1815,14 @@ function render(
   if (sourceLayoutFrame !== undefined) window.cancelAnimationFrame(sourceLayoutFrame);
   sourceLayoutFrame = undefined;
   clearCopyFeedback();
+  correctionTermsController?.abort();correctionTermsController=undefined;
   translationText.classList.remove('correction-mode');
   translationText.classList.remove('aligned-view');
   translationViewSwitch.hidden = true;
   sourceSection.hidden = false;
   readingNavigation.hidden = true;
   currentSession = session ?? undefined;
+  syncNativePdfReaderTip();
   syncWebHistoryNavigation(currentSession);
   syncTargetLanguageControl(currentSession);
   const renderRevision = ++translationRenderRevision;
@@ -1755,17 +1832,20 @@ function render(
       renderRevision,
       followStreamOutput && resolvedReadingIntent === 'none',
     );
-    scheduleReadingState(
-      session,
-      renderRevision,
-      resolvedReadingIntent,
-      readingInteractionAtRender,
-    );
+    if (session.status !== 'complete') {
+      scheduleReadingState(
+        session,
+        renderRevision,
+        resolvedReadingIntent,
+        readingInteractionAtRender,
+        readingPositionAtRender,
+      );
+    }
   }
   emptyState.hidden = Boolean(session);
   sessionSection.hidden = !session;
   if (!session) {
-    translationHeading.textContent = '译文';
+    translationHeading.textContent = t('译文');
     lexicalLookup.hidden = true;
     stopSpeaking();
     finishProgress();
@@ -1777,6 +1857,7 @@ function render(
     errorMessage.hidden = true;
     errorMessage.textContent = '';
     correct.hidden = true;
+    explainPassageButton.hidden = true;
     correctionUndo.hidden = true;
     copy.hidden = true;
     sessionActions.hidden = true;
@@ -1796,25 +1877,30 @@ function render(
   sourceLabel.textContent = session.sourceLabel;
   sourceLabel.title = session.sourceLabel;
   const isWebSession = session.sourceKind === 'web';
+  webSidebarSwitch.hidden = !isWebSession || session.status !== 'complete';
   syncWebRegionAction(isWebSession);
   syncContinuousTranslationControl(isWebSession);
   const historicalWebResult = isWebSession && viewingWebHistory;
-  appSubtitle.textContent = isWebSession ? '网页划词翻译' : 'PDF 划词翻译';
-  sourceKindLabel.textContent = isWebSession ? '当前网页' : '当前 PDF';
+  appSubtitle.textContent = isWebSession ? t('网页划词翻译') : t('PDF 划词翻译');
+  sourceKindLabel.textContent = isWebSession ? t('当前网页') : t('当前 PDF');
+  sourceLabel.title=`${sourceKindLabel.textContent} · ${session.sourceLabel}`;
+  appSubtitle.title=appSubtitle.textContent??'';
   sourceText.textContent = presentationText(session, session.sourceText);
   syncSourceDisclosure(session, renderRevision);
   const pdfSource = isWebSession ? undefined : parsePdfSourceUrl(session.pageUrl);
   const pageNumber = session.pageNumber ?? pdfInitialPage(session.pageUrl);
   const needsVisionHint = session.providerContext?.role === 'vision';
+  pdfReaderGuideAction.hidden = isWebSession;
+  pdfReaderGuideAction.textContent = pdfSource ? t('用 Pi 打开 PDF') : t('查看读取权限');
   readerHintText.hidden = isWebSession || !needsVisionHint;
   readerHintText.textContent = needsVisionHint
-    ? `Edge 原生阅读器未提供选区图像；本次只传递选中文字。复杂公式可用 Pi 打开后截图识别${pageNumber ? `，并定位到第 ${pageNumber} 页` : ''}。`
+    ? msg`Edge 原生阅读器未提供选区图像；本次只传递选中文字。复杂公式可用 Pi 打开后截图识别${pageNumber ? msg`，并定位到第 ${pageNumber} 页` : ''}。`
     : '';
   openPiReader.textContent = isWebSession
-    ? '改用浮动侧栏'
+    ? t('改用浮动侧栏')
     : pdfSource
-      ? '用 Pi 打开'
-      : '解决 PDF 读取权限';
+      ? t('用 Pi 打开')
+      : t('解决 PDF 读取权限');
   if (isWebSession || pdfSource) hidePdfAccessAlert();
   else showHiddenPdfSourceAlert();
 
@@ -1833,33 +1919,34 @@ function render(
   progressTrack.hidden = !isTranslating;
   stopTranslation.hidden = !isTranslating;
   stopTranslation.disabled = stopPendingRequestId === session.requestId;
-  stopTranslation.textContent = stopTranslation.disabled ? '停止中' : '停止';
-  stopTranslation.title = stopTranslation.disabled ? '正在停止翻译' : '停止翻译';
+  stopTranslation.textContent = stopTranslation.disabled ? t('停止中') : t('停止');
+  stopTranslation.title = stopTranslation.disabled ? t('正在停止翻译') : t('停止翻译');
   errorMessage.hidden = true;
   errorMessage.textContent = '';
   errorActions.hidden = session.status !== 'error';
   retry.hidden = false;
   retry.disabled = false;
-  retry.textContent = '重试';
+  retry.textContent = t('重试');
   retry.title = '';
   retry.classList.remove('primary');
   errorSettings.hidden = false;
-  errorSettings.textContent = '检查设置';
+  errorSettings.textContent = t('检查设置');
   errorSettings.classList.remove('primary');
   errorSettings.classList.add('secondary');
   copy.hidden = !copyableText;
   copy.disabled = !copyableText;
-  copy.textContent = copyActionLabel(session);
+  setCopyLabel(copyActionLabel(session));
   correct.hidden = historicalWebResult || session.status !== 'complete' || !session.result?.translatedText;
   correct.disabled = correct.hidden;
+  explainPassageButton.hidden=correct.hidden;
   correctionUndo.hidden = historicalWebResult || !session.correctionReceipt || session.status !== 'complete';
   correctionUndo.classList.remove('is-error');
   correctionUndo.removeAttribute('aria-busy');
   correctionUndo.setAttribute('role', 'status');
   correctionUndo.setAttribute('aria-live', 'polite');
-  correctionUndoMessage.textContent = '已修正 ·';
+  correctionUndoMessage.textContent = t('已修正 ·');
   undoCorrection.disabled = correctionUndo.hidden;
-  undoCorrection.textContent = '撤销';
+  undoCorrection.textContent = t('撤销');
   syncSessionActions();
   translationText.classList.toggle('pending', isTranslating && !session.partialText);
   translationText.classList.toggle(
@@ -1867,7 +1954,7 @@ function render(
     session.status === 'error' && !preservedPartial && !explicitlyStopped,
   );
   if (session.status !== 'complete') {
-    translationHeading.textContent = '译文';
+    translationHeading.textContent = t('译文');
     lexicalLookup.hidden = true;
     stopSpeaking();
   }
@@ -1895,29 +1982,29 @@ function render(
     const waitingForConfirmation =
       session.settingsRecoveryConfirmation?.failedRequestId === session.requestId;
     if (waitingForConfirmation) {
-      translationState.textContent = '配置已完成 · 等待确认';
+      translationState.textContent = t('配置已完成 · 等待确认');
       retry.hidden = false;
-      retry.textContent = '确认重新翻译';
-      retry.title = '使用刚保存的配置发起一次新的翻译请求';
+      retry.textContent = t('确认重新翻译');
+      retry.title = t('使用刚保存的配置发起一次新的翻译请求');
       retry.classList.add('primary');
       errorSettings.hidden = true;
       errorActions.hidden = false;
       translationText.textContent = preservedPartial
         ? presentationText(session, preservedPartial)
-        : '配置已完成。为避免意外调用 API，请确认后再重新翻译。';
+        : t('配置已完成。为避免意外调用 API，请确认后再重新翻译。');
       if (preservedPartial) {
-        errorMessage.textContent = '上方部分译文已保留；为避免重复调用 API，请确认后再重新翻译。';
+        errorMessage.textContent = t('上方部分译文已保留；为避免重复调用 API，请确认后再重新翻译。');
         errorMessage.hidden = false;
       }
       return;
     }
     translationState.textContent = explicitlyStopped
       ? preservedPartial
-        ? '已停止 · 已保留部分译文'
-        : '已停止'
+        ? t('已停止 · 已保留部分译文')
+        : t('已停止')
       : preservedPartial
-        ? '翻译中断 · 已保留部分译文'
-        : '翻译失败';
+        ? t('翻译中断 · 已保留部分译文')
+        : t('翻译失败');
     const exactPdfMessage = [
       'EMPTY_SELECTION',
       'REQUEST_ABORTED',
@@ -1934,7 +2021,7 @@ function render(
     );
     retry.hidden = !recovery.showRetry;
     errorSettings.hidden = !recovery.settingsFocus;
-    errorSettings.textContent = recovery.settingsLabel ?? '检查设置';
+    errorSettings.textContent = recovery.settingsLabel ?? t('检查设置');
     errorSettings.dataset.settingsFocus = recovery.settingsFocus ?? '';
     errorSettings.classList.toggle('secondary', recovery.showRetry);
     errorSettings.classList.toggle('primary', !recovery.showRetry && Boolean(recovery.settingsFocus));
@@ -1973,6 +2060,9 @@ function render(
   const completedState = translationCompletionStatus(session.result ?? {});
   renderLexicalLookup(session);
   translationState.textContent = completedState;
+  translationState.dataset.metadata='true';
+  translationHeading.title=completedState;
+  translationHeading.setAttribute('aria-describedby',translationState.id);
   const translatedText = presentationText(
     session,
     session.result?.translatedText ?? session.partialText ?? '',
@@ -1981,13 +2071,21 @@ function render(
   const renderLatex = formulaRenderOverride ?? autoRenderLatex;
   const renderAligned = syncTranslationViewSwitch(session);
   formulaView.hidden = !hasLatex;
-  formulaView.textContent = renderLatex ? '源码' : '公式';
-  formulaView.title = renderLatex ? '显示可编辑的 LaTeX 源码' : '渲染译文中的 LaTeX 公式';
+  formulaView.textContent = renderLatex ? t('源码') : t('公式');
+  formulaView.title = renderLatex ? t('显示可编辑的 LaTeX 源码') : t('渲染译文中的 LaTeX 公式');
   formulaView.setAttribute('aria-pressed', String(renderLatex));
   const resultRequestId = session.result?.requestId ?? session.requestId;
   const renderPromise = renderAligned
     ? renderAlignedTranslation(session, hasLatex && renderLatex, resultRequestId)
     : renderTranslationText(translatedText, hasLatex && renderLatex, resultRequestId);
+  // Queue after source disclosure measurement, which can change the page height.
+  scheduleReadingState(
+    session,
+    renderRevision,
+    resolvedReadingIntent,
+    readingInteractionAtRender,
+    readingPositionAtRender,
+  );
   if (hasLatex && renderLatex) {
     const identity = progressIdentity(session);
     activeProgressIdentity = identity;
@@ -2005,11 +2103,14 @@ function render(
       }
       finishProgress();
       translationState.textContent = completedState;
+      translationState.dataset.metadata='true';
+      translationHeading.title=completedState;
       scheduleReadingState(
         session,
         renderRevision,
         resolvedReadingIntent,
         readingInteractionAtRender,
+        readingPositionAtRender,
       );
     }).catch(() => undefined);
   }
@@ -2034,7 +2135,7 @@ speakSource.addEventListener('click', () => {
   const language = normalizedSpeechLanguage(result.detectedLanguage);
   const voice = selectLocalSpeechVoice(window.speechSynthesis.getVoices(), language);
   if (!voice) {
-    setStatus('当前没有可用的本地语音，原文未发送到语音服务');
+    setStatus(t('当前没有可用的本地语音，原文未发送到语音服务'));
     return;
   }
   activeSpeechRequestId = result.requestId;
@@ -2150,8 +2251,8 @@ async function loadActiveSession(
 
 function activeSession(): PdfSidePanelSession | undefined {
   if (currentSession?.tabId === activeTabId) return currentSession;
-  setStatus('当前标签页已切换，正在刷新翻译会话');
-  void loadActiveSession().catch(() => setStatus('无法读取当前翻译会话'));
+  setStatus(t('当前标签页已切换，正在刷新翻译会话'));
+  void loadActiveSession().catch(() => setStatus(t('无法读取当前翻译会话')));
   return undefined;
 }
 
@@ -2176,7 +2277,7 @@ function openCorrectionEditor(): void {
   const panel = document.createElement('div');
   panel.className = 'correction-editor';
   panel.setAttribute('role', 'group');
-  panel.setAttribute('aria-label', '修正译文，公式已锁定');
+  panel.setAttribute('aria-label', t('修正译文，公式已锁定'));
   const parts = document.createElement('div');
   parts.className = 'correction-parts';
   const inputs = new Map<string, HTMLTextAreaElement>();
@@ -2190,7 +2291,7 @@ function openCorrectionEditor(): void {
       input.className = 'correction-text-part';
       input.value = part.text;
       input.maxLength = 24000;
-      input.setAttribute('aria-label', `可编辑译文第 ${textPartNumber} 段`);
+      input.setAttribute('aria-label', msg`可编辑译文第 ${textPartNumber} 段`);
       inputs.set(part.id, input);
       parts.append(input);
     } else {
@@ -2198,7 +2299,7 @@ function openCorrectionEditor(): void {
       const formula = document.createElement('div');
       formula.className = 'correction-latex';
       formula.textContent = part.text;
-      formula.setAttribute('aria-label', `受保护公式 ${formulaNumber}，不可编辑`);
+      formula.setAttribute('aria-label', msg`受保护公式 ${formulaNumber}，不可编辑`);
       formula.setAttribute('role', 'textbox');
       formula.setAttribute('aria-readonly', 'true');
       formula.tabIndex = 0;
@@ -2208,20 +2309,20 @@ function openCorrectionEditor(): void {
   const note = document.createElement('p');
   note.className = 'correction-note';
   note.textContent = formulaNumber
-    ? '公式片段已锁定；保存只修改自然语言，不调用 API。'
-    : '保存修改不会调用 API。';
+    ? t('公式片段已锁定；保存只修改自然语言，不调用 API。')
+    : t('保存修改不会调用 API。');
   if (session.result.alignedSegments?.length) {
-    note.textContent += ' 保存整段修正后将退出逐句对照。';
+    note.textContent += t(' 保存整段修正后将退出逐句对照。');
   }
   const scopeLabel = document.createElement('label');
   scopeLabel.className = 'correction-scope';
-  scopeLabel.append('译文保存');
+  scopeLabel.append(t('译文保存'));
   const scope = document.createElement('select');
-  scope.ariaLabel = '修正译文的保存范围';
+  scope.ariaLabel = t('修正译文的保存范围');
   const stableDocument = Boolean(session.pageUrl.trim() || session.result.documentId);
   for (const [value, label] of [
-    ['current', '仅本次'],
-    ['document', '记住本文'],
+    ['current', t('仅本次')],
+    ['document', t('记住本文')],
   ] as const) {
     const option = document.createElement('option');
     option.value = value;
@@ -2233,31 +2334,31 @@ function openCorrectionEditor(): void {
   const termDisclosure = document.createElement('details');
   termDisclosure.className = 'correction-term-disclosure';
   const termSummary = document.createElement('summary');
-  termSummary.textContent = '＋ 固定术语（可选）';
+  termSummary.textContent = t('＋ 固定术语（可选）');
   const termFields = document.createElement('fieldset');
   termFields.className = 'correction-term-fields';
   const sourceLabel = document.createElement('label');
-  sourceLabel.append('原文术语');
+  sourceLabel.append(t('原文术语'));
   const source = document.createElement('input');
   source.maxLength = 120;
-  source.placeholder = '例如 adaptive sensing';
-  source.ariaLabel = '原文术语';
+  source.placeholder = t('例如 adaptive sensing');
+  source.ariaLabel = t('原文术语');
   sourceLabel.append(source);
   const targetLabel = document.createElement('label');
-  targetLabel.append('固定译法');
+  targetLabel.append(t('固定译法'));
   const target = document.createElement('input');
   target.maxLength = 120;
-  target.placeholder = '例如 自适应感知';
-  target.ariaLabel = '固定译法';
+  target.placeholder = t('例如 自适应感知');
+  target.ariaLabel = t('固定译法');
   targetLabel.append(target);
   const termScopeLabel = document.createElement('label');
   termScopeLabel.className = 'correction-term-scope';
-  termScopeLabel.append('保存到');
+  termScopeLabel.append(t('保存到'));
   const termScope = document.createElement('select');
-  termScope.ariaLabel = '术语保存范围';
+  termScope.ariaLabel = t('术语保存范围');
   for (const [value, label] of [
-    ['document', '本文'],
-    ['global', '全局'],
+    ['document', t('本文')],
+    ['global', t('全局')],
   ] as const) {
     const option = document.createElement('option');
     option.value = value;
@@ -2278,17 +2379,18 @@ function openCorrectionEditor(): void {
   feedback.setAttribute('aria-live', 'polite');
   const cancel = document.createElement('button');
   cancel.type = 'button';
-  cancel.textContent = '取消';
+  cancel.textContent = t('取消');
   const save = document.createElement('button');
   save.type = 'button';
   save.className = 'save';
-  save.textContent = '保存';
+  save.textContent = t('保存');
   actions.append(feedback, cancel, save);
   panel.append(parts, note, scopeLabel, termDisclosure, actions);
   for (const input of inputs.values()) input.setAttribute('aria-describedby', feedback.id);
   source.setAttribute('aria-describedby', feedback.id);
   target.setAttribute('aria-describedby', feedback.id);
   translationText.classList.add('correction-mode');
+  syncNativePdfReaderTip();
   translationText.replaceChildren(panel);
   syncTargetLanguageControl(session);
   translationViewSwitch.hidden = true;
@@ -2298,6 +2400,7 @@ function openCorrectionEditor(): void {
   copy.hidden = true;
   copy.disabled = true;
   correct.hidden = true;
+  explainPassageButton.hidden = true;
   correctionUndo.hidden = true;
   syncSessionActions();
 
@@ -2330,7 +2433,7 @@ function openCorrectionEditor(): void {
   };
   const showSaveFailure = (message: string): void => {
     setCorrectionStatus(message, true);
-    save.textContent = '重试';
+    save.textContent = t('重试');
     queueMicrotask(() => {
       feedback.scrollIntoView({ block: 'nearest' });
       save.focus({ preventScroll: true });
@@ -2339,7 +2442,7 @@ function openCorrectionEditor(): void {
   const resetSaveError = (): void => {
     if (!feedback.classList.contains('is-error')) return;
     setCorrectionStatus('');
-    save.textContent = '保存';
+    save.textContent = t('保存');
   };
   const clearTermErrors = (): void => {
     source.removeAttribute('aria-invalid');
@@ -2351,10 +2454,10 @@ function openCorrectionEditor(): void {
     termDisclosure.classList.toggle('has-value', hasSource && hasTarget);
     termDisclosure.classList.toggle('has-error', hasSource !== hasTarget);
     termSummary.textContent = hasSource && hasTarget
-      ? '✓ 已填写固定术语'
+      ? t('✓ 已填写固定术语')
       : hasSource !== hasTarget
-        ? '！固定术语待补充'
-        : '＋ 固定术语（可选）';
+        ? t('！固定术语待补充')
+        : t('＋ 固定术语（可选）');
   };
   const showTermValidationFailure = (): void => {
     const sourceMissing = !source.value.trim();
@@ -2364,7 +2467,7 @@ function openCorrectionEditor(): void {
     target.setAttribute('aria-invalid', String(targetMissing || pairInvalid));
     termDisclosure.classList.remove('has-value');
     termDisclosure.classList.add('has-error');
-    termSummary.textContent = '！固定术语需检查';
+    termSummary.textContent = t('！固定术语需检查');
     termDisclosure.open = true;
     queueMicrotask(() => (sourceMissing ? source : targetMissing ? target : source)
       .focus({ preventScroll: true }));
@@ -2380,6 +2483,19 @@ function openCorrectionEditor(): void {
   };
   source.addEventListener('input', onTermInput);
   target.addEventListener('input', onTermInput);
+  const suggestions=document.createElement('div');termDisclosure.before(suggestions);
+  let currentTerms:import('../../core/translation/types').GlossaryEntry[]|undefined,readUnavailable=false,retryTerms:()=>Promise<void>=async()=>{};
+  const refreshSuggestions=()=>{
+    if(readUnavailable){renderCorrectionTermReadFailure(suggestions,retryTerms);return}
+    const corrected=draft.parts.map(part=>part.kind==='text'?(inputs.get(part.id)?.value??part.text):part.text).join('');
+    renderCorrectionTermSuggestions(suggestions,(currentTerms?deduplicateCorrectionTerms(correctionTermSuggestions(session.sourceText,sessionResult.translatedText,corrected,[...(sessionResult.appliedGlossaryTerms??[]),...currentTerms]),currentTerms):[]).map(item=>({...item,context:session.sourceText.slice(0,180)})),item=>{
+      if(save.disabled)return;
+      if((source.value.trim()&&source.value!==item.source)||(target.value.trim()&&target.value!==item.target)){setCorrectionStatus(t('已有词条草稿已保留，请先处理当前输入。'));termDisclosure.open=true;source.focus();return}
+      source.value=item.source;target.value=item.target;onTermInput();setCorrectionStatus(t('词条已填入，保存修正时一并确认。'));termDisclosure.open=true;target.focus();
+    });
+  };
+  for(const input of inputs.values())input.addEventListener('input',refreshSuggestions);refreshSuggestions();
+  correctionTermsController?.abort();correctionTermsController=new AbortController();retryTerms=watchCorrectionTerms({locator:{pageUrl:session.pageUrl,sourceLabel:session.sourceLabel,...(sessionResult.documentId?{documentId:sessionResult.documentId}:{})},language:sessionResult.targetLanguage??session.targetLanguage??'',evidence:session.sourceText,signal:correctionTermsController.signal,onPending:()=>{currentTerms=undefined;readUnavailable=false;refreshSuggestions()},onChange:terms=>{currentTerms=terms;readUnavailable=false;refreshSuggestions()},onUnavailable:()=>{currentTerms=undefined;readUnavailable=true;refreshSuggestions()}});
   save.addEventListener('click', () => {
     const selectedScope = scope.value as TranslationMemoryScope;
     const edits: ManualCorrectionEdit[] = [...inputs].map(([partId, input]) => ({
@@ -2410,13 +2526,13 @@ function openCorrectionEditor(): void {
     } catch (error) {
       setCorrectionStatus(error instanceof ManualCorrectionError
         ? error.code === 'NO_CHANGES'
-          ? '译文没有变化'
+          ? t('译文没有变化')
           : error.code === 'LATEX_CHANGED'
-            ? '公式已锁定，请只修改文字'
+            ? t('公式已锁定，请只修改文字')
             : error.code === 'INVALID_TERM_CANDIDATE'
-              ? '请完整填写不含公式的简短术语和固定译法'
-              : '修正内容不完整，请检查'
-        : '无法保存修正', true);
+              ? t('请完整填写不含公式的简短术语和固定译法')
+              : t('修正内容不完整，请检查')
+        : t('无法保存修正'), true);
       if (error instanceof ManualCorrectionError && error.code === 'INVALID_TERM_CANDIDATE') {
         showTermValidationFailure();
       } else {
@@ -2424,7 +2540,7 @@ function openCorrectionEditor(): void {
       }
       return;
     }
-    save.textContent = '保存';
+    save.textContent = t('保存');
     panel.setAttribute('aria-busy', 'true');
     save.disabled = true;
     cancel.disabled = true;
@@ -2433,7 +2549,8 @@ function openCorrectionEditor(): void {
     for (const input of inputs.values()) input.disabled = true;
     source.disabled = true;
     target.disabled = true;
-    setCorrectionStatus('正在保存…');
+    suggestions.querySelectorAll('button').forEach(button=>button.disabled=true);
+    setCorrectionStatus(t('正在保存…'));
     void (async () => {
       const response = await browser.runtime.sendMessage({
         type: 'UPDATE_PDF_SIDE_PANEL_TRANSLATION_RESULT',
@@ -2472,7 +2589,8 @@ function openCorrectionEditor(): void {
       source.disabled = false;
       target.disabled = false;
       termScope.disabled = false;
-      showSaveFailure(error instanceof Error ? error.message : '保存失败，请重试');
+      suggestions.querySelectorAll('button').forEach(button=>button.disabled=false);
+      showSaveFailure(error instanceof Error ? error.message : t('保存失败，请重试'));
     });
   });
   queueMicrotask(() => (inputs.values().next().value ?? scope).focus());
@@ -2487,8 +2605,8 @@ function undoCurrentCorrection(): void {
   correctionUndo.setAttribute('aria-busy', 'true');
   correctionUndo.setAttribute('role', 'status');
   correctionUndo.setAttribute('aria-live', 'polite');
-  correctionUndoMessage.textContent = '正在撤销…';
-  undoCorrection.textContent = '撤销';
+  correctionUndoMessage.textContent = t('正在撤销…');
+  undoCorrection.textContent = t('撤销');
   undoCorrection.disabled = true;
   setStatus('');
   void (async () => {
@@ -2518,20 +2636,20 @@ function undoCurrentCorrection(): void {
     const rollbackSkipped = Boolean(response.data.termRollbackSkipped);
     setStatus(
       rollbackSkipped
-        ? '译文已撤销；术语后来被修改，未自动覆盖'
-        : '已撤销修正',
+        ? t('译文已撤销；术语后来被修改，未自动覆盖')
+        : t('已撤销修正'),
       rollbackSkipped ? 8_000 : 2_200,
     );
   })().catch((error: unknown) => {
     correctionUndo.removeAttribute('aria-busy');
     undoCorrection.disabled = false;
-    undoCorrection.textContent = '重试';
+    undoCorrection.textContent = t('重试');
     correctionUndo.classList.add('is-error');
     correctionUndo.setAttribute('role', 'alert');
     correctionUndo.setAttribute('aria-live', 'assertive');
     correctionUndoMessage.textContent = error instanceof Error
       ? `${error.message} ·`
-      : '撤销失败 ·';
+      : t('撤销失败 ·');
     queueMicrotask(() => {
       correctionUndo.scrollIntoView({ block: 'nearest' });
       undoCorrection.focus({ preventScroll: true });
@@ -2555,8 +2673,8 @@ function openFullSettings(
           }
         : {}),
     } satisfies RuntimeMessage) as OpenOptionsPageResponse;
-    if (!response.ok) setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置');
-  })().catch(() => setStatus('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置'));
+    if (!response.ok) setStatus(t('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置'));
+  })().catch(() => setStatus(t('无法打开完整设置，请从扩展菜单进入 Pi Translator 设置')));
 }
 
 openSettings.addEventListener('click', () => openFullSettings());
@@ -2658,7 +2776,7 @@ emptyAction.addEventListener('click', () => {
   const idleLabel = emptyAction.textContent;
   emptyAction.disabled = true;
   emptyAction.setAttribute('aria-busy', 'true');
-  emptyAction.textContent = '正在打开…';
+  emptyAction.textContent = t('正在打开…');
   setEmptyStatus('');
   void (async () => {
     if (emptyContext.kind === 'web') {
@@ -2684,8 +2802,8 @@ emptyAction.addEventListener('click', () => {
       error instanceof Error
         ? error.message
         : emptyContext.kind === 'web'
-          ? '无法切换到网页浮动侧栏。'
-          : '无法打开 Pi PDF 阅读器。',
+          ? t('无法切换到网页浮动侧栏。')
+          : t('无法打开 Pi PDF 阅读器。'),
       true,
     );
   }).finally(() => {
@@ -2727,7 +2845,7 @@ retry.addEventListener('click', () => {
   const session = activeSession();
   if (!session) return;
   if (session.settingsRecoveryConfirmation?.failedRequestId === session.requestId) {
-    setStatus('正在使用刚保存的配置重新翻译');
+    setStatus(t('正在使用刚保存的配置重新翻译'));
   }
   retryFocusPending = document.activeElement === retry;
   retryStatusFocusPending = retryFocusPending;
@@ -2752,7 +2870,7 @@ retry.addEventListener('click', () => {
     retryFocusPending = false;
     retryStatusFocusPending = false;
     retryFocusTabId = undefined;
-    setStatus('无法重新开始翻译');
+    setStatus(t('无法重新开始翻译'));
     queueMicrotask(() => retry.focus({ preventScroll: true }));
   });
 });
@@ -2776,7 +2894,7 @@ stopTranslation.addEventListener('click', () => {
       stopPendingRequestId = undefined;
       render(currentSession);
       setStatus(response.ok
-        ? '翻译任务已经结束，无需再次停止'
+        ? t('翻译任务已经结束，无需再次停止')
         : translationErrorMessage(response.error.code, response.error.message));
       return;
     }
@@ -2790,7 +2908,7 @@ stopTranslation.addEventListener('click', () => {
     ) return;
     stopPendingRequestId = undefined;
     render(currentSession);
-    setStatus('暂时无法停止翻译，请稍后重试');
+    setStatus(t('暂时无法停止翻译，请稍后重试'));
   });
 });
 
@@ -2806,8 +2924,8 @@ copy.addEventListener('click', () => {
     .catch(() => {
       if (currentSession !== session) return;
       clearCopyFeedback();
-      copy.textContent = copyActionLabel(session);
-      setStatus('复制失败', 4_000);
+      setCopyLabel(copyActionLabel(session));
+      setStatus(t('复制失败'), 4_000);
     });
 });
 
@@ -2862,16 +2980,38 @@ window.addEventListener('keydown', (event) => {
   scrollReadingToEdge(event.key === 'Home' ? 'top' : 'bottom');
 });
 correct.addEventListener('click', openCorrectionEditor);
+explainPassageButton.addEventListener('click',()=>{const session=activeSession(),result=session?.result;if(!result||session?.status!=='complete')return;const input=resultPassageInput(result);openPassageExplanation(input,{isCurrent:()=>activeSession()?.result===result&&JSON.stringify(resultPassageInput(result))===JSON.stringify(input)})});
 undoCorrection.addEventListener('click', undoCurrentCorrection);
 
+pdfReaderGuideAction.addEventListener('click', () => openPiReader.click());
+nativePdfReaderTipDismiss.addEventListener('click', () => {
+  nativePdfTipRevision++;
+  nativePdfTipAllowed = false;
+  syncNativePdfReaderTip();
+  pdfReaderGuideAction.focus({preventScroll:true});
+  void browser.storage.local.set({[nativePdfTipDismissedKey]: true}).catch(() => {
+    setStatus(t('本次已隐藏提示，但未能保存该选择。'));
+  });
+});
+webSidebarSwitch.addEventListener('click', () => {
+  if (translationText.classList.contains('correction-mode') || document.querySelector('dialog[open]')) {
+    setStatus(t('请先完成或取消当前编辑，再切换侧栏。'));
+    return;
+  }
+  openPiReader.click();
+});
 openPiReader.addEventListener('click', () => {
   void (async () => {
     const session = activeSession();
     if (!session) return;
     if (session.sourceKind === 'web') {
+      if (translationText.classList.contains('correction-mode') || document.querySelector('dialog[open]')) {
+        setStatus(t('请先完成或取消当前编辑，再切换侧栏。'));
+        return;
+      }
       const response = await browser.runtime.sendMessage({
         type: 'USE_FLOATING_SIDEBAR',
-        payload: { tabId: session.tabId },
+        payload: { tabId: session.tabId, requestId: session.requestId },
       } satisfies RuntimeMessage) as RuntimeResponse<{ opened: true }>;
       if (!response.ok) throw new Error(response.error.message);
       return;
@@ -2888,7 +3028,7 @@ openPiReader.addEventListener('click', () => {
       activeTabId !== session.tabId ||
       !isSamePdfSidePanelSession(currentSession, session)
     ) {
-      setStatus('标签页已切换，请在当前 PDF 中重新操作');
+      setStatus(t('标签页已切换，请在当前 PDF 中重新操作'));
       return;
     }
     const response = (await browser.runtime.sendMessage({
@@ -2904,7 +3044,7 @@ openPiReader.addEventListener('click', () => {
     } satisfies RuntimeMessage)) as RuntimeResponse<{ opened: true }> | undefined;
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
   })().catch((error: unknown) => setStatus(
-    error instanceof Error ? error.message : '无法打开 Pi PDF 阅读器',
+    error instanceof Error ? error.message : t('无法打开 Pi PDF 阅读器'),
   ));
 });
 
@@ -2912,7 +3052,7 @@ openExtensionManagement.addEventListener('click', () => {
   void browser.tabs.create({
     url: `edge://extensions/?id=${browser.runtime.id}`,
     active: true,
-  }).catch(() => setStatus('请手动打开 edge://extensions 并进入 Pi Translator 详情。'));
+  }).catch(() => setStatus(t('请手动打开 edge://extensions 并进入 Pi Translator 详情。')));
 });
 
 retryPdfAccess.addEventListener('click', () => {
@@ -2925,7 +3065,7 @@ retryPdfAccess.addEventListener('click', () => {
       return;
     }
     if (await requestPdfSourceAccess(sourceUrl)) {
-      setStatus('PDF 读取权限已就绪');
+      setStatus(t('PDF 读取权限已就绪'));
     }
   })().catch(() => showHiddenPdfSourceAlert());
 });
@@ -2978,7 +3118,7 @@ browser.tabs.onActivated.addListener((activated) => {
   showEmptyContext({ kind: 'loading' });
   render(undefined);
   void loadActiveSession(activated)
-    .catch(() => setEmptyStatus('无法读取当前翻译会话。', true));
+    .catch(() => setEmptyStatus(t('无法读取当前翻译会话。'), true));
 });
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
@@ -2989,7 +3129,7 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   sessionLoadGate.invalidate();
   showEmptyContext(emptyContextForTabUrl(changeInfo.url));
   void loadActiveSession({ tabId, windowId: tab.windowId })
-    .catch(() => setEmptyStatus('无法刷新当前页面状态。', true));
+    .catch(() => setEmptyStatus(t('无法刷新当前页面状态。'), true));
 });
 
 browser.storage.onChanged.addListener((changes, areaName) => {
@@ -2998,6 +3138,13 @@ browser.storage.onChanged.addListener((changes, areaName) => {
       void refreshWebHistory(activeTabId).catch(() => undefined);
     }
     return;
+  }
+  if (areaName === 'local' && (changes[nativePdfTipDismissedKey] || changes[pdfReaderUsedKey])) {
+    nativePdfTipRevision++;
+    if (changes[nativePdfTipDismissedKey]?.newValue === true || changes[pdfReaderUsedKey]?.newValue === true) {
+      nativePdfTipAllowed = false;
+      syncNativePdfReaderTip();
+    }
   }
   if (areaName !== 'local' || !changes.extensionSettings) return;
   void getSettings().then((settings) => {
@@ -3014,7 +3161,7 @@ browser.storage.onChanged.addListener((changes, areaName) => {
     syncBilingualPageControl();
     if (activeTabId !== undefined && latestWebSession?.tabId === activeTabId) {
       void refreshWebHistory(activeTabId).catch(() => undefined);
-    } else {
+    } else if (!translationText.classList.contains('correction-mode')) {
       render(currentSession);
     }
   });
@@ -3028,6 +3175,12 @@ window.addEventListener('pagehide', () => {
   } satisfies RuntimeMessage).catch(() => undefined);
 });
 
+const nativePdfTipReadRevision = nativePdfTipRevision;
+void browser.storage.local.get([nativePdfTipDismissedKey, pdfReaderUsedKey]).then((stored) => {
+  if (nativePdfTipReadRevision !== nativePdfTipRevision) return;
+  nativePdfTipAllowed = stored[nativePdfTipDismissedKey] !== true && stored[pdfReaderUsedKey] !== true;
+  syncNativePdfReaderTip();
+}).catch(() => undefined);
 void getSettings().then((settings) => {
   autoRenderLatex = settings.autoRenderLatex;
   webHistoryLimit = settings.historyLimit;
@@ -3047,5 +3200,9 @@ void getSettings().then((settings) => {
 });
 void loadActiveSession().catch(() => {
   render(undefined);
-  setEmptyStatus('无法读取当前翻译会话，请重新加载扩展后重试。', true);
+  setEmptyStatus(t('无法读取当前翻译会话，请重新加载扩展后重试。'), true);
 });
+
+}
+
+void startUi();

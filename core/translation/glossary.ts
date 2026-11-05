@@ -20,7 +20,7 @@ export function normalizeGlossaryTermKey(value: string): string {
 function splitGlossaryLine(
   line: string,
 ): { source: string; target: string } | undefined {
-  const separators = ['=>', '\t', '='];
+  const separators = line.includes('\t') ? ['\t'] : ['=>', '='];
   for (const separator of separators) {
     const index = line.indexOf(separator);
     if (index < 0) continue;
@@ -90,7 +90,7 @@ export function parseGlossaryText(value: string): GlossaryParseResult {
 
 export function formatGlossaryEntries(entries: Iterable<GlossaryEntry>): string {
   return normalizeGlossaryEntries(entries)
-    .map(({ source, target }) => `${source} = ${target}`)
+    .map(({ source, target }) => source.includes('=')||target.includes('=>')?`${source}\t${target}`:`${source} = ${target}`)
     .join('\n');
 }
 

@@ -1,118 +1,92 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Pi Translator - 翻译侧栏</title>
-    <link rel="stylesheet" href="./style.css" />
-    <link rel="stylesheet" href="../../ui/product-theme.css" />
-    <link rel="stylesheet" href="./design.css" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title data-i18n-parts="[[0,&quot;Pi Translator - 翻译侧栏&quot;]]">Pi Translator - 翻译侧栏</title>
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="../../ui/product-theme.css">
+    <link rel="stylesheet" href="./design.css">
   </head>
   <body>
     <main>
       <header class="app-header">
         <div class="brand">
-          <img src="/brand/pi_logo.png" alt="" />
+          <img src="/brand/pi_logo.png" alt="">
           <div>
             <strong>Pi Translator</strong>
-            <span id="app-subtitle">网页与 PDF 翻译</span>
+            <span data-i18n-parts="[[0,&quot;网页与 PDF 翻译&quot;]]" id="app-subtitle">网页与 PDF 翻译</span>
           </div>
         </div>
         <div id="panel-more-home" class="header-actions">
-          <button
-            id="continuous-translation-toggle"
-            class="continuous-translation-toggle"
-            type="button"
-            aria-pressed="false"
-            title="暂停当前标签页的自动连续翻译"
-            hidden
-          ><span class="continuous-translation-dot" aria-hidden="true"></span><span id="continuous-translation-label" data-short-label="自动">自动翻译中</span></button>
+          <button id="web-sidebar-switch" class="surface-switch" type="button" hidden data-i18n-parts="[[0,&quot;改用页面侧栏&quot;]]">改用页面侧栏</button>
+          <button data-i18n-title="暂停当前标签页的自动连续翻译" id="continuous-translation-toggle" class="continuous-translation-toggle" type="button" aria-pressed="false" title="暂停当前标签页的自动连续翻译" hidden><span class="continuous-translation-dot" aria-hidden="true"></span><span data-i18n-data-short-label="自动" data-i18n-parts="[[0,&quot;自动翻译中&quot;]]" id="continuous-translation-label" data-short-label="自动">自动翻译中</span></button>
           <details id="panel-more" class="panel-more">
-            <summary aria-label="更多翻译操作">更多</summary>
+            <summary data-pi-icon="more" data-i18n-title="更多翻译操作" title="更多翻译操作" data-i18n-aria-label="更多翻译操作" data-i18n-parts="[[0,&quot;更多&quot;]]" aria-label="更多翻译操作">更多</summary>
             <div class="panel-menu">
-              <div class="panel-menu-group"><span>译文</span><button id="correct" class="correction-action" type="button" hidden>修正</button><button id="formula-view" type="button" hidden>源码</button></div>
-              <div class="panel-menu-group"><span>阅读与工具</span><button
-            id="start-web-region"
-            class="web-region-action"
-            type="button"
-            title="在当前网页拖动框选文字、公式、图表或图像"
-            hidden
-          ><span class="web-region-icon" aria-hidden="true"></span><span id="start-web-region-label" data-short-label="框选">框选网页</span></button><button id="open-pi-reader" type="button" hidden>用 Pi 打开</button></div>
-              <div class="panel-menu-group"><button id="open-settings" class="text-action" type="button">设置</button></div>
+              <div class="panel-menu-group"><span data-i18n-parts="[[0,&quot;译文&quot;]]">译文</span><button data-i18n-parts="[[0,&quot;修正&quot;]]" id="correct" class="correction-action" type="button" hidden>修正</button><button data-i18n-parts="[[0,&quot;源码&quot;]]" id="formula-view" type="button" hidden>源码</button></div>
+              <div class="panel-menu-group"><span data-i18n-parts="[[0,&quot;阅读与工具&quot;]]">阅读与工具</span><button data-i18n-title="在当前网页拖动框选文字、公式、图表或图像" id="start-web-region" class="web-region-action" type="button" title="在当前网页拖动框选文字、公式、图表或图像" hidden><span class="web-region-icon" aria-hidden="true"></span><span data-i18n-parts="[[0,&quot;框选网页&quot;]]" id="start-web-region-label" data-i18n-data-short-label="框选" data-short-label="框选">框选网页</span></button><button data-i18n-parts="[[0,&quot;用 Pi 打开&quot;]]" id="open-pi-reader" type="button" hidden>用 Pi 打开</button></div>
+              <div class="panel-menu-group"><button data-i18n-parts="[[0,&quot;设置&quot;]]" id="open-settings" class="text-action" type="button">设置</button></div>
             </div>
           </details>
         </div>
       </header>
 
-      <section id="bilingual-page-control" class="bilingual-page-control" aria-label="网页正文双语阅读" hidden>
+      <section data-i18n-aria-label="网页正文双语阅读" id="bilingual-page-control" class="bilingual-page-control" aria-label="网页正文双语阅读" hidden>
         <div class="bilingual-page-overview">
           <span class="bilingual-page-mark" aria-hidden="true">
-            <img src="/brand/pi_logo.png" alt="" />
+            <img src="/brand/pi_logo.png" alt="">
           </span>
           <div class="bilingual-page-copy">
-            <strong>网页全文翻译</strong>
-            <span id="bilingual-page-status" aria-live="polite">在原段落下方渐进显示译文</span>
+            <strong data-i18n-parts="[[0,&quot;网页全文翻译&quot;]]">网页全文翻译</strong>
+            <span data-i18n-parts="[[0,&quot;在原段落下方渐进显示译文&quot;]]" id="bilingual-page-status" aria-live="polite">在原段落下方渐进显示译文</span>
           </div>
           <label class="bilingual-page-language">
-            <span>译为</span>
-            <select id="bilingual-page-language" aria-label="正文译为">
-              <option value="zh-CN">中文</option>
-              <option value="en">英文</option>
-              <option value="ja">日语</option>
-              <option value="de">德语</option>
-              <option value="fr">法语</option>
+            <span data-i18n-parts="[[0,&quot;译为&quot;]]">译为</span>
+            <select data-i18n-aria-label="正文译为" id="bilingual-page-language" aria-label="正文译为">
+              <option data-i18n-parts="[[0,&quot;中文&quot;]]" value="zh-CN">中文</option>
+              <option data-i18n-parts="[[0,&quot;英文&quot;]]" value="en">英文</option>
+              <option data-i18n-parts="[[0,&quot;日语&quot;]]" value="ja">日语</option>
+              <option data-i18n-parts="[[0,&quot;德语&quot;]]" value="de">德语</option>
+              <option data-i18n-parts="[[0,&quot;法语&quot;]]" value="fr">法语</option>
             </select>
           </label>
         </div>
-        <div
-          id="bilingual-page-progress"
-          class="bilingual-page-progress"
-          role="progressbar"
-          aria-label="网页全文翻译进度"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow="0"
-          hidden
-        >
+        <div data-i18n-aria-label="网页全文翻译进度" id="bilingual-page-progress" class="bilingual-page-progress" role="progressbar" aria-label="网页全文翻译进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" hidden>
           <i></i>
         </div>
 
         <div class="bilingual-page-actions">
-          <button id="bilingual-page-primary" class="primary" type="button">开始</button>
-          <button id="bilingual-page-scope" type="button" hidden>调整范围</button>
+          <button data-i18n-parts="[[0,&quot;开始&quot;]]" id="bilingual-page-primary" class="primary" type="button">开始</button>
+          <button data-i18n-parts="[[0,&quot;调整范围&quot;]]" id="bilingual-page-scope" type="button" hidden>调整范围</button>
           <label id="bilingual-page-display-control" class="bilingual-page-display" hidden>
-            <span>显示</span>
-            <select id="bilingual-page-display" aria-label="正文显示方式">
-              <option value="bilingual">双语</option>
-              <option value="translation">译文</option>
-              <option value="source">原文</option>
+            <span data-i18n-parts="[[0,&quot;显示&quot;]]">显示</span>
+            <select data-i18n-aria-label="正文显示方式" id="bilingual-page-display" aria-label="正文显示方式">
+              <option data-i18n-parts="[[0,&quot;双语&quot;]]" value="bilingual">双语</option>
+              <option data-i18n-parts="[[0,&quot;译文&quot;]]" value="translation">译文</option>
+              <option data-i18n-parts="[[0,&quot;原文&quot;]]" value="source">原文</option>
             </select>
           </label>
           <details id="bilingual-page-copy-menu" class="bilingual-page-copy-menu" hidden>
-            <summary>更多</summary>
+            <summary data-pi-icon="more" data-i18n-aria-label="更多" data-i18n-title="更多" aria-label="更多" title="更多" data-i18n-parts="[[0,&quot;更多&quot;]]">更多</summary>
             <div>
-              <div id="bilingual-page-export-actions" class="bilingual-page-menu-group"><span>导出</span>
-              <button id="bilingual-page-copy-translation" type="button">复制纯译文</button>
-              <button id="bilingual-page-copy-bilingual" type="button">复制双语 Markdown</button>
+              <div id="bilingual-page-export-actions" class="bilingual-page-menu-group"><span data-i18n-parts="[[0,&quot;导出&quot;]]">导出</span>
+              <button data-i18n-parts="[[0,&quot;复制纯译文&quot;]]" id="bilingual-page-copy-translation" type="button">复制纯译文</button>
+              <button data-i18n-parts="[[0,&quot;复制双语 Markdown&quot;]]" id="bilingual-page-copy-bilingual" type="button">复制双语 Markdown</button>
               <span role="separator"></span>
-              <button id="bilingual-page-download-translation" type="button">下载纯译文 .md</button>
-              <button id="bilingual-page-download-bilingual" type="button">下载双语 .md</button>
-              <button id="bilingual-page-download-html" type="button">下载可打印 HTML</button>
+              <button data-i18n-parts="[[0,&quot;下载纯译文 .md&quot;]]" id="bilingual-page-download-translation" type="button">下载纯译文 .md</button>
+              <button data-i18n-parts="[[0,&quot;下载双语 .md&quot;]]" id="bilingual-page-download-bilingual" type="button">下载双语 .md</button>
+              <button data-i18n-parts="[[0,&quot;下载可打印 HTML&quot;]]" id="bilingual-page-download-html" type="button">下载可打印 HTML</button>
               </div>
         <div id="bilingual-page-retention" class="bilingual-page-retention" hidden>
           <span>
-            <strong>关闭后保留译文</strong>
-            <small id="bilingual-page-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
+            <strong data-i18n-parts="[[0,&quot;关闭后保留译文&quot;]]">关闭后保留译文</strong>
+            <small data-i18n-parts="[[0,&quot;默认只保留在当前 Edge 会话&quot;]]" id="bilingual-page-retention-status" aria-live="polite">默认只保留在当前 Edge 会话</small>
           </span>
           <span class="bilingual-page-retention-actions">
-            <button id="bilingual-page-retention-manage" type="button">管理</button>
+            <button data-i18n-parts="[[0,&quot;管理&quot;]]" id="bilingual-page-retention-manage" type="button">管理</button>
             <label class="bilingual-page-retention-switch">
-              <input
-                id="bilingual-page-retention-toggle"
-                type="checkbox"
-                role="switch"
-                aria-label="关闭 Edge 后仍在本机保留当前网页译文"
-              />
+              <input data-i18n-aria-label="关闭 Edge 后仍在本机保留当前网页译文" id="bilingual-page-retention-toggle" type="checkbox" role="switch" aria-label="关闭 Edge 后仍在本机保留当前网页译文">
             </label>
           </span>
         </div>
@@ -123,52 +97,57 @@
         <div class="bilingual-page-footer">
           <small id="bilingual-page-retention-error" role="alert" hidden></small>
           <small id="bilingual-page-copy-feedback" class="bilingual-page-copy-feedback" aria-live="polite"></small>
-          <button id="bilingual-page-clear" type="button" title="清除当前网页的全文译文" hidden>清除</button>
+          <button data-i18n-title="清除当前网页的全文译文" data-i18n-parts="[[0,&quot;清除&quot;]]" id="bilingual-page-clear" type="button" title="清除当前网页的全文译文" hidden>清除</button>
         </div>
         <div id="bilingual-page-language-confirmation" class="bilingual-page-language-confirmation" role="alert" hidden>
           <span id="bilingual-page-language-message"></span>
-          <button id="bilingual-page-language-cancel" type="button">取消</button>
-          <button id="bilingual-page-language-confirm" type="button">清除并改译</button>
+          <button data-i18n-parts="[[0,&quot;取消&quot;]]" id="bilingual-page-language-cancel" type="button">取消</button>
+          <button data-i18n-parts="[[0,&quot;清除并改译&quot;]]" id="bilingual-page-language-confirm" type="button">清除并改译</button>
         </div>
       </section>
 
       <section id="empty-state" class="empty-state" data-context="loading" aria-busy="true" aria-labelledby="empty-title">
         <div class="empty-mark">π</div>
-        <h1 id="empty-title">正在检查当前页面…</h1>
-        <p id="empty-description">确认当前标签页可以使用哪种翻译方式。</p>
-        <button id="empty-action" class="empty-action" type="button" hidden>打开 Pi PDF 阅读器</button>
+        <h1 data-i18n-parts="[[0,&quot;正在检查当前页面…&quot;]]" id="empty-title">正在检查当前页面…</h1>
+        <p data-i18n-parts="[[0,&quot;确认当前标签页可以使用哪种翻译方式。&quot;]]" id="empty-description">确认当前标签页可以使用哪种翻译方式。</p>
+        <button data-i18n-parts="[[0,&quot;打开 Pi PDF 阅读器&quot;]]" id="empty-action" class="empty-action" type="button" hidden>打开 Pi PDF 阅读器</button>
         <p id="empty-status" class="empty-status" role="status" aria-live="polite" aria-atomic="true"></p>
       </section>
 
       <section id="session" hidden>
-        <section class="session-context" aria-label="当前来源">
+        <section data-i18n-aria-label="当前来源" class="session-context" aria-label="当前来源">
           <div class="document-line">
-            <span id="source-kind-label">当前来源</span>
+            <span data-i18n-parts="[[0,&quot;当前来源&quot;]]" id="source-kind-label">当前来源</span>
             <strong id="source-label"></strong>
           </div>
+          <button id="pdf-reader-guide-action" class="surface-switch" type="button" hidden></button>
         </section>
-        <nav id="web-history-navigation" class="web-history-navigation" aria-label="最近译文" hidden>
-          <span class="web-history-label">最近译文</span>
-          <button id="web-history-older" type="button" title="上一条译文" aria-label="上一条译文">‹</button>
+        <div id="native-pdf-reader-tip" class="native-pdf-reader-tip" hidden>
+          <span data-i18n-parts='[[0,"Pi 阅读器支持划词、笔记与原文对照。"]]'>Pi 阅读器支持划词、笔记与原文对照。</span>
+          <button id="native-pdf-reader-tip-dismiss" type="button" data-i18n-aria-label="不再显示阅读器提示" aria-label="不再显示阅读器提示" data-i18n-title="不再显示阅读器提示" title="不再显示阅读器提示">×</button>
+        </div>
+        <nav data-i18n-aria-label="最近译文" id="web-history-navigation" class="web-history-navigation" aria-label="最近译文" hidden>
+          <span data-i18n-parts="[[0,&quot;最近译文&quot;]]" class="web-history-label">最近译文</span>
+          <button data-i18n-aria-label="上一条译文" data-i18n-title="上一条译文" id="web-history-older" type="button" title="上一条译文" aria-label="上一条译文">‹</button>
           <output id="web-history-counter" aria-live="polite">1 / 1</output>
-          <button id="web-history-newer" type="button" title="下一条译文" aria-label="下一条译文">›</button>
+          <button data-i18n-aria-label="下一条译文" data-i18n-title="下一条译文" id="web-history-newer" type="button" title="下一条译文" aria-label="下一条译文">›</button>
         </nav>
         <p id="reader-hint-text" class="session-context-note" hidden></p>
 
         <aside id="pdf-access-alert" class="access-alert" role="alert" hidden>
-          <strong id="pdf-access-title">需要 PDF 读取权限</strong>
+          <strong data-i18n-parts="[[0,&quot;需要 PDF 读取权限&quot;]]" id="pdf-access-title">需要 PDF 读取权限</strong>
           <p id="pdf-access-message"></p>
           <ol id="pdf-access-steps"></ol>
           <div class="access-actions">
-            <button id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
-            <button id="retry-pdf-access" type="button">重新检测</button>
+            <button data-i18n-parts="[[0,&quot;打开 Edge 扩展管理页&quot;]]" id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
+            <button data-i18n-parts="[[0,&quot;重新检测&quot;]]" id="retry-pdf-access" type="button">重新检测</button>
           </div>
         </aside>
 
         <section id="source-section" class="content-section source-section">
           <div class="section-heading">
-            <h2>原文</h2>
-            <button id="source-toggle" class="source-toggle" type="button" aria-controls="source-text" aria-expanded="false" hidden>展开</button>
+            <h2 data-i18n-parts="[[0,&quot;原文&quot;]]">原文</h2>
+            <button data-i18n-parts="[[0,&quot;展开&quot;]]" id="source-toggle" class="source-toggle" type="button" aria-controls="source-text" aria-expanded="false" hidden data-pi-icon="chevron" aria-label="展开完整原文" data-i18n-aria-label="展开完整原文" title="展开完整原文" data-i18n-title="展开完整原文">展开</button>
           </div>
           <p id="source-text"></p>
         </section>
@@ -176,25 +155,25 @@
         <section id="result-section" class="content-section result-section">
           <div class="section-heading">
             <div class="translation-title-group">
-              <h2 id="translation-heading">译文</h2>
+              <h2 data-i18n-parts="[[0,&quot;译文&quot;]]" id="translation-heading">译文</h2>
               <label id="target-language-control" class="target-language-control" hidden>
-                <span>译为</span>
-                <select id="target-language" aria-label="目标语言">
-                  <option value="zh-CN">中文</option>
-                  <option value="en">英文</option>
-                  <option value="ja">日语</option>
-                  <option value="de">德语</option>
-                  <option value="fr">法语</option>
+                <span data-i18n-parts="[[0,&quot;译为&quot;]]">译为</span>
+                <select data-i18n-aria-label="目标语言" id="target-language" aria-label="目标语言">
+                  <option data-i18n-parts="[[0,&quot;中文&quot;]]" value="zh-CN">中文</option>
+                  <option data-i18n-parts="[[0,&quot;英文&quot;]]" value="en">英文</option>
+                  <option data-i18n-parts="[[0,&quot;日语&quot;]]" value="ja">日语</option>
+                  <option data-i18n-parts="[[0,&quot;德语&quot;]]" value="de">德语</option>
+                  <option data-i18n-parts="[[0,&quot;法语&quot;]]" value="fr">法语</option>
                 </select>
               </label>
             </div>
             <div class="translation-heading-tools">
-              <div id="translation-view-switch" class="translation-view-switch" role="group" aria-label="译文显示方式" hidden>
-                <button id="translation-view-full" type="button" class="active" aria-label="显示完整译文" aria-pressed="true" title="显示完整译文">全文</button>
-                <button id="translation-view-aligned" type="button" aria-label="显示逐句对照" aria-pressed="false" title="显示逐句对照">逐句</button>
+              <div data-i18n-aria-label="译文显示方式" id="translation-view-switch" class="translation-view-switch" role="group" aria-label="译文显示方式" hidden>
+                <button data-i18n-aria-label="显示完整译文" data-i18n-title="显示完整译文" data-i18n-parts="[[0,&quot;全文&quot;]]" id="translation-view-full" type="button" class="active" aria-label="显示完整译文" aria-pressed="true" title="显示完整译文">全文</button>
+                <button data-i18n-aria-label="显示逐句对照" data-i18n-title="显示逐句对照" data-i18n-parts="[[0,&quot;逐句&quot;]]" id="translation-view-aligned" type="button" aria-label="显示逐句对照" aria-pressed="false" title="显示逐句对照">逐句</button>
               </div>
               <span id="translation-state" tabindex="-1" aria-live="polite"></span>
-              <button id="stop-translation" type="button" title="停止翻译" hidden>停止</button>
+              <button data-i18n-title="停止翻译" data-i18n-parts="[[0,&quot;停止&quot;]]" id="stop-translation" type="button" title="停止翻译" hidden>停止</button>
             </div>
           </div>
           <div id="progress-track" class="progress-track" hidden><i></i></div>
@@ -202,29 +181,29 @@
             <div class="lexical-meta">
               <span id="lexical-pronunciation"></span>
               <span id="lexical-part-of-speech"></span>
-              <button id="speak-source" type="button" aria-pressed="false">朗读原文</button>
+              <button data-i18n-parts="[[0,&quot;朗读原文&quot;]]" id="speak-source" type="button" aria-pressed="false">朗读原文</button>
             </div>
-            <div id="lexical-senses" class="lexical-senses"></div>
           </div>
           <div id="translation-text" class="translation-text"></div>
+          <details id="lexical-details" class="lexical-details" hidden><summary id="lexical-summary"></summary><div id="lexical-senses" class="lexical-senses"></div></details>
           <div id="error-message" class="error-message" role="alert" aria-live="assertive" hidden></div>
           <div id="error-actions" class="error-actions" hidden>
-            <button id="retry" type="button">重试</button>
-            <button id="error-settings" class="secondary" type="button">检查设置</button>
+            <button data-i18n-parts="[[0,&quot;重试&quot;]]" id="retry" type="button">重试</button>
+            <button data-i18n-parts="[[0,&quot;检查设置&quot;]]" id="error-settings" class="secondary" type="button">检查设置</button>
           </div>
         </section>
 
         <footer id="session-actions" class="session-actions" hidden>
-          <button id="copy" class="copy-action" type="button" disabled>复制译文</button>
+          <button data-pi-icon="copy" data-i18n-aria-label="复制译文" data-i18n-title="复制译文" aria-label="复制译文" title="复制译文" data-i18n-parts="[[0,&quot;复制译文&quot;]]" id="copy" class="copy-action" type="button" disabled>复制译文</button>
           <span id="copy-feedback" class="sr-only" role="status" aria-live="polite" aria-atomic="true"></span>
           <span id="correction-undo" class="correction-undo" role="status" hidden>
-            <span id="correction-undo-message">已修正 ·</span>
-            <button id="undo-correction" type="button">撤销</button>
+            <span data-i18n-parts="[[0,&quot;已修正 ·&quot;]]" id="correction-undo-message">已修正 ·</span>
+            <button data-i18n-parts="[[0,&quot;撤销&quot;]]" id="undo-correction" type="button">撤销</button>
           </span>
-          <div id="reading-navigation" class="reading-navigation" role="group" aria-label="长译文阅读导航" hidden>
-            <output id="reading-progress" aria-label="译文阅读进度">顶部</output>
-            <button id="reading-top" type="button" aria-label="回到译文顶部" aria-keyshortcuts="Home" title="回到译文顶部（Home）">↑</button>
-            <button id="reading-bottom" type="button" aria-label="前往译文底部" aria-keyshortcuts="End" title="前往译文底部（End）">↓</button>
+          <div data-i18n-aria-label="长译文阅读导航" id="reading-navigation" class="reading-navigation" role="group" aria-label="长译文阅读导航" hidden>
+            <output data-i18n-aria-label="译文阅读进度" data-i18n-parts="[[0,&quot;顶部&quot;]]" id="reading-progress" aria-label="译文阅读进度">顶部</output>
+            <button data-i18n-aria-label="回到译文顶部" data-i18n-title="回到译文顶部（Home）" id="reading-top" type="button" aria-label="回到译文顶部" aria-keyshortcuts="Home" title="回到译文顶部（Home）">↑</button>
+            <button data-i18n-aria-label="前往译文底部" data-i18n-title="前往译文底部（End）" id="reading-bottom" type="button" aria-label="前往译文底部" aria-keyshortcuts="End" title="前往译文底部（End）">↓</button>
           </div>
           <span id="status" role="status" aria-live="polite"></span>
         </footer>

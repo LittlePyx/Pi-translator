@@ -1,4 +1,5 @@
 import type { TranslationErrorCode } from './errors';
+import { localizeErrorMessage, t } from '../i18n/ui-language';
 
 export type SettingsFocus =
   | 'api'
@@ -42,16 +43,18 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   OCR_NOT_SUPPORTED: '当前接口不能生成可靠的扫描 PDF 文字层；仍可使用框选翻译。坐标 OCR 目前支持官方 Qwen / 阿里云百炼接口。',
   OCR_INVALID_RESPONSE: 'OCR 没有返回可靠的文字坐标，未生成文字层；请调整识别区域或继续使用框选翻译。',
   IMAGE_REGION_INVALID: '框选图片无法处理，请缩小框选范围或重新框选更清晰的区域。',
+  DOCUMENT_TERMS_READ_FAILED: '暂时无法读取本文术语，未发送正文修复；本段请对照原文核对。重试本段会重新发送图像。',
   WEB_CAPTURE_PERMISSION_REQUIRED: '网页框选尚未获得截图权限，请从浏览器侧栏重新点击“框选网页”，并在 Edge 提示中选择允许。',
   UNSUPPORTED_PAGE: '当前页面禁止扩展注入，请在普通网页或 Overleaf 项目页使用。',
   REQUEST_ABORTED: '翻译请求已取消。',
   UNKNOWN_ERROR: '翻译发生未知错误，请重试；若仍失败，请打开设置测试连接。',
 };
 
-export function translationErrorMessage(
+function untranslatedErrorMessage(
   code: TranslationErrorCode,
   fallback?: string,
 ): string {
+  if(code==='UNKNOWN_ERROR'&&fallback==='暂时无法读取本文术语，未发送正文修复；本段请对照原文核对。重试本段会重新发送图像。')return fallback;
   if(code==='LATEX_VALIDATION_FAILED'&&fallback&&fallback.length<=1500&&/^正文修复未通过语义单元校验（PDF_SENTENCE_[1-9]\d?(?:_(?:HEAD|IF|THEN))?）：/u.test(fallback))return fallback;
   if (code === 'LATEX_VALIDATION_FAILED' && fallback && (
     fallback === '正文修复未通过公式对应校验：文字片段缺失或重复。' ||
@@ -89,18 +92,18 @@ export function translationErrorMessage(
  * well as ordinary cancellation. Preserve the background's actionable Chinese
  * explanation, but never surface an arbitrary/internal English abort message.
  */
-export function translationCorrectionErrorMessage(
+function untranslatedCorrectionErrorMessage(
   code: TranslationErrorCode,
   fallback?: string,
 ): string {
-  if (code !== 'REQUEST_ABORTED') return translationErrorMessage(code, fallback);
+  if (code !== 'REQUEST_ABORTED') return untranslatedErrorMessage(code, fallback);
   const detail = fallback?.trim();
   return detail && /[\u3400-\u9fff]/u.test(detail)
     ? detail
     : '当前译文已更新，请重新打开修正。';
 }
 
-export function runtimeConnectionErrorMessage(error: unknown): string {
+function untranslatedConnectionErrorMessage(error: unknown): string {
   const message = error instanceof Error ? error.message : String(error ?? '');
   if (/extension context invalidated/i.test(message)) {
     return '扩展刚刚更新或重新加载，请刷新当前网页后重试。';
@@ -114,7 +117,7 @@ export function runtimeConnectionErrorMessage(error: unknown): string {
   return '无法连接扩展后台，请刷新网页；若仍失败，请在扩展管理页重新加载 Pi Translator。';
 }
 
-export function translationErrorRecovery(
+function untranslatedErrorRecovery(
   code: TranslationErrorCode,
   retryable: boolean,
   role: TranslationProviderRole = 'text',
@@ -222,4 +225,24 @@ export function translationErrorRecovery(
     return { showRetry: true, settingsFocus: 'support', settingsLabel: '查看诊断' };
   }
   return { showRetry: retryable };
+}
+
+
+export function translationErrorMessage(code: TranslationErrorCode, fallback?: string): string {
+  return localizeErrorMessage(untranslatedErrorMessage(code, fallback));
+}
+
+export function translationCorrectionErrorMessage(code: TranslationErrorCode, fallback?: string): string {
+  return localizeErrorMessage(untranslatedCorrectionErrorMessage(code, fallback));
+}
+
+export function runtimeConnectionErrorMessage(error: unknown): string {
+  return localizeErrorMessage(untranslatedConnectionErrorMessage(error));
+}
+
+export function translationErrorRecovery(
+  code: TranslationErrorCode, retryable: boolean, role: TranslationProviderRole = 'text',
+): TranslationErrorRecovery {
+  const result = untranslatedErrorRecovery(code, retryable, role);
+  return result.settingsLabel ? { ...result, settingsLabel: t(result.settingsLabel) } : result;
 }

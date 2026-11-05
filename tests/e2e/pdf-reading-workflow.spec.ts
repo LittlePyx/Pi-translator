@@ -106,7 +106,7 @@ test('serializes backup import and correction saves across extension windows',as
     const download=options.waitForEvent('download');await options.locator('#export-library-backup').click();await(await download).saveAs(info.outputPath('before-concurrent-save.json'));
     const backup=await readFile(info.outputPath('before-concurrent-save.json'),'utf8');
     await options.evaluate(()=>{const scope=globalThis as any,c=scope.chrome,set=c.storage.local.set.bind(c.storage.local);scope.piImportHeld=false;scope.piImportGate=new Promise<void>(resolve=>scope.piReleaseImport=resolve);c.storage.local.set=async(values:any,...rest:any[])=>{if('retainedDocumentNamesV1' in values&&'piPdfTranslationMarkersV1' in values){scope.piImportHeld=true;await scope.piImportGate}return set(values,...rest)}});
-    await options.locator('#library-backup-input').setInputFiles({name:'old-backup.json',mimeType:'application/json',buffer:Buffer.from(backup)});await expect.poll(()=>options.evaluate(()=>(globalThis as any).piImportHeld)).toBe(true);
+    await options.locator('#library-backup-input').setInputFiles({name:'old-backup.json',mimeType:'application/json',buffer:Buffer.from(backup)});await expect(options.locator('#library-import-dialog')).toBeVisible();await options.locator('#library-import-confirm').click();await expect.poll(()=>options.evaluate(()=>(globalThis as any).piImportHeld)).toBe(true);
     await reader.locator('#pdf-paragraph-editor-save').click();await expect(reader.locator('#pdf-paragraph-editor-save')).toBeDisabled();await expect(reader.locator('#pdf-paragraph-editor')).toBeVisible();
     await options.evaluate(()=>{(globalThis as any).piReleaseImport()});await expect(options.locator('#retained-storage-action-status')).toContainText('已恢复');await expect(reader.locator('#pdf-paragraph-editor')).not.toBeVisible();
     const saved=await worker.evaluate(async()=>(await(globalThis as any).chrome.storage.local.get('pdfDocumentTranslationRetainedV1')).pdfDocumentTranslationRetainedV1[0]);
@@ -308,6 +308,46 @@ test('searches the visible PDF translation and reveals source hits without extra
   }finally{await reader.close()}
 });
 
+test('warns near revision and archive capacity, preserving a draft across backup and other-window changes',async({},info)=>{
+  const requests=textRequests.length+visionRequests.length,reader=await context.newPage(),worker=context.serviceWorkers()[0]!;const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome.storage;return{local:await c.local.get(null),session:await c.session.get(null)}});
+  const sources=['A controlled experiment measures the sample.','The final paragraph describes the results.'],buffer=createTwoPageTextPdf(sources[0]!,sources[1]!);
+  const signatures=sources.map((text,index)=>pdfDocumentTranslationSessionBlockSignature(index+1,text,0));
+  const descriptor={documentKey:pdfDocumentTranslationSessionDocumentKey('capacity-demo'),targetLanguage:'zh-CN',sourceLanguage:'auto',style:'academic',contentMode:'auto'},fingerprint=createHash('sha256').update(buffer).digest('hex'),behaviorKey=pdfDocumentTranslationSessionBehaviorKey('old');
+  const revisions=Array.from({length:40},(_,i)=>({id:`revision-${i}`,createdAt:i,reason:'correction',translatedText:`旧修订 ${i}`}));
+  const block={signature:signatures[0],translatedText:'保留的人工译文',manualCorrection:true,pageNumber:1,revisions};
+  const record={...descriptor,behaviorKey,sourceFingerprint:fingerprint,documentSignatures:signatures,activity:'complete',updatedAt:Date.now(),blocks:[block,{signature:signatures[1],translatedText:'第二段',pageNumber:2}]};
+  const archive={id:'archive-0',fingerprint,descriptor,behaviorKey,signature:signatures[0],createdAt:1,session:block,local:block,visible:block};
+  const id=JSON.stringify(['pdf',descriptor.documentKey,'zh-CN','auto','academic','auto']);let backup:typeof reader|undefined;
+  try{
+    await worker.evaluate(async({record,archive})=>await(globalThis as any).chrome.storage.local.set({pdfDocumentTranslationRetainedV1:[record],pdfFormulaRepairArchivesV1:[archive]}),{record,archive});
+    await reader.setViewportSize({width:360,height:640});await reader.goto(`chrome-extension://${extensionId}/pdf.html?restore=${encodeURIComponent(id)}`);await reader.locator('#file-input').setInputFiles({name:'capacity.pdf',mimeType:'application/pdf',buffer});await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');
+    await openPdfTranslationOptions(reader);const note=reader.locator('.pdf-repair-backup-note').filter({hasText:'分歧版本存档空间接近上限'});await expect(note).toBeHidden();
+    await worker.evaluate(async archive=>await(globalThis as any).chrome.storage.local.set({pdfFormulaRepairArchivesV1:Array.from({length:80},(_,i)=>({...archive,id:`archive-${i}`}))}),archive);await expect(note).toBeVisible();
+    await worker.evaluate(async archive=>await(globalThis as any).chrome.storage.local.set({pdfFormulaRepairArchivesV1:[archive]}),archive);await expect(note).toBeHidden();
+    await worker.evaluate(async archive=>{const value={signature:archive.signature,translatedText:'文'.repeat(19000)};await(globalThis as any).chrome.storage.local.set({pdfFormulaRepairArchivesV1:Array.from({length:15},(_,i)=>({...archive,id:`archive-${i}`,session:value,local:value,visible:value}))})},archive);await expect(note).toBeVisible();
+    const first=reader.locator('.pdf-document-translation-block').first();await first.hover();await first.locator('.pdf-paragraph-edit-action').click();const editor=reader.locator('#pdf-paragraph-editor');await expect(editor.locator('#pdf-paragraph-editor-capacity')).toContainText('40/50');await editor.locator('textarea').first().fill('尚未保存的人工草稿');
+    await expect(editor.locator('#pdf-paragraph-editor-capacity')).not.toHaveAttribute('open','');
+    const buttons=await editor.locator('.pdf-edit-actions button').evaluateAll(items=>items.map(item=>{const r=item.getBoundingClientRect();return{top:r.top,bottom:r.bottom}}));expect(Math.abs(buttons[0]!.top-buttons[1]!.top)).toBeLessThan(1);expect(buttons[1]!.bottom).toBeLessThanOrEqual(640);await editor.screenshot({path:info.outputPath('editor-collapsed-360.png')});
+    await editor.locator('#pdf-paragraph-editor-capacity summary').click();
+    const opened=context.waitForEvent('page');await editor.locator('#pdf-paragraph-editor-backup').click();backup=await opened;await backup.waitForLoadState('domcontentloaded');await expect(backup).toHaveURL(/options\.html#storage/u);await expect(editor.locator('textarea').first()).toHaveValue('尚未保存的人工草稿');
+    await backup.close();backup=undefined;await expect(editor.locator('textarea').first()).toHaveValue('尚未保存的人工草稿');await expect.poll(()=>editor.evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);await editor.screenshot({path:info.outputPath('capacity-editor-narrow.png')});
+    await editor.locator('#pdf-paragraph-editor-cancel').click();await reader.locator('#pdf-document-translation-copy-menu > summary').click();await reader.locator('#pdf-document-history').click();await expect(reader.locator('#pdf-history-capacity')).toContainText('40 条修订');await reader.locator('#pdf-history-close').click();
+    await worker.evaluate(async archive=>await(globalThis as any).chrome.storage.local.set({pdfFormulaRepairArchivesV1:[archive]}),archive);await expect(note).toBeHidden();
+    const after=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfDocumentTranslationRetainedV1')).pdfDocumentTranslationRetainedV1));const retained=after[0].blocks.find((item:any)=>item.signature===signatures[0]);expect(retained.revisions).toHaveLength(40);expect(retained.translatedText).toBe('保留的人工译文');expect(textRequests.length+visionRequests.length).toBe(requests);
+  }finally{await backup?.close();await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome.storage;await c.local.clear();await c.session.clear();await c.local.set(saved.local);await c.session.set(saved.session)},saved)}
+});
+
+test('keeps older corrections when editing past five revisions',async()=>{
+  const reader=await context.newPage(),worker=context.serviceWorkers()[0]!;const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome.storage;return{local:await c.local.get(null),session:await c.session.get(null)}});const buffer=createTwoPageTextPdf('A complete paragraph about a controlled experiment.','A second paragraph reports the evaluation results.');
+  try{
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles({name:'history-limit.pdf',mimeType:'application/pdf',buffer});await reader.locator('#translate-document').click();await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-translation-retention-toggle').check();await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase','complete');await reader.locator('#pdf-document-translation-view-reading').click();
+    const block=reader.locator('.pdf-document-translation-block').first(),editor=reader.locator('#pdf-paragraph-editor');
+    for(let index=0;index<5;index++){await block.hover();await block.locator('.pdf-paragraph-edit-action').click();await editor.locator('textarea').first().fill(`人工版本 ${index}`);await editor.locator('#pdf-paragraph-editor-save').click();await expect(editor).not.toBeVisible()}
+    await block.hover();await block.locator('.pdf-paragraph-edit-action').click();await editor.locator('textarea').first().fill('第六次人工修正');await editor.locator('#pdf-paragraph-editor-save').click();await expect(editor).not.toBeVisible();await expect(block).toContainText('第六次人工修正');
+    const savedRecord=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfDocumentTranslationRetainedV1')).pdfDocumentTranslationRetainedV1));expect(savedRecord[0].blocks.find((item:any)=>item.translatedText==='第六次人工修正').revisions).toHaveLength(6);
+  }finally{await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome.storage;await c.local.clear();await c.session.clear();await c.local.set(saved.local);await c.session.set(saved.session)},saved)}
+});
+
 test('corrects, undoes, pins, backs up and restores a PDF with a renamed source file',async({},info)=>{
   const reader=await context.newPage();const options=await context.newPage();let restored:typeof reader|undefined;
   const buffer=createTwoPageTextPdf('A complete paragraph about a controlled experiment.','A second paragraph reports the evaluation results.');
@@ -338,6 +378,7 @@ test('corrects, undoes, pins, backs up and restores a PDF with a renamed source 
     await reader.close();
     await options.evaluate(async()=>{const storage=(globalThis as any).chrome.storage;const data=await storage.local.get(null);const keys=Object.keys(data).filter(key=>key.startsWith('fixedDocumentTranslationV1:')||key==='pdfDocumentTranslationRetainedV1'||key==='retainedDocumentNamesV1');await storage.local.remove(keys);await storage.session.remove('pdfDocumentTranslationSessionsV1')});
     await options.locator('#library-backup-input').setInputFiles({name:'backup.json',mimeType:'application/json',buffer:Buffer.from(text)});
+    await expect(options.locator('#library-import-dialog')).toBeVisible();await options.locator('#library-import-confirm').click();
     await expect(options.locator('#retained-storage-action-status')).toContainText('已恢复 1 份文档');
     row=options.locator('.library-entry').first();await expect(row).toContainText('实验论文');await expect(row).toContainText('已固定');
     await options.setViewportSize({width:300,height:420});await options.emulateMedia({colorScheme:'dark'});
@@ -377,7 +418,7 @@ test('keeps restored formulas and review warnings locked during local paragraph 
     await reader.screenshot({path:info.outputPath('formula-correction-light.png')});
     await reader.setViewportSize({width:300,height:420});await reader.emulateMedia({colorScheme:'dark'});
     await expect.poll(()=>reader.locator('#pdf-paragraph-editor').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
-    const layout=await reader.locator('#pdf-paragraph-editor').evaluate(el=>{const body=el.querySelector('.pdf-paragraph-editor-parts')!.getBoundingClientRect();const footer=el.querySelector('footer')!.getBoundingClientRect();return{gap:footer.top-body.bottom,bottom:footer.bottom,height:window.innerHeight}});
+    const layout=await reader.locator('#pdf-paragraph-editor').evaluate(el=>{const body=el.querySelector('.pdf-paragraph-editor-body')!.getBoundingClientRect();const footer=el.querySelector('footer')!.getBoundingClientRect();return{gap:footer.top-body.bottom,bottom:footer.bottom,height:window.innerHeight}});
     expect(layout.gap).toBeGreaterThanOrEqual(-1);expect(layout.bottom).toBeLessThanOrEqual(layout.height);
     await reader.locator('#pdf-paragraph-editor-save').scrollIntoViewIfNeeded();await expect(reader.locator('#pdf-paragraph-editor-save')).toBeInViewport();
     await reader.screenshot({path:info.outputPath('formula-correction-narrow.png')});

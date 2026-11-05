@@ -834,6 +834,79 @@ for(const limit of [1,2])test(`repairs formula prose once within the whole-task 
   }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
 });
 
+test('passes document and scheme identity to background formula repair',async({},info)=>{
+ const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let images=0,texts=0,repairBody='';const saved=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get(null),session:await s.session.get(null)}});const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+ const handler=async(route:import('@playwright/test').Route)=>{const body=route.request().postDataJSON(),image=Array.isArray(body.messages[0].content);if(image){images++;const locator=await worker.evaluate(()=>(globalThis as any).formulaBackgroundLocator);expect(locator.documentId).toBeTruthy();expect(locator.glossaryDocumentId).toBeTruthy();const term=await reader.evaluate(async locator=>(globalThis as any).chrome.runtime.sendMessage({type:'UPSERT_DOCUMENT_TERM',payload:{...locator,term:{source:'Energy',target:'本文人工能量'}}}),locator);expect(term.ok).toBe(true);await worker.evaluate(async locator=>{const c=(globalThis as any).chrome,s=(await c.storage.local.get('extensionSettings')).extensionSettings;await c.storage.local.set({extensionSettings:{...s,glossaryProfiles:[{id:'energy',name:'能源',entries:[{source:'Energy',target:'方案能量'}]}],documentGlossaryProfiles:{[locator.glossaryDocumentId]:'energy'}}})},locator);await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation:'演示：能量 {{m1}} 与 {{m1}} 保持不变。',uncertainSpans:[]})}}]})});return}texts++;repairBody=JSON.stringify(body);const segments=JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>({id:part.id,translation:'本文人工能量 '+(part.text.match(/⟦[^⟧]+⟧/gu)??[]).join(' ')+' 保持不变。'}));await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({translation:'正文已翻译。',segments,warnings:[]})}}]})})};
+ await context.route(endpoint,handler);await worker.evaluate(()=>{const g=globalThis as any,c=g.chrome;g.formulaBackgroundObserver=(message:any)=>{if(message.type==='TRANSLATE_PDF_BACKGROUND_VISUAL_BLOCK'){const {pageUrl,documentId,glossaryDocumentId}=message.payload.request;g.formulaBackgroundLocator={pageUrl,documentId,glossaryDocumentId}}};c.runtime.onMessage.addListener(g.formulaBackgroundObserver)});
+ try{const source=info.outputPath('term-identity.pdf');await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('2');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);expect(images).toBe(1);expect(texts).toBe(1);expect(repairBody).toContain('本文人工能量');expect(repairBody).not.toContain('方案能量');await expect(reader.locator('[data-translation-block]').first()).toContainText('本文人工能量')
+ }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const g=globalThis as any,c=g.chrome;c.runtime.onMessage.removeListener(g.formulaBackgroundObserver);delete g.formulaBackgroundObserver;delete g.formulaBackgroundLocator;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
+});
+
+for(const language of ['zh-CN','en'] as const)test(`explains a local term read failure during formula repair in ${language}`,async({},info)=>{
+ const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let images=0,texts=0;const saved=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get(null),session:await s.session.get(null)}});const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+ const handler=async(route:import('@playwright/test').Route)=>{const body=route.request().postDataJSON();if(!Array.isArray(body.messages[0].content)){texts++;const segments=JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>({id:part.id,translation:'能量关系 '+(part.text.match(/⟦[^⟧]+⟧/gu)??[]).join(' ')+' 保持不变。'}));await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({translation:'正文已翻译。',segments,warnings:[]})}}]})});return}images++;if(images<=2)await worker.evaluate(()=>{const g=globalThis as any,c=g.chrome;g.formulaLocalGet=c.storage.local.get.bind(c.storage.local);c.storage.local.get=(key:any)=>key==='documentTranslationMemoryV1'?Promise.reject(new Error('synthetic term read failure')):g.formulaLocalGet(key)});await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation:'演示：能量 {{m1}} 与 {{m1}} 保持不变。',uncertainSpans:[]})}}]})})};await context.route(endpoint,handler);
+ try{
+  await worker.evaluate(async language=>await(globalThis as any).chrome.storage.local.set({uiLanguagePreference:language}),language);await reader.setViewportSize({width:360,height:780});await reader.emulateMedia({colorScheme:'dark'});const source=info.outputPath(`term-read-${language}.pdf`);await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('4');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
+  const block=reader.locator('[data-translation-block]').first();await expect(block.locator('.pdf-formula-review-details')).toContainText(language==='en'?'Document terms are temporarily unavailable':'暂时无法读取本文术语');await expect(block.locator('.pdf-formula-review-details')).toContainText(language==='en'?'will resend its image':'会重新发送图像');expect(images).toBe(1);expect(texts).toBe(0);await expect(reader.locator('#pdf-document-request-usage')).toContainText(language==='en'?'Text 0':'文字 0 次');expect(await reader.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);await block.screenshot({path:info.outputPath(`term-read-${language}.png`)});await worker.evaluate(()=>{const g=globalThis as any;g.chrome.storage.local.get=g.formulaLocalGet;delete g.formulaLocalGet});await block.locator('.pdf-formula-review-retry').click();await expect.poll(()=>images).toBe(2);await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);expect(texts).toBe(0);await expect(reader.locator('#pdf-document-request-usage')).toContainText(language==='en'?'Text 0':'文字 0 次');await worker.evaluate(()=>{const g=globalThis as any;g.chrome.storage.local.get=g.formulaLocalGet;delete g.formulaLocalGet});await block.locator('.pdf-formula-review-retry').click();await expect.poll(()=>images).toBe(3);await expect.poll(()=>texts).toBe(1);await expect(block).toContainText('能量关系');await expect(block.locator('math')).toHaveCount(1);
+ }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const g=globalThis as any,s=g.chrome.storage;if(g.formulaLocalGet){s.local.get=g.formulaLocalGet;delete g.formulaLocalGet}await s.local.clear();await s.session.clear();await s.local.set(saved.local);await s.session.set(saved.session)},saved)}
+});
+
+for(const [language,retain] of [['zh-CN',false],['en',false],['zh-CN',true]] as const)test(`continues a locally blocked formula repair without resending its image in ${language}, retained ${retain}`,async({},info)=>{
+ const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let images=0,texts=0;const saved=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get(null),session:await s.session.get(null)}});const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+ const handler=async(route:import('@playwright/test').Route)=>{const body=route.request().postDataJSON();if(!Array.isArray(body.messages[0].content)){texts++;const segments=JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>({id:part.id,translation:'能量关系 '+(part.text.match(/⟦[^⟧]+⟧/gu)??[]).join(' ')+' 保持不变。'}));await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({translation:'正文已翻译。',segments,warnings:[]})}}]})});return}images++;await worker.evaluate(()=>{const g=globalThis as any,c=g.chrome;g.formulaLocalGet=c.storage.local.get.bind(c.storage.local);c.storage.local.get=(key:any)=>key==='documentTranslationMemoryV1'?Promise.reject(new Error('synthetic term read failure')):g.formulaLocalGet(key)});await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation:'演示：能量 {{m1}} 与 {{m1}} 保持不变。',uncertainSpans:[]})}}]})})};await context.route(endpoint,handler);
+ try{
+  await worker.evaluate(async language=>await(globalThis as any).chrome.storage.local.set({uiLanguagePreference:language}),language);await reader.setViewportSize({width:360,height:780});const source=info.outputPath('continue-formula.pdf');await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);if(retain){await reader.locator('#pdf-document-translation-retention-toggle').check();await expect(reader.locator('#pdf-document-translation-retention-status')).toContainText('已保留到本机')}await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('2');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
+  const block=reader.locator('[data-translation-block]').first(),resume=block.getByRole('button',{name:language==='en'?'Continue text repair (text only)':'继续正文修复（仅文字）'});await expect(resume).toBeVisible();await block.screenshot({path:info.outputPath(`continue-${language}.png`)});expect(await reader.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);expect(images).toBe(1);expect(texts).toBe(0);await resume.click();await expect(reader.locator('#pdf-document-translation-status')).toContainText(language==='en'?'Document terms are temporarily unavailable':'暂时无法读取本文术语');expect(images).toBe(1);expect(texts).toBe(0);await expect(reader.locator('#pdf-document-request-usage')).toContainText(language==='en'?'Text 0':'文字 0 次');await worker.evaluate(()=>{const g=globalThis as any;g.chrome.storage.local.get=g.formulaLocalGet;delete g.formulaLocalGet});await resume.click();await expect.poll(()=>texts).toBe(1);await expect(block).toContainText('能量关系');await expect(block.locator('math')).toHaveCount(1);expect(images).toBe(1);await expect(reader.locator('#pdf-document-request-usage')).toContainText(language==='en'?'Text 1':'文字 1 次');await reader.waitForTimeout(300);await expect(reader.locator('.pdf-repair-storage-check')).toBeHidden();if(retain){const retained=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfDocumentTranslationRetainedV1')).pdfDocumentTranslationRetainedV1));expect(retained[0].blocks[0].translatedText).toContain('能量关系');expect(retained[0].blocks[0].revisions[0].translatedText).toContain('演示：能量')}
+ }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const g=globalThis as any,s=g.chrome.storage;if(g.formulaLocalGet){s.local.get=g.formulaLocalGet;delete g.formulaLocalGet}await s.local.clear();await s.session.clear();await s.local.set(saved.local);await s.session.set(saved.session)},saved)}
+});
+
+test('offers a local retry when archived version storage cannot be read',async({},info)=>{
+ const reader=await context.newPage(),source=info.outputPath('archive-read.pdf');await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));
+ try{await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.evaluate(()=>{const s=(globalThis as any).chrome.storage.local,get=s.get.bind(s);(globalThis as any).restoreArchiveGet=()=>{s.get=get};s.get=(keys:any)=>keys==='pdfFormulaRepairArchivesV1'?Promise.reject(new Error('synthetic read failure')):get(keys)});await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();const retry=reader.getByRole('button',{name:'重试读取保留版本'});await expect(retry).toBeVisible();await reader.evaluate(()=>(globalThis as any).restoreArchiveGet());await retry.click();await expect(retry).toBeHidden()}finally{await reader.close()}
+});
+
+for(const failure of ['concurrent correction','term settings change','unrelated document change','second storage failure','rollback failure','rollback failure recovery','rollback failure after reopening','rollback failure in another window','rollback failure after session loss'] as const)test(`protects stored work during direct formula repair: ${failure}`,async({},info)=>{
+ const worker=context.serviceWorkers()[0]!,reader=await context.newPage();let images=0,texts=0,releaseText:()=>void=()=>{};const textGate=new Promise<void>(resolve=>releaseText=resolve);const saved=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get(null),session:await s.session.get(null)}});const endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';
+ const handler=async(route:import('@playwright/test').Route)=>{const body=route.request().postDataJSON();if(!Array.isArray(body.messages[0].content)){texts++;await textGate;const segments=JSON.parse(body.messages[1].content).segments.map((part:{id:string;text:string})=>({id:part.id,translation:'能量关系 '+(part.text.match(/⟦[^⟧]+⟧/gu)??[]).join(' ')+' 保持不变。'}));await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({translation:'正文已翻译。',segments,warnings:[]})}}]})});return}images++;await worker.evaluate(()=>{const g=globalThis as any,c=g.chrome;g.formulaLocalGet=c.storage.local.get.bind(c.storage.local);c.storage.local.get=(key:any)=>key==='documentTranslationMemoryV1'?Promise.reject(new Error('synthetic term read failure')):g.formulaLocalGet(key)});await route.fulfill({contentType:'application/json',body:JSON.stringify({choices:[{message:{content:JSON.stringify({formulaFormat:'refs-v1',formulas:[{id:'m1',latex:'E=mc^2',display:false}],recognizedText:'Energy {{m1}} is invariant.',translation:'演示：能量 {{m1}} 与 {{m1}} 保持不变。',uncertainSpans:[]})}}]})})};await context.route(endpoint,handler);
+ try{
+  await reader.setViewportSize({width:360,height:780});const source=info.outputPath('continue-conflict.pdf');await writeFile(source,createTextPdf('Energy E=mc^2 is invariant.'));await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-translation-retention-toggle').check();await expect(reader.locator('#pdf-document-translation-retention-status')).toContainText('已保留到本机');await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('2');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
+  const block=reader.locator('[data-translation-block]').first();await expect(block.getByRole('button',{name:'继续正文修复'})).toBeVisible();await worker.evaluate(()=>{const g=globalThis as any;g.chrome.storage.local.get=g.formulaLocalGet;delete g.formulaLocalGet});await block.getByRole('button',{name:'继续正文修复'}).click();await expect.poll(()=>texts).toBe(1);await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeDisabled();
+  if(failure==='concurrent correction')await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage.local,key='pdfDocumentTranslationRetainedV1',data=await s.get(key),records=data[key],block=records[0].blocks[0];block.manualCorrection=true;block.formulaDocument.translationTemplate='其他窗口人工修正 {{m1}}。';block.translatedText=block.formulaDocument.translationTemplate;await s.set({[key]:records})});
+  else if(failure==='term settings change')await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage.local,v=(await s.get('extensionSettings')).extensionSettings;await s.set({extensionSettings:{...v,academicGlossary:[{source:'Energy',target:'人工确认能量'}]}})});
+  else if(failure==='unrelated document change')await worker.evaluate(async()=>{const storage=(globalThis as any).chrome.storage;for(const [area,key] of [[storage.session,'pdfDocumentTranslationSessionsV1'],[storage.local,'pdfDocumentTranslationRetainedV1']] as const){const records=(await area.get(key))[key],other=structuredClone(records[0]);other.documentKey='pdf-other123';other.blocks[0].manualCorrection=true;other.blocks[0].formulaDocument.translationTemplate='另一篇人工修正 {{m1}}。';other.blocks[0].translatedText=other.blocks[0].formulaDocument.translationTemplate;records.push(other);await area.set({[key]:records})}});
+  else await reader.evaluate(failure=>{const g=globalThis as any,s=g.chrome.storage.session,original=s.set.bind(s);let once=true;s.set=async(value:any)=>{if(once&&value.pdfDocumentTranslationSessionsV1){once=false;await original(value);throw new Error('synthetic session write failure')}return original(value)};if(failure.startsWith('rollback failure')){const local=g.chrome.storage.local,save=local.set.bind(local);let calls=0;local.set=async(value:any)=>{if(value.pdfDocumentTranslationRetainedV1&&++calls===2)throw new Error('synthetic rollback failure');return save(value)}}},failure);
+  const before=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get('pdfDocumentTranslationRetainedV1'),session:await s.session.get('pdfDocumentTranslationSessionsV1')}});releaseText();
+  if(failure==='unrelated document change'){await expect(reader.locator('#pdf-document-translation-status')).toContainText('正文修复已保存');await expect(block).toContainText('能量关系');const after=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get('pdfDocumentTranslationRetainedV1'),session:await s.session.get('pdfDocumentTranslationSessionsV1')}});for(const scope of ['local','session'] as const){const data=after[scope] as Record<string,any[]>;expect(Object.values(data)[0]!.find((item:any)=>item.documentKey==='pdf-other123').blocks[0].translatedText).toContain('另一篇人工修正')}expect(texts).toBe(1);expect(images).toBe(1);return}
+  await expect(reader.locator('#pdf-document-translation-status')).toContainText(failure.startsWith('rollback failure')?'存储状态暂不确定':'修复结果暂未保存');const after=await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get('pdfDocumentTranslationRetainedV1'),session:await s.session.get('pdfDocumentTranslationSessionsV1')}});if(!failure.startsWith('rollback failure'))expect(after).toEqual(before);else{await expect(block.locator('.pdf-formula-review-retry')).toBeDisabled();await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeDisabled()}await expect(block.locator('.pdf-formula-review-content')).not.toContainText('能量关系');expect(images).toBe(1);
+  if(failure==='rollback failure after reopening'){
+    await reader.reload();await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeDisabled();await expect(reader.getByRole('button',{name:'核对保存状态'})).toBeVisible();expect(texts).toBe(1);expect(images).toBe(1);return;
+  }
+  if(failure==='rollback failure in another window'){
+    const other=await context.newPage();try{await other.goto(`chrome-extension://${extensionId}/pdf.html`);await other.locator('#file-input').setInputFiles(source);await other.locator('#translate-document').click();await expect(other.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(other);await expect(other.locator('#pdf-document-translation-retention-toggle')).toBeDisabled();await expect(other.getByRole('button',{name:'核对保存状态'})).toBeVisible();expect(texts).toBe(1);expect(images).toBe(1)}finally{await other.close()}return;
+  }
+  if(failure==='rollback failure after session loss'){
+    await worker.evaluate(async()=>await(globalThis as any).chrome.storage.session.remove('pdfDocumentTranslationSessionsV1'));await reader.reload();await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeDisabled();await reader.getByRole('button',{name:'核对保存状态'}).click();await expect(reader.locator('#pdf-document-translation-status')).toContainText('本机版本已核对');await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeEnabled();expect(texts).toBe(1);expect(images).toBe(1);return;
+  }
+  if(failure==='rollback failure recovery'){
+    const priorArchives=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfFormulaRepairArchivesV1')).pdfFormulaRepairArchivesV1));await reader.getByRole('button',{name:'核对保存状态'}).click();await reader.locator('.pdf-repair-versions summary').click();const comparison=reader.locator('.pdf-repair-versions'),choose=comparison.locator('section').nth(1).getByRole('button',{name:'使用此版本…'});await choose.click();const confirm=reader.getByRole('dialog',{name:'确认使用此版本'});await confirm.getByRole('button',{name:'取消'}).click();await expect(confirm).toHaveCount(0);expect(await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfFormulaRepairArchivesV1')).pdfFormulaRepairArchivesV1))).toEqual(priorArchives);await choose.click();await confirm.getByRole('button',{name:'确认使用'}).click();await expect(confirm).toHaveCount(0);await expect(reader.locator('#pdf-document-translation-status')).toContainText('另一份已保留');await expect(reader.getByRole('button',{name:'查看保留的分歧版本'})).toBeVisible();
+    const archived=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfFormulaRepairArchivesV1')).pdfFormulaRepairArchivesV1));expect(archived).toHaveLength(1);expect(archived[0].session).toBeTruthy();expect(archived[0].local).toBeTruthy();await worker.evaluate(async()=>await(globalThis as any).chrome.storage.session.remove('pdfDocumentTranslationSessionsV1'));await reader.reload();await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await expect(reader.getByRole('button',{name:'查看保留的分歧版本'})).toBeVisible();await reader.getByRole('button',{name:'查看保留的分歧版本'}).click();const archiveDialog=reader.getByRole('dialog',{name:'保留的分歧版本'});await archiveDialog.locator('details').first().locator('summary').first().click();await archiveDialog.screenshot({path:info.outputPath('archive-360.png')});expect(await reader.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);await archiveDialog.locator('section').nth(2).getByRole('button',{name:'恢复此版本…'}).click();const restore=reader.getByRole('dialog',{name:'确认恢复此版本'});await restore.getByRole('button',{name:'确认恢复'}).click();await expect(restore).toHaveCount(0);await expect(archiveDialog).toHaveCount(0);await expect(reader.locator('#pdf-document-translation-status')).toContainText('先前版本已保留');const second=await worker.evaluate(async()=>((await(globalThis as any).chrome.storage.local.get('pdfFormulaRepairArchivesV1')).pdfFormulaRepairArchivesV1));expect(second).toHaveLength(2);expect(texts).toBe(1);expect(images).toBe(1);return;
+  }
+  if(failure==='rollback failure'){
+    await reader.screenshot({path:info.outputPath('uncertain-360.png')});expect(await reader.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
+    await reader.getByRole('button',{name:'核对保存状态'}).click();await expect(reader.locator('#pdf-document-translation-status')).toContainText('保存内容与当前阅读不一致');await reader.locator('.pdf-repair-versions summary').click();await expect(reader.locator('.pdf-repair-versions')).toContainText('当前会话');await expect(reader.locator('.pdf-repair-versions')).toContainText('本机保留');await expect(reader.locator('.pdf-repair-versions')).toContainText('与当前阅读不同');await expect(reader.locator('.pdf-repair-versions math')).toHaveCount(2);await reader.locator('.pdf-repair-versions').screenshot({path:info.outputPath('saved-versions-360.png')});expect(await worker.evaluate(async()=>{const s=(globalThis as any).chrome.storage;return{local:await s.local.get('pdfDocumentTranslationRetainedV1'),session:await s.session.get('pdfDocumentTranslationSessionsV1')}})).toEqual(after);
+    const scroll=await reader.locator('#pdf-document-translation-pages').evaluate(node=>node.scrollTop);const newPage=context.waitForEvent('page');await reader.getByRole('button',{name:'查看备份与恢复'}).click();const backupPage=await newPage;await backupPage.waitForURL('**/options.html#storage');await backupPage.close();await expect(reader.locator('.pdf-repair-versions')).toBeVisible();expect(await reader.locator('#pdf-document-translation-pages').evaluate(node=>node.scrollTop)).toBe(scroll);
+    await block.locator('.pdf-paragraph-edit-action').click();const editor=reader.locator('#pdf-paragraph-editor'),draft=editor.locator('textarea').first();await draft.fill('保留的人工草稿');await editor.locator('#pdf-paragraph-editor-save').click();await expect(editor.locator('#pdf-paragraph-editor-status')).toContainText('当前草稿仍在这里');await editor.locator('#pdf-paragraph-editor-check').click();await expect(editor.locator('#pdf-paragraph-editor-status')).toContainText('保存版本不一致');await expect(draft).toHaveValue('保留的人工草稿');
+    await worker.evaluate(async state=>{const s=(globalThis as any).chrome.storage;await s.local.set(state.local);await s.session.set(state.session)},before);await expect(reader.locator('.pdf-repair-versions')).toBeHidden();await expect(reader.locator('#pdf-document-translation-status')).toContainText('保存内容已变化');await editor.locator('#pdf-paragraph-editor-check').click();await expect(editor.locator('#pdf-paragraph-editor-status')).toContainText('保存状态已核对');await expect(draft).toHaveValue('保留的人工草稿');await expect(reader.locator('#pdf-document-translation-retention-toggle')).toBeEnabled();await editor.locator('#pdf-paragraph-editor-save').click();await expect(editor).not.toHaveAttribute('open');await expect(block).toContainText('保留的人工草稿');
+  }else{
+    await block.locator('.pdf-pending-repair summary').click();await expect(block.locator('.pdf-pending-repair')).toContainText('能量关系');await expect(block.locator('.pdf-pending-repair math')).toHaveCount(1);expect(await reader.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);await block.screenshot({path:info.outputPath(`pending-${failure}.png`)});
+    await block.getByRole('button',{name:'重新核对并保存'}).click();
+    if(failure==='second storage failure')await expect(block).toContainText('能量关系');
+    else{await expect(reader.locator('#pdf-document-translation-status')).toContainText(failure==='term settings change'?'术语或设置已变化':'本段已在其他窗口变化');await expect(block.locator('.pdf-formula-review-content')).not.toContainText('能量关系')}
+  }
+  expect(texts).toBe(1);expect(images).toBe(1);
+ }finally{releaseText();await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const g=globalThis as any,s=g.chrome.storage;if(g.formulaLocalGet){s.local.get=g.formulaLocalGet;delete g.formulaLocalGet}await s.local.clear();await s.session.clear();await s.local.set(saved.local);await s.session.set(saved.session)},saved)}
+});
+
 for(const validRepair of [true,false])test(`binds conditional formulas before accepting a visual result with valid counts: ${validRepair}`,async({},info)=>{
   const worker=context.serviceWorkers()[0]!,reader=await context.newPage(),endpoint='https://www.overleaf.com/pi-translator-e2e-vision/**';let images=0,texts=0;
   const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;return{local:await c.storage.local.get(null),session:await c.storage.session.get(null)}});
@@ -848,11 +921,44 @@ for(const validRepair of [true,false])test(`binds conditional formulas before ac
   try{
     const source=info.outputPath(`演示文本-条件绑定-${validRepair}.pdf`);await writeFile(source,createTextPdf('If E=mc^2 is invariant, then F=ma is stable.'));
     await reader.goto(`chrome-extension://${extensionId}/pdf.html`);await reader.locator('#file-input').setInputFiles(source);await reader.locator('#translate-document').click();await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase',/idle|preparing/u);await openPdfTranslationOptions(reader);await reader.locator('#pdf-document-budget-details > summary').click();await reader.locator('#pdf-document-request-limit').fill('2');await reader.locator('#pdf-document-translation-primary').click();await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase',/complete|warning/u);
-    const block=reader.locator('[data-translation-block]').first();expect(images).toBe(1);expect(texts).toBe(1);
+    const block=reader.locator('[data-translation-block]').first();expect(images).toBe(1);expect(texts).toBe(1);await expect(reader.locator('#pdf-document-request-usage')).toContainText('文字 1 次');
     if(validRepair){await expect(block).toContainText('如果');await expect(block).toContainText('则');await expect(block).toContainText('通常未必成立²');await expect(block.locator('math')).toHaveCount(2);await expect(block.locator('.pdf-formula-review-notice')).toHaveCount(0)}
     else{await expect(block).toContainText('条件与结论');await expect(block).toContainText('正文修复未完成');await expect(block).toContainText('所属句子')}
     await reader.screenshot({path:info.outputPath('conditional-binding.png')});
   }finally{await context.unroute(endpoint,handler);await reader.close();await worker.evaluate(async saved=>{const c=(globalThis as any).chrome;await c.storage.local.clear();await c.storage.session.clear();await c.storage.local.set(saved.local);await c.storage.session.set(saved.session)},saved)}
+});
+
+test('keeps the text reservation when a sent repair request fails', async ({}, info) => {
+  const worker = context.serviceWorkers()[0]!, reader = await context.newPage(), endpoint = 'https://www.overleaf.com/pi-translator-e2e-vision/**';
+  let images = 0, texts = 0;
+  const saved = await worker.evaluate(async () => { const c = (globalThis as any).chrome; return { local: await c.storage.local.get(null), session: await c.storage.session.get(null) }; });
+  const handler = async (route: import('@playwright/test').Route) => {
+    const body = route.request().postDataJSON();
+    if (!Array.isArray(body.messages[0].content)) { texts++; await route.fulfill({ status: 400, contentType: 'application/json', body: JSON.stringify({ error: { message: 'synthetic provider failure' } }) }); return; }
+    images++;
+    const result = { formulaFormat: 'refs-v1', formulas: [{ id: 'm1', latex: 'E=mc^2', display: false }], recognizedText: 'Energy {{m1}} is invariant.', translation: '演示：能量 {{m1}} 与 {{m1}} 保持不变。', uncertainSpans: [] };
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ choices: [{ message: { content: JSON.stringify(result) } }] }) });
+  };
+  await context.route(endpoint, handler);
+  try {
+    const source = info.outputPath('sent-repair-failure.pdf');
+    await writeFile(source, createTextPdf('Energy E=mc^2 is invariant.'));
+    await reader.goto(`chrome-extension://${extensionId}/pdf.html`);
+    await reader.locator('#file-input').setInputFiles(source);
+    await reader.locator('#translate-document').click();
+    await expect(reader.locator('#pdf-document-translation')).not.toHaveAttribute('data-phase', /idle|preparing/u);
+    await openPdfTranslationOptions(reader);
+    await reader.locator('#pdf-document-budget-details > summary').click();
+    await reader.locator('#pdf-document-request-limit').fill('2');
+    await reader.locator('#pdf-document-translation-primary').click();
+    await expect(reader.locator('#pdf-document-translation')).toHaveAttribute('data-phase', /complete|warning/u);
+    expect(images).toBe(1); expect(texts).toBe(1);
+    await expect(reader.locator('#pdf-document-request-usage')).toContainText('文字 1 次');
+    await expect(reader.locator('[data-translation-block]').first()).toContainText('正文修复未完成');
+  } finally {
+    await context.unroute(endpoint, handler); await reader.close();
+    await worker.evaluate(async saved => { const c = (globalThis as any).chrome; await c.storage.local.clear(); await c.storage.session.clear(); await c.storage.local.set(saved.local); await c.storage.session.set(saved.session); }, saved);
+  }
 });
 
 test('translates a captioned paper table as one visual object beside ordinary text', async ({}, info) => {
@@ -1916,14 +2022,14 @@ test('uses the native PDF outline for compact chapter navigation', async ({}, te
 
     await experiment.press('Escape');
     await expect(panel).toBeHidden();
-    await expect(pdfPage.locator('#pdf-reader-menu > summary')).toBeFocused();
+    await expect(openOutline).toBeFocused();
     await clickPdfReaderAction(pdfPage,'open-outline');
     await expect(panel).toBeVisible();
     await pdfPage.keyboard.press('Control+f');
     await expect(panel).toBeHidden();
     await expect(pdfPage.locator('#pdf-search-query')).toBeFocused();
     await pdfPage.locator('#pdf-search-query').press('Escape');
-    await expect(pdfPage.locator('#pdf-reader-menu > summary')).toBeFocused();
+    await expect(openOutline).toBeFocused();
 
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await clickPdfReaderAction(pdfPage,'open-outline');
@@ -2419,12 +2525,14 @@ test('keeps the PDF toolbar clear and usable at narrow widths', async () => {
     await expect(pdfPage.locator('.brand img')).toBeVisible();
     await expect(pdfPage.locator('.brand > span')).toBeVisible();
     await expect(pdfPage.locator('#recognize-page')).toBeHidden();
-    await expect(pdfPage.locator('#region-translate')).toHaveCSS('font-size','12px');
+    await expect(pdfPage.locator('#region-translate')).toHaveCSS('font-size','0px');
+    await expect(pdfPage.locator('#region-translate')).toHaveAttribute('data-pi-icon','region');
+    await expect(pdfPage.locator('#region-translate')).toHaveAttribute('aria-label',/框选/u);
     const regionButton = pdfPage.locator('#region-translate');
     await regionButton.click();
     await expect(regionButton).toHaveAttribute('aria-pressed', 'true');
     expect(await regionButton.evaluate((button) =>
-      getComputedStyle(button, '::before').content)).toBe('none');
+      getComputedStyle(button, '::before').content)).toBe('""');
 
     await pdfPage.setViewportSize({ width: 360, height: 700 });
     await expect(pdfPage.locator('.zoom-controls output')).toBeHidden();
@@ -2722,14 +2830,21 @@ test('restores a PDF reading position, zoom, and fixed sidebar without storing i
     await expect(restoredReader.locator('#zoom-value')).toHaveText('150%');
     await expect(restoredReader.locator('#tex-selection-translator-root'))
       .toHaveAttribute('data-pi-view', 'sidebar');
-    const serializedStorage = await restoredReader.evaluate(async () => {
+    const storedReading = await restoredReader.evaluate(async () => {
       const api = (globalThis as typeof globalThis & {
         chrome: { storage: { local: { get(key: null): Promise<Record<string, unknown>> } } };
       }).chrome;
-      return JSON.stringify(await api.storage.local.get(null));
+      const stored = await api.storage.local.get(null);
+      const {piRecentPdfDocumentsV1:recent,...other} = stored;
+      return {recent,other};
     });
-    expect(serializedStorage).not.toContain('private-reading-state.pdf');
-    expect(serializedStorage).not.toContain(sourceUrl);
+    const recent = storedReading.recent as Record<string,{title:string;pageCount?:number;updatedAt:number}>;
+    const matching = Object.entries(recent).filter(([,item]) => item.title === 'private-reading-state.pdf');
+    expect(matching).toHaveLength(1);
+    expect(matching[0]![0]).toMatch(/^[a-f0-9]{32}$/u);
+    expect(matching[0]![1]).toEqual({title:'private-reading-state.pdf',pageCount:2,updatedAt:expect.any(Number)});
+    expect(JSON.stringify(storedReading.other)).not.toContain('private-reading-state.pdf');
+    expect(JSON.stringify(storedReading)).not.toContain(sourceUrl);
   } finally {
     await restoredReader.close();
     await context.unroute(sourceUrl);
@@ -3012,7 +3127,8 @@ test('keeps 100 persistent markers responsive across a long lazily rendered PDF'
     await overlay.locator('details.more > summary').click();
     await overlay.getByRole('button', { name: '查看本文标记（100）' }).click();
     await expect(overlay.locator('.marker-note')).toHaveCount(100);
-    await expect(overlay.locator('.marker-notes-toolbar')).toContainText('100 条');
+    await expect(overlay.locator('.marker-notes-toolbar > span')).toHaveText('100');
+    await expect(overlay.locator('.marker-notes-toolbar > span')).toHaveAttribute('aria-label','100 条标记');
 
     const lastMarker = overlay.locator('.marker-note').last();
     await expect(lastMarker).toContainText('第 100 页');
@@ -3195,9 +3311,10 @@ test('keeps narrow PDF marker notes readable and reveals the marked source', asy
     const copy = markerNote.getByRole('button', { name: '复制这条标记' });
     await copy.click();
     await expect(copy).toHaveText('已复制');
-    const copyAll = overlay.getByRole('button', { name: '复制本文标记为 Markdown' });
+    const copyAll = overlay.locator('.marker-notes-toolbar button');
     await copyAll.click();
     await expect(copyAll).toHaveText('已复制 2 条');
+    await expect(copyAll).toHaveAttribute('aria-label', '已复制 2 条');
 
     await markerNote.getByRole('button', { name: '跳转到原文' }).click();
     await expect(markerLayer.locator('.marker.focused')).toBeVisible();

@@ -90,6 +90,19 @@ test('shows a compact contextual lookup for a short selection', async ({}, info)
   await expect(overlay.locator('.lexical-meta')).toContainText('noun');
   await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
   await expect(overlay.locator('.lexical-sense')).toContainText('连贯性');
+  const supplementary = overlay.locator('.lexical-details');
+  await expect(supplementary).not.toHaveAttribute('open', '');
+  await expect(overlay.locator('.lexical-sense')).toBeHidden();
+  const fullMeaning = await overlay.locator('.lexical-sense').allTextContents();
+  await supplementary.locator('summary').focus();
+  await page.keyboard.press('Enter');
+  await expect(overlay.locator('.lexical-sense')).toBeVisible();
+  await expect(supplementary.locator('summary')).toBeFocused();
+  expect(await overlay.locator('.lexical-sense').allTextContents()).toEqual(fullMeaning);
+  await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-supplementary-open.png')});
+  await page.keyboard.press('Enter');
+  await expect(overlay.locator('.lexical-sense')).toBeHidden();
+  expect(textRequests).toHaveLength(requestsBefore + 1);
 
   const modes = overlay.getByRole('group', {name: '释义与译文'});
   await expect(modes.getByRole('button', {name: '查看释义'})).toHaveAttribute('aria-pressed', 'true');
@@ -113,6 +126,11 @@ test('shows a compact contextual lookup for a short selection', async ({}, info)
     await page.setViewportSize({width: 300, height: 600});
     expect(await overlay.locator('.surface').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
     await overlay.locator('.surface').screenshot({path: info.outputPath(`lookup-narrow-${color}.png`)});
+    await overlay.locator('.lexical-details > summary').click();
+    await expect(overlay.locator('.lexical-sense')).toBeVisible();
+    expect(await overlay.locator('.surface').evaluate(el => el.scrollWidth - el.clientWidth)).toBeLessThanOrEqual(1);
+    await overlay.locator('.surface').screenshot({path: info.outputPath(`lookup-narrow-${color}-expanded.png`)});
+    await overlay.locator('.lexical-details > summary').click();
     await modes.getByRole('button', {name: '查看译文'}).click();
     await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'true');
     await modes.getByRole('button', {name: '查看释义'}).click();
@@ -122,6 +140,8 @@ test('shows a compact contextual lookup for a short selection', async ({}, info)
   await page.evaluate(() => {document.body.style.backgroundColor = '#ffffff'; document.body.style.color = '#202020';});
   await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
+  await overlay.locator('.lexical-details > summary').click();
+  await expect(overlay.locator('.lexical-sense')).toBeVisible();
   await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-sidebar-light.png')});
   await modes.getByRole('button', {name: '查看译文'}).click();
   await expect(modes.getByRole('button', {name: '查看译文'})).toHaveAttribute('aria-pressed', 'true');
@@ -132,6 +152,85 @@ test('shows a compact contextual lookup for a short selection', async ({}, info)
   expect(request).toContain('lookupMode');
   await closeVisibleTranslationSurfaceForCleanup();
   await clearBrowserSelection();
+});
+
+test('keeps an echoed lookup visible with a review notice and no automatic retry', async () => {
+  let requests = 0;
+  const replay = async (route: Route) => {
+    requests += 1;
+    await route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      choices: [{message: {content: JSON.stringify({translation: 'jet stream', detectedLanguage: 'en', warnings: [],
+        lookup: {partOfSpeech: 'noun', senses: [{meaning: '大气中的高速气流带'}]},
+      })}}],
+    })});
+  };
+  await context.route('https://www.overleaf.com/pi-translator-e2e-api/**', replay);
+  try {
+    await page.locator('#lookup-source').evaluate(element => { element.textContent = 'jet stream'; });
+    await selectElementText('#lookup-source');
+    const overlay = page.locator('#tex-selection-translator-root');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('jet stream');
+    await expect(overlay.locator('.lexical-sense')).toContainText('大气中的高速气流带');
+    await expect(overlay.locator('.lexical-details')).toHaveAttribute('open', '');
+    await expect(overlay.locator('.lexical-sense')).toBeVisible();
+    await expect(overlay.locator('.warning')).toHaveText('主释义保留了原文，请结合下方释义核对。');
+    await overlay.getByRole('button', {name: '查看译文', exact: true}).click();
+    await expect(overlay.locator('.body')).toHaveText('jet stream');
+    await expect(overlay.locator('.warning')).toBeVisible();
+    expect(requests).toBe(1);
+  } finally {
+    await context.unroute('https://www.overleaf.com/pi-translator-e2e-api/**', replay);
+    await closeVisibleTranslationSurfaceForCleanup();
+    await clearBrowserSelection();
+    await page.locator('#lookup-source').evaluate(element => { element.textContent = 'continuity'; });
+  }
+});
+
+test('keeps a concise lookup usable when the model omits supplementary senses', async ({}, info) => {
+  let requests = 0;
+  const requestedTexts:string[]=[];
+  const response = async (route: Route) => {
+    requests += 1;
+    const payload=route.request().postDataJSON();
+    const user=payload.messages.findLast((message:{role:string})=>message.role==='user');
+    requestedTexts.push(JSON.parse(user.content).text);
+    await route.fulfill({contentType: 'application/json', body: JSON.stringify({
+      choices: [{message: {content: JSON.stringify({translation: '转导', detectedLanguage: 'en', warnings: [],
+        lookup: {pronunciation: '', partOfSpeech: 'noun', senses: []},
+      })}}],
+    })});
+  };
+  await context.route('https://www.overleaf.com/pi-translator-e2e-api/**', response);
+  try {
+    // A programmatic selection is immediate; the extension debounces it. Do not
+    // click the prior case's trigger before that old selection has been cleared.
+    await clearBrowserSelection();
+    await expect(page.locator('#tex-selection-translator-root .trigger')).toBeHidden();
+    await page.locator('#lookup-source').evaluate(element => { element.textContent = 'transduction'; });
+    await selectElementText('#lookup-source');
+    const overlay = page.locator('#tex-selection-translator-root');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('转导');
+    await expect(overlay.locator('.lexical-sense, .lexical-senses')).toHaveCount(0);
+    await expect(overlay.locator('.lexical-details')).toHaveCount(0);
+    await expect(overlay.locator('.warning, .error')).toHaveCount(0);
+    await expect(overlay.locator('.copy-action')).toBeEnabled();
+    await page.setViewportSize({width: 300, height: 650});
+    expect(await overlay.locator('.surface').evaluate(e => e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+    await overlay.locator('.surface').screenshot({path: info.outputPath('lookup-no-supplementary-senses.png')});
+    await overlay.getByRole('button', {name: '查看译文', exact: true}).click();
+    await expect(overlay.locator('.body')).toHaveText('转导');
+    expect(requests).toBe(1);
+    expect(requestedTexts).toEqual(['transduction']);
+    await info.attach('selection-refresh-boundary',{body:JSON.stringify({oldTriggerHiddenBeforeNewSelection:true,requestedTexts}),contentType:'application/json'});
+  } finally {
+    await context.unroute('https://www.overleaf.com/pi-translator-e2e-api/**', response);
+    await closeVisibleTranslationSurfaceForCleanup();
+    await clearBrowserSelection();
+    await page.setViewportSize({width: 1280, height: 720});
+    await page.locator('#lookup-source').evaluate(element => { element.textContent = 'continuity'; });
+  }
 });
 
 test('deep-links recovery actions to API and PDF image settings', async () => {
@@ -354,6 +453,7 @@ test('finishes first-time setup and resumes the first interrupted translation', 
     await options.locator('#onboarding-next').click();
     await expect(options.locator('#onboarding-model')).toBeFocused();
     await expect(options.locator('#onboarding-model')).toHaveValue('e2e-model');
+    const imageCallsBeforeSetup = visionRequests.length;
     await options.locator('#onboarding-next').click();
 
     await expect(onboarding).not.toBeVisible();
@@ -365,6 +465,21 @@ test('finishes first-time setup and resumes the first interrupted translation', 
     await expect.poll(() => textRequests.filter((request) => (
       JSON.stringify(request).includes(sourceText)
     )).length).toBe(requestsBefore + 1);
+    expect(visionRequests.length).toBe(imageCallsBeforeSetup);
+    const preservedSetup = await worker!.evaluate(async () => {
+      const api = (globalThis as typeof globalThis & { chrome: {
+        storage: { local: { get(key: string): Promise<Record<string, unknown>> } };
+      } }).chrome;
+      return (await api.storage.local.get('extensionSettings')).extensionSettings as {
+        apiProfiles: Array<{ id: string; name: string; apiBaseUrl: string; model: string }>;
+        visionApiProfileId: string;
+        visionModel: string;
+      };
+    });
+    const previousSetup = originalConfiguration.settings as typeof preservedSetup;
+    expect(preservedSetup.apiProfiles).toEqual(expect.arrayContaining(previousSetup.apiProfiles));
+    expect(preservedSetup.visionApiProfileId).toBe(previousSetup.visionApiProfileId);
+    expect(preservedSetup.visionModel).toBe(previousSetup.visionModel);
   } finally {
     await options?.close().catch(() => undefined);
     await worker!.evaluate(async (snapshot) => {
@@ -630,7 +745,7 @@ test('makes the PDF side-panel empty state contextual and directly actionable', 
     await nativePdfPage.bringToFront();
     await expect(emptyState).toHaveAttribute('data-context', 'pdf');
     await expect(sidePanel.locator('#empty-title')).toHaveText('当前 PDF 已就绪');
-    await expect(sidePanel.locator('#empty-description')).toContainText('选择文字后右键翻译');
+    await expect(sidePanel.locator('#empty-description')).toContainText('选中文字并右键翻译');
     await expect(emptyAction).toHaveText('用 Pi 打开当前 PDF');
     await expect(webRegionAction).toBeHidden();
     await emptyAction.focus();
@@ -758,12 +873,18 @@ test('dismisses one passive trigger and can pause the current site in place', as
     await popup.locator('#popup-more-actions > summary').click();await popup.locator('#pause-site').uncheck();
     await expect(popup.locator('#status')).toContainText('已恢复');
     await expect(popup.locator('#pause-site')).not.toBeChecked();
+    await clearBrowserSelection();
+    await selectSourceText();
+    await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
   } finally {
     if (!popup.isClosed()) {
       await page.bringToFront();
       await popup.reload();
       const pauseSite = popup.locator('#pause-site');
-      if (await pauseSite.isChecked().catch(() => false)) await pauseSite.uncheck();
+      if (await pauseSite.isChecked().catch(() => false)) {
+        await popup.locator('#popup-more-actions > summary').click();
+        await pauseSite.uncheck();
+      }
       await popup.close();
     }
     await clearBrowserSelection();
@@ -990,7 +1111,9 @@ test('falls back to selectable text when webpage screenshot permission is unavai
   await clearBrowserSelection();
 });
 
-test('opens, drags, and dismisses a translation card', async () => {
+test('opens, drags, and dismisses a translation card', async ({}, testInfo) => {
+  await page.bringToFront();
+  await expect.poll(() => page.evaluate(() => document.hasFocus())).toBe(true);
   await selectSourceText();
   const overlay = page.locator('#tex-selection-translator-root');
   await expect(overlay).toHaveAttribute('data-pi-view', 'trigger');
@@ -1014,6 +1137,21 @@ test('opens, drags, and dismisses a translation card', async () => {
 
   const deltaX = before.x > 150 ? -80 : 80;
   const deltaY = before.y > 150 ? -55 : 55;
+  if (process.env.PI_DRAG_DIAGNOSTICS) await page.evaluate(() => {
+    const events: object[] = [];
+    const controller = new AbortController();
+    (globalThis as any).piDragEvents = events;
+    (globalThis as any).piStopDragAudit = () => controller.abort();
+    for (const type of ['pointerdown', 'pointermove', 'pointerup', 'pointercancel', 'lostpointercapture', 'blur']) {
+      window.addEventListener(type, event => {
+        const card = document.querySelector('#tex-selection-translator-root')?.shadowRoot?.querySelector('.card');
+        const pointer = event as PointerEvent;
+        events.push({ type, time: performance.now(), x: pointer.clientX, y: pointer.clientY,
+          buttons: pointer.buttons, focused: document.hasFocus(), cardX: card?.getBoundingClientRect().x,
+          dragging: card?.classList.contains('dragging') });
+      }, { capture: true, signal: controller.signal });
+    }
+  });
   await page.mouse.move(handle.x + 30, handle.y + 14);
   await page.mouse.down();
   await page.mouse.move(
@@ -1024,6 +1162,12 @@ test('opens, drags, and dismisses a translation card', async () => {
   await page.mouse.up();
 
   const after = await card.boundingBox();
+  if (process.env.PI_DRAG_DIAGNOSTICS) {
+    const events = await page.evaluate(() => { (globalThis as any).piStopDragAudit(); return (globalThis as any).piDragEvents; });
+    const evidence = JSON.stringify({ before, after, events }, null, 2);
+    await testInfo.attach('drag-events', { body: evidence, contentType: 'application/json' });
+    console.log('Drag diagnostics:', evidence);
+  }
   expect(after).not.toBeNull();
   expect(Math.abs((after?.x ?? before.x) - before.x)).toBeGreaterThan(30);
 

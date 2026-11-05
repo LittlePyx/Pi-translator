@@ -699,7 +699,8 @@ export function installEdgeExtensionHooks(): void {
       ? process.env.PI_LIVE_EXTENSION_PATH : '.output/edge-mv3'));
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
-    headless: false,
+    locale: process.env.PI_E2E_LOCALE ?? 'zh-CN',
+    headless: process.env.PI_E2E_HEADLESS === '1',
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -712,10 +713,25 @@ export function installEdgeExtensionHooks(): void {
     serviceWorker = await context.waitForEvent('serviceworker');
   }
   extensionId = new URL(serviceWorker.url()).host;
+  await serviceWorker.evaluate(async () => {
+    await (globalThis as any).chrome.storage.local.set({ uiLanguagePreference: 'zh-CN' });
+  });
 
   const bootstrapPages = context.pages();
   const bootstrapPage = bootstrapPages[0] ?? await context.newPage();
-  await bootstrapPage.goto(`chrome-extension://${extensionId}/options.html`);
+  const bootstrapUrl = `chrome-extension://${extensionId}/options.html`;
+  try {
+    await bootstrapPage.goto(bootstrapUrl);
+  } catch (error) {
+    // onInstalled may open the same options page while this navigation starts.
+    // Wait for that navigation; do not issue a second navigation or hide a
+    // different destination/failure.
+    const message=error&&typeof error==='object'&&'message' in error?error.message:undefined;
+    if (!(typeof message==='string'&&message.includes('interrupted by another navigation') &&
+      message.includes(`another navigation to "${bootstrapUrl}"`))) throw error;
+    await bootstrapPage.waitForURL(bootstrapUrl);
+    await bootstrapPage.waitForLoadState('domcontentloaded');
+  }
   await expect(bootstrapPage.locator('#api-profile option')).not.toHaveCount(0);
   const onboarding = bootstrapPage.locator('#onboarding-dialog');
   // This is a fresh profile. Wait for onboarding and its asynchronous settings

@@ -1,6 +1,6 @@
 import {openWebReadingMore} from './support/translation-controls';
 import type { Page } from '@playwright/test';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile } from 'node:fs/promises';
 import {
   ARTICLE_FIXTURE_URL,
   clearBrowserSelection,
@@ -14,11 +14,118 @@ import {
   OVERLEAF_FIXTURE_URL,
   page,
   selectElementText,
+  setStoredSidebarMode,
   test,
   textRequests,
 } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
+
+test('keeps the whole-page launcher from covering an expanded short-word card', async ({}, info) => {
+  const worker=context.serviceWorkers()[0]!;
+  const originalAccess=await worker.evaluate(async()=>{
+    const api=(globalThis as any).chrome,s=(await api.storage.local.get('extensionSettings')).extensionSettings;
+    await api.storage.local.set({extensionSettings:{...s,generalPageMode:'allowlist',siteAllowlist:['www.overleaf.com']}});
+    return {generalPageMode:s.generalPageMode,siteAllowlist:s.siteAllowlist};
+  });
+  await setStoredSidebarMode('floating');
+  await page.setViewportSize({width:360,height:780});
+  await page.goto(ARTICLE_FIXTURE_URL);
+  await context.serviceWorkers()[0]!.evaluate(async url=>{
+    const api=(globalThis as any).chrome;
+    const tab=(await api.tabs.query({})).find((tab:any)=>tab.url===url);
+    await api.scripting.executeScript({target:{tabId:tab.id},files:['content-scripts/general.js']});
+  },ARTICLE_FIXTURE_URL);
+  const launcher=page.locator('#pi-translator-bilingual-page-launcher');
+  await expect(launcher).toBeVisible();
+  await page.locator('#article-intro').evaluate(node=>{node.textContent='continuity';});
+  const before=textRequests.length;
+  const overlay=page.locator('#tex-selection-translator-root');
+  const evidence=[];
+  const coexistence=()=>page.evaluate(()=>{
+    const host=document.getElementById('tex-selection-translator-root')!,root=host.shadowRoot!;
+    const card=root.querySelector<HTMLElement>('.surface.card')!,copy=root.querySelector<HTMLElement>('.copy-action')!;
+    const launcher=document.getElementById('pi-translator-bilingual-page-launcher')!;
+    const c=card.getBoundingClientRect(),b=copy.getBoundingClientRect(),l=launcher.getBoundingClientRect();
+    const x=b.x+b.width/2,y=b.y+b.height/2;
+    const visible=getComputedStyle(launcher).visibility!=='hidden';
+    return {card:c.toJSON(),launcher:l.toJSON(),visible,clear:!visible||!(l.left<c.right&&l.right>c.left&&l.top<c.bottom&&l.bottom>c.top),copyHit:document.elementFromPoint(x,y)===host&&!!root.elementFromPoint(x,y)?.closest('.copy-action')};
+  });
+  try {
+    await selectElementText('#article-intro');
+    await page.bringToFront();
+    await expect(overlay.locator('.trigger')).toBeVisible();
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+    await overlay.locator('.lexical-details > summary').click();
+    for(const height of [780,420]){
+      await page.setViewportSize({width:360,height});
+      await expect.poll(async()=>{const state=await coexistence();return state.clear&&state.copyHit;}).toBe(true);
+      evidence.push({height,...await coexistence()});
+      await page.screenshot({path:info.outputPath(`word-launcher-clear-${height}.png`)});
+    }
+    expect(textRequests).toHaveLength(before+1);
+    await overlay.getByRole('button',{name:'关闭',exact:true}).click();
+    await expect(launcher).toBeVisible();
+    expect(textRequests).toHaveLength(before+1);
+  }finally{
+    if(await overlay.locator('.surface.card').count().catch(()=>0))evidence.push({final:await coexistence()});
+    await writeFile(info.outputPath('launcher-coexistence.json'),JSON.stringify(evidence,null,2));
+    await page.keyboard.press('Escape');await clearBrowserSelection();
+    await page.setViewportSize({width:1280,height:720});
+    await worker.evaluate(async access=>{
+      const api=(globalThis as any).chrome,s=(await api.storage.local.get('extensionSettings')).extensionSettings;
+      await api.storage.local.set({extensionSettings:{...s,...access}});
+    },originalAccess);
+  }
+});
+
+test('keeps webpage scope controls reachable beside an expanded translation sidebar', async ({}, info) => {
+  const caller = await context.newPage();
+  await caller.goto(`chrome-extension://${extensionId}/options.html`);
+  try {
+    for (const width of [1280, 360]) {
+      await page.setViewportSize({ width, height: 720 });
+      await page.goto(ARTICLE_FIXTURE_URL);
+      const tabId = await caller.evaluate(async url => {
+        const api = (globalThis as any).chrome;
+        return (await api.tabs.query({})).find((tab: { url?: string }) => tab.url === url).id;
+      }, ARTICLE_FIXTURE_URL);
+      await caller.evaluate(async tabId => {
+        const api = (globalThis as any).chrome;
+        await api.scripting.executeScript({ target: { tabId }, files: ['content-scripts/general.js'] });
+        await api.tabs.sendMessage(tabId, { type: 'OPEN_SIDEBAR' });
+      }, tabId);
+      const sidebar = page.locator('#tex-selection-translator-root .sidebar');
+      await expect(sidebar).toBeVisible();
+      const before = textRequests.length;
+      const openScope = async () => {
+        const launcher = page.locator('#pi-translator-bilingual-page-launcher');
+        if (width <= 480) {
+          await launcher.locator('details.more > summary').click({ timeout: 3000 });
+          await launcher.locator('button[data-action="scope-menu"]').click({ timeout: 3000 });
+        } else await launcher.locator('button[data-action="scope"]').click({ timeout: 3000 });
+      };
+      await openScope();
+      const control = page.locator('#pi-translator-bilingual-page-control');
+      await expect(control.locator('.bar')).toHaveAttribute('data-phase', 'scope');
+      await page.screenshot({ path: info.outputPath(`web-scope-sidebar-${width}.png`) });
+      await control.locator('[data-action="cancel-scope"]').click({ timeout: 3000 });
+      await expect(control).toHaveCount(0);
+      await expect(sidebar).toBeVisible();
+      expect(textRequests.length).toBe(before);
+      await openScope();
+      await control.locator('[data-action="apply-scope"]').click({ timeout: 3000 });
+      await expect(control.locator('.bar')).toHaveAttribute('data-phase', 'complete');
+      await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
+      await control.locator('[data-action="compact"]').click();
+      await control.locator('details.more > summary').click();
+      await control.locator('[data-action="clear"]').click({ timeout: 3000 });
+      await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(0);
+      await expect(sidebar).toBeVisible();
+    }
+  } finally { await page.setViewportSize({ width: 1280, height: 720 }).catch(() => undefined); await caller.close(); }
+});
 test('exposes the native Edge side panel API to the service worker', async () => {
   const worker = context.serviceWorkers()[0];
   expect(worker).toBeDefined();
@@ -1467,9 +1574,7 @@ test('translates a 520-paragraph webpage and exposes a later safety limit withou
     });
     expect(tabId).toBeDefined();
     const requestCountBeforePreview = textRequests.length;
-    await popup.evaluate(() => {
-      document.querySelector<HTMLButtonElement>('#translate-page')?.click();
-    });
+    await popup.locator('#translate-page').click();
 
     const pageControl = page.locator('#pi-translator-bilingual-page-control');
     await expect(pageControl).toBeVisible();
@@ -1950,6 +2055,14 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
 
     (mockControl.releaseHeldBilingualRequest as (() => void) | undefined)?.();
     mockControl.releaseHeldBilingualRequest = undefined;
+    // Keep the resumed batch observable until its in-progress state is checked.
+    const resumedBilingualStarted = new Promise<void>((resolve) => {
+      mockControl.bilingualRequestStarted = resolve;
+    });
+    mockControl.heldBilingualRequestGate = new Promise<void>((resolve) => {
+      mockControl.releaseHeldBilingualRequest = resolve;
+    });
+    mockControl.holdNextBilingualRequest = true;
     mockControl.releaseHeldInteractiveRequest?.();
     mockControl.releaseHeldInteractiveRequest = undefined;
     await expect.poll(() => popup.evaluate(async (targetUrl) => {
@@ -1966,8 +2079,11 @@ test('prioritizes an explicit selection and resumes bilingual article translatio
       return history?.[String(tab.id)]?.length ?? 0;
     }, page.url())).toBe(historyBefore + 1);
     await expect(page.locator('[data-pi-bilingual-error]')).toHaveCount(0);
+    await resumedBilingualStarted;
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('全文翻译中');
 
+    (mockControl.releaseHeldBilingualRequest as (() => void) | undefined)?.();
+    mockControl.releaseHeldBilingualRequest = undefined;
     await expect(sidePanel.locator('#bilingual-page-status')).toContainText('已完成 7/7');
     await expect(page.locator('[data-pi-bilingual-translation]')).toHaveCount(7);
     await expect(page.locator('#article-intro + [data-pi-bilingual-translation]')).toHaveCount(1);

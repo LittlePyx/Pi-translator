@@ -54,10 +54,10 @@ async function dispatchWheel(
 
 test.beforeAll(async () => {
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-pdf-wheel-zoom-'));
-  const extensionPath = path.resolve('.output/edge-mv3');
+  const extensionPath = path.resolve(process.env.PI_E2E_EXTENSION_PATH??'.output/edge-mv3');
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
-    headless: false,
+    headless: process.env.PI_E2E_HEADLESS === '1',
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -66,6 +66,9 @@ test.beforeAll(async () => {
     ],
   });
   const worker = context.serviceWorkers()[0] ?? await context.waitForEvent('serviceworker');
+  await worker.evaluate(async () => {
+    await (globalThis as any).chrome.storage.local.set({ uiLanguagePreference: 'zh-CN' });
+  });
   extensionId = new URL(worker.url()).host;
   page = context.pages()[0] ?? await context.newPage();
 });

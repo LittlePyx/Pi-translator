@@ -1,0 +1,110 @@
+{
+  "description": "New clear-source verifier experiment. Public excerpts were not inference inputs in previous rounds. Synthetic sources and manually corrupted translations are labelled; gold is never sent to the checker. Source fidelity, not current scientific truth, is assessed.",
+  "sources": {
+    "k2": "https://science.nasa.gov/missions/webb/webb-discovers-methane-carbon-dioxide-in-atmosphere-of-k2-18-b/",
+    "europa": "https://science.nasa.gov/missions/webb/nasas-webb-finds-carbon-source-on-surface-of-jupiters-moon-europa/",
+    "gj": "https://science.nasa.gov/missions/webb/webb-finds-water-vapor-but-from-a-rocky-planet-or-its-star/",
+    "enceladus": "https://science.nasa.gov/missions/webb/webb-maps-surprisingly-large-plume-jetting-from-saturns-moon-enceladus/"
+  },
+  "naturalGenerationIds": ["k2-distance", "europa-life", "gj-mass", "enceladus-plume", "jet-location", "explicit-ocean", "titan-identity", "uncertain-atmosphere"],
+  "cases": [
+    {
+      "id":"k2-distance","kind":"public-new","article":"k2",
+      "source":"K2-18 b orbits the cool dwarf star K2-18 in the habitable zone and lies 120 light-years from Earth in the constellation Leo.",
+      "clean":"K2-18 b在宜居带内围绕低温矮星K2-18运行，位于狮子座，距离地球120光年。",
+      "faulty":"K2-18 b在宜居带内围绕低温矮星K2-18运行，位于狮子座，距离地球1200光年。",
+      "gold":{"type":"mistranslation","category":"number","sourceQuote":"120 light-years","translationQuote":"1200光年","reason":"距离从120改成1200。"}
+    },
+    {
+      "id":"europa-life","kind":"public-new","article":"europa",
+      "source":"Jupiter’s moon Europa is one of a handful of worlds in our solar system that could potentially harbor conditions suitable for life. Previous research has shown that beneath its water-ice crust lies a salty ocean of liquid water with a rocky seafloor. However, planetary scientists had not confirmed if that ocean contained the chemicals needed for life, particularly carbon.",
+      "clean":"木星的卫星木卫二是太阳系中少数可能具备适宜生命条件的世界之一。此前研究表明，其水冰外壳之下有一片咸的液态水海洋，海底为岩石。然而，行星科学家尚未确认该海洋是否含有生命所需的化学物质，尤其是碳。",
+      "faulty":"木星的卫星木卫二是太阳系中少数可能具备适宜生命条件的世界之一。此前研究表明，其水冰外壳之下有一片咸的液态水海洋，海底为岩石。然而，行星科学家已经确认该海洋含有生命所需的化学物质，尤其是碳。",
+      "gold":{"type":"mistranslation","category":"negation","sourceQuote":"had not confirmed if that ocean contained","translationQuote":"已经确认该海洋含有","reason":"尚未确认被反转为已经确认。"}
+    },
+    {
+      "id":"gj-mass","kind":"public-new","article":"gj",
+      "source":"GJ 486 b is about 30% larger than Earth and three times as massive, which means it is a rocky world with stronger gravity than Earth.",
+      "clean":"GJ 486 b比地球大约30%，质量为地球的三倍，这意味着它是一个引力比地球更强的岩石世界。",
+      "faulty":"GJ 486 b比地球大约30%，质量为地球的三十倍，这意味着它是一个引力比地球更强的岩石世界。",
+      "gold":{"type":"mistranslation","category":"number","sourceQuote":"three times as massive","translationQuote":"质量为地球的三十倍","reason":"三倍被改成三十倍。"}
+    },
+    {
+      "id":"enceladus-plume","kind":"public-new","article":"enceladus",
+      "source":"A water vapor plume from Saturn’s moon Enceladus spanning more than 6,000 miles – nearly the distance from Los Angeles, California to Buenos Aires, Argentina – has been detected by researchers using NASA’s James Webb Space Telescope.",
+      "clean":"研究人员利用NASA的詹姆斯·韦布空间望远镜，探测到来自土星卫星土卫二的水蒸气羽流，其延伸超过6000英里，几乎相当于从加利福尼亚州洛杉矶到阿根廷布宜诺斯艾利斯的距离。",
+      "faulty":"研究人员利用NASA的詹姆斯·韦布空间望远镜，探测到来自土星卫星土卫二的水蒸气羽流，其延伸超过6000英里，几乎相当于从加利福尼亚州洛杉矶到阿根廷布宜诺斯艾利斯的距离。该羽流由地下海洋中的生物活动产生。",
+      "gold":{"type":"addition","category":"unsupported-cause","sourceQuote":"","translationQuote":"该羽流由地下海洋中的生物活动产生。","reason":"原文没有给出羽流的地下海洋生物成因。"}
+    },
+    {
+      "id":"jet-location","kind":"synthetic-new",
+      "source":"The atmospheric jet on planet Vela moves at 260 kilometers per hour, twice the sustained wind speed of a Category 4 hurricane on Earth.",
+      "clean":"行星Vela上的大气急流以每小时260公里的速度移动，是地球上四级飓风持续风速的两倍。",
+      "faulty":"行星Vela上的大气急流以每小时260公里的速度移动，是地球上海洋上四级飓风持续风速的两倍。",
+      "gold":{"type":"addition","category":"unsupported-location","sourceQuote":"","translationQuote":"海洋上","reason":"比较对象未指定发生在海洋。虚构行星和比较仅为翻译测试数据。"}
+    },
+    {
+      "id":"explicit-ocean","kind":"synthetic-new",
+      "source":"The coastal observatory measured wind above the ocean, not above the inland plateau.",
+      "clean":"海岸天文台测量的是海洋上空的风，而不是内陆高原上空的风。",
+      "faulty":"海岸天文台测量的是风，而不是内陆高原上空的风。",
+      "gold":{"type":"omission","category":"omitted-location","sourceQuote":"above the ocean","translationQuote":"","reason":"漏掉了原文明示的海洋上空。正确译文不应因海洋一词被误报。"}
+    },
+    {
+      "id":"uncertain-atmosphere","kind":"synthetic-new",
+      "source":"Planet Arin may have a thin atmosphere, but these measurements do not establish that liquid water is present.",
+      "clean":"行星Arin可能拥有稀薄的大气层，但这些测量并不能证实存在液态水。",
+      "faulty":"已确认行星Arin拥有稀薄的大气层，但这些测量并不能证实存在液态水。",
+      "gold":{"type":"mistranslation","category":"certainty","sourceQuote":"may have a thin atmosphere","translationQuote":"已确认行星Arin拥有稀薄的大气层","reason":"可能拥有被强化为已确认拥有。"}
+    },
+    {
+      "id":"formula-ratio","kind":"synthetic-new",
+      "source":"For this estimate, v = 3u and u = 90 km/h. The report does not state a cause for this relationship.",
+      "clean":"在这项估计中，v = 3u，u = 90 km/h。报告没有说明这一关系的原因。",
+      "faulty":"在这项估计中，v = 2u，u = 90 km/h。报告没有说明这一关系的原因。",
+      "gold":{"type":"mistranslation","category":"formula","sourceQuote":"v = 3u","translationQuote":"v = 2u","reason":"公式系数3被改成2。此为明文公式测试。"}
+    },
+    {
+      "id":"titan-identity","kind":"synthetic-new",
+      "source":"Titan is a moon of Saturn. The instrument measured methane in Titan’s atmosphere.",
+      "clean":"土卫六是土星的一颗卫星。仪器测量了土卫六大气中的甲烷。",
+      "faulty":"土卫六是地球的一颗卫星。仪器测量了土卫六大气中的甲烷。",
+      "gold":{"type":"mistranslation","category":"entity","sourceQuote":"a moon of Saturn","translationQuote":"地球的一颗卫星","reason":"土星被改成地球；原文明确实体，不再使用无指代的moon。"}
+    },
+    {
+      "id":"carbon-origin","kind":"synthetic-new",
+      "source":"Sample L contains carbon dioxide. The origin of that carbon has not been determined.",
+      "clean":"L样本含有二氧化碳。其中碳的来源尚未确定。",
+      "faulty":"L样本含有来自地下海洋的二氧化碳。其中碳的来源尚未确定。",
+      "gold":{"type":"addition","category":"unsupported-origin","sourceQuote":"","translationQuote":"来自地下海洋的","reason":"原文来源未定，译文擅自加入地下海洋来源。"}
+    },
+    {
+      "id":"ammonia-negation","kind":"synthetic-new",
+      "source":"No ammonia was detected in Sample R. The instrument was able to detect methane.",
+      "clean":"R样本中未检测到氨。仪器能够检测甲烷。",
+      "faulty":"R样本中检测到了氨。仪器能够检测甲烷。",
+      "gold":{"type":"mistranslation","category":"negation","sourceQuote":"No ammonia was detected","translationQuote":"检测到了氨","reason":"未检出被反转为检出。"}
+    },
+    {
+      "id":"wind-unit","kind":"synthetic-new",
+      "source":"The instrument measured a wind speed of 18 meters per second at an altitude of 7 kilometers.",
+      "clean":"仪器在7公里高度测得风速为每秒18米。",
+      "faulty":"仪器在7公里高度测得风速为每小时18公里。",
+      "gold":{"type":"mistranslation","category":"unit","sourceQuote":"18 meters per second","translationQuote":"每小时18公里","reason":"18米每秒被改成18公里每小时，并非等值换算。"}
+    },
+    {
+      "id":"storm-grade","kind":"synthetic-new",
+      "source":"The storm was classified as Category 2. No wind measurement was reported.",
+      "clean":"这场风暴被归为二级。报告未提供风速测量值。",
+      "faulty":"这场风暴被归为一级。报告未提供风速测量值。",
+      "gold":{"type":"mistranslation","category":"grade","sourceQuote":"Category 2","translationQuote":"一级","reason":"等级从2改为1；不得根据背景知识补阈值或风速。"}
+    },
+    {
+      "id":"omitted-limit","kind":"synthetic-new",
+      "source":"This estimate excludes atmospheric drag and does not predict the cause of the observed motion.",
+      "clean":"这项估计排除了大气阻力，也不预测所观测运动的原因。",
+      "faulty":"这项估计排除了大气阻力。",
+      "gold":{"type":"omission","category":"omitted-limit","sourceQuote":"does not predict the cause of the observed motion","translationQuote":"","reason":"漏掉了不预测运动原因这一适用范围限制。"}
+    }
+  ]
+}

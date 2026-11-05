@@ -5,6 +5,8 @@ import {
   type ApiProfile,
   type ExtensionSettings,
 } from './schema';
+import {validateGlossaryProfiles,validateGlossaryProfileSettings} from './glossary-profiles';
+import {normalizePurposePreferences} from './purpose-preferences';
 import { normalizeGlossaryEntries } from '../translation/glossary';
 import { normalizeModelPrices } from '../translation/cost-estimate';
 import type { GlossaryEntry } from '../translation/types';
@@ -14,6 +16,7 @@ import {
   commitConfigurationRevision,
 } from './configuration-revision';
 import { translationBehaviorFingerprint } from './translation-configuration';
+import { normalizeApiBaseUrl } from './api-access';
 
 const SETTINGS_KEY = 'extensionSettings';
 const API_KEY_KEY = 'apiKey';
@@ -141,6 +144,8 @@ export async function getSettings(): Promise<ExtensionSettings> {
   return {
     ...DEFAULT_SETTINGS,
     ...value,
+    ...validateGlossaryProfiles(value),
+    ...(value.purposePreferences!==undefined?{purposePreferences:normalizePurposePreferences(value.purposePreferences)!}:{}),
     modelPrices: normalizeModelPrices(value.modelPrices),
     schemaVersion: 8,
     provider: 'openai-compatible',
@@ -169,6 +174,7 @@ export async function getSettings(): Promise<ExtensionSettings> {
       value.contextMode === 'sentence' || value.contextMode === 'paragraph'
         ? value.contextMode
         : 'off',
+    ...(value.paragraphShortcut==='alt'||value.paragraphShortcut==='shift'?{paragraphShortcut:value.paragraphShortcut}:{}),
     autoRenderLatex: value.autoRenderLatex !== false,
     enableStreaming: value.enableStreaming !== false,
     protectSensitiveFields: value.protectSensitiveFields !== false,
@@ -190,6 +196,8 @@ export async function getSettings(): Promise<ExtensionSettings> {
 async function commitSettings(
   settings: ExtensionSettings,
 ): Promise<{ settings: ExtensionSettings; revisionId: string }> {
+  normalizePurposePreferences(settings.purposePreferences);
+  validateGlossaryProfileSettings(settings);
   const previous = await browser.storage.local.get(SETTINGS_KEY);
   const storedSettings: ExtensionSettings = {
     ...settings,
@@ -431,8 +439,15 @@ async function moveApiKeysLocked(
   }
 }
 
-export async function getApiKey(profileId?: string): Promise<string | undefined> {
-  const activeProfileId = profileId ?? (await getSettings()).activeApiProfileId;
+export async function getApiKey(profileId?: string, expectedBaseUrl?: string): Promise<string | undefined> {
+  const settings = expectedBaseUrl !== undefined || profileId === undefined ? await getSettings() : undefined;
+  const activeProfileId = profileId ?? settings!.activeApiProfileId;
+  if (expectedBaseUrl !== undefined) {
+    const profile = settings!.apiProfiles.find(item => item.id === activeProfileId);
+    try {
+      if (!profile || normalizeApiBaseUrl(profile.apiBaseUrl) !== normalizeApiBaseUrl(expectedBaseUrl)) return undefined;
+    } catch { return undefined; }
+  }
   const session = await browser.storage.session.get([
     API_KEYS_KEY,
     API_KEY_KEY,

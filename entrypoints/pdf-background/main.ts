@@ -17,7 +17,7 @@ import { capturePdfVisualRegions } from '../../core/pdf/document-visual-capture'
 import { PdfCapturePrefetch } from '../../core/pdf/capture-prefetch';
 import {pdfFontHintText} from '../../core/pdf/math-font-evidence';
 import { combinePdfVisualOutcomes, pdfVisualUnitContext } from '../../core/pdf/visual-unit-translation';
-import { addPdfReportedTokens, consumePdfRequest, emptyPdfRequestUsage, type PdfRequestUsage } from '../../core/pdf/request-budget';
+import { addPdfReportedTokens, consumePdfRequest, releasePdfRequest, emptyPdfRequestUsage, type PdfRequestUsage } from '../../core/pdf/request-budget';
 import {preparePdfFormulaProseRepair} from '../../core/pdf/formula-prose-repair';
 import type {
   TranslateRuntimeResponse,
@@ -169,6 +169,7 @@ async function processVisualBlock(
       request: {
         requestId,
         ...(job.settings.documentId ? { documentId: job.settings.documentId } : {}),
+        ...(job.settings.glossaryDocumentId?{glossaryDocumentId:job.settings.glossaryDocumentId}:{}),
         imageDataUrl: capture.imageDataUrl,
         imageWidth: capture.imageWidth,
         imageHeight: capture.imageHeight,
@@ -198,19 +199,20 @@ async function processVisualBlock(
     code: response.error.code,
   });
   let result = response.data.result;
-  let repairNote:string|undefined;
+  let repairNote:string|undefined,pendingFormulaRepair:typeof result.formulaDocument;
   if (!result.cached) addPdfReportedTokens(job.requestUsage, result.usage, result.usageSource);
   if(job.phase==='running'&&preparePdfFormulaProseRepair(result.formulaDocument,job.settings.targetLanguage)){
     let authorized=true;try{consumePdfRequest(job.requestUsage,'text',job.settings.requestLimit??0)}catch{authorized=false;repairNote='任务请求上限不足，未发送正文修复。'}
     if(authorized){
       job.activeRequestId=requestId;
-      const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{sourceTabId:job.sourceTabId,requestId,document:result.formulaDocument!,targetLanguage:job.settings.targetLanguage,sourceLanguage:job.settings.sourceLanguage,style:job.settings.style}}) as TranslateRuntimeResponse;
+      const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{sourceTabId:job.sourceTabId,requestId,pageUrl:job.settings.pageUrl,...(job.settings.documentId?{documentId:job.settings.documentId}:{}),...(job.settings.glossaryDocumentId?{glossaryDocumentId:job.settings.glossaryDocumentId}:{}),document:result.formulaDocument!,targetLanguage:job.settings.targetLanguage,sourceLanguage:job.settings.sourceLanguage,style:job.settings.style}}) as TranslateRuntimeResponse;
       if(job.activeRequestId===requestId)delete job.activeRequestId;
-      if(repaired.ok){result=repaired.data.result;addPdfReportedTokens(job.requestUsage,result.usage,result.usageSource)}else repairNote=`正文修复未完成：${translationErrorMessage(repaired.error.code,repaired.error.message)}`;
+      if(repaired.ok){result=repaired.data.result;addPdfReportedTokens(job.requestUsage,result.usage,result.usageSource)}else{if(repaired.error.code==='DOCUMENT_TERMS_READ_FAILED'){releasePdfRequest(job.requestUsage,'text');if(!result.uncertainSpans?.some(issue=>!issue.startsWith('公式 LaTeX 未通过自动校验：')))pendingFormulaRepair=result.formulaDocument}repairNote=`正文修复未完成：${translationErrorMessage(repaired.error.code,repaired.error.message)}`}
     }
   }
   const validationStartedAt = performance.now();
   const outcome = pdfBackgroundVisualOutcome(block, result, job.settings.targetLanguage);
+  if(pendingFormulaRepair&&outcome.formulaDocument&&!outcome.formulaReviewDraft&&!outcome.visualFallbackMessage)outcome.pendingFormulaRepair=pendingFormulaRepair;
   if(repairNote)outcome.formulaReviewMessage=[outcome.formulaReviewMessage,repairNote].filter(Boolean).join('；').slice(0,1800);
   job.timing.validationMs += performance.now() - validationStartedAt;
   return outcome;
@@ -245,6 +247,7 @@ async function processTextBlocks(
           requestId,
           items: pending.map((block) => ({ id: block.id, text: block.text })),
           ...(job.settings.documentId ? { documentId: job.settings.documentId } : {}),
+        ...(job.settings.glossaryDocumentId?{glossaryDocumentId:job.settings.glossaryDocumentId}:{}),
           pageUrl: job.settings.pageUrl,
           ...(job.settings.sourceLabel ? { sourceLabel: job.settings.sourceLabel } : {}),
           targetLanguage: job.settings.targetLanguage,

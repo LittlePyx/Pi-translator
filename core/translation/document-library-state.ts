@@ -1,9 +1,13 @@
+import {LIBRARY_ORGANIZATION_KEY} from './library-organization';
+import {PDF_AREA_NOTES_KEY} from '../pdf/area-note-repository';
 import {PDF_READING_STATES_KEY,normalizePdfReadingState,type PdfReadingState} from '../pdf/reading-state';
 import {PDF_READING_BOOKMARKS_KEY,normalizePdfReadingBookmarkState,type PdfReadingBookmarkState} from '../pdf/reading-bookmark-repository';
 import {DOCUMENT_MEMORY_STORAGE_KEY,type DocumentConfirmedTerm} from '../document/document-memory-repository';
 import {validTermProvenance} from '../document/term-provenance';
+import {RECENT_PDF_DOCUMENTS_KEY} from '../pdf/recent-documents';
+import {RECENT_PDF_OVERRIDES_KEY} from '../pdf/recent-reading-overrides';
 
-export const LIBRARY_READING_STATE_KEYS=[PDF_READING_STATES_KEY,PDF_READING_BOOKMARKS_KEY,DOCUMENT_MEMORY_STORAGE_KEY];
+export const LIBRARY_READING_STATE_KEYS=[LIBRARY_ORGANIZATION_KEY,PDF_AREA_NOTES_KEY,PDF_READING_STATES_KEY,PDF_READING_BOOKMARKS_KEY,DOCUMENT_MEMORY_STORAGE_KEY,RECENT_PDF_DOCUMENTS_KEY,RECENT_PDF_OVERRIDES_KEY];
 interface Terms {documentId:string;updatedAt:number;confirmedTerms:DocumentConfirmedTerm[]}
 function mapStates<T>(value:unknown,maximum:number,normalize:(v:unknown)=>T|undefined):Record<string,T>{
   if(value===undefined)return {};

@@ -1,3 +1,28 @@
+import {readingRecapPage} from '../../core/content/reading-hints';
+import {searchWithConfirmedTerms} from '../../core/translation/search-assistance';
+import {hasReadingDraft,pdfReadingTarget,readingSelectionText,selectedReadingQuery,type ReadingSummaryReturn} from '../../core/content/reading-navigation';
+import {appendSearchAssistance} from '../../ui/search-assistance';
+import {openNoteSummary} from '../../ui/note-summary';
+import {bindReadingHints} from '../../ui/reading-hints';
+import type {NoteSummaryTarget} from '../../core/content/note-summary';
+import {isRuntimeMessage} from '../../core/messaging/messages';
+import {keyEventDialog} from '../../ui/dialog-navigation';
+import {pdfCitationMetadata} from '../../core/content/local-citation';
+import type {CitationMetadata} from '../../core/content/citation-metadata';
+import {paragraphCorrectionTerms,deduplicateCorrectionTerms,correctionTermSuggestions,type CorrectionTermSuggestion} from '../../core/translation/correction-term-suggestions';
+import {openPassageExplanation} from '../../ui/passage-explanation';
+import {documentTermVersion} from '../../core/document/document-memory-repository';
+import {normalizeGlossaryTermKey} from '../../core/translation/glossary';
+import type {PassageInput} from '../../core/content/passage-explanation';
+import {renderCorrectionTermSuggestions,renderCorrectionTermReadFailure} from '../../ui/correction-term-suggestions';
+import {bindPdfThumbnails} from '../../ui/pdf-thumbnails';
+import {rotatePdfViewRect,type PdfViewRotation} from '../../core/pdf/reader-view';
+import { t, msg, uiHtml, initializeUiLanguage, localizeUiDocument, localizeErrorMessage } from '../../core/i18n/ui-language';
+import {bindCompactHelp} from '../../ui/compact-help';
+import {bindActionHints} from '../../ui/action-feedback';
+import {bindActionGuide} from '../../ui/action-guide';
+import {bindPdfOriginalCopy} from '../../ui/pdf-original-copy';
+import {pdfReadingStateId} from '../../core/pdf/reading-state';
 import {pdfDocumentProgress} from '../../core/pdf/document-progress';
 import {bindPdfTermReuse} from '../../ui/pdf-term-reuse';
 import {documentIdentity} from '../../core/document/document-identity';
@@ -5,7 +30,12 @@ import {termSourceUrl,termAppliesToLanguage,type TermSource} from '../../core/do
 import {containsPdfTerm} from '../../core/pdf/term-consistency';
 import {bindPdfResearchReferences} from '../../ui/pdf-research-references';
 import { bindAnchoredMenus } from '../../ui/anchored-menu';
+import {bindPdfReadingAnnotations} from '../../ui/pdf-reading-annotations';
+import {bindPdfRecentReading} from '../../ui/pdf-recent-reading';
+import {bindPdfExcerptSource} from '../../ui/pdf-excerpt-source';
 import {retainedDocumentId} from '../../core/translation/fixed-document-storage';
+import {addDocumentToProject} from '../../core/translation/library-projects';
+import {layoutTaskDialog} from '../../ui/task-dialog';
 import {listRetainedPdfDocumentTranslations,retainedPdfRecordsForBackup} from '../../core/pdf/document-translation-session';
 import {retainedWebRecordsForBackup} from '../../core/translation/bilingual-page-session';
 import {listRetainedDocuments} from '../../core/translation/retained-document-library';
@@ -34,14 +64,14 @@ import {
 import type { ImageTranslationPurpose, PdfSourceLocation } from '../../core/translation/types';
 import { shouldUseVisionForPdfFormula } from '../../core/translation/formula-detection';
 import { formulaDocumentIssues, formulaDocumentText, type FormulaDocument } from '../../core/translation/formula-document';
-import { renderFormulaDocument } from '../../ui/formula-document-view';
+import { renderFormulaDocument as renderFormulaDocumentBase } from '../../ui/formula-document-view';
 import { pdfReviewQueue, pdfReviewConfirmation, pdfReviewConfirmed, type PdfReviewKind } from '../../core/pdf/review-queue';
 import {paragraphValue,paragraphRevision,withParagraphHistory,restoredParagraphRevision,MAX_PDF_PARAGRAPH_REVISIONS,type PdfParagraphHistory,type PdfParagraphRevision} from '../../core/pdf/paragraph-history';
 import { pdfLeftBraceGlyphMetrics } from '../../core/pdf/tex-font-glyphs';
 import {pdfNativeMathFontHints,pdfFontHintText} from '../../core/pdf/math-font-evidence';
 import {splitMarkdownTableRow} from '../../core/translation/table-output-validation';
 import { bindPdfEquationNumbers } from '../../core/pdf/equation-binding';
-import { addPdfReportedTokens, consumePdfRequest, emptyPdfRequestUsage, validPdfRequestLimit, type PdfRequestUsage } from '../../core/pdf/request-budget';
+import { addPdfReportedTokens, consumePdfRequest, releasePdfRequest, emptyPdfRequestUsage, validPdfRequestLimit, type PdfRequestUsage } from '../../core/pdf/request-budget';
 import { findModelPrice, formatCost, reportedCost, roughTextCost } from '../../core/translation/cost-estimate';
 import {
   parsePdfSourceUrl,
@@ -136,12 +166,29 @@ import {
   pdfDocumentTranslationSessionDocumentKey,
   saveRetainedPdfDocumentTranslationSession,
   savePdfDocumentTranslationSession,
+  capturePdfRepairStorage,
+  commitPdfRepairStorage,
+  commitPdfTermCorrection,
+  inspectPdfRepairStorage,
+  resolvePdfRepairConflict,
+  beginPdfArchivedRestore,
+  listPdfRepairArchives,
+  pdfRepairArchiveCapacity,
+  MAX_PDF_REPAIR_ARCHIVES,
+  MAX_PDF_REPAIR_ARCHIVE_BYTES,
+  PDF_REPAIR_ARCHIVE_KEY,
+  pdfRepairVersionDifferences,
+  confirmPdfRepairStorage,
+  getPdfRepairGuard,
+  PDF_REPAIR_GUARD_KEY,
+  samePdfRepairInputs,
+  type PdfRepairStorageSnapshot,
   type PdfDocumentTranslationSessionActivity,
   type PdfDocumentTranslationSessionDescriptor,
 } from '../../core/pdf/document-translation-session';
 import {
-  renderTranslationContent,
-  renderTranslationContents,
+  renderTranslationContent as renderTranslationContentBase,
+  renderTranslationContents as renderTranslationContentsBase,
 } from '../../ui/translation-content';
 import {
   mapCoordinateOcrPageToRegion,
@@ -204,6 +251,40 @@ import {
   type SafePdfNamedAction,
 } from '../../core/pdf/link-annotations';
 
+const pendingPdfTranslationRenders = new Set<Promise<unknown>>();
+function trackPdfTranslationRender<T>(render: Promise<T>): Promise<T> {
+  pendingPdfTranslationRenders.add(render);
+  void render.then(() => pendingPdfTranslationRenders.delete(render), () => pendingPdfTranslationRenders.delete(render));
+  return render;
+}
+function renderFormulaDocument(...args: Parameters<typeof renderFormulaDocumentBase>) {
+  return trackPdfTranslationRender(renderFormulaDocumentBase(...args));
+}
+function renderTranslationContent(...args: Parameters<typeof renderTranslationContentBase>) {
+  return trackPdfTranslationRender(renderTranslationContentBase(...args));
+}
+function renderTranslationContents(...args: Parameters<typeof renderTranslationContentsBase>) {
+  return trackPdfTranslationRender(renderTranslationContentsBase(...args));
+}
+
+async function startUi(): Promise<void> {
+  await initializeUiLanguage();
+  localizeUiDocument();
+  bindActionHints();
+  bindCompactHelp();
+  bindActionGuide(document,['.pdf-reader-menu-content','#pdf-document-translation-copy-menu > div'],[
+    {label:t('打开 PDF'),selector:'#choose-file'},
+    {label:t('搜索 PDF'),selector:'#open-search'},
+    {label:t('目录'),selector:'#open-outline'},
+    {label:t('批注'),selector:'#pdf-open-annotations'},
+    {label:t('译全文'),selector:'#translate-document'},
+    {label:t('检查术语'),selector:'#pdf-document-terms'},
+    {label:t('校订历史'),selector:'#pdf-document-history'},
+    {label:t('搜索译文'),selector:'#pdf-library-search'},
+    {label:t('返回原页'),selector:'#pdf-document-translation-close'},
+  ]);
+
+
 type PdfJsModule = typeof import('pdfjs-dist');
 type PdfViewerModule = typeof import('pdfjs-dist/web/pdf_viewer.mjs');
 
@@ -249,6 +330,23 @@ function element<T extends HTMLElement>(id: string): T {
 const fileInput = element<HTMLInputElement>('file-input');
 const toolbar = element<HTMLElement>('pdf-toolbar');
 const readerMenu = element<HTMLDetailsElement>('pdf-reader-menu');
+// Reuse the same controls and listeners at both widths; never duplicate IDs or state.
+const zoomControls = toolbar.querySelector<HTMLElement>('.zoom-controls')!;
+const toolbarZoom = element<HTMLElement>('pdf-toolbar-zoom');
+const menuViewTools = element<HTMLElement>('pdf-reader-view-tools');
+const compactToolbar = matchMedia('(max-width: 720px)');
+const placeZoomControls = () => {
+  const focused = document.activeElement instanceof HTMLElement && zoomControls.contains(document.activeElement)
+    ? document.activeElement : undefined;
+  if (compactToolbar.matches) menuViewTools.insertBefore(zoomControls, element('fit-page'));
+  else toolbarZoom.append(zoomControls);
+  if (focused) {
+    if (compactToolbar.matches && !readerMenu.open) readerMenu.querySelector<HTMLElement>('summary')?.focus({preventScroll:true});
+    else focused.focus({preventScroll:true});
+  }
+};
+compactToolbar.addEventListener('change', placeZoomControls);
+placeZoomControls();
 bindAnchoredMenus('#pdf-reader-menu, #pdf-document-translation-copy-menu', ':scope > div');
 readerMenu.addEventListener('click', event => {
   if (!(event.target instanceof Element)) return;
@@ -272,6 +370,19 @@ const outlineTree = element<HTMLElement>('pdf-outline-tree');
 const outlineClose = element<HTMLButtonElement>('pdf-outline-close');
 const outlineTab = element<HTMLButtonElement>('pdf-navigation-outline-tab');
 const bookmarksTab = element<HTMLButtonElement>('pdf-navigation-bookmarks-tab');
+const thumbnailsTab = element<HTMLButtonElement>('pdf-navigation-thumbnails-tab');
+const thumbnailsPanel = element<HTMLElement>('pdf-thumbnails');
+const thumbnails = bindPdfThumbnails(thumbnailsPanel, pageNumber => {
+  const epoch = documentEpoch;
+  // Fitting a differently sized destination can scroll before the jump itself.
+  pushPdfLinkHistory(visiblePageAnchor());
+  if (!documentTranslationPanel.hidden && pdfDocumentTranslationViewMode === 'reading') setPdfDocumentTranslationViewMode('compare');
+  void (async () => {
+    if (fitWidthActive || fitPageActive) await fitDocumentToAvailableWidth({pageNumber,ratio:0});
+    if (epoch !== documentEpoch) return;
+    jumpToPdfLinkDestination({pageNumber,ratio:0,destinationLabel:msg`第 ${pageNumber} 页`},false);
+  })();
+});
 const bookmarksPanel = element<HTMLElement>('pdf-bookmarks');
 const bookmarkAdd = element<HTMLButtonElement>('pdf-bookmark-add');
 const bookmarkStatus = element<HTMLElement>('pdf-bookmark-status');
@@ -281,6 +392,17 @@ const openSearch = element<HTMLButtonElement>('open-search');
 const translateDocument = element<HTMLButtonElement>('translate-document');
 const documentTranslationPanel = element<HTMLElement>('pdf-document-translation');
 const documentTranslationStatus = element<HTMLElement>('pdf-document-translation-status');
+const pdfCorrectionFollowup=document.createElement('div');pdfCorrectionFollowup.id='pdf-correction-followup';pdfCorrectionFollowup.className='pdf-correction-followup';pdfCorrectionFollowup.hidden=true;documentTranslationStatus.after(pdfCorrectionFollowup);
+function showPdfCorrectionFollowup(message:string,action:()=>void,label=t('检查相关用法')):void{const text=document.createElement('span'),button=document.createElement('button'),dismiss=document.createElement('button');text.textContent=message;button.type=dismiss.type='button';button.textContent=label;button.addEventListener('click',action);dismiss.textContent=t('忽略');dismiss.addEventListener('click',()=>{pdfCorrectionFollowup.hidden=true});pdfCorrectionFollowup.replaceChildren(text,button,dismiss);pdfCorrectionFollowup.hidden=false}
+const pdfRepairStorageCheck=document.createElement('button');pdfRepairStorageCheck.type='button';pdfRepairStorageCheck.className='pdf-repair-storage-check';pdfRepairStorageCheck.textContent=t('核对保存状态');pdfRepairStorageCheck.hidden=true;documentTranslationStatus.after(pdfRepairStorageCheck);
+const pdfRepairVersions=document.createElement('details');pdfRepairVersions.className='pdf-repair-versions';pdfRepairVersions.hidden=true;pdfRepairStorageCheck.after(pdfRepairVersions);
+const pdfRepairBackup=document.createElement('button');pdfRepairBackup.type='button';pdfRepairBackup.className='pdf-repair-backup';pdfRepairBackup.textContent=t('查看备份与恢复');pdfRepairBackup.title=t('在新标签打开备份与恢复，返回本页后重新核对。');pdfRepairBackup.hidden=true;pdfRepairVersions.after(pdfRepairBackup);pdfRepairBackup.addEventListener('click',()=>{void browser.tabs.create({url:browser.runtime.getURL('/options.html#storage')})});
+const pdfRepairBackupNote=document.createElement('small');pdfRepairBackupNote.className='pdf-repair-backup-note';pdfRepairBackupNote.textContent=t('普通备份包含本机保留版本，不含当前会话版本。');pdfRepairBackupNote.hidden=true;pdfRepairBackup.after(pdfRepairBackupNote);
+const pdfRepairArchiveView=document.createElement('button');pdfRepairArchiveView.type='button';pdfRepairArchiveView.className='pdf-repair-backup';pdfRepairArchiveView.textContent=t('查看保留的分歧版本');pdfRepairArchiveView.hidden=true;pdfRepairBackupNote.after(pdfRepairArchiveView);
+const pdfArchiveCapacityNote=document.createElement('small');pdfArchiveCapacityNote.className='pdf-repair-backup-note';pdfArchiveCapacityNote.setAttribute('role','status');pdfArchiveCapacityNote.hidden=true;pdfRepairArchiveView.after(pdfArchiveCapacityNote);
+const pdfArchiveCapacityBackup=document.createElement('button');pdfArchiveCapacityBackup.type='button';pdfArchiveCapacityBackup.className='pdf-repair-backup';pdfArchiveCapacityBackup.textContent=t('查看备份与恢复');pdfArchiveCapacityBackup.hidden=true;pdfArchiveCapacityNote.after(pdfArchiveCapacityBackup);
+function openPdfBackupInNewTab():void{void browser.tabs.create({url:browser.runtime.getURL('/options.html#storage')})}
+pdfArchiveCapacityBackup.addEventListener('click',openPdfBackupInNewTab);
 const documentTranslationName = element<HTMLElement>('pdf-document-translation-document-name');
 const documentTranslationClose = element<HTMLButtonElement>('pdf-document-translation-close');
 const documentTranslationProgress = element<HTMLElement>('pdf-document-translation-progress');
@@ -421,6 +543,9 @@ const zoomOut = element<HTMLButtonElement>('zoom-out');
 const zoomIn = element<HTMLButtonElement>('zoom-in');
 const zoomValue = element<HTMLOutputElement>('zoom-value');
 const fitWidth = element<HTMLButtonElement>('fit-width');
+const fitPage = element<HTMLButtonElement>('fit-page');
+const rotatePage = element<HTMLButtonElement>('rotate-page');
+const readerFullscreen = element<HTMLButtonElement>('reader-fullscreen');
 const openSettings = element<HTMLButtonElement>('open-settings');
 const stage = element<HTMLElement>('document-stage');
 const emptyState = element<HTMLElement>('empty-state');
@@ -438,6 +563,7 @@ const RETAINED_PAGE_RADIUS = 2;
 const MAX_PAGE_CANVAS_PIXELS = 12_000_000;
 let zoomLevel = 1.25;
 let pdfDocument: PDFDocumentProxy | undefined;
+let currentPdfCitation: CitationMetadata = {};
 let currentPdfBackgroundData: Uint8Array | undefined;
 let currentSourceUrl = location.href;
 let currentSourceLabel: string | undefined;
@@ -464,6 +590,8 @@ let noticeRevision = 0;
 let noticeTimer: ReturnType<typeof setTimeout> | undefined;
 let retentionFrame: number | undefined;
 let fitWidthActive = false;
+let fitPageActive = false;
+let viewRotation: PdfViewRotation = 0;
 let fitWidthTimer: ReturnType<typeof setTimeout> | undefined;
 let fitWidthTask: Promise<void> | undefined;
 let wheelZoomTimer: ReturnType<typeof setTimeout> | undefined;
@@ -480,30 +608,37 @@ type CachedReadingContext=({kind:'pdf';record:Awaited<ReturnType<typeof retained
 let cachedReadingContext:CachedReadingContext|undefined;
 let libraryRestoreDocumentKey: string | undefined;
 let currentPdfContentFingerprint: string | undefined;
+let readingHintTarget:NoteSummaryTarget|undefined;
+let readingHintResumePage:number|undefined;
 const PDF_SEARCH_RESULT_LIMIT = 5_000;
 const PDF_SEARCH_PREVIEW_LIMIT = 80;
 const PDF_SEARCH_HIGHLIGHT_NAME = 'pi-pdf-search-match';
 const PDF_SEARCH_CURRENT_HIGHLIGHT_NAME = 'pi-pdf-search-current';
 const searchPageIndexes = new Map<number, PdfSearchPageIndex>();
-type ReaderSearchMatch = PdfSearchMatch & { translationBlockId?: string };
+type ReaderSearchMatch = PdfSearchMatch & { translationBlockId?: string; matchedQuery?:string };
 let searchMatches: ReaderSearchMatch[] = [];
 const translationSearchIndexes = new Map<string, PdfSearchPageIndex>();
 let searchViewContext = '';
+let assistedSearchOrigin:{query:string;scope:string}|undefined;
+const searchAssistance=document.createElement('div');searchAssistance.id='pdf-search-assistance';searchAssistance.style.gridColumn='1 / -1';searchAssistance.hidden=true;searchPanel.append(searchAssistance);
 let translationSearchFrame = 0;
 let activeParagraphEdit:{block:PdfDocumentTranslationRuntimeBlock;stamp:string;documentSessionId:string}|undefined;
 let lastParagraphCorrection:{block:PdfDocumentTranslationRuntimeBlock;stamp:string;before:PdfCorrectionValue;confirmation?:string;documentSessionId:string}|undefined;
 let searchResultIndex = -1;
 let activeSearchQuery = '';
+let confirmedSearchAliases:string[]=[];
 let searchIndexRunId = 0;
 let searchIndexing = false;
 let searchReturnFocus: HTMLElement | undefined;
+let searchSourceReturnSaved = false;
+let searchQueryEdited = false;
 let searchResultsExpanded = true;
 let pdfOutlineEntries: PdfOutlineEntry[] = [];
 let pdfOutlineEntryMap = new Map<string, PdfOutlineEntry>();
 let pdfOutlineExpandedIds = new Set<string>();
 let currentPdfOutlineEntryId: string | undefined;
 let outlineReturnFocus: HTMLElement | undefined;
-type PdfNavigationView = 'outline' | 'bookmarks';
+type PdfNavigationView = 'outline' | 'bookmarks' | 'thumbnails';
 let activePdfNavigationView: PdfNavigationView = 'bookmarks';
 let pdfReadingBookmarks: PdfReadingBookmark[] = [];
 let editingPdfBookmarkId: string | undefined;
@@ -543,12 +678,19 @@ interface PdfDocumentTranslationRuntimeBlock extends PdfDocumentTranslationBlock
 }
 
 let pdfDocumentTranslationPhase: PdfDocumentTranslationPhase = 'idle';
+let pdfRepairStorageUncertain = false;
+let pdfRepairComparisonEpoch=0;
+let pdfRepairContinuationActive = false;
+const pdfUncertainRepairDocuments=new Map<string,string>();
+let pdfGuardObservation=0;
 let pdfRequestUsage: PdfRequestUsage = emptyPdfRequestUsage();
 let pdfTrialRunning = false;
 let pdfDocumentTranslationBlocksState: PdfDocumentTranslationRuntimeBlock[] = [];
 let pdfDocumentTranslationArchivedBlocks: PdfDocumentTranslationSessionBlock[] = [];
 let pdfDocumentTranslationPageInputs: PdfDocumentTranslationPageInput[] = [];
 const stagedPdfReplacements=new WeakMap<PdfDocumentTranslationRuntimeBlock,PdfParagraphHistory>();
+const pendingFormulaRepairs=new WeakMap<PdfDocumentTranslationRuntimeBlock,{document:FormulaDocument;stamp:string}>();
+const pendingValidatedRepairs=new WeakMap<PdfDocumentTranslationRuntimeBlock,{replacement:PdfDocumentTranslationSessionBlock;snapshot:PdfRepairStorageSnapshot;stamp:string}>();
 let pdfDocumentTranslationUnreadablePages = 0;
 let pdfDocumentTranslationUnreadablePageNumbers: number[] = [];
 let pdfDocumentTranslationMultiColumnPages = 0;
@@ -708,6 +850,8 @@ let activeRegionTranslation: QueuedRegionTranslation | undefined;
 interface PageAnchor {
   pageNumber: number;
   ratio: number;
+  rotation?: PdfViewRotation;
+  reading?: {mode:PdfDocumentTranslationViewMode;hidden:boolean;top:number;left:number;sourceLeft:number;page:number};
 }
 
 interface ResolvedPdfLinkDestination extends PageAnchor {
@@ -715,7 +859,7 @@ interface ResolvedPdfLinkDestination extends PageAnchor {
 }
 
 const PDF_LINK_HISTORY_LIMIT = 20;
-const pdfLinkHistory: PageAnchor[] = [];
+const pdfLinkHistory: (PageAnchor & {summaryReturn?:ReadingSummaryReturn})[] = [];
 
 interface DocumentOpenOperation {
   id: number;
@@ -797,25 +941,31 @@ async function openPdfSettings(focus?:SettingsFocus):Promise<boolean>{
     const response=await browser.runtime.sendMessage({type:'OPEN_OPTIONS_PAGE',...(focus?{payload:{focus}}:{})} satisfies RuntimeMessage) as RuntimeResponse<{opened:true}>;
     if(response.ok)return true;
   }catch{}
-  showNotice('无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。', {
+  showNotice(t('无法打开完整设置，请从 Edge 扩展菜单进入 Pi Translator 设置。'), {
     tone: 'error',
   });
   return false;
 }
 
 function setDocumentControls(enabled: boolean): void {
+  element<HTMLButtonElement>('pdf-original-copy').disabled=!enabled;
   toolbar.dataset.loaded = String(enabled);
   element<HTMLElement>('pdf-reader-view-tools').hidden = !enabled;
   element<HTMLElement>('pdf-reader-recognition-tools').hidden = !enabled;
-  chooseFile.textContent = enabled ? '更换 PDF' : '打开 PDF';
-  chooseFile.title = enabled ? '选择另一份本地 PDF 替换当前文档' : '选择一份本地 PDF';
+  chooseFile.textContent = enabled ? t('更换 PDF') : t('打开 PDF');
+  chooseFile.title = enabled ? t('选择另一份本地 PDF 替换当前文档') : t('选择一份本地 PDF');
   chooseFile.setAttribute(
     'aria-label',
-    enabled ? '更换当前 PDF 文档' : '打开本地 PDF 文档',
+    enabled ? t('更换当前 PDF 文档') : t('打开本地 PDF 文档'),
   );
   zoomOut.disabled = !enabled || currentZoom() <= ZOOM_LEVELS[0] + 0.001;
   zoomIn.disabled = !enabled || currentZoom() >= ZOOM_LEVELS.at(-1)! - 0.001;
   fitWidth.disabled = !enabled;
+  fitWidth.setAttribute('aria-pressed',String(fitWidthActive));
+  fitPage.disabled = !enabled;
+  fitPage.setAttribute('aria-pressed',String(fitPageActive));
+  rotatePage.disabled = !enabled;
+  readerFullscreen.disabled = !enabled || !document.fullscreenEnabled;
   openOutline.disabled = !enabled;
   openOutline.hidden = !enabled;
   openSearch.disabled = !enabled;
@@ -935,10 +1085,10 @@ function pdfDocumentTranslationScopeFeedback(): string {
   })).size;
   const supplements = pdfSupplementarySourcePages(scoped, pdfDocumentTranslationPageInRange);
   const baseLabel = pdfDocumentTranslationRangeMode === 'all'
-    ? '整篇文档'
+    ? t('整篇文档')
     : pdfDocumentTranslationRangeMode === 'current'
-      ? `第 ${pdfDocumentTranslationRangePages[0] ?? 1} 页`
-      : `${pdfDocumentTranslationRangeSummary} 页`;
+      ? msg`第 ${pdfDocumentTranslationRangePages[0] ?? 1} 页`
+      : msg`${pdfDocumentTranslationRangeSummary} 页`;
   const skippedReferences = pdfDocumentTranslationSkipReferencesEnabled
     ? pdfDocumentTranslationBlocksState.filter((block) => (
         pdfDocumentTranslationPageInRange(block.pageNumber) && block.section === 'references'
@@ -951,12 +1101,12 @@ function pdfDocumentTranslationScopeFeedback(): string {
     : 0;
   const preservedReferences = scoped.filter((block) => block.referencePreserved).length;
   const skipped = [
-    skippedReferences ? `参考文献 ${skippedReferences} 段` : '',
-    skippedAppendix ? `附录 ${skippedAppendix} 段` : '',
+    skippedReferences ? msg`参考文献 ${skippedReferences} 段` : '',
+    skippedAppendix ? msg`附录 ${skippedAppendix} 段` : '',
   ].filter(Boolean);
-  return `${baseLabel}${supplements.length ? ` · 已自动补齐第 ${supplements.join('、')} 页续段` : ''} · ${selectedPages} 页 / ${scoped.length} 段${
-    skipped.length ? ` · 已跳过${skipped.join('、')}` : ''
-  }${preservedReferences ? ` · 参考文献 ${preservedReferences} 段保留原文` : ''}`;
+  return msg`${baseLabel}${supplements.length ? msg` · 已自动补齐第 ${supplements.join('、')} 页续段` : ''} · ${selectedPages} 页 / ${scoped.length} 段${
+    skipped.length ? msg` · 已跳过${skipped.join('、')}` : ''
+  }${preservedReferences ? msg` · 参考文献 ${preservedReferences} 段保留原文` : ''}`;
 }
 
 function currentPdfDocumentTranslationSessionContext():
@@ -1061,6 +1211,7 @@ async function persistPdfDocumentTranslationSession(
   blocks: readonly PdfDocumentTranslationRuntimeBlock[] = [],
   replaceBlocks = false,
 ): Promise<boolean> {
+  if(pdfRepairStorageUncertain){pdfDocumentTranslationMessage=t('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。');syncPdfDocumentTranslationUi();return false}
   if(cachedReadingContext)return persistCachedReading();
   const context = pdfDocumentTranslationSessionContext;
   if (!context) return false;
@@ -1074,10 +1225,12 @@ async function persistPdfDocumentTranslationSession(
   const current = () => samePdfDocumentTranslationSessionContext(context, pdfDocumentTranslationSessionContext);
   let sessionSaved = false;
   let retainedSaved = false;
+  let sessionResult:Awaited<ReturnType<typeof savePdfDocumentTranslationSession>>|undefined;
   if(current()){pdfDocumentTranslationSavesInFlight++;syncPdfDocumentTranslationUi()}
   try {
   try {
     const saved=await savePdfDocumentTranslationSession(sessionNeedsFull ? fullUpdate : update, context.behaviorKey);
+    sessionResult=saved;
     if(current())for(const result of saved.blocks){const block=pdfDocumentTranslationBlocksState.find(block=>block.sessionSignature===result.signature);if(block&&result.revisions)block.revisions=result.revisions}
     sessionSaved = true;
     if (current()) pdfDocumentTranslationSessionWriteDirty = false;
@@ -1087,7 +1240,13 @@ async function persistPdfDocumentTranslationSession(
   }
   if (retainLocally) {
     try {
-      await saveRetainedPdfDocumentTranslationSession(retainedNeedsFull ? fullUpdate : update, context.behaviorKey);
+      const pending=retainedNeedsFull ? fullUpdate : update;
+      const retainedUpdate=sessionResult&&pending.blocks?{...pending,blocks:pending.blocks.map(block=>{
+        const submitted=(sessionNeedsFull?fullUpdate:update).blocks?.find(item=>item.signature===block.signature);
+        const stored=sessionResult!.blocks.find(item=>item.signature===block.signature);
+        return submitted&&JSON.stringify(submitted)===JSON.stringify(block)&&stored?.revisions?{...block,revisions:stored.revisions}:block;
+      })}:pending;
+      await saveRetainedPdfDocumentTranslationSession(retainedUpdate, context.behaviorKey);
       retainedSaved = true;
       if (current()) pdfDocumentTranslationRetentionWriteDirty = false;
       if (current() && pdfDocumentTranslationRetentionError) {
@@ -1099,14 +1258,14 @@ async function persistPdfDocumentTranslationSession(
       pdfDocumentTranslationRetentionWriteDirty = true;
       pdfDocumentTranslationRetentionError = true;
       pdfDocumentTranslationRetentionMessage =
-        error instanceof Error ? error.message : '本机保留暂时失败；当前 Edge 会话中的进度仍然安全。';
+        error instanceof Error ? error.message : t('本机保留暂时失败；当前 Edge 会话中的进度仍然安全。');
       syncPdfDocumentTranslationUi();
     }
   }
   for(const block of blocks){
     const before=stagedPdfReplacements.get(block);if(!before)continue;
     if(!sessionSaved&&!retainedSaved&&current()){
-      applyPdfParagraphValue(block,before);block.retranslation=true;block.status='error';block.errorMessage='新译文尚未保存，继续保留旧稿。请检查存储后重试。';renderPdfDocumentTranslationBlock(block);
+      applyPdfParagraphValue(block,before);block.retranslation=true;block.status='error';block.errorMessage=t('新译文尚未保存，继续保留旧稿。请检查存储后重试。');renderPdfDocumentTranslationBlock(block);
     }
     stagedPdfReplacements.delete(block);
   }
@@ -1118,18 +1277,19 @@ async function persistPdfDocumentTranslationSession(
 
 function showPdfParagraphSaveScope(): void {
   if (pdfDocumentTranslationRetentionWriteDirty) {
-    showNotice('修正已保留在当前会话，本机保存暂未成功。', {tone: 'warning'});
+    showNotice(t('修正已保留在当前会话，本机保存暂未成功。'), {tone: 'warning'});
   } else if (pdfDocumentTranslationSessionWriteDirty && pdfDocumentTranslationRetainedLocally) {
-    showNotice('修正已保留到本机，当前会话写入暂未成功。', {tone: 'warning'});
+    showNotice(t('修正已保留到本机，当前会话写入暂未成功。'), {tone: 'warning'});
   }
 }
 
 async function setPdfDocumentTranslationRetention(enabled: boolean): Promise<void> {
+  if(pdfRepairStorageUncertain||pdfRepairContinuationActive){syncPdfDocumentTranslationUi();return}
   const context = pdfDocumentTranslationSessionContext;
   if (!context || pdfDocumentTranslationRetentionPending) return;
   pdfDocumentTranslationRetentionPending = true;
   pdfDocumentTranslationRetentionError = false;
-  pdfDocumentTranslationRetentionMessage = enabled ? '正在保存到本机…' : '正在清除本机保存…';
+  pdfDocumentTranslationRetentionMessage = enabled ? t('正在保存到本机…') : t('正在清除本机保存…');
   pdfDocumentTranslationRetainedLocally = enabled;
   syncPdfDocumentTranslationUi();
   try {
@@ -1144,17 +1304,20 @@ async function setPdfDocumentTranslationRetention(enabled: boolean): Promise<voi
         context.behaviorKey,
       );
       pdfDocumentTranslationRetentionMessage =
-        '已保留到本机；再次打开同一 PDF 会自动恢复。';
+        t('已保留到本机；再次打开同一 PDF 会自动恢复。');
+      const projectId=new URL(location.href).searchParams.get('project');
+      if(projectId){try{const name=await addDocumentToProject(retainedDocumentId('pdf',context.descriptor),projectId);pdfDocumentTranslationRetentionMessage=msg`已保留到本机 · 已加入项目 ${name}`}
+      catch{pdfDocumentTranslationRetentionMessage=t('已保留到本机，但未加入项目；可在文档库重新选择。')}}
     } else {
       await clearRetainedPdfDocumentTranslationSession(context.descriptor);
-      pdfDocumentTranslationRetentionMessage = '本机保存已清除；当前会话中的译文不受影响。';
+      pdfDocumentTranslationRetentionMessage = t('本机保存已清除；当前会话中的译文不受影响。');
     }
   } catch {
     pdfDocumentTranslationRetainedLocally = !enabled;
     pdfDocumentTranslationRetentionError = true;
     pdfDocumentTranslationRetentionMessage = enabled
-      ? '无法保留到本机，请检查扩展存储空间后重试。'
-      : '无法清除本机保存，请稍后重试。';
+      ? t('无法保留到本机，请检查扩展存储空间后重试。')
+      : t('无法清除本机保存，请稍后重试。');
   } finally {
     pdfDocumentTranslationRetentionPending = false;
     syncPdfDocumentTranslationUi();
@@ -1175,7 +1338,7 @@ function applyPdfDocumentTranslationScope(): boolean {
     (block) => pdfDocumentTranslationBlockInScope(block),
   );
   if (pdfDocumentTranslationBlocksState.length && !included.some(Boolean)) {
-    pdfDocumentTranslationRangeError = '这个范围没有可翻译正文，请调整页码或跳过选项。';
+    pdfDocumentTranslationRangeError = t('这个范围没有可翻译正文，请调整页码或跳过选项。');
     syncPdfDocumentTranslationUi();
     return false;
   }
@@ -1228,7 +1391,7 @@ function applyPdfDocumentTranslationScope(): boolean {
     pdfDocumentTranslationPhase = 'ready';
   }
   pdfDocumentTranslationMessage = previousPhase === 'running' && changed
-    ? '范围已更新，全文翻译已暂停。'
+    ? t('范围已更新，全文翻译已暂停。')
     : undefined;
   syncPdfDocumentTranslationUi();
   if (pdfDocumentTranslationSessionContext) void persistPdfDocumentTranslationSession();
@@ -1314,14 +1477,14 @@ function syncPdfDocumentTranslationCurrentPage(pageNumber = visiblePageAnchor().
     const awaitingOcr = pdfDocumentTranslationPageInRange(safePageNumber) &&
       pdfDocumentTranslationUnreadablePageNumbers.includes(safePageNumber);
     documentTranslationPageEmpty.textContent = awaitingOcr
-      ? pdfDocumentTranslationOcrRunning ? '正在识别本页文字…' : '本页需要先识别文字。'
+      ? pdfDocumentTranslationOcrRunning ? t('正在识别本页文字…') : t('本页需要先识别文字。')
       : pdfDocumentTranslationPhase === 'ready'
-        ? '选择翻译范围，开始后在这里阅读译文。'
+        ? t('选择翻译范围，开始后在这里阅读译文。')
       : !currentBlocks.length
-      ? `第 ${safePageNumber} 页不在当前翻译范围内。`
+      ? msg`第 ${safePageNumber} 页不在当前翻译范围内。`
       : currentBlocks.some((block) => block.status === 'idle')
-        ? `第 ${safePageNumber} 页译文尚未完成，全文翻译会继续在后台处理。`
-        : `第 ${safePageNumber} 页暂时没有可显示的译文。`;
+        ? msg`第 ${safePageNumber} 页译文尚未完成，全文翻译会继续在后台处理。`
+        : msg`第 ${safePageNumber} 页暂时没有可显示的译文。`;
   }
   if (displayedPageChanged && pdfDocumentTranslationViewMode === 'compare') {
     documentTranslationPages.scrollTop = 0;
@@ -1369,7 +1532,7 @@ function takePdfTaskRequest(kind: 'text' | 'vision' | 'ocr'): void {
   try { consumePdfRequest(pdfRequestUsage, kind, pdfRequestLimit()); }
   catch (error) {
     pdfDocumentTranslationPhase = 'paused';
-    pdfDocumentTranslationMessage = error instanceof Error ? error.message : '已达到任务请求上限。';
+    pdfDocumentTranslationMessage = error instanceof Error ? error.message : t('已达到任务请求上限。');
     syncPdfDocumentTranslationUi();
     throw error;
   }
@@ -1387,7 +1550,7 @@ function syncPdfTrialUi(): void {
     (!pdfTrialRunning && (pdfDocumentTranslationPhase === 'running' || pdfDocumentTranslationOcrRunning));
   if (pdfTrialRunning) {
     documentTrialStart.disabled = true;
-    documentTrialNote.textContent = '正在试译所选段落…';
+    documentTrialNote.textContent = t('正在试译所选段落…');
     return;
   }
   const selected = documentTrialBlock.value;
@@ -1396,7 +1559,7 @@ function syncPdfTrialUi(): void {
     documentTrialBlock.replaceChildren(...candidates.map((block) => {
       const option = document.createElement('option');
       option.value = block.id;
-      option.textContent = `第 ${block.pageNumber} 页 · ${block.text.replace(/\s+/gu, ' ').slice(0, 55)}`;
+      option.textContent = msg`第 ${block.pageNumber} 页 · ${block.text.replace(/\s+/gu, ' ').slice(0, 55)}`;
       return option;
     }));
     documentTrialBlock.dataset.available = available;
@@ -1405,16 +1568,17 @@ function syncPdfTrialUi(): void {
   const block = candidates.find((candidate) => candidate.id === documentTrialBlock.value);
   const busy = pdfDocumentTranslationPhase === 'running' || pdfDocumentTranslationOcrRunning;
   const preservedFormula = block?.kind === 'formula' && !pdfTrialUsesVision(block);
-  documentTrialStart.disabled = !block || busy || preservedFormula;
+  documentTrialStart.disabled = pdfRepairStorageUncertain || !block || busy || preservedFormula;
   documentTrialBlock.disabled = busy || !candidates.length;
   documentTrialNote.textContent = preservedFormula
-    ? '本段包含公式，纯文本模式会保留原文。开启智能多模态后可试译，或选择其他文字段落。'
+    ? t('本段包含公式，纯文本模式会保留原文。开启智能多模态后可试译，或选择其他文字段落。')
     : block && pdfTrialUsesVision(block)
-    ? `只发送本段原文区域，预计 ${block.visualUnits?.length ?? 1} 次视觉请求；点击后开始发送。`
-    : '只发送本段文字；已完成结果可供后续全文任务复用。';
+    ? msg`只发送本段原文区域，预计 ${block.visualUnits?.length ?? 1} 次视觉请求；点击后开始发送。`
+    : t('只发送本段文字；已完成结果可供后续全文任务复用。');
 }
 
 async function trialPdfDocumentBlock(blockId = documentTrialBlock.value): Promise<void> {
+  if(pdfRepairStorageUncertain)return;
   if (pdfTrialRunning || ['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning) return;
   if (!documentRequestLimit.checkValidity()) { documentRequestLimit.reportValidity(); return; }
   const block = pdfDocumentTranslationBlocksState.find((candidate) => candidate.id === blockId && candidate.included);
@@ -1443,11 +1607,14 @@ async function trialPdfDocumentBlock(blockId = documentTrialBlock.value): Promis
       takePdfTaskRequest('text');
       const requestId = crypto.randomUUID();
       pdfDocumentTranslationRequestId = requestId;
+      if(previous.translatedText)block.retranslation=true;
       block.status = 'translating';
       renderPdfDocumentTranslationBlock(block);
       const response = await browser.runtime.sendMessage({ type: 'TRANSLATE_DOCUMENT_BATCH', payload: {
         requestId, items: [{ id: block.id, text: block.text }],
-        documentId: currentReadingIdentity ?? currentDocumentSessionId, pageUrl: currentSourceUrl,
+        ...(previous.translatedText?{bypassCache:true}:{}),
+        ...pdfGlossaryLocator(),
+        documentId: currentReadingIdentity ?? currentDocumentSessionId, pageUrl: currentSourceUrl ?? location.href,
         targetLanguage: pdfDocumentTranslationSettings.targetLanguage, sourceLanguage: pdfDocumentTranslationSettings.sourceLanguage,
         style: pdfDocumentTranslationSettings.style, contentMode: pdfDocumentTranslationSettings.contentMode,
       } } satisfies RuntimeMessage) as TranslationBatchRuntimeResponse;
@@ -1457,24 +1624,23 @@ async function trialPdfDocumentBlock(blockId = documentTrialBlock.value): Promis
       addPdfReportedTokens(pdfRequestUsage, response.data.usage, response.data.usageSource);
       const text = response.data.items.find((item) => item.id === block.id)?.translatedText.trim();
       if (!text) throw new Error('模型未返回所选段落的译文。');
-      block.status = 'done';
-      block.translatedText = text;
-      delete block.errorMessage;
+      applyPdfTranslationOutcome(block,pdfBackgroundTextOutcome(block,text,pdfDocumentTranslationSettings.targetLanguage));
       renderPdfDocumentTranslationBlock(block);
       await persistPdfDocumentTranslationSession([block]);
     }
     if (revision === pdfDocumentTranslationRevision && pdfDocumentTranslationPhase === 'running') {
       pdfDocumentTranslationPhase = 'paused';
       const progress = pdfDocumentTranslationCounts();
-      pdfDocumentTranslationMessage = `试译完成 · ${progress.translated}/${progress.total}`;
+      pdfDocumentTranslationMessage = block.status==='error'?block.errorMessage:msg`试译完成 · ${progress.translated}/${progress.total}`;
       documentTranslationSettings.open = false;
       documentTrial.open = false;
     }
   } catch (error) {
     if (revision !== pdfDocumentTranslationRevision) return;
     Object.assign(block, previous);
+    if(!previous.retranslation)delete block.retranslation;
     pdfDocumentTranslationPhase = 'paused';
-    pdfDocumentTranslationMessage = error instanceof Error ? error.message : '试译失败。';
+    pdfDocumentTranslationMessage = error instanceof Error ? error.message : t('试译失败。');
     renderPdfDocumentTranslationBlock(block);
   } finally {
     pdfTrialRunning = false;
@@ -1487,9 +1653,9 @@ function syncPdfReviewQueue(): void {
   documentReview.hidden = !pdfDocumentTranslationBlocksState.length || all.length === 0 ||
     all.every(item=>item.kind==='untranslated' && !item.block.formulaReviewMessage && !item.block.visualFallbackMessage && !item.block.errorMessage);
   const confirmed = all.filter((item) => item.confirmed).length;
-  documentReviewSummary.textContent = `核对清单 · ${all.length - confirmed} 段待处理${confirmed ? ` · ${confirmed} 段已人工核对` : ''}`;
+  documentReviewSummary.textContent = msg`核对清单 · ${all.length - confirmed} 段待处理${confirmed ? msg` · ${confirmed} 段已人工核对` : ''}`;
   if (!documentReview.open) return;
-  const labels = { untranslated: '尚未翻译', failed: '翻译失败', formula: '译文待核对', original: '保留原文' };
+  const labels = { untranslated: t('尚未翻译'), failed: t('翻译失败'), formula: t('译文待核对'), original: t('保留原文') };
   const items = pdfReviewQueue(pdfDocumentTranslationBlocksState, documentReviewFilter.value as 'all' | PdfReviewKind);
   const fragment = document.createDocumentFragment();
   for (const { block, kind, confirmed: reviewed } of items.slice(0, 50)) {
@@ -1499,15 +1665,15 @@ function syncPdfReviewQueue(): void {
     row.dataset.reviewBlock = block.id;
     const locate = document.createElement('button');
     locate.type = 'button';
-    locate.textContent = `第 ${block.pageNumber} 页 · ${block.id} · ${reviewed ? '已人工核对' : labels[kind]}`;
-    locate.title = block.formulaReviewMessage ?? block.visualFallbackMessage ?? block.errorMessage ?? '返回本段原文';
+    locate.textContent = msg`第 ${block.pageNumber} 页 · ${block.id} · ${reviewed ? t('已人工核对') : labels[kind]}`;
+    locate.title = block.formulaReviewMessage ?? block.visualFallbackMessage ?? block.errorMessage ?? t('返回本段原文');
     locate.addEventListener('click', () => activatePdfDocumentTranslationSource(source));
     row.append(locate);
     if (kind !== 'untranslated') {
       const retry = document.createElement('button');
       retry.type = 'button';
-      retry.textContent = '重试本段';
-      retry.title = pdfTrialUsesVision(source) ? '重新发送本段原文区域进行视觉翻译' : '重新发送本段文字';
+      retry.textContent = t('重试本段');
+      retry.title = pdfTrialUsesVision(source) ? t('重新发送本段原文区域进行视觉翻译') : t('重新发送本段文字');
       retry.disabled = ['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning;
       retry.addEventListener('click', () => {
         foregroundVisualUnits.delete(source);
@@ -1518,12 +1684,12 @@ function syncPdfReviewQueue(): void {
     if (kind === 'formula' || kind === 'original') {
       const acknowledge = document.createElement('button');
       acknowledge.type = 'button';
-      acknowledge.textContent = reviewed ? '撤销确认' : '标记已核对';
-      acknowledge.title = '只记录人工核对状态，保留模型警告与原文';
+      acknowledge.textContent = reviewed ? t('撤销确认') : t('标记已核对');
+      acknowledge.title = t('只记录人工核对状态，保留模型警告与原文');
       acknowledge.disabled = ['running', 'preparing'].includes(pdfDocumentTranslationPhase);
       acknowledge.addEventListener('click', async () => {
         acknowledge.disabled = true;
-        acknowledge.textContent = '正在保存…';
+        acknowledge.textContent = t('正在保存…');
         const previous = source.reviewConfirmation;
         if (reviewed) delete source.reviewConfirmation;
         else source.reviewConfirmation = pdfReviewConfirmation(source);
@@ -1531,7 +1697,7 @@ function syncPdfReviewQueue(): void {
         if (!saved) {
           if (previous) source.reviewConfirmation = previous;
           else delete source.reviewConfirmation;
-          showNotice('核对状态未能保存，请稍后再试。', { tone: 'error' });
+          showNotice(t('核对状态未能保存，请稍后再试。'), { tone: 'error' });
         }
         syncPdfReviewQueue();
       });
@@ -1539,8 +1705,8 @@ function syncPdfReviewQueue(): void {
     }
     fragment.append(row);
   }
-  if (!items.length) fragment.append(document.createTextNode('没有符合筛选条件的段落。'));
-  if (items.length > 50) fragment.append(document.createTextNode('先显示前 50 段；可选择类别缩小范围。'));
+  if (!items.length) fragment.append(document.createTextNode(t('没有符合筛选条件的段落。')));
+  if (items.length > 50) fragment.append(document.createTextNode(t('先显示前 50 段；可选择类别缩小范围。')));
   documentReviewList.replaceChildren(fragment);
 }
 
@@ -1554,8 +1720,10 @@ function syncPdfDocumentTranslationSetupUi(): void {
 }
 
 function syncPdfDocumentTranslationUi(): void {
+  element<HTMLButtonElement>('pdf-note-summary').hidden=!currentPdfContentFingerprint;
+  if((document.getElementById('pdf-terms-dialog') as HTMLDialogElement|null)?.open)renderPdfCorrectionSuggestions();
   const canEdit=!['running','preparing'].includes(pdfDocumentTranslationPhase)&&!pdfDocumentTranslationOcrRunning;
-  for(const button of documentTranslationPages.querySelectorAll<HTMLButtonElement>('.pdf-paragraph-edit-action'))button.disabled=!canEdit;
+  for(const button of documentTranslationPages.querySelectorAll<HTMLButtonElement>('.pdf-paragraph-edit-action,.pdf-paragraph-explain-action'))button.disabled=!canEdit;
   element<HTMLButtonElement>('pdf-document-undo-correction').hidden=!canEdit||!lastParagraphCorrection||lastParagraphCorrection.documentSessionId!==currentDocumentSessionId||lastParagraphCorrection.stamp!==pdfParagraphStamp(lastParagraphCorrection.block);
   element<HTMLButtonElement>('pdf-document-history').hidden=!canEdit||!pdfDocumentTranslationBlocksState.some(block=>block.revisions?.length);
   element<HTMLButtonElement>('pdf-document-terms').hidden=!canEdit||!pdfDocument||!pdfDocumentTranslationBlocksState.some(block=>block.status==='done'&&!block.referencePreserved);
@@ -1565,8 +1733,8 @@ function syncPdfDocumentTranslationUi(): void {
   syncPdfReviewQueue();
   syncPdfTrialUi();
   documentRequestLimit.disabled = pdfDocumentTranslationPhase === 'running' || pdfTrialRunning;
-  documentRequestUsage.textContent = `任务请求：文字 ${pdfRequestUsage.text} 次 · 视觉 ${pdfRequestUsage.vision} 次 · OCR ${pdfRequestUsage.ocr} 次` +
-    (pdfRequestUsage.reportedTokens ? ` · 接口已报告 ${pdfRequestUsage.reportedTokens.totalTokens} tokens（未报告部分不计）` : ' · 接口用量未报告');
+  documentRequestUsage.textContent = msg`任务请求：文字 ${pdfRequestUsage.text} 次 · 视觉 ${pdfRequestUsage.vision} 次 · OCR ${pdfRequestUsage.ocr} 次` +
+    (pdfRequestUsage.reportedTokens ? msg` · 接口已报告 ${pdfRequestUsage.reportedTokens.totalTokens} tokens（未报告部分不计）` : t(' · 接口用量未报告'));
   const prices = pdfDocumentTranslationSettings.modelPrices ?? [];
   const costs = reportedCost(pdfRequestUsage.byModel ?? [], prices);
   const amounts = Object.entries(costs.amounts).map(([currency, amount]) => formatCost(amount!, currency as 'CNY' | 'USD'));
@@ -1575,9 +1743,9 @@ function syncPdfDocumentTranslationUi(): void {
   const pendingCharacters = pdfDocumentTranslationBlocksState.filter((block) => block.included && block.status !== 'done' && !block.referencePreserved && !pdfTrialUsesVision(block) && block.kind !== 'formula' && block.kind !== 'code')
     .reduce((sum, block) => sum + block.text.length, 0);
   const forecast = price && pendingCharacters ? roughTextCost(pendingCharacters, price).map((amount) => formatCost(amount, price.currency)).join('–') : '';
-  documentCostEstimate.textContent = `已报告用量费用：${amounts.join(' + ') || '未知'}` +
-    (costs.unpricedModels.length ? ` · 未设单价：${costs.unpricedModels.join('、')}` : '') +
-    (forecast ? `。剩余文字粗估 ${forecast}` : !price ? '。可在设置中填写模型单价' : '');
+  documentCostEstimate.textContent = msg`已报告用量费用：${amounts.join(' + ') || t('未知')}` +
+    (costs.unpricedModels.length ? msg` · 未设单价：${costs.unpricedModels.join('、')}` : '') +
+    (forecast ? msg`。剩余文字粗估 ${forecast}` : !price ? t('。可在设置中填写模型单价') : '');
   const { translated, failed, total } = pdfDocumentTranslationCounts();
   const pending = Math.max(0, total - translated - failed);
   const progressPercent = total
@@ -1595,10 +1763,10 @@ function syncPdfDocumentTranslationUi(): void {
   const visualRequestsInScope = scopedPdfDocumentTranslationBlocks().filter((block) => !block.referencePreserved)
     .reduce((count, block) => count + (block.visualUnits?.length ?? 1), 0);
   const referencePreservationNote = preservedReferencesInScope
-    ? `；${preservedReferencesInScope} 段参考文献保留原文且不发送请求`
+    ? msg`；${preservedReferencesInScope} 段参考文献保留原文且不发送请求`
     : '';
   const referenceDetail = preservedReferencesInScope
-    ? '参考文献条目按原文保留且不发送翻译请求。'
+    ? t('参考文献条目按原文保留且不发送翻译请求。')
     : '';
   const figureObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'figure');
   const tableObjectsInScope = visualObjectsInScope.filter((block) => block.kind === 'table');
@@ -1628,9 +1796,9 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationProgress.setAttribute('aria-valuenow', String(progressPercent));
   documentTranslationProgress.setAttribute(
     'aria-valuetext',
-    total ? `已翻译 ${translated}/${total} 段` : '尚未识别正文',
+    total ? msg`已翻译 ${translated}/${total} 段` : t('尚未识别正文'),
   );
-  documentTranslationRangeCurrent.textContent = `当前页（第 ${currentRangePage} 页）`;
+  documentTranslationRangeCurrent.textContent = msg`当前页（第 ${currentRangePage} 页）`;
   documentTranslationRange.disabled = !scopeEnabled;
   documentTranslationCustomRange.hidden = documentTranslationRange.value !== 'custom';
   documentTranslationCustomPages.disabled = !scopeEnabled;
@@ -1649,16 +1817,16 @@ function syncPdfDocumentTranslationUi(): void {
     ? 'error'
     : 'info';
   const settingsScopeLabel = pdfDocumentTranslationRangeMode === 'all'
-    ? '整篇文档'
+    ? t('整篇文档')
     : pdfDocumentTranslationRangeMode === 'current'
-      ? `第 ${pdfDocumentTranslationRangePages[0] ?? currentRangePage} 页`
-      : `${pdfDocumentTranslationRangeSummary || '指定页码'} 页`;
+      ? msg`第 ${pdfDocumentTranslationRangePages[0] ?? currentRangePage} 页`
+      : msg`${pdfDocumentTranslationRangeSummary || t('指定页码')} 页`;
   documentTranslationSettingsSummary.textContent = `${settingsScopeLabel} · ${
     pdfDocumentTranslationMultimodalEnabled
       ? usesUnifiedVision
-        ? '统一多模态'
-        : '按内容选择接口'
-      : '仅文字接口'
+        ? t('统一多模态')
+        : t('按内容选择接口')
+      : t('仅文字接口')
   }`;
   documentTranslationMultimodal.dataset.mode = pdfDocumentTranslationMultimodalEnabled
     ? 'smart'
@@ -1670,89 +1838,96 @@ function syncPdfDocumentTranslationUi(): void {
     translated > 0;
   documentTranslationMultimodalStatus.textContent = pdfDocumentTranslationMultimodalEnabled
     ? usesUnifiedVision
-      ? `文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${requestableBlocksInScope} 段统一使用视觉模型，预计 ${visualRequestsInScope} 次视觉请求${referencePreservationNote}`
+      ? msg`文档检测到 ${documentFormulaBlocks.length} 个含公式段落；点击开始后，当前范围 ${requestableBlocksInScope} 段统一使用视觉模型，预计 ${visualRequestsInScope} 次视觉请求${referencePreservationNote}`
       : unreadablePagesInScope.length
-        ? `点击开始后识别 ${unreadablePagesInScope.length} 个扫描页；若发现公式，当前范围全部段落改用视觉模型`
+        ? msg`点击开始后识别 ${unreadablePagesInScope.length} 个扫描页；若发现公式，当前范围全部段落改用视觉模型`
         : visualObjectsInScope.length
-          ? `普通正文使用文字接口；${figureObjectsInScope.length ? `${figureObjectsInScope.length} 个图表` : ''}${figureObjectsInScope.length && tableObjectsInScope.length ? '、' : ''}${tableObjectsInScope.length ? `${tableObjectsInScope.length} 个表格` : ''}将整块使用视觉模型，预计 ${visualObjectsInScope.length} 次视觉请求${referencePreservationNote}`
-          : `文档未检测到公式、图表或表格对象；普通正文使用文字接口${referencePreservationNote}`
-    : `${formulaBlocksInScope.length ? '不会发送公式或正文图像；独立公式原样保留；' : ''}${visualObjectsInScope.length ? '图表与表格不会发送图像，只保留合并后的文字结构；' : ''}${unreadablePagesInScope.length ? `${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口${referencePreservationNote}`;
+          ? msg`普通正文使用文字接口；${figureObjectsInScope.length ? msg`${figureObjectsInScope.length} 个图表` : ''}${figureObjectsInScope.length && tableObjectsInScope.length ? '、' : ''}${tableObjectsInScope.length ? msg`${tableObjectsInScope.length} 个表格` : ''}将整块使用视觉模型，预计 ${visualObjectsInScope.length} 次视觉请求${referencePreservationNote}`
+          : msg`文档未检测到公式、图表或表格对象；普通正文使用文字接口${referencePreservationNote}`
+    : msg`${formulaBlocksInScope.length ? t('不会发送公式或正文图像；独立公式原样保留；') : ''}${visualObjectsInScope.length ? t('图表与表格不会发送图像，只保留合并后的文字结构；') : ''}${unreadablePagesInScope.length ? msg`${unreadablePagesInScope.length} 个扫描页不会发送；` : ''}其他正文只使用文字接口${referencePreservationNote}`;
   documentTranslationMultimodalStatus.title = documentTranslationMultimodalStatus.textContent;
   documentTranslationMultimodalStatus.textContent = pdfDocumentTranslationMultimodalEnabled
-    ? usesUnifiedVision ? `当前范围使用视觉模型 · 预计 ${visualRequestsInScope} 次请求` : unreadablePagesInScope.length ? '扫描页将先识别文字，再翻译' : visualObjectsInScope.length ? '正文用文字接口，图表用视觉模型' : '当前正文使用文字接口'
-    : formulaBlocksInScope.length ? '正文用文字接口；公式保留原文' : '使用文字接口';
+    ? usesUnifiedVision ? msg`当前范围使用视觉模型 · 预计 ${visualRequestsInScope} 次请求` : unreadablePagesInScope.length ? t('扫描页将先识别文字，再翻译') : visualObjectsInScope.length ? t('正文用文字接口，图表用视觉模型') : t('当前正文使用文字接口')
+    : formulaBlocksInScope.length ? t('正文用文字接口；公式保留原文') : t('使用文字接口');
   const defaultStatus = pdfDocumentTranslationPhase === 'idle'
-    ? '尚未读取正文'
+    ? t('尚未读取正文')
     : pdfDocumentTranslationPhase === 'preparing'
-      ? '正在本地读取文字层…'
+      ? t('正在本地读取文字层…')
       : pdfDocumentTranslationPhase === 'ready'
-        ? `已识别 ${total} 段，等待确认`
+        ? msg`已识别 ${total} 段，等待确认`
         : pdfDocumentTranslationPhase === 'running'
-          ? `全文翻译中 · ${translated}/${total}`
+          ? msg`全文翻译中 · ${translated}/${total}`
           : pdfDocumentTranslationPhase === 'paused'
-            ? `已暂停 · ${translated}/${total}`
+            ? msg`已暂停 · ${translated}/${total}`
             : pdfDocumentTranslationPhase === 'stopped'
-              ? `已停止 · ${translated}/${total}`
+              ? msg`已停止 · ${translated}/${total}`
               : pdfDocumentTranslationPhase === 'complete'
                 ? failed
-                  ? `已完成 ${translated}/${total} · ${failed} 段待重试`
-                  : `已完成 ${translated}/${total}`
-                : `翻译中断 · ${translated}/${total}`;
+                  ? msg`已完成 ${translated}/${total} · ${failed} 段待重试`
+                  : msg`已完成 ${translated}/${total}`
+                : msg`翻译中断 · ${translated}/${total}`;
   const saveState=pdfDocumentTranslationSavesInFlight||pdfDocumentTranslationRetentionPending?'saving'
-    :pdfDocumentTranslationRetentionError||pdfDocumentTranslationRetentionWriteDirty||pdfDocumentTranslationSessionWriteDirty&&!pdfDocumentTranslationRetainedLocally?'error'
+    :pdfRepairStorageUncertain||pdfDocumentTranslationRetentionError||pdfDocumentTranslationRetentionWriteDirty||pdfDocumentTranslationSessionWriteDirty&&!pdfDocumentTranslationRetainedLocally?'error'
     :pdfDocumentTranslationRetainedLocally?'retained':'session';
   documentTranslationStatus.dataset.saveState=saveState;
-  const saveLabel=saveState==='saving'?'正在保存':saveState==='error'
-    ?pdfDocumentTranslationRetentionError||pdfDocumentTranslationRetentionWriteDirty?'本机保存失败':'最新进度未保存'
-    :saveState==='retained'?'已保存到本机':'仅当前会话';
+  const saveLabel=saveState==='saving'?t('正在保存'):saveState==='error'
+    ?pdfRepairStorageUncertain||pdfDocumentTranslationRetentionError||pdfDocumentTranslationRetentionWriteDirty?t('本机保存失败'):t('最新进度未保存')
+    :saveState==='retained'?t('已保存到本机'):t('仅当前会话');
   documentTranslationStatus.textContent = (pdfDocumentTranslationOcrRunning
-    ? `正在识别扫描页 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
+    ? msg`正在识别扫描页 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
     : pdfDocumentTranslationMessage ?? defaultStatus) +
-    (formulaReviewCount ? ` · ${formulaReviewCount} 段译文待核对` : '') +
-    (visualFallbackCount ? ` · ${visualFallbackCount} 段保留原文` : '') +
+    (formulaReviewCount ? msg` · ${formulaReviewCount} 段译文待核对` : '') +
+    (visualFallbackCount ? msg` · ${visualFallbackCount} 段保留原文` : '') +
     (translated && pdfDocumentTranslationPhase!=='running' ? ` · ${saveLabel}` : '');
+  pdfRepairStorageCheck.hidden=!pdfRepairStorageUncertain;
+  pdfRepairBackup.hidden=!pdfRepairStorageUncertain;
+  pdfRepairBackupNote.hidden=!pdfRepairStorageUncertain;
+  const editorCheck=element<HTMLButtonElement>('pdf-paragraph-editor-check');editorCheck.hidden=!pdfRepairStorageUncertain;editorCheck.textContent=t('核对保存状态');
+  pdfRepairStorageCheck.textContent=t('核对保存状态');
+  pdfRepairStorageCheck.disabled=['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning;
+  editorCheck.disabled=pdfRepairStorageCheck.disabled;
   const progress = pdfDocumentProgress(pdfDocumentTranslationBlocksState);
-  documentTranslationStatus.title = `已处理 ${progress.processed}/${progress.total} 段，其中 ${progress.translated} 段译文、${progress.preserved} 段参考文献保留原文；${progress.review} 段待核对，${progress.confirmed} 段已人工核对。`;
+  documentTranslationStatus.title = msg`已处理 ${progress.processed}/${progress.total} 段，其中 ${progress.translated} 段译文、${progress.preserved} 段参考文献保留原文；${progress.review} 段待核对，${progress.confirmed} 段已人工核对。`;
   for (const button of documentTranslationPages.querySelectorAll<HTMLButtonElement>('[data-review-retry]')) {
-    button.disabled = ['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning;
+    button.disabled = pdfRepairStorageUncertain || ['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning;
   }
   const canStartVisionOnly = pdfDocumentTranslationMultimodalEnabled &&
     !pdfDocumentTranslationMultimodalAuthorized &&
     unreadablePagesInScope.length > 0;
-  documentTranslationPrimary.disabled = pdfDocumentTranslationPhase === 'preparing' ||
+  documentTranslationPrimary.disabled = pdfRepairStorageUncertain || pdfDocumentTranslationPhase === 'preparing' ||
     (Boolean(pdfDocumentTranslationRangeError) && pdfDocumentTranslationPhase !== 'running') ||
     pdfDocumentTranslationOcrRunning || (total === 0 && !canStartVisionOnly);
   documentTranslationPrimary.hidden = pdfDocumentTranslationOcrRunning || pdfDocumentTranslationPhase === 'preparing' ||
     (pdfDocumentTranslationPhase === 'complete' && failed === 0);
-  documentTranslationPrimary.textContent = pdfDocumentTranslationOcrRunning ? '正在识别…' : pdfDocumentTranslationPhase === 'running'
-    ? '暂停'
+  documentTranslationPrimary.textContent = pdfDocumentTranslationOcrRunning ? t('正在识别…') : pdfDocumentTranslationPhase === 'running'
+    ? t('暂停')
     : pdfDocumentTranslationPhase === 'paused'
-      ? '继续'
+      ? t('继续')
       : pdfDocumentTranslationPhase === 'complete' && failed > 0
-        ? `重试 ${failed} 段`
+        ? msg`重试 ${failed} 段`
         : pdfDocumentTranslationPhase === 'error'
-          ? '继续'
+          ? t('继续')
           : canStartVisionOnly && total === 0
-            ? '开始识别并翻译'
+            ? t('开始识别并翻译')
             : translated > 0 && pending > 0
-            ? '继续翻译'
+            ? t('继续翻译')
             : usesUnifiedVision
-              ? '开始多模态全文翻译'
+              ? t('开始多模态全文翻译')
               : pdfDocumentTranslationMultimodalEnabled && (
                   unreadablePagesInScope.length || visualObjectsInScope.length
                 )
-                ? '开始智能翻译'
-              : '开始翻译';
+                ? t('开始智能翻译')
+              : t('开始翻译');
   documentTranslationStop.hidden = !pdfDocumentTranslationBlocksState.some(block=>block.retranslation)&&!pdfDocumentTranslationOcrRunning && ![
     'running',
     'paused',
   ].includes(pdfDocumentTranslationPhase);
-  documentTranslationStop.textContent = pdfDocumentTranslationOcrRunning ? '停止识别' : '停止';
+  documentTranslationStop.textContent = pdfDocumentTranslationOcrRunning ? t('停止识别') : t('停止');
   documentTranslationClear.hidden = !total || (
     translated === 0 && failed === 0 && pdfDocumentTranslationPhase === 'ready'
   ) || pdfDocumentTranslationPhase === 'preparing';
-  documentTranslationClear.textContent = '重新翻译';
-  documentTranslationClear.title = '保留人工修正；其他段落的新结果通过校验并保存后替换旧稿';
+  documentTranslationClear.textContent = t('重新翻译');
+  documentTranslationClear.title = t('保留人工修正；其他段落的新结果通过校验并保存后替换旧稿');
   documentTranslationDownloadArchive.hidden = pdfDocumentTranslationArchivedBlocks.length === 0;
   const canExport=pdfDocumentTranslationBlocksState.some(block=>block.included&&(block.status==='done'||block.retranslation)&&Boolean(block.translatedText?.trim()));
   documentTranslationExportActions.hidden = !canExport && pdfDocumentTranslationArchivedBlocks.length === 0;
@@ -1779,12 +1954,12 @@ function syncPdfDocumentTranslationUi(): void {
     ? 'error'
     : 'info';
   documentTranslationRetentionToggle.checked = pdfDocumentTranslationRetainedLocally;
-  documentTranslationRetentionToggle.disabled = pdfDocumentTranslationRetentionPending ||
+  documentTranslationRetentionToggle.disabled = pdfRepairStorageUncertain || pdfRepairContinuationActive || pdfDocumentTranslationRetentionPending ||
     !pdfDocumentTranslationSessionContext;
   documentTranslationRetentionStatus.textContent = pdfDocumentTranslationRetentionMessage ?? (
     pdfDocumentTranslationRetainedLocally
-      ? '只保存译文和匿名段落标识；打开同一 PDF 自动恢复'
-      : '默认只保留在当前 Edge 会话'
+      ? t('只保存译文和匿名段落标识；打开同一 PDF 自动恢复')
+      : t('默认只保留在当前 Edge 会话')
   );
   documentTranslationOcr.hidden = !pdfDocumentTranslationOcrRunning &&
     unreadablePagesInScope.length === 0;
@@ -1792,39 +1967,39 @@ function syncPdfDocumentTranslationUi(): void {
   documentTranslationOcrAction.disabled = pdfDocumentTranslationPhase === 'preparing' ||
     (pdfDocumentTranslationPhase === 'running' && !pdfDocumentTranslationOcrRunning);
   documentTranslationOcrAction.textContent = pdfDocumentTranslationOcrRunning
-    ? '停止识别'
-    : `识别 ${unreadablePagesInScope.length} 页`;
+    ? t('停止识别')
+    : msg`识别 ${unreadablePagesInScope.length} 页`;
   documentTranslationOcrStatus.textContent = pdfDocumentTranslationOcrRunning
-    ? `正在逐页识别 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
+    ? msg`正在逐页识别 · ${pdfDocumentTranslationOcrProgress.completed}/${pdfDocumentTranslationOcrProgress.total}`
     : pdfDocumentTranslationOcrMessage ??
-      `${unreadablePagesInScope.length} 页没有文字层；智能多模态开启时将在开始后自动识别`;
+      msg`${unreadablePagesInScope.length} 页没有文字层；智能多模态开启时将在开始后自动识别`;
   translateDocument.setAttribute('aria-expanded', String(!documentTranslationPanel.hidden));
   translateDocument.title = total
-    ? `PDF 全文翻译 · ${translated}/${total}${failed ? ` · ${failed} 段待重试` : ''}`
-    : '翻译整篇 PDF';
+    ? msg`PDF 全文翻译 · ${translated}/${total}${failed ? msg` · ${failed} 段待重试` : ''}`
+    : t('翻译整篇 PDF');
   const localLayoutNotes = [
     pdfDocumentTranslationMultiColumnPages
-      ? `已按阅读顺序整理 ${pdfDocumentTranslationMultiColumnPages} 页多栏正文`
+      ? msg`已按阅读顺序整理 ${pdfDocumentTranslationMultiColumnPages} 页多栏正文`
       : '',
     pdfDocumentTranslationRemovedMarginLines
-      ? `已跳过 ${pdfDocumentTranslationRemovedMarginLines} 行重复页眉页脚`
+      ? msg`已跳过 ${pdfDocumentTranslationRemovedMarginLines} 行重复页眉页脚`
       : '',
   ].filter(Boolean).join('；');
   const retentionNote = pdfDocumentTranslationRetainedLocally
-    ? '已完成译文会保留在本机；不会保存原文、PDF 文件或页面图像。'
-    : '已完成译文默认只保留在当前 Edge 会话中。';
+    ? t('已完成译文会保留在本机；不会保存原文、PDF 文件或页面图像。')
+    : t('已完成译文默认只保留在当前 Edge 会话中。');
   const visualFallbackNote = (visualFallbackCount
-    ? ` ${visualFallbackCount} 段暂保留原文，具体原因见核对清单。`
+    ? msg` ${visualFallbackCount} 段暂保留原文，具体原因见核对清单。`
     : '') + (formulaReviewCount
-      ? ` ${formulaReviewCount} 段有内容待核对，已保留返回译文，可展开原文截图对照。` : '');
+      ? msg` ${formulaReviewCount} 段有内容待核对，已保留返回译文，可展开原文截图对照。` : '');
   documentTranslationProcessingDetails.textContent = pdfDocumentTranslationUnreadablePages
-    ? `预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部可翻译段落统一使用视觉模型。${referenceDetail}${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
+    ? msg`预览与范围调整零请求；点击开始即确认当前任务的正文和多模态处理。检测到公式后，当前范围全部可翻译段落统一使用视觉模型。${referenceDetail}${retentionNote}仍有 ${pdfDocumentTranslationUnreadablePages} 页没有可用文字层。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 原始 PDF 始终保留。`
     : usesUnifiedVision
-      ? `文档含公式，当前范围全部可翻译段落统一使用视觉模型，以保持术语、语气和公式处理一致。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
+      ? msg`文档含公式，当前范围全部可翻译段落统一使用视觉模型，以保持术语、语气和公式处理一致。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`
       : visualObjectsInScope.length && pdfDocumentTranslationMultimodalEnabled
-        ? `普通正文使用文字接口；图表与表格按完整对象各发送一次图像，避免把刻度、图例或单元格拆成零散译文。${referenceDetail}${retentionNote}原始 PDF 始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 点击对象译文可返回并高亮整块原文。`
-        : `文档未检测到需要整块视觉处理的公式、图表或表格，普通正文使用文字接口。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
-  documentTranslationNote.textContent = '预览在本地完成；开始后发送所选内容及必要的相邻页续段。';
+        ? msg`普通正文使用文字接口；图表与表格按完整对象各发送一次图像，避免把刻度、图例或单元格拆成零散译文。${referenceDetail}${retentionNote}原始 PDF 始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 点击对象译文可返回并高亮整块原文。`
+        : msg`文档未检测到需要整块视觉处理的公式、图表或表格，普通正文使用文字接口。${referenceDetail}${retentionNote}原始 PDF、公式和图表始终保留。${localLayoutNotes ? ` ${localLayoutNotes}。` : ''}${visualFallbackNote} 译文按页排列，点击可返回原文。`;
+  documentTranslationNote.textContent = t('预览在本地完成；开始后发送所选内容及必要的相邻页续段。');
   syncPdfDocumentTranslationCurrentPage();
 }
 
@@ -1844,10 +2019,10 @@ function setPdfDocumentTranslationCopyFeedback(message: string, error = false): 
 function pdfDocumentTranslationExportNotice(block: PdfDocumentTranslationRuntimeBlock): string {
   const proseReview = /正文|漏译|目标语言/u.test(block.formulaReviewMessage ?? '');
   const notice = block.formulaReviewMessage
-    ? `${block.formulaReviewDraft ? '待核对译文（非最终结果）' : proseReview ? '译文待核对' : '公式待核对'}：${block.formulaReviewMessage}。已保留返回内容，请对照原 PDF 第 ${block.pageNumber} 页核对。`
-    : block.visualFallbackMessage ? `本段保留原文：${block.visualFallbackMessage}。` : '';
-  const review=notice && pdfReviewConfirmed(block) ? `已人工核对。原警告：${block.formulaReviewMessage ?? block.visualFallbackMessage}。` : notice;
-  return [block.retranslation?'重译尚未完成，以下保留上次译文。':'',review].filter(Boolean).join('\n\n');
+    ? msg`${block.formulaReviewDraft ? t('待核对译文（非最终结果）') : proseReview ? t('译文待核对') : t('公式待核对')}：${block.formulaReviewMessage}。已保留返回内容，请对照原 PDF 第 ${block.pageNumber} 页核对。`
+    : block.visualFallbackMessage ? msg`本段保留原文：${block.visualFallbackMessage}。` : '';
+  const review=notice && pdfReviewConfirmed(block) ? msg`已人工核对。原警告：${block.formulaReviewMessage ?? block.visualFallbackMessage}。` : notice;
+  return [block.retranslation?t('重译尚未完成，以下保留上次译文。'):'',review].filter(Boolean).join('\n\n');
 }
 
 function pdfDocumentTranslationExportText(block: PdfDocumentTranslationRuntimeBlock): string {
@@ -1895,13 +2070,13 @@ function syncCachedReadingUi():void{
   documentTranslationPanel.dataset.phase='complete';
   searchScope.value='translation';searchScope.disabled=true;
   documentTranslationName.textContent=cached.name;
-  documentTranslationPanel.querySelector('.pdf-document-translation-title strong')!.textContent='译文阅读';
+  documentTranslationPanel.querySelector('.pdf-document-translation-title strong')!.textContent=t('译文阅读');
   documentTranslationViewReading.setAttribute('aria-pressed','true');documentTranslationViewCompare.hidden=true;
-  documentTranslationClose.textContent='文档库';documentTranslationClose.title='返回文档库';documentTranslationClose.ariaLabel='返回文档库';
-  documentTranslationStatus.textContent=pdfDocumentTranslationRetentionError?'最新修改尚未保存到本机':`已保存译文 · ${cached.record.blocks.length} 段${cached.record.blocks.some(block=>'retranslation' in block&&block.retranslation)?' · 部分段落保留旧稿，选择原 PDF 后可继续重译':''}`;
+  documentTranslationClose.textContent=t('文档库');documentTranslationClose.title=t('返回文档库');documentTranslationClose.ariaLabel=t('返回文档库');
+  documentTranslationStatus.textContent=pdfDocumentTranslationRetentionError?t('最新修改尚未保存到本机'):msg`已保存译文 · ${cached.record.blocks.length} 段${cached.record.blocks.some(block=>'retranslation' in block&&block.retranslation)?t(' · 部分段落保留旧稿，选择原 PDF 后可继续重译'):''}`;
   documentTranslationCopyMenu.hidden=false;
   const allowed=new Set(['pdf-library-search','pdf-library-back','pdf-document-translation-copy-translation','pdf-document-translation-download-translation']);
-  if(cached.kind==='pdf'){allowed.add('pdf-library-source');if(pdfDocumentTranslationBlocksState.some(block=>block.revisions?.length))allowed.add('pdf-document-history')}
+  if(cached.kind==='pdf'){allowed.add('pdf-library-source');if(currentPdfContentFingerprint)allowed.add('pdf-note-summary');if(pdfDocumentTranslationBlocksState.some(block=>block.revisions?.length))allowed.add('pdf-document-history')}
   for(const button of documentTranslationCopyMenu.querySelectorAll<HTMLButtonElement>('button')){button.hidden=!allowed.has(button.id);if(allowed.has(button.id))button.disabled=false}
   documentTranslationPages.querySelectorAll<HTMLButtonElement>('.pdf-paragraph-edit-action').forEach(button=>{button.hidden=cached.kind!=='pdf';button.disabled=false});
 }
@@ -1934,7 +2109,7 @@ async function openCachedLibraryReading(id:string):Promise<void>{
     if(!entry)throw new Error('这份译文已被移除，请返回文档库刷新。');
     if(entry.kind==='pdf'){
       const record=(await retainedPdfRecordsForBackup()).find(record=>retainedDocumentId('pdf',record)===id);if(!record)throw new Error('译文记录不可用。');
-      cachedReadingContext={id,name:entry.name,kind:'pdf',record};currentPdfContentFingerprint=record.sourceFingerprint;
+      cachedReadingContext={id,name:entry.name,kind:'pdf',record};currentPdfContentFingerprint=record.sourceFingerprint;void refreshPdfRepairArchiveView();
     }else{
       const record=(await retainedWebRecordsForBackup()).find(record=>retainedDocumentId('web',record)===id);if(!record)throw new Error('译文记录不可用。');
       cachedReadingContext={id,name:entry.name,kind:'web',record};
@@ -1942,7 +2117,8 @@ async function openCachedLibraryReading(id:string):Promise<void>{
     currentReadingIdentity=`library:${id}`;
     const identity=currentPdfContentFingerprint?`pdf-content:${currentPdfContentFingerprint}`:currentReadingIdentity;
     const [shared,legacy]=await Promise.all([getPdfReadingState(identity),getPdfReadingState(currentReadingIdentity)]);
-    pdfTranslationReadingAnchor=(shared&&(!legacy||shared.updatedAt>=legacy.updatedAt)?shared:legacy)?.translation;
+    const latestReading=shared&&(!legacy||shared.updatedAt>=legacy.updatedAt)?shared:legacy;
+    pdfTranslationReadingAnchor=latestReading?.translation??(latestReading?{mode:'reading',pageNumber:latestReading.pageNumber,offsetRatio:0}:undefined);
     document.documentElement.dataset.libraryReading='true';documentName.textContent=entry.name;document.title=`${entry.name} - Pi Translator`;
     emptyState.hidden=true;documentTranslationPanel.hidden=false;documentTranslationSettings.open=false;
     const records=cachedReadingContext.record;
@@ -1963,11 +2139,11 @@ async function openCachedLibraryReading(id:string):Promise<void>{
     const signature=new URL(location.href).searchParams.get('block'),requested=pdfDocumentTranslationBlocksState.find(block=>block.sessionSignature===signature);
     if(requested)pdfTranslationReadingAnchor={mode:'reading',signature:requested.sessionSignature,pageNumber:requested.pageNumber,offsetRatio:0};
     else if(pdfTranslationReadingAnchor)pdfTranslationReadingAnchor={...pdfTranslationReadingAnchor,mode:'reading'};
-    syncCachedReadingUi();restorePdfTranslationReadingAnchor();scheduleReadingStateSave();
+    syncCachedReadingUi();if(entry.kind==='pdf')void refreshPdfReadingHints();restorePdfTranslationReadingAnchor();scheduleReadingStateSave();
     const query=new URL(location.href).searchParams.get('query');
-    if(query){openPdfSearch();searchQuery.value=query;applyPdfSearchQuery()}
+    if(query){openPdfSearch();searchQuery.value=query;searchQueryEdited=true;applyPdfSearchQuery()}
     const url=new URL(location.href);url.searchParams.delete('query');url.searchParams.delete('block');history.replaceState(null,'',url);
-  }catch(error){showNotice(error instanceof Error?error.message:'无法打开保留译文。',{tone:'error'})}
+  }catch(error){showNotice(error instanceof Error?error.message:t('无法打开保留译文。'),{tone:'error'})}
 }
 
 async function capturePdfDocumentTranslationExportPageImages(
@@ -2038,7 +2214,7 @@ async function capturePdfDocumentTranslationMarkdownVisualImages(): Promise<
       if (documentEpoch !== epoch || pdfDocument !== pdf) break;
       images.set(block.id, {
         dataUrl: capture.imageDataUrl,
-        alt: `原 PDF 第 ${block.pageNumber} 页${block.formulaReviewMessage ? '含公式原文' : block.kind === 'table' ? '表格' : '图表'}截图`,
+        alt: msg`原 PDF 第 ${block.pageNumber} 页${block.formulaReviewMessage ? t('含公式原文') : block.kind === 'table' ? t('表格') : t('图表')}截图`,
       });
     } catch {
       // A local crop failure must not prevent downloading the completed text.
@@ -2058,7 +2234,7 @@ function openPdfLayoutTranslationPreview(): Window | undefined {
   const preview = window.open('', '_blank');
   if (!preview) return undefined;
   preview.document.open();
-  preview.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>正在生成原页对照翻译 PDF</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f4f5f8;color:#364152;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:420px;padding:28px;text-align:center}strong{display:block;margin-bottom:8px;color:#302d85;font-size:18px}</style></head><body><main><strong>正在本地生成原页对照翻译页…</strong><span>每张原页会完整保留；不会产生新的翻译或 OCR 请求。</span></main></body></html>`);
+  preview.document.write(uiHtml`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>正在生成原页对照翻译 PDF</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f4f5f8;color:#364152;font:14px/1.6 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:420px;padding:28px;text-align:center}strong{display:block;margin-bottom:8px;color:#302d85;font-size:18px}</style></head><body><main><strong>正在本地生成原页对照翻译页…</strong><span>每张原页会完整保留；不会产生新的翻译或 OCR 请求。</span></main></body></html>`);
   preview.document.close();
   return preview;
 }
@@ -2069,7 +2245,7 @@ function showPdfLayoutTranslationPreviewError(
 ): void {
   if (preview.closed) return;
   preview.document.open();
-  preview.document.write(`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>原页对照翻译 PDF 生成失败</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f8f5f5;color:#5f2730;font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:520px;padding:30px}strong{display:block;margin-bottom:8px;font-size:18px}</style></head><body><main><strong>原页对照翻译 PDF 生成失败</strong><span>${message.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</span></main></body></html>`);
+  preview.document.write(uiHtml`<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>原页对照翻译 PDF 生成失败</title><style>body{display:grid;min-height:100vh;margin:0;place-items:center;background:#f8f5f5;color:#5f2730;font:14px/1.65 "Segoe UI","Microsoft YaHei",sans-serif}main{max-width:520px;padding:30px}strong{display:block;margin-bottom:8px;font-size:18px}</style></head><body><main><strong>原页对照翻译 PDF 生成失败</strong><span>${message.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;')}</span></main></body></html>`);
   preview.document.close();
 }
 
@@ -2333,15 +2509,15 @@ async function handlePdfDocumentTranslationExport(
   if(cachedReadingContext){
     const text=pdfDocumentTranslationBlocksState.map(block=>pdfDocumentTranslationExportText(block)).join('\n\n');
     if(action==='copy-translation')await navigator.clipboard.writeText(text);
-    else if(action==='translation-markdown')triggerDocumentTranslationDownload({content:`# ${cachedReadingContext.name.replace(/[\r\n]/gu,' ')}\n\n仅导出已保存译文，不含原文和来源。\n\n${text}`,filename:`${cachedReadingContext.name.replace(/[<>:"/\\|?*\u0000-\u001f]/gu,'_').slice(0,80)}.md`,mimeType:'text/markdown;charset=utf-8'});
-    setPdfDocumentTranslationCopyFeedback(action==='copy-translation'?'译文已复制。':'译文已导出。');return;
+    else if(action==='translation-markdown')triggerDocumentTranslationDownload({content:msg`# ${cachedReadingContext.name.replace(/[\r\n]/gu,' ')}\n\n仅导出已保存译文，不含原文和来源。\n\n${text}`,filename:`${cachedReadingContext.name.replace(/[<>:"/\\|?*\u0000-\u001f]/gu,'_').slice(0,80)}.md`,mimeType:'text/markdown;charset=utf-8'});
+    setPdfDocumentTranslationCopyFeedback(action==='copy-translation'?t('译文已复制。'):t('译文已导出。'));return;
   }
   if (pdfDocumentTranslationCopyPending) return;
   const layoutPreview = action === 'layout-pdf'
     ? openPdfLayoutTranslationPreview()
     : undefined;
   if (action === 'layout-pdf' && !layoutPreview) {
-    setPdfDocumentTranslationCopyFeedback('无法打开原页对照翻译页，请允许此页面打开新窗口。', true);
+    setPdfDocumentTranslationCopyFeedback(t('无法打开原页对照翻译页，请允许此页面打开新窗口。'), true);
     return;
   }
   let result = pdfDocumentTranslationExportResult();
@@ -2354,7 +2530,7 @@ async function handlePdfDocumentTranslationExport(
   try {
     if (action === 'layout-pdf') {
       if (!layoutPreview) throw new Error('原页对照翻译页未打开。');
-      setPdfDocumentTranslationCopyFeedback('正在本地生成原页对照翻译页…');
+      setPdfDocumentTranslationCopyFeedback(t('正在本地生成原页对照翻译页…'));
       const blocks = pdfLayoutTranslationBlocks();
       const [pageImages, fragments] = await Promise.all([
         capturePdfDocumentTranslationExportPageImages('layout'),
@@ -2371,12 +2547,12 @@ async function handlePdfDocumentTranslationExport(
       );
       documentTranslationCopyMenu.open = false;
       setPdfDocumentTranslationCopyFeedback(
-        `已打开原页对照打印页 · ${layout.pageCount} 个原页 · ${layout.blockCount} 段译文`,
+        msg`已打开原页对照打印页 · ${layout.pageCount} 个原页 · ${layout.blockCount} 段译文`,
       );
       return;
     }
     if (action === 'printable-html') {
-      setPdfDocumentTranslationCopyFeedback('正在本地生成带原页图的双语 HTML…');
+      setPdfDocumentTranslationCopyFeedback(t('正在本地生成带原页图的双语 HTML…'));
       result = pdfDocumentTranslationExportResult(
         await capturePdfDocumentTranslationExportPageImages(),
       );
@@ -2386,34 +2562,34 @@ async function handlePdfDocumentTranslationExport(
       };
     }
     if (action === 'bilingual-markdown') {
-      setPdfDocumentTranslationCopyFeedback('正在本地截取图表并生成双语 Markdown…');
+      setPdfDocumentTranslationCopyFeedback(t('正在本地截取图表并生成双语 Markdown…'));
       result = pdfDocumentTranslationExportResult(
         [],
         await capturePdfDocumentTranslationMarkdownVisualImages(),
       );
     }
-    const pageLabel = result.pageCount ? ` · ${result.pageCount} 页` : '';
+    const pageLabel = result.pageCount ? msg` · ${result.pageCount} 页` : '';
     const partialLabel = result.complete
       ? ''
-      : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段${result.unavailablePageCount ? `，${result.unavailablePageCount} 页未识别` : ''}`;
+      : msg` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段${result.unavailablePageCount ? msg`，${result.unavailablePageCount} 页未识别` : ''}`;
     let message: string;
     if (action === 'copy-translation' || action === 'copy-bilingual') {
       await navigator.clipboard.writeText(action === 'copy-translation'
         ? result.translationText
         : result.bilingualMarkdown);
       message = action === 'copy-translation'
-        ? `已复制 ${result.blockCount} 段译文${pageLabel}`
-        : `已复制双语 Markdown · ${result.blockCount} 段${pageLabel}`;
+        ? msg`已复制 ${result.blockCount} 段译文${pageLabel}`
+        : msg`已复制双语 Markdown · ${result.blockCount} 段${pageLabel}`;
     } else {
       const download = documentTranslationDownload(result, action, 'pdf');
       triggerDocumentTranslationDownload(download);
       message = action === 'translation-markdown'
-        ? '已下载纯译文 Markdown'
+        ? t('已下载纯译文 Markdown')
         : action === 'bilingual-markdown'
-          ? `已下载图文双语 Markdown${result.embeddedImageCount
-            ? ` · ${result.embeddedImageCount} 张图表截图`
-            : ' · 未检测到可嵌入图表'}`
-          : '已下载带原页图的可打印 HTML';
+          ? msg`已下载图文双语 Markdown${result.embeddedImageCount
+            ? msg` · ${result.embeddedImageCount} 张图表截图`
+            : t(' · 未检测到可嵌入图表')}`
+          : t('已下载带原页图的可打印 HTML');
       message += pageLabel;
     }
     documentTranslationCopyMenu.open = false;
@@ -2422,11 +2598,11 @@ async function handlePdfDocumentTranslationExport(
     if (layoutPreview) {
       showPdfLayoutTranslationPreviewError(
         layoutPreview,
-        error instanceof Error ? error.message : '未知错误。',
+        error instanceof Error ? error.message : t('未知错误。'),
       );
     }
     setPdfDocumentTranslationCopyFeedback(
-      error instanceof Error ? error.message : '导出失败，请重试。',
+      error instanceof Error ? error.message : t('导出失败，请重试。'),
       true,
     );
   } finally {
@@ -2446,8 +2622,8 @@ function ensurePdfDocumentTranslationPage(pageNumber: number): HTMLElement {
   const header = document.createElement('header');
   const jump = document.createElement('button');
   jump.type = 'button';
-  jump.textContent = `第 ${pageNumber} 页`;
-  jump.title = `回到 PDF 第 ${pageNumber} 页`;
+  jump.textContent = msg`第 ${pageNumber} 页`;
+  jump.title = msg`回到 PDF 第 ${pageNumber} 页`;
   jump.addEventListener('click', () => {
     scrollToPageAnchor({ pageNumber, ratio: 0 });
     updatePageControl({ pageNumber, ratio: 0 });
@@ -2479,7 +2655,7 @@ function updatePdfDocumentTranslationPageProgress(pageNumber: number): void {
   const done = pageBlocks.filter((block) => block.status === 'done').length;
   const failed = pageBlocks.filter((block) => block.status === 'error').length;
   const progress = section.querySelector<HTMLElement>('[data-page-progress]');
-  if (progress) progress.textContent = `${done}/${pageBlocks.length}${failed ? ` · ${failed} 待重试` : ''}`;
+  if (progress) progress.textContent = `${done}/${pageBlocks.length}${failed ? msg` · ${failed} 待重试` : ''}`;
 }
 
 function pdfDocumentTranslationSourceLocation(
@@ -2620,6 +2796,7 @@ async function renderPdfDocumentTranslationTable(
 }
 
 async function retryPdfFormulaReview(block: PdfDocumentTranslationRuntimeBlock): Promise<void> {
+  if(pdfRepairStorageUncertain)return;
   if (['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning ||
       !pdfDocumentTranslationMultimodalEnabled) return;
   // The explicit per-block retry authorizes this image request, not the queue.
@@ -2630,7 +2807,7 @@ async function retryPdfFormulaReview(block: PdfDocumentTranslationRuntimeBlock):
   const previousTask = pdfDocumentTranslationTask;
   // Keep the old foreground queue stopped while awaiting its in-flight work.
   pdfDocumentTranslationPhase = 'preparing';
-  pdfDocumentTranslationMessage = '正在重试本段；其他段落不会重新请求。';
+  pdfDocumentTranslationMessage = t('正在重试本段；其他段落不会重新请求。');
   syncPdfDocumentTranslationUi();
   await sendPdfDocumentBackgroundControl('dispose');
   await previousTask?.catch(() => undefined);
@@ -2651,7 +2828,7 @@ async function retryPdfFormulaReview(block: PdfDocumentTranslationRuntimeBlock):
       const failure = pdfDocumentTranslationMessage;
       Object.assign(block, previous);
       if(!previous.retranslation)delete block.retranslation;
-      pdfDocumentTranslationMessage = `本段重试未完成，已保留先前结果。${failure ?? ''}`;
+      pdfDocumentTranslationMessage = msg`本段重试未完成，已保留先前结果。${failure ?? ''}`;
     }
     const scoped=scopedPdfDocumentTranslationBlocks();
     pdfDocumentTranslationPhase = previousPhase === 'complete' || scoped.length>0 &&
@@ -2666,13 +2843,171 @@ async function retryPdfFormulaReview(block: PdfDocumentTranslationRuntimeBlock):
   }
 }
 
+async function continuePdfFormulaRepair(block:PdfDocumentTranslationRuntimeBlock):Promise<void>{
+  if(pdfRepairStorageUncertain)return;
+  const candidate=pendingFormulaRepairs.get(block),context=pdfDocumentTranslationSessionContext;
+  if(!candidate||!context||!currentPdfContentFingerprint||cachedReadingContext||candidate.stamp!==pdfParagraphStamp(block)||block.manualCorrection||activeParagraphEdit||
+    ['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning||!documentRequestLimit.checkValidity())return;
+  const revision=pdfDocumentTranslationRevision,previousPhase=pdfDocumentTranslationPhase;
+  const current=()=>revision===pdfDocumentTranslationRevision&&pdfDocumentTranslationBlocksState.includes(block)&&candidate.stamp===pdfParagraphStamp(block)&&!activeParagraphEdit&&samePdfDocumentTranslationSessionContext(context,pdfDocumentTranslationSessionContext);
+  pdfRepairContinuationActive=true;pdfDocumentTranslationPhase='preparing';syncPdfDocumentTranslationUi();
+  let budgetBlocked=false,requestId:string|undefined;
+  try{
+    await sendPdfDocumentBackgroundControl('dispose');await pdfDocumentBackgroundSnapshotQueue;
+    if(!current())throw new Error(t('本段已变化，请重新打开核对。'));
+    const expected=pdfDocumentTranslationSessionUpdate(context,[block]).blocks?.[0];
+    if(!expected)throw new Error(t('本段保存状态已变化，请重新打开核对。'));
+    const snapshot=await capturePdfRepairStorage(context.descriptor,context.behaviorKey,block.sessionSignature,expected,pdfDocumentTranslationRetainedLocally,currentPdfContentFingerprint);
+    if(!current())throw new Error(t('本段已变化，请重新打开核对。'));
+    takePdfTaskRequest('text');pdfDocumentTranslationPhase='running';requestId=crypto.randomUUID();pdfDocumentTranslationRequestId=requestId;syncPdfDocumentTranslationUi();
+    const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{requestId,...termLocator(),document:candidate.document,targetLanguage:pdfDocumentTranslationSettings.targetLanguage,sourceLanguage:pdfDocumentTranslationSettings.sourceLanguage,style:pdfDocumentTranslationSettings.style}} satisfies RuntimeMessage) as TranslateRuntimeResponse;
+    if(!current()||pdfDocumentTranslationRequestId!==requestId)return;
+    if(!repaired.ok){if(repaired.error.code==='DOCUMENT_TERMS_READ_FAILED')releasePdfRequest(pdfRequestUsage,'text');throw new Error(translationErrorMessage(repaired.error.code,repaired.error.message))}
+    addPdfReportedTokens(pdfRequestUsage,repaired.data.result.usage,repaired.data.result.usageSource);
+    const outcome=pdfBackgroundVisualOutcome({id:block.id,text:block.text,containsFormula:pdfDocumentTranslationBlockContainsFormula(block),visualPurpose:pdfDocumentTranslationVisualPurpose(block),...(block.equationNumbers?{equationNumbers:block.equationNumbers}:{}),...(block.sourceFontHints?{sourceFontHints:block.sourceFontHints}:{}),...(block.sourceEquations?{sourceEquations:block.sourceEquations}:{})},repaired.data.result,pdfDocumentTranslationSettings.targetLanguage);
+    if(outcome.formulaReviewMessage||outcome.visualFallbackMessage||outcome.formulaReviewDraft)throw new Error(t('修复结果仍需核对，先前结果已保留。'));
+    const replacement:PdfDocumentTranslationSessionBlock={signature:block.sessionSignature,...paragraphValue(outcome),...(expected.pageNumber?{pageNumber:expected.pageNumber}:{}),...(expected.headingLevel?{headingLevel:expected.headingLevel}:{}),...(expected.paperRole?{paperRole:expected.paperRole}:{})};
+    const saved=await commitPdfRepairStorage(snapshot,replacement,()=>current()&&pdfDocumentTranslationRequestId===requestId);
+    if(saved.status==='conflict'||saved.status==='failed'){pendingFormulaRepairs.delete(block);pendingValidatedRepairs.set(block,{replacement,snapshot,stamp:pdfParagraphStamp(block)});throw new Error(t('修复结果暂未保存，可重新核对后保存，不会再次请求。'))}
+    if(saved.status==='uncertain'){pdfRepairStorageUncertain=true;if(currentPdfContentFingerprint)pdfUncertainRepairDocuments.set(currentPdfContentFingerprint,block.sessionSignature);pendingFormulaRepairs.delete(block);throw new Error(t('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。'))}
+    if(saved.status!=='saved')return;
+    if(!current())return;
+    applyPdfParagraphValue(block,saved.block);block.status='done';if(outcome.visualProcessed)block.visualProcessed=true;else delete block.visualProcessed;delete block.errorMessage;delete block.singleRetry;pendingFormulaRepairs.delete(block);pendingValidatedRepairs.delete(block);
+    pdfDocumentTranslationMessage=t('正文修复已保存。');
+  }catch(error){budgetBlocked=Boolean(error&&typeof error==='object'&&'code' in error&&error.code==='REQUEST_BUDGET_REACHED');if(revision===pdfDocumentTranslationRevision)pdfDocumentTranslationMessage=error instanceof Error?localizeErrorMessage(error.message):t('正文修复未完成，请稍后重试。')}
+  finally{pdfRepairContinuationActive=false;if(revision===pdfDocumentTranslationRevision&&(!requestId||pdfDocumentTranslationRequestId===requestId)){pdfDocumentTranslationRequestId=undefined;pdfDocumentTranslationPhase=budgetBlocked?'paused':previousPhase;renderPdfDocumentTranslationBlock(block)}syncPdfDocumentTranslationUi()}
+}
+
+async function savePendingPdfRepair(block:PdfDocumentTranslationRuntimeBlock):Promise<void>{
+  const pending=pendingValidatedRepairs.get(block),context=pdfDocumentTranslationSessionContext;
+  if(!pending||!context||!currentPdfContentFingerprint||pdfRepairStorageUncertain||activeParagraphEdit||['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning)return;
+  const revision=pdfDocumentTranslationRevision,previousPhase=pdfDocumentTranslationPhase;
+  const current=()=>revision===pdfDocumentTranslationRevision&&pdfDocumentTranslationBlocksState.includes(block)&&pending.stamp===pdfParagraphStamp(block)&&!activeParagraphEdit&&samePdfDocumentTranslationSessionContext(context,pdfDocumentTranslationSessionContext);
+  pdfRepairContinuationActive=true;pdfDocumentTranslationPhase='preparing';syncPdfDocumentTranslationUi();
+  try{
+    if(!current())throw new Error(t('本段已变化，请重新打开核对。'));
+    const expected=pdfDocumentTranslationSessionUpdate(context,[block]).blocks?.[0];if(!expected)throw new Error(t('本段保存状态已变化，请重新打开核对。'));
+    const snapshot=await capturePdfRepairStorage(context.descriptor,context.behaviorKey,block.sessionSignature,expected,pdfDocumentTranslationRetainedLocally,currentPdfContentFingerprint);
+    if(!samePdfRepairInputs(snapshot,pending.snapshot))throw new Error(t('术语或设置已变化，暂不能保存这份修复结果。'));
+    const saved=await commitPdfRepairStorage(snapshot,pending.replacement,current);
+    if(saved.status==='conflict')throw new Error(t('资料再次变化，修复结果仍保留在本次阅读中。'));
+    if(saved.status==='failed')throw new Error(t('修复未保存，先前资料已恢复。'));
+    if(saved.status==='uncertain'){pdfRepairStorageUncertain=true;if(currentPdfContentFingerprint)pdfUncertainRepairDocuments.set(currentPdfContentFingerprint,block.sessionSignature);pendingValidatedRepairs.delete(block);throw new Error(t('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。'))}
+    if(saved.status!=='saved'||!current())return;
+    applyPdfParagraphValue(block,saved.block);block.status='done';block.visualProcessed=true;delete block.errorMessage;delete block.singleRetry;pendingValidatedRepairs.delete(block);pdfDocumentTranslationMessage=t('正文修复已保存。');
+  }catch(error){if(revision===pdfDocumentTranslationRevision)pdfDocumentTranslationMessage=error instanceof Error?localizeErrorMessage(error.message):t('本机核对未完成，请稍后重试。')}
+  finally{pdfRepairContinuationActive=false;if(revision===pdfDocumentTranslationRevision){pdfDocumentTranslationPhase=previousPhase;renderPdfDocumentTranslationBlock(block)}syncPdfDocumentTranslationUi()}
+}
+
+pdfRepairStorageCheck.addEventListener('click',()=>{
+  if(!pdfRepairStorageUncertain||pdfRepairStorageCheck.disabled)return;
+  const context=pdfDocumentTranslationSessionContext,fingerprint=currentPdfContentFingerprint,signature=fingerprint?pdfUncertainRepairDocuments.get(fingerprint):undefined;
+  if(fingerprint&&!signature){
+    const edit=activeParagraphEdit;pdfRepairStorageCheck.disabled=true;element<HTMLButtonElement>('pdf-paragraph-editor-check').disabled=true;
+    void getPdfRepairGuard(fingerprint).then(guard=>{
+      if(currentPdfContentFingerprint!==fingerprint)return;
+      if(guard){pdfUncertainRepairDocuments.set(fingerprint,guard.signature);pdfDocumentTranslationMessage=t('已读取保存状态，请再次核对本段。');if(edit&&activeParagraphEdit===edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('已读取保存状态，请再次核对本段。')}
+      else{pdfRepairStorageUncertain=false;pdfDocumentTranslationMessage=t('保存状态已核对，可以继续阅读。');if(edit&&activeParagraphEdit===edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('保存状态已核对，草稿仍在这里。')}
+    }).catch(()=>{pdfDocumentTranslationMessage=t('暂时无法核对本段，请在资料库检查保存版本。');if(edit&&activeParagraphEdit===edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('暂时无法核对，草稿仍在这里。')}).finally(()=>{pdfRepairStorageCheck.disabled=false;syncPdfDocumentTranslationUi()});return;
+  }
+  const block=pdfDocumentTranslationBlocksState.find(item=>item.sessionSignature===signature);
+  if(!context||!fingerprint||!block){pdfDocumentTranslationMessage=t('暂时无法核对本段，请在资料库检查保存版本。');if(activeParagraphEdit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('暂时无法核对，草稿仍在这里。');syncPdfDocumentTranslationUi();return}
+  const expected=pdfDocumentTranslationSessionUpdate(context,[block]).blocks?.[0],stamp=pdfParagraphStamp(block),epoch=pdfRepairComparisonEpoch,edit=activeParagraphEdit;
+  if(!expected)return;pdfRepairStorageCheck.disabled=true;element<HTMLButtonElement>('pdf-paragraph-editor-check').disabled=true;
+  void inspectPdfRepairStorage(context.descriptor,context.behaviorKey,block.sessionSignature,expected,pdfDocumentTranslationRetainedLocally).then(async result=>{
+    if(epoch!==pdfRepairComparisonEpoch||currentPdfContentFingerprint!==fingerprint||!pdfDocumentTranslationBlocksState.includes(block)||stamp!==pdfParagraphStamp(block)||activeParagraphEdit!==edit){pdfDocumentTranslationMessage=t('保存内容已变化，请重新核对。');return}
+    if(result.consistent){
+      const confirmed=await confirmPdfRepairStorage(context.descriptor,context.behaviorKey,block.sessionSignature,expected,pdfDocumentTranslationRetainedLocally,fingerprint,()=>epoch===pdfRepairComparisonEpoch&&currentPdfContentFingerprint===fingerprint&&pdfDocumentTranslationBlocksState.includes(block)&&stamp===pdfParagraphStamp(block)&&activeParagraphEdit===edit);
+      if(!confirmed)throw new Error('保存版本已变化');pdfUncertainRepairDocuments.delete(fingerprint);pdfRepairStorageUncertain=false;pdfRepairVersions.hidden=true;pdfRepairVersions.replaceChildren();pdfDocumentTranslationMessage=t(result.session?'保存状态已核对一致，可以继续阅读。':'会话记录已结束，本机版本已核对，可以继续阅读。')
+      if(edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('保存状态已核对，草稿仍在这里。');
+    }
+    else{
+      pdfDocumentTranslationMessage=t('保存内容与当前阅读不一致，可展开对照。');
+      if(edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('保存版本不一致，当前草稿仍在这里。');
+      const summary=document.createElement('summary');summary.textContent=t('查看保存版本');const nodes:HTMLElement[]=[summary];
+      const hint=document.createElement('p');hint.textContent=t('以下与当前阅读内容对照；资料不会自动覆盖。');nodes.push(hint);
+      for(const [label,value] of [[t('当前会话'),result.session],[t('本机保留'),result.local]] as const){
+        if(!value&&label===t('本机保留'))continue;const section=document.createElement('section'),heading=document.createElement('strong'),body=document.createElement('div');heading.textContent=label+(value?.manualCorrection?` · ${t('人工修正')}`:'')+(value?.revisions?.length?msg` · ${value.revisions.length} 条修订`:'');section.append(heading,body);nodes.push(section);
+        if(!value){body.textContent=t('当前会话没有保存记录。');continue}
+        const names={text:t('译文'),formula:t('公式'),manual:t('人工修正'),history:t('修订历史'),review:t('核对状态'),other:t('保存信息')};const differences=pdfRepairVersionDifferences(value,expected);const difference=document.createElement('p');difference.className='pdf-repair-difference';difference.textContent=differences.length?`${t('与当前阅读不同')}：${differences.map(item=>names[item]).join('、')}`:t('与当前阅读一致');section.insertBefore(difference,body);
+        if(value.formulaDocument&&!value.formulaReviewDraft)void renderFormulaDocument(body,value.formulaDocument,pdfDocumentTranslationSettings.autoRenderLatex);else body.textContent=value.translatedText;
+        if(result.session&&result.local){const choose=document.createElement('button');choose.type='button';choose.className='pdf-repair-backup';choose.textContent=t('使用此版本…');choose.addEventListener('click',()=>{
+          if(activeParagraphEdit){pdfDocumentTranslationMessage=t('请先处理打开的修正草稿，再选择版本。');syncPdfDocumentTranslationUi();return}
+          const dialog=document.createElement('dialog'),heading=document.createElement('h2'),description=document.createElement('p'),status=document.createElement('p'),actions=document.createElement('div'),cancel=document.createElement('button'),confirm=document.createElement('button');dialog.className='citation-export-dialog';dialog.ariaLabel=t('确认使用此版本');heading.textContent=t('确认使用此版本');description.textContent=t('先在本机保留两份版本及其修订，再使用所选版本。若资料变化或保存失败，将继续暂停。');status.role='status';actions.className='support-task-actions';cancel.type=confirm.type='button';cancel.textContent=t('取消');confirm.textContent=t('确认使用');confirm.className='primary';actions.append(cancel,confirm);layoutTaskDialog(dialog,heading,[description],actions,status);document.body.append(dialog);let busy=false;cancel.addEventListener('click',()=>dialog.close());dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault()});dialog.addEventListener('close',()=>{dialog.remove();if(choose.isConnected)choose.focus({preventScroll:true})},{once:true});
+          confirm.addEventListener('click',()=>{if(busy)return;busy=true;cancel.disabled=confirm.disabled=true;pdfRepairContinuationActive=true;const scroll=documentTranslationPages.scrollTop;
+            const current=()=>epoch===pdfRepairComparisonEpoch&&currentPdfContentFingerprint===fingerprint&&pdfDocumentTranslationBlocksState.includes(block)&&stamp===pdfParagraphStamp(block)&&!activeParagraphEdit;
+            void resolvePdfRepairConflict(context.descriptor,context.behaviorKey,block.sessionSignature,fingerprint,expected,{session:result.session!,local:result.local!},value===result.session?'session':'local',current).then(saved=>{
+              if(saved.status!=='saved'){status.textContent=t(saved.status==='conflict'?'保存内容已变化，请重新核对。':saved.status==='uncertain'?'保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。':'暂时无法保存所选版本；原内容仍受保护。');return}
+              if(!current())return;applyPdfParagraphValue(block,saved.block);block.status='done';renderPdfDocumentTranslationBlock(block);documentTranslationPages.scrollTop=scroll;pdfUncertainRepairDocuments.delete(fingerprint);pdfRepairStorageUncertain=false;pdfRepairVersions.hidden=true;pdfRepairVersions.replaceChildren();pdfDocumentTranslationMessage=t('已保存所选版本，另一份已保留。');dialog.close();
+            }).catch(()=>{status.textContent=t('暂时无法保存所选版本；原内容仍受保护。')}).finally(()=>{busy=false;pdfRepairContinuationActive=false;cancel.disabled=confirm.disabled=false;syncPdfDocumentTranslationUi()});
+          });dialog.showModal();cancel.focus();
+        });section.append(choose)}
+      }
+      pdfRepairVersions.replaceChildren(...nodes);pdfRepairVersions.hidden=false;
+    }
+  }).catch(()=>{pdfDocumentTranslationMessage=t('暂时无法核对本段，请在资料库检查保存版本。');if(edit&&activeParagraphEdit===edit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('暂时无法核对，草稿仍在这里。')}).finally(()=>{pdfRepairStorageCheck.disabled=false;syncPdfDocumentTranslationUi()});
+});
+browser.storage.onChanged.addListener((changes,area)=>{
+  if(area==='local'&&changes[PDF_REPAIR_ARCHIVE_KEY])void refreshPdfRepairArchiveView();
+  if(pdfRepairStorageUncertain&&!pdfRepairContinuationActive&&((area==='session'&&changes.pdfDocumentTranslationSessionsV1)||(area==='local'&&(changes.pdfDocumentTranslationRetainedV1||Object.keys(changes).some(key=>key.startsWith('fixedDocumentTranslationV1:')))))){
+    pdfRepairComparisonEpoch++;if(!pdfRepairVersions.hidden){pdfRepairVersions.hidden=true;pdfRepairVersions.replaceChildren();pdfDocumentTranslationMessage=t('保存内容已变化，请重新核对。');syncPdfDocumentTranslationUi()}
+  }
+  if(area!=='local'||!changes[PDF_REPAIR_GUARD_KEY])return;const revision=++pdfGuardObservation;
+  const fingerprint=currentPdfContentFingerprint;if(!fingerprint||pdfRepairContinuationActive)return;
+  void getPdfRepairGuard(fingerprint).then(guard=>{
+    if(!guard||revision!==pdfGuardObservation||pdfRepairContinuationActive||currentPdfContentFingerprint!==fingerprint)return;
+    pdfUncertainRepairDocuments.set(fingerprint,guard.signature);pdfRepairStorageUncertain=true;pdfDocumentTranslationMessage=t('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。');if(activeParagraphEdit)element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('保存状态待核对，当前草稿仍在这里。');syncPdfDocumentTranslationUi();
+  }).catch(()=>{if(revision===pdfGuardObservation&&!pdfRepairContinuationActive&&currentPdfContentFingerprint===fingerprint){pdfRepairStorageUncertain=true;syncPdfDocumentTranslationUi()}});
+});
+
+let pdfArchiveCapacityRevision=0;
+async function refreshPdfRepairArchiveView():Promise<void>{
+  const revision=++pdfArchiveCapacityRevision,fingerprint=currentPdfContentFingerprint;if(!fingerprint){pdfRepairArchiveView.hidden=pdfArchiveCapacityNote.hidden=pdfArchiveCapacityBackup.hidden=true;return}
+  try{const capacity=await pdfRepairArchiveCapacity(fingerprint);if(currentPdfContentFingerprint===fingerprint&&revision===pdfArchiveCapacityRevision){pdfRepairArchiveView.hidden=!capacity.documentCount;pdfRepairArchiveView.textContent=t('查看保留的分歧版本');const near=capacity.count>=MAX_PDF_REPAIR_ARCHIVES*.8||capacity.bytes>=MAX_PDF_REPAIR_ARCHIVE_BYTES*.8;pdfArchiveCapacityNote.hidden=pdfArchiveCapacityBackup.hidden=!near;if(near)pdfArchiveCapacityNote.textContent=t('分歧版本存档空间接近上限；备份不会释放空间，包含本机保留内容，不含当前会话版本和未保存草稿。')}}catch{if(currentPdfContentFingerprint===fingerprint&&revision===pdfArchiveCapacityRevision){pdfRepairArchiveView.hidden=false;pdfRepairArchiveView.textContent=t('重试读取保留版本');pdfArchiveCapacityNote.hidden=pdfArchiveCapacityBackup.hidden=true}}
+}
+pdfRepairArchiveView.addEventListener('click',()=>{const fingerprint=currentPdfContentFingerprint;if(!fingerprint)return;void listPdfRepairArchives(fingerprint).then(archives=>{
+  if(currentPdfContentFingerprint!==fingerprint)return;void refreshPdfRepairArchiveView();if(!archives.length){pdfRepairArchiveView.hidden=true;return}pdfRepairArchiveView.textContent=t('查看保留的分歧版本');
+  const dialog=document.createElement('dialog'),heading=document.createElement('h2'),intro=document.createElement('p'),list=document.createElement('div'),status=document.createElement('p'),actions=document.createElement('div'),close=document.createElement('button');
+  dialog.className='citation-export-dialog';dialog.ariaLabel=t('保留的分歧版本');heading.textContent=t('保留的分歧版本');intro.textContent=t('以下为本机存档，包含各版本修订；可查看、恢复或随文档库备份。');status.role='status';actions.className='support-task-actions';close.type='button';close.textContent=t('关闭');actions.append(close);
+  for(const archive of [...archives].reverse()){
+    const group=document.createElement('details'),summary=document.createElement('summary');summary.textContent=`${archive.visible.pageNumber?msg`第 ${archive.visible.pageNumber} 页`:t('已保存段落')} · ${new Date(archive.createdAt).toLocaleString()}`;group.append(summary);
+    for(const [label,value,branch] of [[t('当前会话'),archive.session,'session'],[t('本机保留'),archive.local,'local'],[t('当时阅读'),archive.visible,'visible']] as const){
+      const section=document.createElement('section'),title=document.createElement('strong'),body=document.createElement('div'),copy=document.createElement('button');title.textContent=label;section.append(title,body);if(value.formulaDocument&&!value.formulaReviewDraft)void renderFormulaDocument(body,value.formulaDocument,true);else body.textContent=value.translatedText;
+      copy.type='button';copy.className='pdf-repair-backup';copy.textContent=t('复制译文');copy.addEventListener('click',()=>{void navigator.clipboard.writeText(value.formulaDocument?formulaDocumentText(value.formulaDocument):value.translatedText).then(()=>{status.textContent=t('已复制')}).catch(()=>{status.textContent=t('复制失败，请重试。')})});section.append(copy);
+      const restore=document.createElement('button');restore.type='button';restore.className='pdf-repair-backup';restore.textContent=t('恢复此版本…');restore.addEventListener('click',()=>{
+        const context=pdfDocumentTranslationSessionContext,block=pdfDocumentTranslationBlocksState.find(item=>item.sessionSignature===archive.signature);
+        if(!context||!block||!pdfDocumentTranslationRetainedLocally||pdfRepairStorageUncertain||activeParagraphEdit||['running','preparing'].includes(pdfDocumentTranslationPhase)||context.behaviorKey!==archive.behaviorKey||(['documentKey','targetLanguage','sourceLanguage','style','contentMode'] as const).some(key=>context.descriptor[key]!==archive.descriptor[key])){status.textContent=t('请先打开并保留对应译文，完成当前编辑后再恢复。');return}
+        const expected=pdfDocumentTranslationSessionUpdate(context,[block]).blocks?.[0],stamp=pdfParagraphStamp(block),epoch=pdfRepairComparisonEpoch;if(!expected)return;
+        const confirmDialog=document.createElement('dialog'),title=document.createElement('h2'),description=document.createElement('p'),message=document.createElement('p'),buttons=document.createElement('div'),cancel=document.createElement('button'),confirm=document.createElement('button');confirmDialog.className='citation-export-dialog';confirmDialog.ariaLabel=t('确认恢复此版本');title.textContent=t('确认恢复此版本');description.textContent=t('先保留当前版本及修订，再恢复所选存档。');message.role='status';buttons.className='support-task-actions';cancel.type=confirm.type='button';cancel.textContent=t('取消');confirm.textContent=t('确认恢复');confirm.className='primary';buttons.append(cancel,confirm);layoutTaskDialog(confirmDialog,title,[description],buttons,message);document.body.append(confirmDialog);let busy=false;cancel.addEventListener('click',()=>confirmDialog.close());confirmDialog.addEventListener('cancel',event=>{if(busy)event.preventDefault()});confirmDialog.addEventListener('close',()=>{confirmDialog.remove();if(restore.isConnected)restore.focus({preventScroll:true})},{once:true});
+        confirm.addEventListener('click',()=>{if(busy)return;busy=true;cancel.disabled=confirm.disabled=true;pdfRepairContinuationActive=true;const scroll=documentTranslationPages.scrollTop,current=()=>epoch===pdfRepairComparisonEpoch&&currentPdfContentFingerprint===fingerprint&&pdfDocumentTranslationBlocksState.includes(block)&&stamp===pdfParagraphStamp(block)&&!activeParagraphEdit;
+          void beginPdfArchivedRestore(context.descriptor,context.behaviorKey,block.sessionSignature,fingerprint,expected,current).then(async start=>{
+            if(start.status==='conflict'){message.textContent=t('保存内容已变化，请重新核对。');return}
+            pdfRepairStorageUncertain=true;pdfUncertainRepairDocuments.set(fingerprint,block.sessionSignature);
+            if(start.status!=='ready'){message.textContent=t('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。');return}
+            const saved=await resolvePdfRepairConflict(context.descriptor,context.behaviorKey,block.sessionSignature,fingerprint,expected,start.preview,'session',current,{archive,branch});
+            if(saved.status!=='saved'){message.textContent=t(saved.status==='conflict'?'保存内容已变化，请重新核对。':saved.status==='uncertain'?'保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。':'暂时无法保存所选版本；原内容仍受保护。');return}
+            if(!current())return;applyPdfParagraphValue(block,saved.block);block.status='done';renderPdfDocumentTranslationBlock(block);documentTranslationPages.scrollTop=scroll;pdfUncertainRepairDocuments.delete(fingerprint);pdfRepairStorageUncertain=false;pdfDocumentTranslationMessage=t('已恢复所选版本，先前版本已保留。');confirmDialog.close();dialog.close();
+          }).catch(()=>{message.textContent=t('暂时无法保存所选版本；原内容仍受保护。')}).finally(()=>{busy=false;pdfRepairContinuationActive=false;cancel.disabled=confirm.disabled=false;syncPdfDocumentTranslationUi()});
+        });confirmDialog.showModal();cancel.focus();
+      });section.append(restore);
+      if(value.revisions?.length){const history=document.createElement('details'),label=document.createElement('summary');label.textContent=msg`${value.revisions.length} 条修订`;history.append(label);for(const revision of value.revisions){const row=document.createElement('p');row.textContent=revision.formulaDocument?formulaDocumentText(revision.formulaDocument):revision.translatedText;history.append(row)}section.append(history)}group.append(section);
+    }list.append(group);
+  }
+  layoutTaskDialog(dialog,heading,[intro,list],actions,status);document.body.append(dialog);close.addEventListener('click',()=>dialog.close());dialog.addEventListener('close',()=>{dialog.remove();if(pdfRepairArchiveView.isConnected)pdfRepairArchiveView.focus({preventScroll:true})},{once:true});dialog.showModal();close.focus();
+}).catch(()=>showNotice(t('暂时无法读取保留的分歧版本。'),{tone:'error'}))});
+
+function localizeFormulaRepairReadFailure(value:string):string{
+  const reason='暂时无法读取本文术语，未发送正文修复；本段请对照原文核对。重试本段会重新发送图像。';
+  return value.replace(reason,t(reason)).replace('正文修复未完成：',t('正文修复未完成：'));
+}
+
 function renderPdfFormulaReview(
   container: HTMLElement,
   block: PdfDocumentTranslationRuntimeBlock,
 ): void {
   if(cachedReadingContext){
     container.replaceChildren();const note=document.createElement('small');note.className='pdf-retranslation-note';
-    note.textContent=`${pdfReviewConfirmed(block)?'已人工核对（原警告保留）':'待核对'}：${block.formulaReviewMessage??block.visualFallbackMessage}；可在更多菜单选择原 PDF 对照。`;
+    note.textContent=msg`${pdfReviewConfirmed(block)?t('已人工核对（原警告保留）'):t('待核对')}：${localizeFormulaRepairReadFailure(block.formulaReviewMessage??block.visualFallbackMessage??'')}；可在更多菜单选择原 PDF 对照。`;
     const text=document.createElement('div');container.append(note,text);
     if(block.formulaReviewDraft)text.textContent=block.translatedText??'';
     else if(block.formulaDocument)void renderFormulaDocument(text,block.formulaDocument,true);else void renderTranslationContent(text,block.translatedText??'',true);
@@ -2682,10 +3017,10 @@ function renderPdfFormulaReview(
   const notice = document.createElement('div');
   notice.className = 'pdf-formula-review-notice';
   notice.textContent = block.formulaReviewMessage
-    ? block.formulaReviewDraft ? '待核对译文 · 请对照原文' : '正文译文已保留 · 公式待核对'
+    ? block.formulaReviewDraft ? t('待核对译文 · 请对照原文') : t('正文译文已保留 · 公式待核对')
     : block.visualFallbackMessage === '纯文本模式下公式保持原样'
-      ? '当前仅文字模式 · 本段保留原文'
-      : '未取得可靠译文 · 暂保留原文';
+      ? t('当前仅文字模式 · 本段保留原文')
+      : t('未取得可靠译文 · 暂保留原文');
   const content = document.createElement('div');
   content.className = 'pdf-formula-review-content';
   container.append(notice, content);
@@ -2694,16 +3029,16 @@ function renderPdfFormulaReview(
   if (block.formulaReviewMessage) details.open = true;
   if (block.formulaDocument) {
     notice.textContent = /正文|漏译|目标语言/u.test(block.formulaReviewMessage ?? '')
-      ? '译文完整性待核对 · 已保留译文与公式'
-      : '部分公式待核对 · 其余公式与正文已保留';
+      ? t('译文完整性待核对 · 已保留译文与公式')
+      : t('部分公式待核对 · 其余公式与正文已保留');
     void renderFormulaDocument(content, block.formulaDocument, pdfDocumentTranslationSettings.autoRenderLatex,
       () => { details.open = true; details.scrollIntoView({ block: 'nearest' }); });
   } else void renderTranslationContent(content, block.translatedText ?? block.text,
     Boolean(block.formulaReviewMessage) && !block.formulaReviewDraft && pdfDocumentTranslationSettings.autoRenderLatex);
   const summary = document.createElement('summary');
-  summary.textContent = '查看原因与原文截图';
+  summary.textContent = t('查看原因与原文截图');
   const reason = document.createElement('p');
-  reason.textContent = block.formulaReviewMessage ?? block.visualFallbackMessage ?? '';
+  reason.textContent = localizeFormulaRepairReadFailure(block.formulaReviewMessage ?? block.visualFallbackMessage ?? '');
   const imageHost = document.createElement('div');
   details.append(summary, reason, imageHost);
   let loading = false;
@@ -2711,27 +3046,37 @@ function renderPdfFormulaReview(
     const pdf = pdfDocument;
     if (!details.open || loading || !pdf) return;
     loading = true;
-    imageHost.textContent = '正在本地生成原文截图…';
+    imageHost.textContent = t('正在本地生成原文截图…');
     void capturePdfDocumentTranslationVisualBlock(pdf, block).then((capture) => {
       if (!details.isConnected || pdfDocument !== pdf) return;
       const img = document.createElement('img');
       img.src = capture.imageDataUrl;
-      img.alt = `第 ${block.pageNumber} 页完整原文区域（含公式），以原 PDF 为准`;
+      img.alt = msg`第 ${block.pageNumber} 页完整原文区域（含公式），以原 PDF 为准`;
       imageHost.replaceChildren(img);
     }).catch(() => {
       if (!details.isConnected) return;
-      imageHost.textContent = '无法生成本地截图，请点击本段返回原 PDF 核对。';
+      imageHost.textContent = t('无法生成本地截图，请点击本段返回原 PDF 核对。');
       loading = false;
     });
   });
   container.append(details);
+  const pending=pendingFormulaRepairs.get(block);
+  if(pending&&currentPdfContentFingerprint&&pending.stamp===pdfParagraphStamp(block)&&!block.manualCorrection){
+    const resume=document.createElement('button');resume.type='button';resume.dataset.reviewRetry='';resume.className='pdf-formula-continue';resume.textContent=t('继续正文修复（仅文字）');resume.title=t('仅发送本段文字修复请求，不重新发送图像。');resume.disabled=['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning;resume.addEventListener('click',()=>void continuePdfFormulaRepair(block));container.append(resume);
+  }
+  const validated=pendingValidatedRepairs.get(block);
+  if(validated&&currentPdfContentFingerprint&&validated.stamp===pdfParagraphStamp(block)&&!block.manualCorrection){
+    const preview=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('div');preview.className='pdf-formula-review-details pdf-pending-repair';summary.textContent=t('查看待保存修复');preview.append(summary,body);container.append(preview);
+    if(validated.replacement.formulaDocument)void renderFormulaDocument(body,validated.replacement.formulaDocument,pdfDocumentTranslationSettings.autoRenderLatex);else body.textContent=validated.replacement.translatedText;
+    const save=document.createElement('button');save.type='button';save.dataset.reviewRetry='';save.className='pdf-formula-continue';save.textContent=t('重新核对并保存');save.title=t('只核对本机资料并保存，不再次发送请求。');save.disabled=pdfRepairStorageUncertain||['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning;save.addEventListener('click',()=>void savePendingPdfRepair(block));container.append(save);
+  }
   if (pdfDocumentTranslationMultimodalEnabled) {
     const retry = document.createElement('button');
     retry.type = 'button';
     retry.className = 'pdf-formula-review-retry';
     retry.dataset.reviewRetry = '';
-    retry.textContent = '重试本段';
-    retry.title = `重新发送本段图像，预计 ${block.visualUnits?.length ?? 1} 次视觉请求；必要时补一次公式锁定的正文修复，也计入任务上限。批量翻译期间请先暂停`;
+    retry.textContent = t('重试本段');
+    retry.title = msg`重新发送本段图像，预计 ${block.visualUnits?.length ?? 1} 次视觉请求；必要时补一次公式锁定的正文修复，也计入任务上限。批量翻译期间请先暂停`;
     retry.disabled = ['running', 'preparing'].includes(pdfDocumentTranslationPhase) || pdfDocumentTranslationOcrRunning;
     retry.addEventListener('click', () => { void retryPdfFormulaReview(block); });
     container.append(retry);
@@ -2805,8 +3150,8 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
   if (sourceAvailable) {
     container.tabIndex = 0;
     container.setAttribute('role', 'link');
-    container.setAttribute('aria-label', `返回第 ${block.pageNumber} 页对应原文`);
-    container.title = '点击返回并高亮 PDF 原文；拖选译文不会跳转';
+    container.setAttribute('aria-label', msg`返回第 ${block.pageNumber} 页对应原文`);
+    container.title = t('点击返回并高亮 PDF 原文；拖选译文不会跳转');
   } else {
     container.removeAttribute('tabindex');
     container.removeAttribute('role');
@@ -2827,25 +3172,25 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     delete container.dataset.visualRole;
   }
   if (sourceAvailable && block.referencePreserved) {
-    container.title = '参考文献条目按原文保留，未发送翻译请求；点击返回并高亮原文';
+    container.title = t('参考文献条目按原文保留，未发送翻译请求；点击返回并高亮原文');
   } else if (sourceAvailable && block.formulaReviewMessage) {
     container.title = block.formulaReviewDraft
-      ? '待核对的模型译文，数学内容未确认；点击返回 PDF 原文'
-      : '正文译文已保留，公式尚待核对；点击返回 PDF 原文';
+      ? t('待核对的模型译文，数学内容未确认；点击返回 PDF 原文')
+      : t('正文译文已保留，公式尚待核对；点击返回 PDF 原文');
   } else if (sourceAvailable && block.visualProcessed) {
     const purpose = pdfDocumentTranslationVisualPurpose(block);
     container.title = block.kind === 'footnote'
-      ? '脚注已完整翻译；点击返回并高亮整条脚注'
+      ? t('脚注已完整翻译；点击返回并高亮整条脚注')
       : purpose === 'figure'
-        ? '图表已作为完整对象翻译；点击返回并高亮整张图表'
+        ? t('图表已作为完整对象翻译；点击返回并高亮整张图表')
         : purpose === 'table'
-          ? '表格已按完整行列结构翻译；点击返回并高亮整张表格'
+          ? t('表格已按完整行列结构翻译；点击返回并高亮整张表格')
           : purpose === 'formula'
-            ? '含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文'
-            : '本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文';
+            ? t('含公式段落已通过视觉模型识别；点击返回并高亮 PDF 原文')
+            : t('本段已使用统一视觉模型翻译；点击返回并高亮 PDF 原文');
   } else if (sourceAvailable && block.visualFallbackMessage) {
-    container.title = `${block.visualFallbackMessage}；已保留${
-      pdfDocumentTranslationBlockContainsFormula(block) ? '原式' : '原文'
+    container.title = msg`${block.visualFallbackMessage}；已保留${
+      pdfDocumentTranslationBlockContainsFormula(block) ? t('原式') : t('原文')
     }，点击可返回 PDF 原文`;
   }
   if ((block.status === 'done'||block.retranslation) && block.translatedText) {
@@ -2855,7 +3200,7 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
       const open=container.querySelector<HTMLDetailsElement>('.pdf-paper-publication')?.open??false;
       const details=document.createElement('details');details.className='pdf-paper-publication';details.open=open;
       const summary=document.createElement('summary');
-      const label=document.createElement('span');label.textContent='出版信息';
+      const label=document.createElement('span');label.textContent=t('出版信息');
       const excerpt=document.createElement('span');excerpt.className='pdf-paper-publication-excerpt';excerpt.textContent=block.translatedText.replace(/\s+/gu,' ').trim();
       summary.append(label,excerpt);const content=document.createElement('div');content.className='pdf-paper-publication-content';details.append(summary,content);container.replaceChildren(details);
       if(block.formulaDocument)void renderFormulaDocument(content,block.formulaDocument,pdfDocumentTranslationSettings.autoRenderLatex);
@@ -2889,10 +3234,10 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
       );
     }
   } else if (block.status === 'error') {
-    container.replaceChildren(document.createTextNode(block.errorMessage ?? '本段翻译失败。'));
+    container.replaceChildren(document.createTextNode(block.errorMessage ?? t('本段翻译失败。')));
     const retry = document.createElement('button');
     retry.type = 'button';
-    retry.textContent = '重试本段';
+    retry.textContent = t('重试本段');
     retry.addEventListener('click', () => {
       disposePdfDocumentBackgroundJob();
       block.status = 'idle';
@@ -2908,15 +3253,17 @@ function renderPdfDocumentTranslationBlock(block: PdfDocumentTranslationRuntimeB
     });
     container.append(retry);
   } else {
-    container.textContent = '正在翻译本页内容…';
+    container.textContent = t('正在翻译本页内容…');
   }
-  if(block.retranslation){const note=document.createElement('small');note.className='pdf-retranslation-note';note.textContent=block.errorMessage??'重译中保留旧稿，新结果通过校验并保存后替换。';container.prepend(note)}
+  if(block.retranslation){const note=document.createElement('small');note.className='pdf-retranslation-note';note.textContent=block.errorMessage??t('重译中保留旧稿，新结果通过校验并保存后替换。');container.prepend(note)}
   updatePdfDocumentTranslationPageProgress(block.pageNumber);
   container.querySelector('.pdf-paragraph-edit-action')?.remove();
+  container.querySelector('.pdf-paragraph-explain-action')?.remove();
   if(block.status==='done'&&block.translatedText&&!block.referencePreserved&&!['figure','table','formula','code'].includes(block.kind??'paragraph')){
-    const edit=document.createElement('button');edit.type='button';edit.className='pdf-paragraph-edit-action';edit.textContent='✎';edit.title='修正本段文字';edit.ariaLabel=`修正第 ${block.pageNumber} 页本段译文`;
+    const edit=document.createElement('button');edit.type='button';edit.className='pdf-paragraph-edit-action';edit.textContent='✎';edit.title=t('修正本段文字');edit.ariaLabel=msg`修正第 ${block.pageNumber} 页本段译文`;
     edit.disabled=['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning;
     edit.addEventListener('click',event=>{event.stopPropagation();void openPdfParagraphEditor(block)});container.append(edit);
+    if(block.text.trim()){const explain=document.createElement('button');explain.type='button';explain.className='pdf-paragraph-explain-action';explain.textContent=t('解释本段');explain.disabled=edit.disabled;explain.addEventListener('click',event=>{event.stopPropagation();void explainPdfParagraph(block)});container.append(explain)}
   }
   if (!searchPanel.hidden && searchScope.value !== 'source' && !translationSearchFrame) {
     translationSearchFrame = requestAnimationFrame(() => {
@@ -2950,19 +3297,41 @@ function applyPdfTranslationOutcome(block:PdfDocumentTranslationRuntimeBlock,out
   if(before&&block.retranslation&&(outcome.formulaReviewMessage||outcome.visualFallbackMessage)){
     const candidate=paragraphRevision(outcome,'unaccepted');
     const previous=block.revisions??[];
-    if(!previous.some(item=>item.reason==='unaccepted'&&JSON.stringify(paragraphValue(item))===JSON.stringify(paragraphValue(candidate))))block.revisions=[candidate,...previous].slice(0,MAX_PDF_PARAGRAPH_REVISIONS);
-    block.status='error';block.errorMessage='新结果未通过校验，继续显示旧译文；返回内容在校订历史中待核对。';
+    const duplicate=previous.some(item=>item.reason==='unaccepted'&&JSON.stringify(paragraphValue(item))===JSON.stringify(paragraphValue(candidate)));
+    if(!duplicate&&previous.length<MAX_PDF_PARAGRAPH_REVISIONS)block.revisions=[candidate,...previous];
+    block.status='error';block.errorMessage=t(!duplicate&&previous.length>=MAX_PDF_PARAGRAPH_REVISIONS?'本段修订历史已满，暂不能保存新版本；已有记录和草稿保留。':'新结果未通过校验，继续显示旧译文；返回内容在校订历史中待核对。');
     return;
   }
+  let next:PdfParagraphHistory;
+  try{next=withParagraphHistory(before,{...paragraphValue(outcome),...(block.revisions?{revisions:block.revisions}:{})})}catch(error){if(!(error instanceof Error)||error.message!=='本段修订历史已满，暂不能保存新版本；已有记录和草稿保留。')throw error;block.status='error';block.errorMessage=t('本段修订历史已满，暂不能保存新版本；已有记录和草稿保留。');return}
   if(before&&block.retranslation)stagedPdfReplacements.set(block,before);
-  const next=withParagraphHistory(before,{...paragraphValue(outcome),...(block.revisions?{revisions:block.revisions}:{})});
   applyPdfParagraphValue(block,next);block.status='done';
+  pendingFormulaRepairs.delete(block);
+  if(outcome.pendingFormulaRepair&&!before&&!block.manualCorrection)pendingFormulaRepairs.set(block,{document:outcome.pendingFormulaRepair,stamp:pdfParagraphStamp(block)});
   delete block.omitReadingMetadata;
   if(outcome.visualProcessed)block.visualProcessed=true;else delete block.visualProcessed;
   delete block.errorMessage;delete block.singleRetry;
 }
 function pdfParagraphStamp(block:PdfDocumentTranslationRuntimeBlock):string{
   return JSON.stringify([currentDocumentSessionId,currentPdfDocumentTranslationSessionContext(),block.sessionSignature,pdfParagraphValue(block),block.formulaReviewMessage,block.visualFallbackMessage]);
+}
+async function pdfAssistTerms(){
+  const [memory,glossary]=await Promise.all([
+    browser.runtime.sendMessage({type:'GET_DOCUMENT_MEMORY',payload:termLocator()} satisfies RuntimeMessage) as Promise<import('../../core/messaging/messages').DocumentMemoryResponse>,
+    browser.runtime.sendMessage({type:'GET_DOCUMENT_GLOSSARY',payload:{...termLocator(),evidenceText:pdfDocumentTranslationBlocksState.map(b=>b.text).join('\n').slice(0,6000)}} satisfies RuntimeMessage) as Promise<import('../../core/messaging/messages').RuntimeResponse<import('../../core/settings/glossary-profiles').DocumentGlossarySelection>>
+  ]);
+  if(!memory.ok||!glossary.ok)throw new Error('暂时无法读取本文术语，请稍后重试；译文和草稿保留。');
+  return [...memory.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage())),...(glossary.data.termHints??[])].map(({source,target})=>({source,target}));
+}
+async function explainPdfParagraph(block:PdfDocumentTranslationRuntimeBlock):Promise<void>{
+  if(['running','preparing'].includes(pdfDocumentTranslationPhase)||!pdfDocumentTranslationBlocksState.includes(block))return;
+  const epoch=documentEpoch,index=pdfDocumentTranslationBlocksState.indexOf(block),related=[block,...[pdfDocumentTranslationBlocksState[index-1],pdfDocumentTranslationBlocksState[index+1]].filter((b):b is PdfDocumentTranslationRuntimeBlock=>Boolean(b&&b.text.trim()&&!b.referencePreserved))];
+  const explanationStamp=(b:PdfDocumentTranslationRuntimeBlock)=>JSON.stringify(pdfParagraphValue(b));
+  const stamps=related.map(explanationStamp),sourceTexts=related.map(b=>b.text),current=()=>epoch===documentEpoch&&related.every((b,i)=>pdfDocumentTranslationBlocksState.includes(b)&&explanationStamp(b)===stamps[i]&&b.text===sourceTexts[i]);
+  try{const terms=await pdfAssistTerms();if(!current())return;
+    const input:PassageInput={title:(pdfDocumentTranslationBlocksState.find(b=>b.paperRole==='title')?.text??'').slice(0,200),sources:related.map(b=>({originalText:b.text,translatedText:b.translatedText??'',label:msg`第 ${b.pageNumber} 页 · ${b===block?t('当前段落'):t('相邻段落')}`})),terms:terms.filter(term=>related.some(b=>containsPdfTerm(b.text,term.source))).slice(0,20)};
+    openPassageExplanation(input,{isCurrent:current,refreshInput:async()=>({...input,terms:(await pdfAssistTerms()).filter(term=>related.some(b=>containsPdfTerm(b.text,term.source))).slice(0,20)}),onLocate:i=>{const target=related[i];if(target)documentTranslationPages.querySelector<HTMLElement>(`[data-translation-block="${target.id}"]`)?.scrollIntoView({block:'center'})}});
+  }catch(e){if(current())showPdfCorrectionFollowup(e instanceof Error?localizeErrorMessage(e.message):t('解释暂不可用。'),()=>void explainPdfParagraph(block),t('重试读取'))}
 }
 async function openPdfParagraphEditor(block:PdfDocumentTranslationRuntimeBlock):Promise<void>{
   if(['running','preparing'].includes(pdfDocumentTranslationPhase)||pdfDocumentTranslationOcrRunning||block.status!=='done')return;
@@ -2973,13 +3342,15 @@ async function openPdfParagraphEditor(block:PdfDocumentTranslationRuntimeBlock):
   const parts=element<HTMLElement>('pdf-paragraph-editor-parts');parts.replaceChildren();
   for(const part of pdfCorrectionParts(pdfParagraphValue(block))){
     if(part.kind==='text'){
-      const label=document.createElement('label');const caption=document.createElement('span');caption.textContent='译文';const input=document.createElement('textarea');input.value=part.text;input.dataset.partId=part.id;input.rows=Math.min(8,Math.max(2,Math.ceil(part.text.length/45)));input.ariaLabel='本段可编辑译文';label.append(caption,input);parts.append(label);
+      const label=document.createElement('label');const caption=document.createElement('span');caption.textContent=t('译文');const input=document.createElement('textarea');input.value=part.text;input.dataset.partId=part.id;input.rows=Math.min(8,Math.max(2,Math.ceil(part.text.length/45)));input.ariaLabel=t('本段可编辑译文');label.append(caption,input);parts.append(label);
     }else{
-      const label=document.createElement('small');label.textContent='公式 / 命令 · 只读';const source=document.createElement('pre');source.className='pdf-paragraph-locked';source.textContent=part.label??part.text;parts.append(label,source);
+      const label=document.createElement('small');label.textContent=t('公式 / 命令 · 只读');const source=document.createElement('pre');source.className='pdf-paragraph-locked';source.textContent=part.label??part.text;parts.append(label,source);
     }
   }
-  element<HTMLElement>('pdf-paragraph-editor-context').textContent=`${block.omitReadingMetadata?'已保存段落':`第 ${block.pageNumber} 页`} · 只修改文字，不调用翻译接口。公式与命令保持锁定。`;
-  element<HTMLElement>('pdf-paragraph-editor-status').textContent='';
+  element<HTMLElement>('pdf-paragraph-editor-context').textContent=`${block.omitReadingMetadata?t('已保存段落'):msg`第 ${block.pageNumber} 页`} · ${t('公式与命令保持锁定')}`;
+  element<HTMLDetailsElement>('pdf-paragraph-editor-capacity').open=false;
+  renderPdfRevisionCapacity(block,'pdf-paragraph-editor');
+  element<HTMLElement>('pdf-paragraph-editor-status').textContent='';delete element<HTMLElement>('pdf-paragraph-editor-status').dataset.state;
   element<HTMLDialogElement>('pdf-paragraph-editor').showModal();
   parts.querySelector('textarea')?.focus();
 }
@@ -2991,51 +3362,102 @@ let pdfTermPreview:{block:PdfDocumentTranslationRuntimeBlock;stamp:string;value:
 const termCandidateSelect=element<HTMLSelectElement>('pdf-terms-candidate');
 const termFrom=element<HTMLInputElement>('pdf-terms-from'),termTo=element<HTMLInputElement>('pdf-terms-to');
 const termApply=element<HTMLButtonElement>('pdf-terms-apply'),termStatus=element<HTMLElement>('pdf-terms-status');
-const termLocator=()=>({pageUrl:currentSourceUrl??location.href,...(currentReadingIdentity?{documentId:currentReadingIdentity}:{}),...(currentSourceLabel?{sourceLabel:currentSourceLabel}:{})});
+const pdfGlossaryDocumentId=()=>currentPdfContentFingerprint?documentIdentity({pageUrl:'',documentId:`pdf-content:${currentPdfContentFingerprint}`}).documentId:undefined;
+const pdfGlossaryLocator=()=>pdfGlossaryDocumentId()?{glossaryDocumentId:pdfGlossaryDocumentId()!}:{};
+const termLocator=()=>({...pdfGlossaryLocator(),pageUrl:currentSourceUrl??location.href,...(currentReadingIdentity?{documentId:currentReadingIdentity}:{}),...(currentSourceLabel?{sourceLabel:currentSourceLabel}:{})});
 function termSourceContext(source?:string):TermSource{
   const identity=documentIdentity(termLocator()),matches=source?pdfDocumentTranslationBlocksState.filter(block=>containsPdfTerm(block.text,source)):[];
-  const title=(pdfDocumentTranslationBlocksState.find(block=>block.paperRole==='title')?.text||currentSourceLabel||'当前 PDF 文档').trim().slice(0,160);
+  const title=(pdfDocumentTranslationBlocksState.find(block=>block.paperRole==='title')?.text||currentPdfCitation.title||currentSourceLabel||t('当前 PDF 文档')).trim().slice(0,160);
   const sourceUrl=termSourceUrl(currentSourceUrl);
   return {documentId:identity.documentId,title,...(sourceUrl?{sourceUrl}:{}),...(matches.length===1?{pageNumber:matches[0]!.pageNumber}:{})};
 }
 function termTargetLanguage(){const language=pdfDocumentTranslationSettings.targetLanguage;if(!isSupportedTargetLanguage(language))throw new Error('当前目标语言不支持术语复用。');return language}
-const pdfTermReuse=bindPdfTermReuse({locator:termLocator,context:termSourceContext,language:termTargetLanguage,onMemory:memory=>{pdfConfirmedTerms=memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));refreshPdfTermCandidates()}});
-function resetPdfTermPreview():void{pdfTermPreview=undefined;termApply.textContent='预览修改';element<HTMLElement>('pdf-terms-preview').hidden=true}
+const pdfCorrectionSuggestions=document.createElement('details');pdfCorrectionSuggestions.id='pdf-correction-term-suggestions';pdfCorrectionSuggestions.hidden=true;
+const pdfCorrectionSummary=document.createElement('summary'),pdfCorrectionList=document.createElement('div');pdfCorrectionSuggestions.append(pdfCorrectionSummary,pdfCorrectionList);element<HTMLElement>('pdf-terms-manage').after(pdfCorrectionSuggestions);
+const pdfTermReuse=bindPdfTermReuse({locator:termLocator,context:termSourceContext,language:termTargetLanguage,evidenceText:()=>pdfDocumentTranslationBlocksState.map(block=>block.text).join('\n').slice(0,6000),onGlossaryChange:renderPdfCorrectionSuggestions,onMemory:(memory,passive)=>{pdfConfirmedTerms=memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));if(activeSearchQuery)updatePdfSearchMatches(true);if(passive)renderPdfCorrectionSuggestions();else refreshPdfTermCandidates()}});
+function renderPdfCorrectionSuggestions():void{
+  if(pdfTermReuse.hintsPending()){pdfCorrectionSuggestions.hidden=true;pdfCorrectionList.replaceChildren();return}
+  if(pdfTermReuse.hintsUnavailable()){if(pdfTermReuse.schemeUnavailable()){pdfCorrectionSuggestions.hidden=true;pdfCorrectionList.replaceChildren();return}pdfCorrectionSuggestions.hidden=false;pdfCorrectionSummary.textContent=t('术语建议暂不可用');renderCorrectionTermReadFailure(pdfCorrectionList,()=>pdfTermReuse.retryTerms());return}
+  const suggestions=pdfDocumentTranslationBlocksState.flatMap(block=>{
+    if(block.status!=='done'||block.referencePreserved)return [];
+    return paragraphCorrectionTerms(block.text,{...block,translatedText:block.translatedText??''},[...pdfConfirmedTerms,...pdfTermReuse.termHints()]).map(item=>({...item,context:msg`第 ${block.pageNumber} 页 · ${block.text.slice(0,180)}`}));
+  });
+  const unique=deduplicateCorrectionTerms(suggestions,[...pdfConfirmedTerms,...pdfTermReuse.currentTerms()]).slice(0,20);
+  pdfCorrectionSuggestions.hidden=!unique.length;pdfCorrectionSummary.textContent=msg`从人工修正整理（${unique.length}）`;
+  renderCorrectionTermSuggestions(pdfCorrectionList,unique,item=>{
+    const form=element<HTMLFormElement>('pdf-terms-add');if(form.querySelector<HTMLButtonElement>('button')!.disabled)return;
+    const source=element<HTMLInputElement>('pdf-term-source'),target=element<HTMLInputElement>('pdf-term-target');
+    element<HTMLDetailsElement>('pdf-terms-manage').open=true;
+    if((source.value.trim()&&source.value!==item.source)||(target.value.trim()&&target.value!==item.target)){termStatus.textContent=t('已有词条草稿已保留，请先处理当前输入。');source.focus();return}
+    source.value=item.source;target.value=item.target;source.dispatchEvent(new Event('input',{bubbles:true}));target.dispatchEvent(new Event('input',{bubbles:true}));termStatus.textContent=t('词条已填入，点击“保存词条”后用于本文。');target.focus();
+  });
+}
+function resetPdfTermPreview():void{pdfTermPreview=undefined;termApply.textContent=t('预览修改');element<HTMLElement>('pdf-terms-preview').hidden=true}
 function renderPdfTermCandidate():void{
-  resetPdfTermPreview();termStatus.textContent='';
+  resetPdfTermPreview();termStatus.textContent='';delete termStatus.dataset.state;
   const candidate=pdfTermCandidates[Number(termCandidateSelect.value)],block=candidate&&pdfDocumentTranslationBlocksState.find(block=>block.id===candidate.blockId);
   const current=element<HTMLElement>('pdf-terms-current');current.replaceChildren();
   termApply.disabled=!candidate||candidate.protected;element<HTMLElement>('pdf-terms-edit').hidden=!candidate||candidate.protected;
-  element<HTMLElement>('pdf-terms-explanation').textContent=candidate?`约定译法：${candidate.source} → ${candidate.target}。本段未找到约定译法，请结合原文判断。${candidate.protected?'本段已人工校订，默认保留。':''}`:pdfConfirmedTerms.length?'未发现缺少约定译法的已完成段落。这不代表全篇语义已通过核验。':'尚无已确认术语，请先添加本文词条。';
+  element<HTMLElement>('pdf-terms-explanation').textContent=candidate?msg`约定译法：${candidate.source} → ${candidate.target}。本段未找到约定译法，请结合原文判断。${candidate.protected?t('本段已人工校订，默认保留。'):''}`:pdfConfirmedTerms.length?t('未发现缺少约定译法的已完成段落。这不代表全篇语义已通过核验。'):t('尚无已确认术语，请先添加本文词条。');
   element<HTMLElement>('pdf-terms-context').textContent=candidate?.context??'';
   if(block?.translatedText){if(block.formulaDocument)void renderFormulaDocument(current,block.formulaDocument,true);else void renderTranslationContent(current,block.translatedText,true)}
   termFrom.value=candidate&&block?.translatedText?.toLocaleLowerCase().includes(candidate.source.toLocaleLowerCase())?candidate.source:'';termTo.value=candidate?.target??'';
+  termFrom.dataset.initialValue=termFrom.value;termTo.dataset.initialValue=termTo.value;
 }
 function refreshPdfTermCandidates():void{
+  const draft={from:termFrom.value,to:termTo.value,candidate:pdfTermCandidates[Number(termCandidateSelect.value)]},dirty=draft.from!==(termFrom.dataset.initialValue??'')||draft.to!==(termTo.dataset.initialValue??'');
   pdfTermCandidates=checkPdfTermConsistency(pdfDocumentTranslationBlocksState.map(block=>({...block,translatedText:block.translatedText??''})),pdfConfirmedTerms);
-  termCandidateSelect.replaceChildren(...pdfTermCandidates.map((candidate,index)=>{const option=document.createElement('option');option.value=String(index);const block=pdfDocumentTranslationBlocksState.find(block=>block.id===candidate.blockId);option.textContent=`第 ${block?.pageNumber} 页 · ${candidate.source}${candidate.protected?' · 已校订':''}`;return option}));
+  termCandidateSelect.replaceChildren(...pdfTermCandidates.map((candidate,index)=>{const option=document.createElement('option');option.value=String(index);const block=pdfDocumentTranslationBlocksState.find(block=>block.id===candidate.blockId);option.textContent=msg`第 ${block?.pageNumber} 页 · ${candidate.source}${candidate.protected?t(' · 已校订'):''}`;return option}));
   termCandidateSelect.disabled=!pdfTermCandidates.length;
-  element<HTMLDetailsElement>('pdf-terms-manage').open=!pdfConfirmedTerms.length;
   renderPdfTermCandidate();
-  termStatus.textContent=pdfTermCandidates.length?`${pdfTermCandidates.length===200?'前 ':''}${pdfTermCandidates.length} 处候选 · 仅检查已完成且有原文的段落`:'本地检查完成，未调用翻译接口。';
+  if(dirty){const index=pdfTermCandidates.findIndex(c=>c.blockId===draft.candidate?.blockId&&c.source===draft.candidate.source&&c.target===draft.candidate.target);if(index>=0){termCandidateSelect.value=String(index);renderPdfTermCandidate()}else termApply.disabled=true;termFrom.value=draft.from;termTo.value=draft.to}
+  renderPdfCorrectionSuggestions();
+  termStatus.textContent=dirty?t('已有段落替换草稿已保留，请重新预览后再应用。'):pdfTermCandidates.length?msg`${pdfTermCandidates.length===200?t('前 '):''}${pdfTermCandidates.length} 处候选 · 仅检查已完成且有原文的段落`:t('本地检查完成，未调用翻译接口。');
 }
-element<HTMLButtonElement>('pdf-document-terms').addEventListener('click',()=>{void(async()=>{
+async function openPdfTermsDialog(throwReadFailure=false):Promise<boolean>{
   documentTranslationCopyMenu.open=false;const epoch=documentEpoch;
-  if(!pdfDocument||['running','preparing'].includes(pdfDocumentTranslationPhase))return;
-  const response=await browser.runtime.sendMessage({type:'GET_DOCUMENT_MEMORY',payload:termLocator()} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;
-  if(!response.ok)throw new Error(response.error.message);if(epoch!==documentEpoch)return;
-  pdfConfirmedTerms=response.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));pdfTermReuse.reset(response.data.memory);refreshPdfTermCandidates();pdfTermsDialog.showModal();
-})().catch(error=>showNotice(error instanceof Error?error.message:'术语检查暂不可用。',{tone:'error'}))});
+  if(!pdfDocument||['running','preparing'].includes(pdfDocumentTranslationPhase))return false;
+  let response:import('../../core/messaging/messages').DocumentMemoryResponse;
+  try{response=await browser.runtime.sendMessage({type:'GET_DOCUMENT_MEMORY',payload:termLocator()} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;if(!response.ok)throw new Error('local term read failed')}catch{if(throwReadFailure)throw new Error('暂时无法读取本文术语，请稍后重试；译文和草稿保留。');if(epoch===documentEpoch)showPdfCorrectionFollowup(t('暂时无法读取本文术语，请稍后重试；译文和草稿保留。'),()=>void openPdfTermsDialog(),t('重试读取'));return false}if(epoch!==documentEpoch)return false;
+  pdfConfirmedTerms=response.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));pdfTermReuse.reset(response.data.memory);element<HTMLDetailsElement>('pdf-terms-manage').open=!pdfConfirmedTerms.length;refreshPdfTermCandidates();
+  if(!pdfTermsDialog.open)pdfTermsDialog.showModal();return true;
+}
+element<HTMLButtonElement>('pdf-document-terms').addEventListener('click',()=>{void openPdfTermsDialog().catch(error=>showNotice(error instanceof Error?error.message:t('术语检查暂不可用。'),{tone:'error'}))});
+let pdfPreparedTermContext:{documentId:string;language:string;onSaved?:(source:string,target:string)=>void}|undefined;
+for(const id of ['pdf-term-source','pdf-term-target'])element<HTMLInputElement>(id).addEventListener('input',()=>{if(!element<HTMLInputElement>('pdf-term-source').value&&!element<HTMLInputElement>('pdf-term-target').value)pdfPreparedTermContext=undefined});
+async function preparePdfCorrectionTerm(item:CorrectionTermSuggestion,current:()=>boolean,onSaved?:(source:string,target:string)=>void):Promise<void>{
+  if(!current()||activeParagraphEdit||element<HTMLFormElement>('pdf-terms-add').querySelector<HTMLButtonElement>('button')!.disabled)return;
+  if(!await openPdfTermsDialog(true)||!current())return;
+  const source=element<HTMLInputElement>('pdf-term-source'),target=element<HTMLInputElement>('pdf-term-target');element<HTMLDetailsElement>('pdf-terms-manage').open=true;
+  if(source.value.trim()||target.value.trim()){
+    if(source.value!==item.source||target.value!==item.target){termStatus.textContent=t('已有词条草稿已保留，请先处理当前输入，再返回填入修正词条。');source.focus();return}
+  }
+  source.value=item.source;target.value=item.target;pdfPreparedTermContext={documentId:documentIdentity(termLocator()).documentId,language:termTargetLanguage(),...(onSaved?{onSaved:(source,target)=>{if(normalizeGlossaryTermKey(source)===normalizeGlossaryTermKey(item.source))onSaved(source,target)}}:{})};source.dispatchEvent(new Event('input',{bubbles:true}));target.dispatchEvent(new Event('input',{bubbles:true}));termStatus.textContent=t('词条已填入，点击“保存词条”后用于本文。');target.focus();
+}
+function confirmPdfTermReplacement(source:string,oldTarget:string,newTarget:string):Promise<boolean>{
+  return new Promise(resolve=>{const dialog=document.createElement('dialog'),heading=document.createElement('h2'),intro=document.createElement('p'),previous=document.createElement('p'),next=document.createElement('p'),actions=document.createElement('div'),cancel=document.createElement('button'),confirm=document.createElement('button');dialog.className='citation-export-dialog';dialog.ariaLabel=t('更新本文词条');heading.textContent=t('更新本文词条');intro.textContent=t('本文已有同名词条。确认后用于后续翻译，旧译文和人工修正保留。');previous.textContent=`${t('当前词条')}：${source} → ${oldTarget}`;next.textContent=`${t('建议词条')}：${source} → ${newTarget}`;previous.ariaLabel=t('当前词条');next.ariaLabel=t('建议词条');actions.className='support-task-actions';cancel.type=confirm.type='button';cancel.textContent=t('取消');confirm.textContent=t('确认更新');confirm.className='primary';actions.append(cancel,confirm);layoutTaskDialog(dialog,heading,[intro,previous,next],actions);document.body.append(dialog);let accepted=false;cancel.addEventListener('click',()=>dialog.close());confirm.addEventListener('click',()=>{accepted=true;dialog.close()});dialog.addEventListener('close',()=>{dialog.remove();resolve(accepted)},{once:true});dialog.showModal();cancel.focus();});
+}
 element<HTMLButtonElement>('pdf-terms-close').addEventListener('click',()=>pdfTermsDialog.close());
 termCandidateSelect.addEventListener('change',renderPdfTermCandidate);
 termFrom.addEventListener('input',resetPdfTermPreview);termTo.addEventListener('input',resetPdfTermPreview);
 element<HTMLFormElement>('pdf-terms-add').addEventListener('submit',event=>{event.preventDefault();void(async()=>{
-  const epoch=documentEpoch,form=element<HTMLFormElement>('pdf-terms-add'),button=form.querySelector('button')!;button.disabled=true;
-  try{const source=element<HTMLInputElement>('pdf-term-source').value,context=termSourceContext(source);const response=await browser.runtime.sendMessage({type:'UPSERT_DOCUMENT_TERM',payload:{...termLocator(),term:{source,target:element<HTMLInputElement>('pdf-term-target').value,provenance:{origin:context,confirmed:{...context,targetLanguage:termTargetLanguage(),at:Date.now()}}}}} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;
+  const epoch=documentEpoch,form=element<HTMLFormElement>('pdf-terms-add'),button=form.querySelector('button')!;if(button.disabled)return;button.disabled=true;
+  try{const sourceInput=element<HTMLInputElement>('pdf-term-source'),targetInput=element<HTMLInputElement>('pdf-term-target'),source=sourceInput.value,target=targetInput.value,context=termSourceContext(source),locator=termLocator(),language=termTargetLanguage();
+    if(pdfPreparedTermContext&&(pdfPreparedTermContext.documentId!==documentIdentity(locator).documentId||pdfPreparedTermContext.language!==language))throw new Error('修正词条的文档或语言已变化，草稿保留；请重新准备词条。');
+    const latest=await browser.runtime.sendMessage({type:'GET_DOCUMENT_MEMORY',payload:locator} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;
+    if(!latest.ok)throw new Error('暂时无法读取本文术语，请稍后重试；译文和草稿保留。');if(epoch!==documentEpoch||language!==termTargetLanguage())throw new Error('本文术语上下文已变化，草稿保留，请重新核对。');
+    const existing=latest.data.memory.confirmedTerms.find(term=>normalizeGlossaryTermKey(term.source)===normalizeGlossaryTermKey(source));
+    if(existing?.target===target.trim()&&termAppliesToLanguage(existing,language)){pdfPreparedTermContext?.onSaved?.(existing.source,existing.target);termStatus.textContent=t('本文已有相同词条，未重复保存；草稿保留。');return}
+    if(existing&&!await confirmPdfTermReplacement(source,existing.target,target))return;
+    if(epoch!==documentEpoch||language!==termTargetLanguage())throw new Error('本文术语上下文已变化，草稿保留，请重新核对。');
+    const response=await browser.runtime.sendMessage({type:'UPSERT_DOCUMENT_TERM',payload:{...locator,term:{source,target,expectedVersion:documentTermVersion(existing),provenance:{origin:context,confirmed:{...context,targetLanguage:language,at:Date.now()}}}}} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;
     if(!response.ok)throw new Error(response.error.message);if(epoch!==documentEpoch)return;
-    pdfConfirmedTerms=response.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));pdfTermReuse.update(response.data.memory);form.reset();refreshPdfTermCandidates();
+    const savedTerm=response.data.memory.confirmedTerms.find(term=>normalizeGlossaryTermKey(term.source)===normalizeGlossaryTermKey(source));if(savedTerm)pdfPreparedTermContext?.onSaved?.(savedTerm.source,savedTerm.target);
+    const continued=sourceInput.value!==source||targetInput.value!==target;
+    pdfConfirmedTerms=response.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));pdfTermReuse.update(response.data.memory);if(!continued){form.reset();pdfPreparedTermContext=undefined}refreshPdfTermCandidates();
+    termStatus.dataset.state='saved';termStatus.textContent=t(continued?'已保存提交时的本文术语，后续输入仍在草稿中。':'本文术语已保存；旧译文和人工修正保留。');if(!continued&&pdfTermsDialog.open)sourceInput.focus({preventScroll:true});
   }finally{button.disabled=false}
-})().catch(error=>termStatus.textContent=error instanceof Error?error.message:'词条保存失败。')});
+})().catch(error=>{delete termStatus.dataset.state;termStatus.textContent=error instanceof Error?error.message:t('词条保存失败。')})});
 termApply.addEventListener('click',()=>{void(async()=>{
   const candidate=pdfTermCandidates[Number(termCandidateSelect.value)],block=candidate&&pdfDocumentTranslationBlocksState.find(block=>block.id===candidate.blockId);
   if(!block||candidate.protected||block.manualCorrection||block.status!=='done'||!pdfDocument)throw new Error('这段译文已变化，请重新检查。');
@@ -3043,7 +3465,7 @@ termApply.addEventListener('click',()=>{void(async()=>{
     const value=previewPdfTermCorrection(pdfParagraphValue(block),termFrom.value.trim(),termTo.value.trim());
     pdfTermPreview={block,stamp:pdfParagraphStamp(block),value};const preview=element<HTMLElement>('pdf-terms-preview');preview.hidden=false;
     const content=preview.querySelector<HTMLElement>('div')!;content.replaceChildren();if(value.formulaDocument)await renderFormulaDocument(content,value.formulaDocument,true);else await renderTranslationContent(content,value.translatedText,true);
-    termApply.textContent='应用到本段';termStatus.textContent='仅替换本段可编辑文字；公式与命令保持不变。';return;
+    termApply.textContent=t('应用到本段');termStatus.textContent=t('仅替换本段可编辑文字；公式与命令保持不变。');return;
   }
   const edit=pdfTermPreview;if(edit.block!==block||edit.stamp!==pdfParagraphStamp(block))throw new Error('本段已变化，请重新预览。');
   termApply.disabled=true;
@@ -3053,43 +3475,149 @@ termApply.addEventListener('click',()=>{void(async()=>{
     const before=pdfParagraphHistoryValue(block);
     applyPdfParagraphValue(block,withParagraphHistory(before,{...paragraphValue({...before,...edit.value}),manualCorrection:true},'correction'));delete block.reviewConfirmation;
     if(!await persistPdfDocumentTranslationSession(pdfDocumentTranslationBlocksState.filter(block=>block.status==='done'),true)){applyPdfParagraphValue(block,before);throw new Error('修正保存失败，旧译文已保留。')}
-    lastParagraphCorrection=undefined;renderPdfDocumentTranslationBlock(block);syncPdfDocumentTranslationUi();refreshPdfTermCandidates();termStatus.textContent='本段修正已保存，可在校订历史中恢复。';
+    lastParagraphCorrection=undefined;renderPdfDocumentTranslationBlock(block);syncPdfDocumentTranslationUi();refreshPdfTermCandidates();termStatus.textContent=t('本段修正已保存，可在校订历史中恢复。');
   }finally{termApply.disabled=!pdfTermCandidates.length||Boolean(pdfTermCandidates[Number(termCandidateSelect.value)]?.protected)}
-})().catch(error=>{termStatus.textContent=error instanceof Error?error.message:'术语修正失败。';resetPdfTermPreview()})});
+})().catch(error=>{delete termStatus.dataset.state;termStatus.textContent=error instanceof Error?error.message:t('术语修正失败。');resetPdfTermPreview()})});
 const pdfHistoryParagraph=element<HTMLSelectElement>('pdf-history-paragraph');
 const pdfHistoryVersion=element<HTMLSelectElement>('pdf-history-version');
+let pdfHistoryRestoreRequest:object|undefined;
+let pdfHistoryViewRevision=0;
 function selectedPdfHistoryBlock(){return pdfDocumentTranslationBlocksState.find(block=>block.sessionSignature===pdfHistoryParagraph.value)}
 function renderPdfHistoryVersion():void{
   const block=selectedPdfHistoryBlock(),version=block?.revisions?.find(item=>item.id===pdfHistoryVersion.value);
+  renderPdfRevisionCapacity(block,'pdf-history');
   const current=element<HTMLElement>('pdf-history-current'),previous=element<HTMLElement>('pdf-history-previous');
   current.replaceChildren();previous.replaceChildren();
   if(block?.translatedText){if(block.formulaDocument)void renderFormulaDocument(current,block.formulaDocument,true);else void renderTranslationContent(current,block.translatedText,true)}
   if(version){if(version.reason==='unaccepted')previous.textContent=version.formulaDocument?formulaDocumentText(version.formulaDocument):version.translatedText;else if(version.formulaDocument)void renderFormulaDocument(previous,version.formulaDocument,true);else void renderTranslationContent(previous,version.translatedText,true)}
-  element<HTMLElement>('pdf-history-status').textContent=version?.reason==='unaccepted'?`未采用的新结果：${version.formulaReviewMessage??version.visualFallbackMessage??'尚未通过校验'}。旧稿仍保留。`:version?.formulaReviewMessage??version?.visualFallbackMessage??'恢复只影响本段；当前版本也会保留在历史中。';
-  element<HTMLButtonElement>('pdf-history-restore').disabled=!version||version.reason==='unaccepted';
+  element<HTMLElement>('pdf-history-status').textContent=version?.reason==='unaccepted'?msg`未采用的新结果：${version.formulaReviewMessage??version.visualFallbackMessage??t('尚未通过校验')}。旧稿仍保留。`:version?.formulaReviewMessage??version?.visualFallbackMessage??t('恢复只影响本段；当前版本也会保留在历史中。');
+  pdfHistoryParagraph.disabled=pdfHistoryVersion.disabled=Boolean(pdfHistoryRestoreRequest);
+  element<HTMLButtonElement>('pdf-history-restore').disabled=Boolean(pdfHistoryRestoreRequest)||!version||version.reason==='unaccepted';
+  if(pdfHistoryRestoreRequest)element<HTMLElement>('pdf-history-status').textContent=t('正在恢复，请稍候…');
 }
-function renderPdfHistoryParagraph():void{
-  const labels={correction:'修正前',translation:'重译前',restore:'恢复前',unaccepted:'未采用 · 待核对',import:'导入时保留的版本'};
+function renderPdfHistoryParagraph(preferredVersion?:string):void{
+  const labels={correction:t('修正前'),translation:t('重译前'),restore:t('恢复前'),unaccepted:t('未采用 · 待核对'),import:t('导入时保留的版本')};
   pdfHistoryVersion.replaceChildren(...(selectedPdfHistoryBlock()?.revisions??[]).map(version=>{const option=document.createElement('option');option.value=version.id;option.textContent=`${labels[version.reason]} · ${new Date(version.createdAt).toLocaleString()}`;return option}));
+  if(preferredVersion&&[...pdfHistoryVersion.options].some(option=>option.value===preferredVersion))pdfHistoryVersion.value=preferredVersion;
   renderPdfHistoryVersion();
 }
 element<HTMLButtonElement>('pdf-document-history').addEventListener('click',()=>{
+  pdfHistoryViewRevision++;
   documentTranslationCopyMenu.open=false;
-  pdfHistoryParagraph.replaceChildren(...pdfDocumentTranslationBlocksState.filter(block=>block.revisions?.length).map(block=>{const option=document.createElement('option');option.value=block.sessionSignature;option.textContent=`${block.omitReadingMetadata?'已保存段落':`第 ${block.pageNumber} 页`} · ${block.translatedText?.replace(/\s+/gu,' ').slice(0,48)}`;return option}));
+  pdfHistoryParagraph.replaceChildren(...pdfDocumentTranslationBlocksState.filter(block=>block.revisions?.length).map(block=>{const option=document.createElement('option');option.value=block.sessionSignature;option.textContent=`${block.omitReadingMetadata?t('已保存段落'):msg`第 ${block.pageNumber} 页`} · ${block.translatedText?.replace(/\s+/gu,' ').slice(0,48)}`;return option}));
   renderPdfHistoryParagraph();pdfHistoryDialog.showModal();
 });
-pdfHistoryParagraph.addEventListener('change',renderPdfHistoryParagraph);pdfHistoryVersion.addEventListener('change',renderPdfHistoryVersion);
+pdfHistoryParagraph.addEventListener('change',()=>renderPdfHistoryParagraph());pdfHistoryVersion.addEventListener('change',renderPdfHistoryVersion);
 element<HTMLButtonElement>('pdf-history-close').addEventListener('click',()=>pdfHistoryDialog.close());
 element<HTMLButtonElement>('pdf-history-restore').addEventListener('click',()=>{void(async()=>{
-  const block=selectedPdfHistoryBlock();if(!block||!block.revisions?.some(item=>item.id===pdfHistoryVersion.value&&item.reason!=='unaccepted'))return;
+  const block=selectedPdfHistoryBlock(),versionId=pdfHistoryVersion.value;
+  if(pdfHistoryRestoreRequest||!block||!block.revisions?.some(item=>item.id===versionId&&item.reason!=='unaccepted'))return;
+  const request={},epoch=documentEpoch,viewRevision=pdfHistoryViewRevision;
+  const current=()=>epoch===documentEpoch&&pdfDocumentTranslationBlocksState.includes(block);
   const before=pdfParagraphHistoryValue(block),stamp=pdfParagraphStamp(block);
-  await sendPdfDocumentBackgroundControl('dispose');await pdfDocumentBackgroundSnapshotQueue;
-  if(stamp!==pdfParagraphStamp(block))throw new Error('本段已变化，请重新打开历史。');
-  applyPdfParagraphValue(block,restoredParagraphRevision(before,pdfHistoryVersion.value));block.status='done';
-  if(!await persistPdfDocumentTranslationSession(pdfDocumentTranslationBlocksState,true)){applyPdfParagraphValue(block,before);throw new Error('恢复未能保存，当前译文已保留。')}
-  lastParagraphCorrection=undefined;renderPdfDocumentTranslationBlock(block);syncPdfDocumentTranslationUi();pdfHistoryDialog.close();showPdfParagraphSaveScope();
-})().catch(error=>{element<HTMLElement>('pdf-history-status').textContent=error instanceof Error?error.message:'恢复失败，当前译文已保留。'})});
+  pdfHistoryRestoreRequest=request;renderPdfHistoryVersion();
+  let failure:string|undefined;
+  try{
+    await sendPdfDocumentBackgroundControl('dispose');await pdfDocumentBackgroundSnapshotQueue;
+    if(!current())return;
+    if(stamp!==pdfParagraphStamp(block))throw new Error('本段已变化，请重新打开历史。');
+    applyPdfParagraphValue(block,restoredParagraphRevision(before,versionId));block.status='done';
+    if(!await persistPdfDocumentTranslationSession(pdfDocumentTranslationBlocksState,true)){applyPdfParagraphValue(block,before);throw new Error('恢复未能保存，当前译文已保留。')}
+    if(!current())return;
+    lastParagraphCorrection=undefined;renderPdfDocumentTranslationBlock(block);syncPdfDocumentTranslationUi();
+    if(viewRevision===pdfHistoryViewRevision)pdfHistoryDialog.close();
+    showPdfParagraphSaveScope();
+  }catch(error){failure=error instanceof Error?error.message:t('恢复失败，当前译文已保留。')}
+  finally{
+    if(pdfHistoryRestoreRequest===request){
+      pdfHistoryRestoreRequest=undefined;
+      if(current()){
+        renderPdfHistoryParagraph(pdfHistoryVersion.value);
+        if(failure)element<HTMLElement>('pdf-history-status').textContent=failure;
+      }
+    }
+  }
+})()});
 const paragraphEditor=element<HTMLDialogElement>('pdf-paragraph-editor');
+async function suggestPdfCorrectionFollowup(origin:PdfDocumentTranslationRuntimeBlock,before:PdfCorrectionValue):Promise<void>{
+  const epoch=documentEpoch,stamp=pdfParagraphStamp(origin);
+  const currentOrigin=()=>epoch===documentEpoch&&stamp===pdfParagraphStamp(origin);
+  try{
+    const terms=await pdfAssistTerms();if(!currentOrigin())return;
+    const suggestions=deduplicateCorrectionTerms(correctionTermSuggestions(origin.text,before.formulaDocument?.translationTemplate??before.translatedText,origin.formulaDocument?.translationTemplate??origin.translatedText??'',terms),[]);
+    const findRelated=(items:readonly CorrectionTermSuggestion[])=>items.flatMap(term=>pdfDocumentTranslationBlocksState.filter(b=>b!==origin&&b.included&&b.status==='done'&&!b.referencePreserved&&containsPdfTerm(b.text,term.source)&&!containsPdfTerm(b.translatedText??'',term.target)).map(block=>({term,block})));
+    const related=findRelated(suggestions);if(!suggestions.length)return;
+    showPdfCorrectionFollowup(related.length?msg`本篇另有 ${related.length} 处相关用法，可检查是否统一。`:t('修正可整理为本文术语，供后续翻译使用。'),()=>{
+      if(!currentOrigin()){pdfCorrectionFollowup.hidden=true;return}
+      if(!related.length&&suggestions.length===1){const prepare=()=>void preparePdfCorrectionTerm(suggestions[0]!,currentOrigin,()=>{pdfCorrectionFollowup.hidden=true}).catch(e=>showPdfCorrectionFollowup(localizeErrorMessage(e instanceof Error?e.message:String(e)),prepare,t('重试读取')));prepare();return}
+      const dialog=document.createElement('dialog'),title=document.createElement('h2'),intro=document.createElement('p'),list=document.createElement('div'),status=document.createElement('p'),actions=document.createElement('div'),close=document.createElement('button'),recheck=document.createElement('button');
+      dialog.className='citation-export-dialog';dialog.ariaLabel=title.textContent=t(related.length?'检查相关用法':'存为本文术语');intro.textContent=t('相关用法不一定需要统一。逐处预览后保存，已人工校订的段落保留。');status.role='status';actions.className='support-task-actions';close.type=recheck.type='button';close.textContent=t('关闭');recheck.textContent=t('重新检查');recheck.hidden=true;actions.append(recheck,close);
+      let busy=false,checking=false,stale=false,observation=0,closed=false;
+      const wordViews=new Map<string,{item:CorrectionTermSuggestion;pair:HTMLElement;button:HTMLButtonElement;saved:boolean}>();
+      const rowViews=new Map<string,{block:PdfDocumentTranslationRuntimeBlock;source:string;update:(term:CorrectionTermSuggestion)=>void;invalidate:()=>void;sync:()=>void}>();
+      const keyOf=(source:string)=>normalizeGlossaryTermKey(source);
+      function sync(){close.disabled=busy;recheck.hidden=!stale;recheck.disabled=busy||checking;for(const row of rowViews.values())row.sync();for(const view of wordViews.values())view.button.disabled=busy||checking||view.saved}
+      function markStale(){observation++;stale=true;for(const row of rowViews.values())row.invalidate();status.textContent=t('本文术语已变化，可在此重新检查相关用法。');sync()}
+      for(const proposal of suggestions){
+        const item={...proposal},row=document.createElement('div'),pair=document.createElement('span'),button=document.createElement('button');row.className='pdf-related-term';pair.textContent=`${item.source} → ${item.target}`;button.type='button';button.textContent=t('存为本文术语');row.append(pair,button);list.append(row);const view={item,pair,button,saved:false};wordViews.set(keyOf(item.source),view);
+        button.addEventListener('click',()=>{if(busy||checking)return;if(!currentOrigin()){status.textContent=t('本段已变化，请重新检查相关用法。');return}button.disabled=true;
+          void preparePdfCorrectionTerm(item,currentOrigin,(source,target)=>{if(closed||!currentOrigin())return;view.item.target=target;pair.textContent=`${source} → ${target}`;view.saved=true;button.textContent=t('已保存本文术语');pdfCorrectionFollowup.hidden=true;markStale()}).catch(e=>{status.textContent=localizeErrorMessage(e instanceof Error?e.message:String(e))}).finally(sync);
+        });
+      }
+      function addRow(proposal:CorrectionTermSuggestion,block:PdfDocumentTranslationRuntimeBlock){
+        const key=JSON.stringify([block.sessionSignature,keyOf(proposal.source)]),existing=rowViews.get(key);if(existing){existing.update(proposal);return}if(rowViews.size>=20)return;
+        const section=document.createElement('details'),heading=document.createElement('summary'),source=document.createElement('p'),preview=document.createElement('p'),button=document.createElement('button');button.type='button';preview.style.whiteSpace='pre-wrap';section.append(heading,source,preview,button);list.append(section);
+        let term={...proposal},blockStamp=pdfParagraphStamp(block),beforeValue=pdfParagraphValue(block),confirmation=block.reviewConfirmation,snapshot:PdfRepairStorageSnapshot|undefined;
+        const satisfied=()=>containsPdfTerm(block.translatedText??'',term.target);
+        const syncRow=()=>{button.disabled=busy||checking||stale||pdfRepairStorageUncertain||Boolean(block.manualCorrection||block.formulaReviewDraft)||satisfied()||button.dataset.saved==='true'};
+        const update=(next:CorrectionTermSuggestion)=>{term={...next};snapshot=undefined;blockStamp=pdfParagraphStamp(block);beforeValue=pdfParagraphValue(block);confirmation=block.reviewConfirmation;heading.textContent=msg`第 ${block.pageNumber} 页 · ${term.source} → ${term.target}${block.manualCorrection?t(' · 已校订'):''}`;source.textContent=block.text;preview.textContent=block.formulaDocument?formulaDocumentText(block.formulaDocument):block.translatedText??'';button.textContent=t(button.dataset.saved==='true'?'已保存':satisfied()?'已符合本文术语':'预览修改');syncRow()};
+        const invalidate=()=>{snapshot=undefined;if(button.dataset.saved!=='true')button.textContent=t('预览修改')};rowViews.set(key,{block,source:keyOf(term.source),update,invalidate,sync:syncRow});update(term);
+        button.addEventListener('click',()=>{if(busy||checking||stale||pdfRepairStorageUncertain||activeParagraphEdit)return;const context=pdfDocumentTranslationSessionContext,fingerprint=currentPdfContentFingerprint;
+          const current=()=>!closed&&!stale&&currentOrigin()&&blockStamp===pdfParagraphStamp(block)&&pdfDocumentTranslationBlocksState.includes(block)&&!activeParagraphEdit;
+          if(!context||!fingerprint||!current()){status.textContent=t('本段已变化，请重新检查相关用法。');return}busy=true;sync();
+          void(async()=>{
+            if(!snapshot){const expected=pdfDocumentTranslationSessionUpdate(context,[block]).blocks?.[0];if(!expected)return;const next=await capturePdfRepairStorage(context.descriptor,context.behaviorKey,block.sessionSignature,expected,pdfDocumentTranslationRetainedLocally,fingerprint);if(!current())throw new Error('本段已变化，请重新检查相关用法。');
+              const memories=next.termsRaw as Record<string,Pick<import('../../core/document/document-memory-repository').DocumentMemorySnapshot,'confirmedTerms'>>|undefined;
+              const confirmed=memories?.[documentIdentity(termLocator()).documentId]?.confirmedTerms?.find(item=>keyOf(item.source)===keyOf(term.source));
+              if(confirmed&&confirmed.target!==term.previousTarget&&confirmed.target!==term.target){markStale();throw new Error('本文词条已有其他译法，请在此重新检查相关用法。')}
+              const value=previewPdfTermCorrection(pdfParagraphValue(block),term.previousTarget,term.target);preview.textContent=`${t('修改前')}：${block.formulaDocument?formulaDocumentText(block.formulaDocument):block.translatedText}\n\n${t('修改后')}：${value.formulaDocument?formulaDocumentText(value.formulaDocument):value.translatedText}`;snapshot=next;button.textContent=t('保存本段');status.textContent=t('仅替换本段可编辑文字；公式与命令保持不变。');return;
+            }
+            pdfRepairContinuationActive=true;const saved=await commitPdfTermCorrection(snapshot,term.previousTarget,term.target,current);
+            if(saved.status==='uncertain'){pdfRepairStorageUncertain=true;pdfUncertainRepairDocuments.set(fingerprint,block.sessionSignature);throw new Error('保存中断，存储状态暂不确定；请核对保存状态，勿重复操作。')}
+            if(saved.status!=='saved')throw new Error(saved.status==='conflict'?'本段已在其他窗口变化，请重新打开核对。':'修正保存失败，旧译文已保留。');
+            applyPdfParagraphValue(block,saved.block);renderPdfDocumentTranslationBlock(block);button.textContent=t('已保存');button.dataset.saved='true';pdfCorrectionFollowup.hidden=true;lastParagraphCorrection={block,stamp:pdfParagraphStamp(block),before:beforeValue,...(confirmation?{confirmation}:{}),documentSessionId:currentDocumentSessionId};status.textContent=t('本段修正已保存，可在校订历史中恢复。');
+          })().catch(e=>{snapshot=undefined;button.textContent=t('预览修改');status.textContent=localizeErrorMessage(e instanceof Error?e.message:String(e))}).finally(()=>{busy=false;pdfRepairContinuationActive=false;sync();syncPdfDocumentTranslationUi()});
+        });
+      }
+      for(const {term,block} of related.slice(0,20))addRow(term,block);
+      const limit=document.createElement('p');limit.textContent=t('仅列出前 20 处相关用法。');limit.hidden=related.length<=20;list.append(limit);
+      recheck.addEventListener('click',()=>{if(busy||checking)return;if(!currentOrigin()){status.textContent=t('本段已变化，请重新打开核对。');return}const version=observation,scroll=dialog.querySelector<HTMLElement>('.pi-task-body')!.scrollTop;checking=true;sync();
+        void(async()=>{const response=await browser.runtime.sendMessage({type:'GET_DOCUMENT_MEMORY',payload:termLocator()} satisfies RuntimeMessage) as import('../../core/messaging/messages').DocumentMemoryResponse;
+          if(closed)return;if(!response.ok)throw new Error('暂时无法读取本文术语，请稍后重试；译文和草稿保留。');if(!currentOrigin()||version!==observation)throw new Error('本文术语再次变化，请重新检查。');
+          const confirmed=response.data.memory.confirmedTerms.filter(term=>termAppliesToLanguage(term,termTargetLanguage()));const latest=suggestions.map(base=>{const term=confirmed.find(t=>keyOf(t.source)===keyOf(base.source));const view=wordViews.get(keyOf(base.source))!;view.item.target=term&&(view.saved||term.target!==base.previousTarget||term.target===base.target)?term.target:base.target;view.saved=Boolean(term&&term.target===view.item.target);view.pair.textContent=`${base.source} → ${view.item.target}`;view.button.textContent=t(view.saved?'已保存本文术语':'存为本文术语');return {...base,target:view.item.target}});
+          stale=false;for(const row of rowViews.values()){const term=latest.find(t=>keyOf(t.source)===row.source);if(term)row.update(term)}
+          // Existing DOM nodes are reused so open previews and list position survive.
+          const matches=findRelated(latest);for(const {term,block} of matches.slice(0,20))addRow(term,block);list.append(limit);limit.hidden=matches.length<=20;status.textContent=t('已按最新本文术语重新检查，逐处预览后再保存。');dialog.querySelector<HTMLElement>('.pi-task-body')!.scrollTop=scroll;
+        })().catch(e=>{if(!closed)status.textContent=localizeErrorMessage(e instanceof Error?e.message:String(e))}).finally(()=>{checking=false;if(!closed)sync()});
+      });
+      const termsChanged=(changes:Record<string,unknown>,area:string)=>{if(area==='local'&&(changes.documentTranslationMemoryV1||changes.extensionSettings)&&!closed)markStale()};browser.storage.onChanged.addListener(termsChanged);
+      layoutTaskDialog(dialog,title,[intro,list],actions,status);document.body.append(dialog);close.addEventListener('click',()=>dialog.close());dialog.addEventListener('cancel',e=>{if(busy)e.preventDefault()});dialog.addEventListener('close',()=>{closed=true;observation++;browser.storage.onChanged.removeListener(termsChanged);dialog.remove()},{once:true});dialog.showModal();close.focus();sync();
+    },related.length?t('检查相关用法'):t('存为本文术语'));
+  }catch{if(currentOrigin()){showPdfCorrectionFollowup(t('修正已保存，暂时无法读取相关术语。'),()=>void suggestPdfCorrectionFollowup(origin,before));pdfCorrectionFollowup.querySelector('button')!.textContent=t('重试读取')}}
+}
+function renderPdfRevisionCapacity(block:PdfDocumentTranslationRuntimeBlock|undefined,prefix:'pdf-paragraph-editor'|'pdf-history'):void{
+  const count=block?.revisions?.length??0,note=element<HTMLElement>(`${prefix}-capacity`),button=element<HTMLButtonElement>(`${prefix}-backup`);
+  note.hidden=button.hidden=count<MAX_PDF_PARAGRAPH_REVISIONS*.8;
+  if(!note.hidden){
+    if(prefix==='pdf-paragraph-editor'){
+      note.querySelector('summary')!.textContent=count>=MAX_PDF_PARAGRAPH_REVISIONS?msg`修订已满 · ${count}/50 条`:msg`修订接近上限 · ${count}/50 条`;
+      note.querySelector('p')!.textContent=t('已有修订会保留，满额后暂停新写入。备份不释放空间，也不包含未归档的会话版本和未保存草稿。');
+    }else note.textContent=msg`本段当前阅读版本有 ${count} 条修订，上限 50 条。备份不会释放空间，包含本机保留内容，不含当前会话版本和未保存草稿。`;
+  }
+  button.textContent=t('查看备份与恢复');
+}
+for(const id of ['pdf-paragraph-editor-backup','pdf-history-backup'])element<HTMLButtonElement>(id).addEventListener('click',openPdfBackupInNewTab);
+element<HTMLButtonElement>('pdf-paragraph-editor-check').addEventListener('click',()=>pdfRepairStorageCheck.click());
 for(const id of ['pdf-paragraph-editor-close','pdf-paragraph-editor-cancel'])element<HTMLButtonElement>(id).addEventListener('click',()=>paragraphEditor.close());
 paragraphEditor.addEventListener('close',()=>{
   const block=activeParagraphEdit?.block;activeParagraphEdit=undefined;
@@ -3097,7 +3625,8 @@ paragraphEditor.addEventListener('close',()=>{
 });
 element<HTMLFormElement>('pdf-paragraph-edit-form').addEventListener('submit',event=>{
   event.preventDefault();const edit=activeParagraphEdit;if(!edit)return;
-  const save=element<HTMLButtonElement>('pdf-paragraph-editor-save');save.disabled=true;
+  if(pdfRepairStorageUncertain){element<HTMLElement>('pdf-paragraph-editor-status').textContent=t('保存状态待核对，当前草稿仍在这里。');return}
+  const save=element<HTMLButtonElement>('pdf-paragraph-editor-save');if(save.disabled)return;save.disabled=true;
   void(async()=>{
     if(edit.documentSessionId!==currentDocumentSessionId||!pdfDocumentTranslationBlocksState.includes(edit.block)||edit.stamp!==pdfParagraphStamp(edit.block))throw new Error('这段译文已变化，请关闭后重新打开修正。');
     const before=pdfParagraphValue(edit.block);const historyBefore=pdfParagraphHistoryValue(edit.block);const confirmation=edit.block.reviewConfirmation;
@@ -3109,12 +3638,18 @@ element<HTMLFormElement>('pdf-paragraph-edit-form').addEventListener('submit',ev
     if(!saved){applyPdfParagraphValue(edit.block,historyBefore);throw new Error('保存失败，原译文已保留，请重试。');}
     if(edit.documentSessionId!==currentDocumentSessionId||!pdfDocumentTranslationBlocksState.includes(edit.block))return;
     lastParagraphCorrection={block:edit.block,stamp:pdfParagraphStamp(edit.block),before,...(confirmation?{confirmation}:{}),documentSessionId:currentDocumentSessionId};
-    renderPdfDocumentTranslationBlock(edit.block);syncPdfDocumentTranslationUi();paragraphEditor.close();
-    setPdfDocumentTranslationCopyFeedback('本段修正已保存，可在更多菜单中撤销。');
+    renderPdfDocumentTranslationBlock(edit.block);syncPdfDocumentTranslationUi();
+    if(activeParagraphEdit!==edit)return;
+    const currentEdits=[...paragraphEditor.querySelectorAll<HTMLTextAreaElement>('textarea[data-part-id]')].map(input=>[input.dataset.partId!,input.value]);
+    if(JSON.stringify(currentEdits)!==JSON.stringify([...edits])){edit.stamp=pdfParagraphStamp(edit.block);renderPdfRevisionCapacity(edit.block,'pdf-paragraph-editor');const status=element<HTMLElement>('pdf-paragraph-editor-status');status.dataset.state='saved';status.textContent=t('已保存提交时的修正，后续输入仍在草稿中。');return}
+    paragraphEditor.close();
+    setPdfDocumentTranslationCopyFeedback(t('本段修正已保存，可在更多菜单中撤销。'));
     showPdfParagraphSaveScope();
+    if(!cachedReadingContext)void suggestPdfCorrectionFollowup(edit.block,before);
   })().catch(error=>{
     const code=(error as {code?:string}).code;
-    element<HTMLElement>('pdf-paragraph-editor-status').textContent=code==='NO_CHANGES'?'译文没有变化。':code==='LATEX_CHANGED'?'只能修改自然语言，公式和命令必须保持不变。':code==='EMPTY_TRANSLATION'?'译文不能为空。':error instanceof Error?error.message:'保存失败，请重试。';
+    delete element<HTMLElement>('pdf-paragraph-editor-status').dataset.state;
+    element<HTMLElement>('pdf-paragraph-editor-status').textContent=code==='NO_CHANGES'?t('译文没有变化。'):code==='LATEX_CHANGED'?t('只能修改自然语言，公式和命令必须保持不变。'):code==='EMPTY_TRANSLATION'?t('译文不能为空。'):error instanceof Error?error.message:t('保存失败，请重试。');
   }).finally(()=>{save.disabled=false});
 });
 element<HTMLButtonElement>('pdf-document-undo-correction').addEventListener('click',()=>{
@@ -3126,9 +3661,9 @@ element<HTMLButtonElement>('pdf-document-undo-correction').addEventListener('cli
     if(!await persistPdfDocumentTranslationSession(pdfDocumentTranslationBlocksState.filter(block=>block.status==='done'),true)){Object.assign(undo.block,current);if(currentConfirmation)undo.block.reviewConfirmation=currentConfirmation;else delete undo.block.reviewConfirmation;throw new Error('撤销保存失败，请重试。');}
     if(undo.documentSessionId!==currentDocumentSessionId||!pdfDocumentTranslationBlocksState.includes(undo.block))return;
     lastParagraphCorrection=undefined;renderPdfDocumentTranslationBlock(undo.block);syncPdfDocumentTranslationUi();
-    setPdfDocumentTranslationCopyFeedback('已恢复修正前的译文。');
+    setPdfDocumentTranslationCopyFeedback(t('已恢复修正前的译文。'));
     showPdfParagraphSaveScope();
-  })().catch(error=>showNotice(error instanceof Error?error.message:'撤销失败。',{tone:'error'}));
+  })().catch(error=>showNotice(error instanceof Error?error.message:t('撤销失败。'),{tone:'error'}));
 });
 
 let pdfDocumentBackgroundSnapshotQueue: Promise<void> = Promise.resolve();
@@ -3333,6 +3868,7 @@ async function startPdfDocumentBackgroundTranslation(): Promise<boolean> {
         };
       }),
       settings: {
+        ...pdfGlossaryLocator(),
         requestLimit: pdfRequestLimit(),
         requestUsage: { ...pdfRequestUsage },
         ...(currentReadingIdentity || currentDocumentSessionId
@@ -3461,7 +3997,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   const revision = ++pdfDocumentTranslationRevision;
   const epoch = documentEpoch;
   pdfDocumentTranslationPhase = 'preparing';
-  pdfDocumentTranslationMessage = '正在本地读取文字层…';
+  pdfDocumentTranslationMessage = t('正在本地读取文字层…');
   pdfDocumentTranslationBlocksState = [];
   pdfDocumentTranslationArchivedBlocks = [];
   pdfDocumentTranslationSessionContext = undefined;
@@ -3483,7 +4019,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
         const element=viewer.querySelector<HTMLElement>(`.pdf-page[data-page-number="${page.pageNumber}"]`);
         if(element&&renderTemporaryOcrTextLayer(element,page))element.dataset.hasText='true';
       }
-    }catch{showNotice('临时识别结果未能恢复；当前窗口已有内容不变，可稍后重试。',{tone:'error'})}
+    }catch{showNotice(t('临时识别结果未能恢复；当前窗口已有内容不变，可稍后重试。'),{tone:'error'})}
   }
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     if (
@@ -3551,7 +4087,7 @@ async function preparePdfDocumentTranslation(): Promise<void> {
       // Missing pages are identified after the local preparation pass.
     }
     if (pageNumber % 4 === 0 || pageNumber === pdf.numPages) {
-      pdfDocumentTranslationMessage = `正在本地读取文字层 · ${pageNumber}/${pdf.numPages} 页`;
+      pdfDocumentTranslationMessage = msg`正在本地读取文字层 · ${pageNumber}/${pdf.numPages} 页`;
       syncPdfDocumentTranslationUi();
       await new Promise<void>((resolve) => window.setTimeout(resolve, 0));
     }
@@ -3686,8 +4222,8 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   const restoredInScope = scoped.filter(block => block.status === 'done').length;
   pdfDocumentTranslationMessage = restoredInScope
     ? restoredInScope === scoped.length
-      ? `${restoredFromLocalCount ? '已从本机恢复' : '已恢复'} ${restoredInScope}/${scoped.length} 段，无需重复翻译`
-      : `${restoredFromLocalCount ? '已从本机恢复' : '已恢复'} ${restoredInScope}/${scoped.length} 段，可继续翻译`
+      ? msg`${restoredFromLocalCount ? t('已从本机恢复') : t('已恢复')} ${restoredInScope}/${scoped.length} 段，无需重复翻译`
+      : msg`${restoredFromLocalCount ? t('已从本机恢复') : t('已恢复')} ${restoredInScope}/${scoped.length} 段，可继续翻译`
     : undefined;
   pdfDocumentTranslationPhase = scoped.length
     ? restoredInScope === scoped.length
@@ -3699,8 +4235,8 @@ async function preparePdfDocumentTranslation(): Promise<void> {
   if (restoredCount) documentTranslationSettings.open = false;
   if (!discovered.length) {
     pdfDocumentTranslationMessage = pdfDocumentTranslationUnreadablePages
-      ? '没有读取到文字层；可在下方确认识别扫描页。'
-      : '没有读取到可翻译正文。';
+      ? t('没有读取到文字层；可在下方确认识别扫描页。')
+      : t('没有读取到可翻译正文。');
   }
   syncPdfDocumentTranslationUi();
   restorePdfTranslationReadingAnchor();
@@ -3891,7 +4427,7 @@ function stopPdfDocumentTranslationOcr(): void {
   cancelPdfDocumentTranslationOcrRequest();
   pdfDocumentTranslationOcrRunning = false;
   pdfDocumentTranslationMultimodalAuthorized = false;
-  pdfDocumentTranslationOcrMessage = '识别已停止；成功页面已保留，可继续识别剩余页面。';
+  pdfDocumentTranslationOcrMessage = t('识别已停止；成功页面已保留，可继续识别剩余页面。');
   pdfDocumentTranslationMessage = pdfDocumentTranslationOcrMessage;
   pdfDocumentTranslationOcrError = false;
   syncPdfDocumentTranslationUi();
@@ -3960,7 +4496,7 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
           showNotice(latestError, {
             tone: 'error',
             action: {
-              label: recovery.settingsLabel ?? '检查图像 API',
+              label: recovery.settingsLabel ?? t('检查图像 API'),
               onClick: () => { void openPdfSettings(recovery.settingsFocus); },
             },
           });
@@ -3978,7 +4514,7 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
       temporaryOcrPages.set(pageNumber, page);
       if(currentPdfContentFingerprint){
         try{await savePdfOcrSessionPage(currentPdfContentFingerprint,pdf.numPages,page)}
-        catch{showNotice('识别结果在当前窗口可用，但临时保存失败；关闭后可能需要重新识别。',{tone:'error'})}
+        catch{showNotice(t('识别结果在当前窗口可用，但临时保存失败；关闭后可能需要重新识别。'),{tone:'error'})}
         if(revision!==pdfDocumentTranslationOcrRevision||epoch!==documentEpoch)return;
       }
       updatePdfSearchIndexFromTemporaryOcrPage(pageNumber, page);
@@ -3994,7 +4530,7 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
       pdfDocumentTranslationUnreadablePages = pdfDocumentTranslationUnreadablePageNumbers.length;
       recognizedPages += 1;
     } catch (error) {
-      latestError = error instanceof Error ? error.message : '页面识别失败。';
+      latestError = error instanceof Error ? error.message : t('页面识别失败。');
       if (error && typeof error === 'object' && 'code' in error && error.code === 'REQUEST_BUDGET_REACHED') {
         budgetError = latestError;
         break;
@@ -4036,12 +4572,12 @@ async function recognizePdfDocumentTranslationPages(): Promise<void> {
   }
   pdfDocumentTranslationOcrError = failedPages > 0;
   pdfDocumentTranslationOcrMessage = failedPages
-    ? `${recognizedPages ? `已识别 ${recognizedPages} 页；` : ''}${failedPages} 页未识别${latestError ? `：${latestError}` : ''}`
+    ? msg`${recognizedPages ? msg`已识别 ${recognizedPages} 页；` : ''}${failedPages} 页未识别${latestError ? `：${latestError}` : ''}`
     : undefined;
   pdfDocumentTranslationMessage = restoredAfterOcr.restored
-    ? `${restoredAfterOcr.fromLocal ? '已从本机恢复' : '已恢复'} ${restoredAfterOcr.restored} 段扫描页译文`
+    ? msg`${restoredAfterOcr.fromLocal ? t('已从本机恢复') : t('已恢复')} ${restoredAfterOcr.restored} 段扫描页译文`
     : recognizedPages
-      ? `扫描页已加入正文 · 新增 ${recognizedPages} 页`
+      ? msg`扫描页已加入正文 · 新增 ${recognizedPages} 页`
     : pdfDocumentTranslationMessage;
   if (budgetError) pdfDocumentTranslationMessage = budgetError;
   syncPdfDocumentTranslationUi();
@@ -4070,7 +4606,7 @@ async function processPdfDocumentTranslationVisualBlock(
       block.visualFallbackMessage = '含公式段落缺少可靠的原文位置';
     } else {
       block.status = 'error';
-      block.errorMessage = '本段缺少可靠的视觉定位，未改用文字接口。';
+      block.errorMessage = t('本段缺少可靠的视觉定位，未改用文字接口。');
     }
     delete block.visualProcessed;
     renderPdfDocumentTranslationBlock(block);
@@ -4114,6 +4650,7 @@ async function processPdfDocumentTranslationVisualBlock(
       type: 'TRANSLATE_PDF_DOCUMENT_VISUAL_BLOCK',
       payload: {
         requestId,
+        ...pdfGlossaryLocator(),
         documentId: currentReadingIdentity ?? currentDocumentSessionId,
         ...(bypassCache ? { bypassCache: true } : {}),
         imageDataUrl: capture.imageDataUrl,
@@ -4135,14 +4672,14 @@ async function processPdfDocumentTranslationVisualBlock(
     if(revision!==pdfDocumentTranslationRevision||pdfDocumentTranslationRequestId!==requestId)return false;
     if (!response.ok) break;
     if (!response.data.result.cached) addPdfReportedTokens(pdfRequestUsage, response.data.result.usage, response.data.result.usageSource);
-    let repairNote:string|undefined;
+    let repairNote:string|undefined,pendingFormulaRepair:FormulaDocument|undefined;
     if(pdfDocumentTranslationPhase==='running'&&preparePdfFormulaProseRepair(response.data.result.formulaDocument,pdfDocumentTranslationSettings.targetLanguage)){
       let repairAuthorized=true;
-      try{takePdfTaskRequest('text')}catch{repairAuthorized=false;repairNote='任务请求上限不足，未发送正文修复。'}
+      try{takePdfTaskRequest('text')}catch{repairAuthorized=false;repairNote=t('任务请求上限不足，未发送正文修复。')}
       if(repairAuthorized){
-        const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{requestId,document:response.data.result.formulaDocument!,targetLanguage:pdfDocumentTranslationSettings.targetLanguage,sourceLanguage:pdfDocumentTranslationSettings.sourceLanguage,style:pdfDocumentTranslationSettings.style}} satisfies RuntimeMessage) as TranslateRuntimeResponse;
+        const repaired=await browser.runtime.sendMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{requestId,...termLocator(),document:response.data.result.formulaDocument!,targetLanguage:pdfDocumentTranslationSettings.targetLanguage,sourceLanguage:pdfDocumentTranslationSettings.sourceLanguage,style:pdfDocumentTranslationSettings.style}} satisfies RuntimeMessage) as TranslateRuntimeResponse;
         if(revision!==pdfDocumentTranslationRevision||pdfDocumentTranslationRequestId!==requestId)return false;
-        if(repaired.ok){response=repaired;addPdfReportedTokens(pdfRequestUsage,repaired.data.result.usage,repaired.data.result.usageSource)}else repairNote=`正文修复未完成：${translationErrorMessage(repaired.error.code,repaired.error.message)}`;
+        if(repaired.ok){response=repaired;addPdfReportedTokens(pdfRequestUsage,repaired.data.result.usage,repaired.data.result.usageSource)}else{if(repaired.error.code==='DOCUMENT_TERMS_READ_FAILED'){releasePdfRequest(pdfRequestUsage,'text');if(!response.data.result.uncertainSpans?.some(issue=>!issue.startsWith('公式 LaTeX 未通过自动校验：')))pendingFormulaRepair=response.data.result.formulaDocument}repairNote=msg`正文修复未完成：${translationErrorMessage(repaired.error.code,repaired.error.message)}`}
       }
     }
     const equationNumbers = block.visualUnits ? unit.equationNumbers : block.equationNumbers;
@@ -4151,6 +4688,7 @@ async function processPdfDocumentTranslationVisualBlock(
       ...(unit.sourceEquations ? { sourceEquations: unit.sourceEquations } : {}),
       containsFormula, visualPurpose: pdfDocumentTranslationVisualPurpose(block) }, response.data.result,
     pdfDocumentTranslationSettings.targetLanguage);
+    if(pendingFormulaRepair&&outcome.formulaDocument&&!outcome.formulaReviewDraft&&!outcome.visualFallbackMessage)outcome.pendingFormulaRepair=pendingFormulaRepair;
     if(repairNote)outcome.formulaReviewMessage=[outcome.formulaReviewMessage,repairNote].filter(Boolean).join('；').slice(0,1800);
     completed.push(outcome);
     if (revision !== pdfDocumentTranslationRevision || pdfDocumentTranslationRequestId !== requestId) return false;
@@ -4166,7 +4704,7 @@ async function processPdfDocumentTranslationVisualBlock(
       ok: false,
       error: {
         code: 'NETWORK_ERROR',
-        message: error instanceof Error ? error.message : 'PDF 多模态翻译请求失败。',
+        message: error instanceof Error ? error.message : t('PDF 多模态翻译请求失败。'),
         retryable: true,
       },
     };
@@ -4180,7 +4718,7 @@ async function processPdfDocumentTranslationVisualBlock(
     block.status = 'idle';
     renderPdfDocumentTranslationBlock(block);
     pdfDocumentTranslationPhase = 'paused';
-    pdfDocumentTranslationMessage = '其他划词或框选翻译已优先处理，全文翻译可继续。';
+    pdfDocumentTranslationMessage = t('其他划词或框选翻译已优先处理，全文翻译可继续。');
     syncPdfDocumentTranslationUi();
     return false;
   }
@@ -4201,7 +4739,7 @@ async function processPdfDocumentTranslationVisualBlock(
   renderPdfDocumentTranslationBlock(block);
   await persistPdfDocumentTranslationSession([block]);
   pdfDocumentTranslationMessage = block.visualFallbackMessage
-    ? '部分多模态结果未通过校验，已保留原文并继续翻译。'
+    ? t('部分多模态结果未通过校验，已保留原文并继续翻译。')
     : undefined;
   syncPdfDocumentTranslationUi();
   return true;
@@ -4218,22 +4756,22 @@ function pdfDocumentTranslationContext(block: PdfDocumentTranslationRuntimeBlock
     : pdfDocumentTranslationBlocksState[continuity.nextIndex];
   const relationship = [
     continuity.continuesPrevious
-      ? '本块承接上一连续块中尚未结束的句子；只翻译当前块，不得重复上一块。'
+      ? t('本块承接上一连续块中尚未结束的句子；只翻译当前块，不得重复上一块。')
       : '',
     continuity.continuesNext
-      ? '当前句在下一连续块中继续；不得提前补写下一块。'
+      ? t('当前句在下一连续块中继续；不得提前补写下一块。')
       : '',
     continuity.skippedBefore || continuity.skippedAfter
-      ? '连续正文之间夹有图注、表格或代码等版式结构；这些结构不代表句子自动结束。'
+      ? t('连续正文之间夹有图注、表格或代码等版式结构；这些结构不代表句子自动结束。')
       : '',
   ].filter(Boolean).join(' ');
   const parts = [
-    documentName.textContent ? `文档：${documentName.textContent.slice(0, 120)}` : '',
-    relationship ? `阅读衔接：${relationship}` : '',
-    previous?.text ? `上一连续块原文：${previous.text.slice(-280)}` : '',
+    documentName.textContent ? msg`文档：${documentName.textContent.slice(0, 120)}` : '',
+    relationship ? msg`阅读衔接：${relationship}` : '',
+    previous?.text ? msg`上一连续块原文：${previous.text.slice(-280)}` : '',
     previous?.translatedText && !previous.formulaReviewMessage && !previous.visualFallbackMessage
-      ? `上一连续块译文：${previous.translatedText.slice(-340)}` : '',
-    next?.text ? `下一连续块原文：${next.text.slice(0, 280)}` : '',
+      ? msg`上一连续块译文：${previous.translatedText.slice(-340)}` : '',
+    next?.text ? msg`下一连续块原文：${next.text.slice(0, 280)}` : '',
   ].filter(Boolean);
   const context = parts.join('\n').slice(-1_200).trim();
   return context || undefined;
@@ -4322,8 +4860,9 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
           payload: {
             requestId,
             items: selected.map((block) => ({ id: block.id, text: block.text })),
+            ...pdfGlossaryLocator(),
             documentId: currentReadingIdentity ?? currentDocumentSessionId,
-            pageUrl: currentSourceUrl,
+            pageUrl: currentSourceUrl ?? location.href,
             ...(currentSourceLabel ? { sourceLabel: currentSourceLabel } : {}),
             targetLanguage: pdfDocumentTranslationSettings.targetLanguage,
             sourceLanguage: pdfDocumentTranslationSettings.sourceLanguage,
@@ -4342,7 +4881,7 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
           ok: false,
           error: {
             code: 'NETWORK_ERROR',
-            message: error instanceof Error ? error.message : 'PDF 全文翻译请求失败。',
+            message: error instanceof Error ? error.message : t('PDF 全文翻译请求失败。'),
             retryable: true,
           },
         };
@@ -4359,7 +4898,7 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
             renderPdfDocumentTranslationBlock(block);
           });
           pdfDocumentTranslationPhase = 'paused';
-          pdfDocumentTranslationMessage = '其他划词或框选翻译已优先处理，全文翻译可继续。';
+          pdfDocumentTranslationMessage = t('其他划词或框选翻译已优先处理，全文翻译可继续。');
           syncPdfDocumentTranslationUi();
           return;
         }
@@ -4398,7 +4937,7 @@ async function processPdfDocumentTranslationQueue(): Promise<void> {
           applyPdfTranslationOutcome(block,outcome);
         } else if (block.singleRetry) {
           block.status = 'error';
-          block.errorMessage = '模型没有返回这一段的译文。';
+          block.errorMessage = t('模型没有返回这一段的译文。');
         } else {
           block.status = 'idle';
           block.singleRetry = true;
@@ -4469,6 +5008,7 @@ function preservePdfDocumentTranslationReferenceEntries(): void {
 }
 
 async function startOrTogglePdfDocumentTranslation(): Promise<void> {
+  if(pdfRepairStorageUncertain)return;
   if (pdfTrialRunning) return;
   if (!documentRequestLimit.checkValidity()) { documentRequestLimit.reportValidity(); return; }
   if (pdfDocumentTranslationOcrRunning) return;
@@ -4498,7 +5038,7 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
     pdfDocumentTranslationMultimodalAuthorized = true;
     const unreadablePages = pdfDocumentTranslationUnreadablePagesInScope();
     if (unreadablePages.length) {
-      pdfDocumentTranslationMessage = `已确认智能多模态 · 正在识别 ${unreadablePages.length} 个扫描页…`;
+      pdfDocumentTranslationMessage = msg`已确认智能多模态 · 正在识别 ${unreadablePages.length} 个扫描页…`;
       syncPdfDocumentTranslationUi();
       const ocrRevisionBefore = pdfDocumentTranslationOcrRevision;
       await recognizePdfDocumentTranslationPages();
@@ -4510,7 +5050,7 @@ async function startOrTogglePdfDocumentTranslation(): Promise<void> {
       const limit = pdfRequestLimit();
       if (limit > 0 && pdfRequestUsage.text + pdfRequestUsage.vision + pdfRequestUsage.ocr >= limit) {
         pdfDocumentTranslationPhase = 'paused';
-        pdfDocumentTranslationMessage = `已达到 ${limit} 次任务请求上限；识别结果已保留，可提高上限后继续。`;
+        pdfDocumentTranslationMessage = msg`已达到 ${limit} 次任务请求上限；识别结果已保留，可提高上限后继续。`;
         syncPdfDocumentTranslationUi();
         return;
       }
@@ -4552,6 +5092,7 @@ function stopPdfDocumentTranslation(): void {
 }
 
 async function restartPdfDocumentTranslation(): Promise<void> {
+  if(pdfRepairStorageUncertain)return;
   pdfDocumentTranslationRevision += 1;
   const revision = pdfDocumentTranslationRevision;
   const previousTask = pdfDocumentTranslationTask;
@@ -4563,7 +5104,7 @@ async function restartPdfDocumentTranslation(): Promise<void> {
     block.status='idle';delete block.errorMessage;delete block.singleRetry;
   }
   pdfDocumentTranslationPhase = 'preparing';
-  pdfDocumentTranslationMessage = '保留旧稿与人工修正，准备重新翻译…';
+  pdfDocumentTranslationMessage = t('保留旧稿与人工修正，准备重新翻译…');
   for(const block of pdfDocumentTranslationBlocksState)renderPdfDocumentTranslationBlock(block);
   syncPdfDocumentTranslationUi();
   await previousTask?.catch(() => undefined);
@@ -4575,7 +5116,7 @@ async function restartPdfDocumentTranslation(): Promise<void> {
     ),
     true,
   );
-  if(!saved){pdfDocumentTranslationPhase='error';pdfDocumentTranslationMessage='重译准备未能保存，旧译文仍保留。请检查存储后重试。';syncPdfDocumentTranslationUi();return}
+  if(!saved){pdfDocumentTranslationPhase='error';pdfDocumentTranslationMessage=t('重译准备未能保存，旧译文仍保留。请检查存储后重试。');syncPdfDocumentTranslationUi();return}
   if (revision !== pdfDocumentTranslationRevision) return;
   pdfDocumentTranslationPhase = scopedPdfDocumentTranslationBlocks().length ||
     pdfDocumentTranslationUnreadablePagesInScope().length
@@ -4625,11 +5166,11 @@ function cancelRegionTranslation(taskId: string): void {
   let feedback: { message: string; tone: PdfNoticeTone } | undefined;
   if (queuedIndex >= 0) {
     regionTranslationQueue.splice(queuedIndex, 1);
-    feedback = { message: '已从翻译队列移除。', tone: 'success' };
+    feedback = { message: t('已从翻译队列移除。'), tone: 'success' };
   } else if (activeRegionTranslation?.id === taskId) {
     activeRegionTranslation.cancelled = true;
     void selectionTranslator.then((controller) => controller.cancelActiveTranslation());
-    feedback = { message: '正在取消当前框选翻译…', tone: 'info' };
+    feedback = { message: t('正在取消当前框选翻译…'), tone: 'info' };
   }
   updateRegionAction();
   if (feedback && regionQueuePanel.hidden) {
@@ -4653,11 +5194,11 @@ function renderRegionQueue(): void {
     const label = document.createElement('strong');
     label.textContent = task.pageLabel;
     const status = document.createElement('small');
-    status.textContent = task === activeRegionTranslation ? '翻译中' : '等待中';
+    status.textContent = task === activeRegionTranslation ? t('翻译中') : t('等待中');
     description.append(label, status);
     const cancel = document.createElement('button');
     cancel.type = 'button';
-    cancel.textContent = '取消';
+    cancel.textContent = t('取消');
     cancel.addEventListener('click', () => cancelRegionTranslation(task.id));
     item.append(description, cancel);
     return item;
@@ -4668,17 +5209,17 @@ function updateRegionAction(): void {
   const pending = pendingRegionTranslationCount();
   const shortcut = pdfRegionShortcutKey.toUpperCase();
   const shortcutHint = pdfKeyboardShortcutsEnabled
-    ? `；${shortcut} 框选一次，Shift+${shortcut} 连续框选`
+    ? msg`；${shortcut} 框选一次，Shift+${shortcut} 连续框选`
     : '';
   regionTranslate.dataset.regionMode = regionMode;
   regionTranslate.setAttribute('aria-pressed', String(regionMode === 'continuous'));
   regionTranslate.setAttribute(
     'aria-label',
-    `${regionMode === 'continuous' ? '关闭' : '开启'}连续框选翻译${pending ? `，队列中 ${pending} 项` : ''}`,
+    msg`${regionMode === 'continuous' ? t('关闭') : t('开启')}连续框选翻译${pending ? msg`，队列中 ${pending} 项` : ''}`,
   );
   regionTranslate.title = regionMode === 'continuous'
-    ? `连续框选已开启；点击关闭${pdfKeyboardShortcutsEnabled ? `，或按 Shift+${shortcut}` : ''}`
-    : `点击开启连续框选${shortcutHint}`;
+    ? msg`连续框选已开启；点击关闭${pdfKeyboardShortcutsEnabled ? msg`，或按 Shift+${shortcut}` : ''}`
+    : msg`点击开启连续框选${shortcutHint}`;
   renderRegionQueue();
 }
 
@@ -4840,19 +5381,19 @@ function pdfSelectionPreview(snapshot: SelectionSnapshot) {
   if (matchesGesture && gesture?.tableLike) {
     return {
       text,
-      warning: '检测到表格或多列内容，划词顺序可能不可靠',
-      actionLabel: '改用框选',
+      warning: t('检测到表格或多列内容，划词顺序可能不可靠'),
+      actionLabel: t('改用框选'),
       onAction: useCompletedTextSelectionAsRegion,
       suppressAutoTranslate: true,
     };
   }
   const warning = matchesGesture
     ? gesture?.crossColumn === 'constrained'
-      ? `已保留${gesture.startColumn === 'right' ? '右' : '左'}栏${gesture.retainedSpanningContent ? '及横跨两栏的内容' : ''}，可重新划选调整`
+      ? msg`已保留${gesture.startColumn === 'right' ? t('右') : t('左')}栏${gesture.retainedSpanningContent ? t('及横跨两栏的内容') : ''}，可重新划选调整`
       : gesture?.crossColumn === 'explicit'
-        ? '跨栏选区 · 将按 PDF 原始顺序发送'
+        ? t('跨栏选区 · 将按 PDF 原始顺序发送')
         : gesture?.retainedSpanningContent
-          ? '横跨两栏的内容已保留 · 按 PDF 原始顺序发送'
+          ? t('横跨两栏的内容已保留 · 按 PDF 原始顺序发送')
         : undefined
     : undefined;
   return { text, ...(warning ? { warning } : {}) };
@@ -4867,7 +5408,7 @@ function useCompletedTextSelectionAsRegion(): void {
     gesture.pageElement.dataset.rendered !== 'ready'
   ) {
     setRegionMode('single');
-    showNotice('请在表格或多列内容外沿重新拖动框选。', {
+    showNotice(t('请在表格或多列内容外沿重新拖动框选。'), {
       transient: true,
       tone: 'info',
     });
@@ -4896,7 +5437,7 @@ function useCompletedTextSelectionAsRegion(): void {
   const selection = createActiveRegion(gesture.pageElement, canvas, region);
   createRegionConfirmation(
     selection,
-    '检测到表格或多列内容；请核对框选范围后再发送',
+    t('检测到表格或多列内容；请核对框选范围后再发送'),
   );
   showNotice(undefined);
 }
@@ -4965,22 +5506,22 @@ function finishSmartTextSelection(event: PointerEvent): void {
     if (snap?.tableLike) {
       showNotice(
         continuousSidebarActive
-          ? '检测到表格或多列内容，本次没有自动发送；请使用“框选翻译”核对范围。'
-          : '检测到表格或多列内容，划词顺序可能不可靠；可在选区预览中改用框选。',
+          ? t('检测到表格或多列内容，本次没有自动发送；请使用“框选翻译”核对范围。')
+          : t('检测到表格或多列内容，划词顺序可能不可靠；可在选区预览中改用框选。'),
         { transient: true, tone: 'warning' },
       );
     } else if (snap?.crossColumn === 'constrained') {
-      showNotice(`检测到选区带入另一栏，已保留起始栏${snap.retainedSpanningContent ? '和选中的通栏' : ''}内容。可重新划选调整。`, {
+      showNotice(msg`检测到选区带入另一栏，已保留起始栏${snap.retainedSpanningContent ? t('和选中的通栏') : ''}内容。可重新划选调整。`, {
         transient: true,
         tone: 'info',
       });
     } else if (snap?.crossColumn === 'explicit') {
-      showNotice('已选择左右两栏；将按 PDF 原始文字顺序发送，请先核对选区预览。', {
+      showNotice(t('已选择左右两栏；将按 PDF 原始文字顺序发送，请先核对选区预览。'), {
         transient: true,
         tone: 'warning',
       });
     } else if (snap?.retainedSpanningContent) {
-      showNotice('已保留选中的通栏内容，并按 PDF 原始文字顺序发送。', {
+      showNotice(t('已保留选中的通栏内容，并按 PDF 原始文字顺序发送。'), {
         transient: true,
         tone: 'info',
       });
@@ -5027,21 +5568,23 @@ function beginDocumentOpen(
   element<HTMLDialogElement>('pdf-paragraph-editor').close();
   element<HTMLDialogElement>('pdf-terms-dialog').close();
   pdfHistoryDialog.close();
+  pdfHistoryRestoreRequest=undefined;
   activeParagraphEdit=undefined;lastParagraphCorrection=undefined;
   void persistReadingState();
   cachedReadingContext=undefined;delete document.documentElement.dataset.libraryReading;
   searchScope.disabled=false;
-  documentTranslationViewCompare.hidden=false;documentTranslationClose.textContent='返回原页';
-  documentTranslationPanel.querySelector('.pdf-document-translation-title strong')!.textContent='PDF 全文翻译';
+  documentTranslationViewCompare.hidden=false;documentTranslationClose.textContent=t('返回原页');
+  documentTranslationPanel.querySelector('.pdf-document-translation-title strong')!.textContent=t('PDF 全文翻译');
   element<HTMLButtonElement>('pdf-library-source').hidden=true;element<HTMLButtonElement>('pdf-library-back').hidden=true;
   pdfTranslationReadingAnchor=undefined;
-  currentPdfContentFingerprint=undefined;libraryRestoreDocumentKey=undefined;
+  currentPdfContentFingerprint=undefined;pdfArchiveCapacityRevision++;pdfCorrectionFollowup.hidden=true;pdfRepairArchiveView.hidden=pdfArchiveCapacityNote.hidden=pdfArchiveCapacityBackup.hidden=true;libraryRestoreDocumentKey=undefined;
   resetPdfDocumentTranslation(true);
   currentPdfBackgroundData = undefined;
   currentReadingIdentity = undefined;
   restoringReadingState = false;
   completedTextSelectionGesture = undefined;
   resetPdfOutline();
+  viewRotation = 0; fitPageActive = false;
   resetPdfSearch();
   resetPdfLinkHistory();
   openOperationId += 1;
@@ -5055,6 +5598,8 @@ function beginDocumentOpen(
   }
   const previousDocument = pdfDocument;
   pdfDocument = undefined;
+  currentPdfCitation = {};
+  delete documentName.dataset.citationState;
   if (previousDocument) void previousDocument.destroy().catch(() => undefined);
   regionTranslationQueue.length = 0;
   temporaryOcrPages.clear();
@@ -5062,6 +5607,8 @@ function beginDocumentOpen(
   if (activeRegionTranslation) activeRegionTranslation.cancelled = true;
   updateRegionAction();
   clearDocument();
+  readingHintTarget=undefined;readingHintResumePage=undefined;pdfReadingHints.reset();
+  readingAnnotations.reset();
   void selectionTranslator.then((controller) => controller.reset());
   setDocumentControls(false);
   pageJump.hidden = true;
@@ -5106,8 +5653,8 @@ function setRegionMode(mode: RegionSelectionMode): void {
     window.getSelection()?.removeAllRanges();
     showNotice(
       regionMode === 'continuous'
-        ? '连续框选已开启 · 可逐个发送 · Esc 退出'
-        : '拖动框选一次 · Esc 取消',
+        ? t('连续框选已开启 · 可逐个发送 · Esc 退出')
+        : t('拖动框选一次 · Esc 取消'),
       { transient: true, tone: 'info' },
     );
   } else {
@@ -5136,7 +5683,7 @@ function clamp(value: number, minimum: number, maximum: number): number {
   return Math.min(maximum, Math.max(minimum, value));
 }
 
-function visiblePageAnchor(): PageAnchor {
+function visiblePageAnchor(preferReadingPoint = true): PageAnchor {
   const pages = [...viewer.querySelectorAll<HTMLElement>('.pdf-page')];
   if (pages.length === 0) return { pageNumber: 1, ratio: 0 };
   const stageRect = stage.getBoundingClientRect();
@@ -5166,13 +5713,11 @@ function visiblePageAnchor(): PageAnchor {
     closestPage = page;
     closestDistance = distance;
   }
-  const selectedPage = anchorPage && (
-    dominantPage === anchorPage || dominantVisibleHeight < anchorPageVisibleHeight * 1.5
-  )
-    ? anchorPage
-    : dominantVisibleHeight > 0
-      ? dominantPage
-      : closestPage;
+  // Preserve the point actually being read, including a short page above a
+  // taller neighbour. A dominant-page heuristic loses that offset on restore.
+  const selectedPage = anchorPage && (preferReadingPoint || dominantPage === anchorPage ||
+    dominantVisibleHeight < anchorPageVisibleHeight * 1.5)
+    ? anchorPage : dominantVisibleHeight > 0 ? dominantPage : closestPage;
   const rect = selectedPage.getBoundingClientRect();
   return {
     pageNumber: Number(selectedPage.dataset.pageNumber) || 1,
@@ -5189,6 +5734,8 @@ function currentPdfReadingState(): PdfReadingState | undefined {
     pageRatio: anchor.ratio,
     zoomLevel: currentZoom(),
     fitWidth: fitWidthActive,
+    ...(fitPageActive ? {fitPage:true as const} : {}),
+    ...(viewRotation ? {rotation:viewRotation as 90|180|270} : {}),
     sidebarExpanded: pdfSidebarLayout.expanded,
     updatedAt: Date.now(),
     ...(translation ? {translation} : {}),
@@ -5215,7 +5762,12 @@ function restorePdfTranslationReadingAnchor(): void {
   if (!anchor || documentTranslationPanel.hidden) return;
   setPdfDocumentTranslationViewMode(anchor.mode);
   if (anchor.mode !== 'reading') return;
-  requestAnimationFrame(()=>{
+  // Local MathML rendering replaces formula placeholders asynchronously. Wait
+  // for that one render and its fonts before measuring the saved paragraph.
+  void Promise.allSettled([...pendingPdfTranslationRenders]).then(() => {
+    void documentTranslationPages.offsetHeight;
+    return document.fonts.ready;
+  }).then(() => requestAnimationFrame(()=>{
     if (pdfTranslationReadingAnchor!==anchor || documentTranslationPanel.hidden) return;
     const visible=pdfDocumentTranslationBlocksState.filter(block=>block.included&&block.status!=='idle');
     const block=visible.find(block=>block.sessionSignature===anchor.signature) ??
@@ -5226,16 +5778,25 @@ function restorePdfTranslationReadingAnchor(): void {
     documentTranslationPages.scrollTop+=rect.top-bounds.top+rect.height*anchor.offsetRatio;
     pdfDocumentTranslationReadingScrollTop=documentTranslationPages.scrollTop;
     scheduleReadingStateSave();
-  });
+  }));
 }
 
-async function persistReadingState(): Promise<void> {
+async function persistReadingState(opened=false): Promise<void> {
   if (readingStateSaveTimer) clearTimeout(readingStateSaveTimer);
   readingStateSaveTimer = undefined;
   const identity = currentPdfContentFingerprint ? `pdf-content:${currentPdfContentFingerprint}` : currentReadingIdentity;
   const state = currentPdfReadingState();
   if (!identity || !state) return;
-  await savePdfReadingState(identity, state).catch(() => undefined);
+  if (currentPdfContentFingerprint) {
+    // The worker finishes this write even when the reader closes immediately.
+    await browser.runtime.sendMessage({
+      type: 'SAVE_PDF_READING_STATE',
+      payload: { fingerprint: currentPdfContentFingerprint, state,...(opened?{opened:true as const}:{}),
+        document:{title:(documentName.textContent?.trim()||'PDF').slice(0,120),...(pdfDocument?{pageCount:pdfDocument.numPages}:{})} },
+    } satisfies RuntimeMessage).catch(() => undefined);
+  } else {
+    await savePdfReadingState(identity, state).catch(() => undefined);
+  }
 }
 
 function scheduleReadingStateSave(): void {
@@ -5263,12 +5824,14 @@ function updatePdfLinkReturn(): void {
   const target = pdfLinkHistory.at(-1);
   pdfLinkReturn.hidden = !target;
   if (!target) {
-    pdfLinkReturn.textContent = '← 返回';
+    pdfLinkReturn.textContent = t('← 返回');
     pdfLinkReturn.removeAttribute('title');
     return;
   }
-  pdfLinkReturn.textContent = `← 返回第 ${target.pageNumber} 页`;
-  pdfLinkReturn.title = `返回链接跳转前的第 ${target.pageNumber} 页`;
+  if(target.summaryReturn){const recap=target.summaryReturn.kind==='recap';pdfLinkReturn.textContent=recap?t('← 返回回顾'):t('← 返回小结');pdfLinkReturn.title=pdfLinkReturn.ariaLabel=recap?t('返回刚才的阅读回顾'):t('返回刚才的小结');return}
+  const page=target.reading?.page??target.pageNumber;
+  pdfLinkReturn.textContent = msg`← 返回第 ${page} 页`;
+  pdfLinkReturn.title = msg`返回查阅前的第 ${page} 页`;
   pdfLinkReturn.setAttribute('aria-label', pdfLinkReturn.title);
 }
 
@@ -5277,13 +5840,16 @@ function resetPdfLinkHistory(): void {
   updatePdfLinkReturn();
 }
 
-function pushPdfLinkHistory(anchor: PageAnchor): void {
+function pushPdfLinkHistory(anchor: PageAnchor, summaryReturn?:ReadingSummaryReturn): void {
+  const reading={mode:pdfDocumentTranslationViewMode,hidden:documentTranslationPanel.hidden,top:documentTranslationPages.scrollTop,left:documentTranslationPages.scrollLeft,sourceLeft:stage.scrollLeft,page:!documentTranslationPanel.hidden&&pdfDocumentTranslationViewMode==='reading'?currentPdfTranslationReadingAnchor()?.pageNumber??anchor.pageNumber:anchor.pageNumber};
   const previous = pdfLinkHistory.at(-1);
   if (
-    previous?.pageNumber === anchor.pageNumber &&
-    Math.abs(previous.ratio - anchor.ratio) < 0.01
+    !summaryReturn && previous?.pageNumber === anchor.pageNumber &&
+    Math.abs(previous.ratio - anchor.ratio) < 0.01 && previous.rotation === viewRotation && JSON.stringify(previous.reading)===JSON.stringify(reading)
   ) return;
-  pdfLinkHistory.push(anchor);
+  const entry={...anchor,rotation:viewRotation,reading,...(summaryReturn?{summaryReturn}:{})};
+  pdfLinkHistory.push(entry);
+  summaryReturn?.onCancel(()=>{delete entry.summaryReturn;updatePdfLinkReturn()});
   if (pdfLinkHistory.length > PDF_LINK_HISTORY_LIMIT) pdfLinkHistory.shift();
   updatePdfLinkReturn();
 }
@@ -5310,14 +5876,14 @@ async function resolvePdfLinkDestination(
   let ratio = 0;
   if (top !== undefined) {
     const page = await pdf.getPage(pageNumber);
-    const viewport = page.getViewport({ scale: 1 });
+    const viewport = page.getViewport({ scale: 1,rotation:(page.rotate+viewRotation)%360 });
     const point = viewport.convertToViewportPoint(0, top);
     const viewportY = Number(point[1]);
     if (Number.isFinite(viewportY) && viewport.height > 0) {
       ratio = clamp(viewportY / viewport.height, 0, 1);
     }
   }
-  return { pageNumber, ratio, destinationLabel: `第 ${pageNumber} 页` };
+  return { pageNumber, ratio, destinationLabel: msg`第 ${pageNumber} 页` };
 }
 
 function namedPdfLinkDestination(
@@ -5333,7 +5899,7 @@ function namedPdfLinkDestination(
       : action === 'NextPage'
         ? Math.min(total, sourcePageNumber + 1)
         : Math.max(1, sourcePageNumber - 1);
-  return { pageNumber, ratio: 0, destinationLabel: `第 ${pageNumber} 页` };
+  return { pageNumber, ratio: 0, destinationLabel: msg`第 ${pageNumber} 页` };
 }
 
 function jumpToPdfLinkDestination(
@@ -5356,22 +5922,46 @@ function jumpToPdfLinkDestination(
   if (focusReturn) pdfLinkReturn.focus({ preventScroll: true });
 }
 
-pdfLinkReturn.addEventListener('click', () => {
+pdfLinkReturn.addEventListener('click', async () => {
+  if(pdfLinkHistory.at(-1)?.summaryReturn&&hasReadingDraft()){showNotice(pdfLinkHistory.at(-1)?.summaryReturn?.kind==='recap'?t('请先保存或取消未完成的编辑，再返回阅读回顾。'):t('请先保存或取消未完成的编辑，再返回小结。'));return}
+  searchSourceReturnSaved = false;
   const target = pdfLinkHistory.pop();
   if (!target) return;
+  const epoch = documentEpoch;
+  if(target.reading){
+    documentTranslationPanel.hidden=target.reading.hidden;
+    // Suppress the mode switch's old compare anchor; this snapshot owns return.
+    pdfTranslationReadingAnchor=undefined;
+    pdfDocumentTranslationReadingScrollTop=target.reading.top;
+    setPdfDocumentTranslationViewMode(target.reading.mode);
+    updatePdfDocumentTranslationInset();
+  }
+  if (target.rotation !== undefined && target.rotation !== viewRotation) await changeViewRotation(target.rotation);
+  if (epoch !== documentEpoch) return;
+  if (fitWidthActive || fitPageActive) await fitDocumentToAvailableWidth(target);
+  if (epoch !== documentEpoch) return;
   jumpToPdfLinkDestination(
-    { ...target, destinationLabel: `第 ${target.pageNumber} 页` },
+    { ...target, destinationLabel: msg`第 ${target.pageNumber} 页` },
     false,
   );
+  if(target.reading){
+    syncPdfDocumentTranslationCurrentPage();
+    documentTranslationPages.scrollTop=target.reading.top;
+    documentTranslationPages.scrollLeft=target.reading.left;
+    stage.scrollLeft=target.reading.sourceLeft;
+    scheduleReadingStateSave();
+  }
   updatePdfLinkReturn();
   if (!pdfLinkReturn.hidden) pdfLinkReturn.focus({ preventScroll: true });
   else stage.focus({ preventScroll: true });
+  target.summaryReturn?.resume();
 });
 
-function updatePageControl(anchor = visiblePageAnchor()): void {
+function updatePageControl(anchor = visiblePageAnchor(false)): void {
   if (document.activeElement !== pageNumberInput) {
     pageNumberInput.value = String(anchor.pageNumber);
   }
+  thumbnails.markCurrent(anchor.pageNumber);
   syncPdfOutlineCurrent(anchor.pageNumber);
   syncPdfBookmarkCurrent(anchor.pageNumber);
   syncPdfDocumentTranslationCurrentPage(anchor.pageNumber);
@@ -5383,8 +5973,9 @@ function currentPdfBookmark(pageNumber = visiblePageAnchor().pageNumber): PdfRea
 
 function updatePdfNavigationStatus(): void {
   outlineStatus.textContent = activePdfNavigationView === 'outline'
-    ? `${pdfOutlineEntryMap.size} 项`
-    : `${pdfReadingBookmarks.length} 个书签`;
+    ? msg`${pdfOutlineEntryMap.size} 项`
+    : activePdfNavigationView === 'thumbnails' ? msg`共 ${pdfDocument?.numPages ?? 0} 页`
+    : msg`${pdfReadingBookmarks.length} 个书签`;
 }
 
 function syncPdfBookmarkCurrent(pageNumber: number): void {
@@ -5398,14 +5989,14 @@ function syncPdfBookmarkCurrent(pageNumber: number): void {
   }
   bookmarkAdd.disabled = !currentReadingIdentity || Boolean(current) ||
     pdfReadingBookmarks.length >= MAX_PDF_BOOKMARKS_PER_DOCUMENT;
-  bookmarkAdd.textContent = current ? '✓ 当前页已添加' : '＋ 添加当前页';
+  bookmarkAdd.textContent = current ? t('✓ 当前页已添加') : t('＋ 添加当前页');
   bookmarkAdd.title = !currentReadingIdentity
-    ? '当前文档无法建立本地匿名标识'
+    ? t('当前文档无法建立本地匿名标识')
     : current
-      ? '当前页已有书签'
+      ? t('当前页已有书签')
       : pdfReadingBookmarks.length >= MAX_PDF_BOOKMARKS_PER_DOCUMENT
-        ? `每份 PDF 最多 ${MAX_PDF_BOOKMARKS_PER_DOCUMENT} 个书签`
-        : '将当前阅读页加入书签';
+        ? msg`每份 PDF 最多 ${MAX_PDF_BOOKMARKS_PER_DOCUMENT} 个书签`
+        : t('将当前阅读页加入书签');
   bookmarkStatus.textContent = `${pdfReadingBookmarks.length} / ${MAX_PDF_BOOKMARKS_PER_DOCUMENT}`;
 }
 
@@ -5427,7 +6018,7 @@ function persistPdfBookmarks(): void {
       renderPdfBookmarks();
     } catch {
       if ((currentPdfContentFingerprint?`pdf-content:${currentPdfContentFingerprint}`:currentReadingIdentity) === identity && documentEpoch === epoch) {
-        showNotice('书签暂时无法保存，请稍后重试。', { tone: 'warning', transient: true });
+        showNotice(t('书签暂时无法保存，请稍后重试。'), { tone: 'warning', transient: true });
       }
     }
   });
@@ -5460,22 +6051,22 @@ function renderPdfBookmarkEditor(
   label.type = 'text';
   label.maxLength = MAX_PDF_BOOKMARK_LABEL_LENGTH;
   label.value = bookmark.label;
-  label.placeholder = `第 ${bookmark.pageNumber} 页`;
-  label.setAttribute('aria-label', '书签名称');
+  label.placeholder = msg`第 ${bookmark.pageNumber} 页`;
+  label.setAttribute('aria-label', t('书签名称'));
   const note = document.createElement('textarea');
   note.maxLength = MAX_PDF_BOOKMARK_NOTE_LENGTH;
   note.value = bookmark.note;
-  note.placeholder = '备注（可选）';
-  note.setAttribute('aria-label', '书签备注');
+  note.placeholder = t('备注（可选）');
+  note.setAttribute('aria-label', t('书签备注'));
   const actions = document.createElement('div');
   actions.className = 'pdf-bookmark-editor-actions';
   const cancel = document.createElement('button');
   cancel.type = 'button';
-  cancel.textContent = '取消';
+  cancel.textContent = t('取消');
   const save = document.createElement('button');
   save.type = 'submit';
   save.className = 'save';
-  save.textContent = '保存';
+  save.textContent = t('保存');
   actions.append(cancel, save);
   editor.append(label, note, actions);
   cancel.addEventListener('click', () => {
@@ -5520,7 +6111,7 @@ function renderPdfBookmarks(focusId?: string): void {
     const jump = document.createElement('button');
     jump.type = 'button';
     jump.className = 'pdf-bookmark-jump';
-    jump.title = `跳转到第 ${bookmark.pageNumber} 页`;
+    jump.title = msg`跳转到第 ${bookmark.pageNumber} 页`;
     const copy = document.createElement('span');
     copy.className = 'pdf-bookmark-copy';
     const label = document.createElement('strong');
@@ -5533,7 +6124,7 @@ function renderPdfBookmarks(focusId?: string): void {
     }
     const page = document.createElement('span');
     page.className = 'pdf-bookmark-page';
-    page.textContent = `第 ${bookmark.pageNumber} 页`;
+    page.textContent = msg`第 ${bookmark.pageNumber} 页`;
     jump.append(copy, page);
     jump.addEventListener('click', () => navigateToPdfBookmark(bookmark));
     const actions = document.createElement('span');
@@ -5542,8 +6133,8 @@ function renderPdfBookmarks(focusId?: string): void {
     edit.type = 'button';
     edit.className = 'pdf-bookmark-edit';
     edit.textContent = '✎';
-    edit.title = `编辑“${bookmark.label}”`;
-    edit.setAttribute('aria-label', `编辑书签 ${bookmark.label}`);
+    edit.title = msg`编辑“${bookmark.label}”`;
+    edit.setAttribute('aria-label', msg`编辑书签 ${bookmark.label}`);
     edit.addEventListener('click', () => {
       editingPdfBookmarkId = bookmark.id;
       renderPdfBookmarks();
@@ -5552,8 +6143,8 @@ function renderPdfBookmarks(focusId?: string): void {
     remove.type = 'button';
     remove.className = 'pdf-bookmark-delete';
     remove.textContent = '×';
-    remove.title = `删除“${bookmark.label}”`;
-    remove.setAttribute('aria-label', `删除书签 ${bookmark.label}`);
+    remove.title = msg`删除“${bookmark.label}”`;
+    remove.setAttribute('aria-label', msg`删除书签 ${bookmark.label}`);
     remove.addEventListener('click', () => {
       pdfReadingBookmarks = pdfReadingBookmarks.filter((candidate) => candidate.id !== bookmark.id);
       if (editingPdfBookmarkId === bookmark.id) editingPdfBookmarkId = undefined;
@@ -5586,7 +6177,7 @@ function addCurrentPdfBookmark(): void {
   const bookmark = normalizePdfReadingBookmark({
     id: crypto.randomUUID(),
     pageNumber,
-    label: `第 ${pageNumber} 页`,
+    label: msg`第 ${pageNumber} 页`,
     note: '',
     createdAt: now,
     updatedAt: now,
@@ -5599,20 +6190,19 @@ function addCurrentPdfBookmark(): void {
 }
 
 function setPdfNavigationView(view: PdfNavigationView, focusTab = false): void {
-  activePdfNavigationView = view === 'outline' && !pdfOutlineEntries.length
-    ? 'bookmarks'
-    : view;
-  const showingOutline = activePdfNavigationView === 'outline';
+  activePdfNavigationView = view === 'outline' && !pdfOutlineEntries.length ? 'bookmarks' : view;
   outlineTab.hidden = !pdfOutlineEntries.length;
-  outlineTab.setAttribute('aria-selected', String(showingOutline));
-  outlineTab.tabIndex = showingOutline ? 0 : -1;
-  bookmarksTab.setAttribute('aria-selected', String(!showingOutline));
-  bookmarksTab.tabIndex = showingOutline ? -1 : 0;
-  outlineTree.hidden = !showingOutline;
-  bookmarksPanel.hidden = showingOutline;
+  for (const [tab,name] of [[outlineTab,'outline'],[thumbnailsTab,'thumbnails'],[bookmarksTab,'bookmarks']] as const) {
+    const selected = activePdfNavigationView === name;
+    tab.setAttribute('aria-selected',String(selected)); tab.tabIndex = selected ? 0 : -1;
+    if (selected && focusTab) tab.focus({preventScroll:true});
+  }
+  outlineTree.hidden = activePdfNavigationView !== 'outline';
+  bookmarksPanel.hidden = activePdfNavigationView !== 'bookmarks';
+  thumbnailsPanel.hidden = activePdfNavigationView !== 'thumbnails';
+  thumbnails.show(!outlinePanel.hidden && !thumbnailsPanel.hidden,visiblePageAnchor(false).pageNumber);
   updatePdfNavigationStatus();
-  if (!showingOutline) renderPdfBookmarks();
-  if (focusTab) (showingOutline ? outlineTab : bookmarksTab).focus({ preventScroll: true });
+  if (!bookmarksPanel.hidden) renderPdfBookmarks();
 }
 
 function visiblePdfOutlineEntryId(): string | undefined {
@@ -5667,7 +6257,7 @@ function renderPdfOutline(focusId?: string): void {
         toggle.dataset.outlineToggleId = entry.id;
         toggle.tabIndex = -1;
         toggle.textContent = '›';
-        toggle.setAttribute('aria-label', `${expanded ? '收起' : '展开'} ${entry.title}`);
+        toggle.setAttribute('aria-label', `${expanded ? t('收起') : t('展开')} ${entry.title}`);
         toggle.setAttribute('aria-expanded', String(expanded));
         row.append(toggle);
       } else {
@@ -5695,9 +6285,9 @@ function renderPdfOutline(focusId?: string): void {
         page.className = 'pdf-outline-page';
         page.textContent = String(entry.pageNumber);
         action.append(page);
-        action.title = `${entry.title} · 第 ${entry.pageNumber} 页`;
+        action.title = msg`${entry.title} · 第 ${entry.pageNumber} 页`;
       } else {
-        action.title = `${entry.title} · 章节组`;
+        action.title = msg`${entry.title} · 章节组`;
       }
       row.append(action);
       node.append(row);
@@ -5741,6 +6331,7 @@ function revealCurrentPdfOutlineEntry(): void {
 function closePdfOutline(restoreFocus = true): void {
   if (outlinePanel.hidden) return;
   outlinePanel.hidden = true;
+  thumbnails.show(false);
   openOutline.setAttribute('aria-expanded', 'false');
   if (restoreFocus) {
     const target = outlineReturnFocus?.isConnected ? outlineReturnFocus : openOutline;
@@ -5769,6 +6360,8 @@ function openPdfOutline(): void {
         )
       : outlineTree.querySelector<HTMLButtonElement>('.pdf-outline-action');
     target?.focus({ preventScroll: true });
+  } else if (activePdfNavigationView === 'thumbnails') {
+    thumbnailsPanel.querySelector<HTMLElement>('[aria-current="page"]')?.focus({preventScroll:true});
   } else {
     renderPdfBookmarks();
     const current = currentPdfBookmark();
@@ -5784,6 +6377,7 @@ function openPdfOutline(): void {
 
 function resetPdfOutline(): void {
   closePdfOutline(false);
+  thumbnails.reset();
   pdfOutlineEntries = [];
   pdfOutlineEntryMap = new Map();
   pdfOutlineExpandedIds = new Set();
@@ -5870,7 +6464,7 @@ async function loadPdfOutline(pdf: PDFDocumentProxy, epoch: number): Promise<voi
       pdfOutlineEntries,
       visiblePageAnchor().pageNumber,
     )?.id;
-    outlineTab.title = result.truncated ? `显示前 ${flattened.length} 项` : '';
+    outlineTab.title = result.truncated ? msg`显示前 ${flattened.length} 项` : '';
     if (flattened.length && outlinePanel.hidden) activePdfNavigationView = 'outline';
     setPdfNavigationView(activePdfNavigationView);
   } catch {
@@ -6073,7 +6667,7 @@ function renderPdfSearchResults(): void {
   const hasMatches = Boolean(activeSearchQuery && searchMatches.length);
   searchResultsToggle.hidden = !hasMatches;
   searchResultsToggle.setAttribute('aria-expanded', String(searchResultsExpanded));
-  const toggleLabel = searchResultsExpanded ? '收起搜索结果' : '展开搜索结果';
+  const toggleLabel = searchResultsExpanded ? t('收起搜索结果') : t('展开搜索结果');
   searchResultsToggle.title = toggleLabel;
   searchResultsToggle.setAttribute('aria-label', toggleLabel);
   searchResults.hidden = searchPanel.hidden || !hasMatches || !searchResultsExpanded;
@@ -6087,7 +6681,7 @@ function renderPdfSearchResults(): void {
   if (searchMatches.length > PDF_SEARCH_PREVIEW_LIMIT) {
     const range = document.createElement('div');
     range.className = 'pdf-search-results-range';
-    range.textContent = `显示第 ${start + 1}–${end} 项 · 共 ${searchMatches.length} 项`;
+    range.textContent = msg`显示第 ${start + 1}–${end} 项 · 共 ${searchMatches.length} 项`;
     fragment.append(range);
   }
   searchMatches.slice(start, end).forEach((match, offset) => {
@@ -6096,7 +6690,7 @@ function renderPdfSearchResults(): void {
     button.type = 'button';
     button.className = 'pdf-search-result';
     button.dataset.searchResultIndex = String(resultIndex);
-    button.setAttribute('aria-label', `第 ${match.pageNumber} 页，搜索结果 ${resultIndex + 1}`);
+    button.setAttribute('aria-label', msg`第 ${match.pageNumber} 页，搜索结果 ${resultIndex + 1}`);
     button.setAttribute('aria-posinset', String(resultIndex + 1));
     button.setAttribute('aria-setsize', String(searchMatches.length));
     if (resultIndex === searchResultIndex) {
@@ -6105,16 +6699,16 @@ function renderPdfSearchResults(): void {
     }
     const page = document.createElement('span');
     page.className = 'pdf-search-result-page';
-    page.textContent = `第 ${match.pageNumber} 页${searchScope.value === 'all' ? match.translationBlockId ? ' · 译文' : ' · 原文' : ''}`;
+    page.textContent = msg`第 ${match.pageNumber} 页${searchScope.value === 'all' ? match.translationBlockId ? t(' · 译文') : t(' · 原文') : ''}`;
     const excerpt = document.createElement('span');
     excerpt.className = 'pdf-search-result-excerpt';
     const indexedPage = match.translationBlockId ? translationSearchIndexes.get(match.translationBlockId) : searchPageIndexes.get(match.pageNumber);
     const snippet = indexedPage
       ? buildPdfSearchSnippet(indexedPage, match)
-      : { before: '', match: activeSearchQuery, after: '' };
+      : { before: '', match: match.matchedQuery??activeSearchQuery, after: '' };
     excerpt.append(document.createTextNode(snippet.before));
     const mark = document.createElement('mark');
-    mark.textContent = snippet.match || activeSearchQuery;
+    mark.textContent = snippet.match || match.matchedQuery || activeSearchQuery;
     excerpt.append(mark, document.createTextNode(snippet.after));
     button.append(page, excerpt);
     fragment.append(button);
@@ -6141,8 +6735,9 @@ function syncPdfSearchStatus(): void {
   searchPrevious.disabled = !hasMatches;
   searchNext.disabled = !hasMatches;
   renderPdfSearchResults();
+  renderPdfSearchAssistance();
   if (!activeSearchQuery) {
-    setSearchStatus('输入关键词');
+    setSearchStatus(t('输入关键词'));
     return;
   }
   const totalPages = pdfDocument?.numPages ?? 0;
@@ -6151,37 +6746,50 @@ function syncPdfSearchStatus(): void {
     const capped = searchMatches.length >= PDF_SEARCH_RESULT_LIMIT;
     const total = `${searchMatches.length}${capped ? '+' : ''}`;
     const progress = searchIndexing && indexedPages < totalPages
-      ? ` · ${indexedPages}/${totalPages} 页`
+      ? msg` · ${indexedPages}/${totalPages} 页`
       : '';
     setSearchStatus(`${searchResultIndex + 1} / ${total}${progress}`);
     return;
   }
   if (searchIndexing && indexedPages < totalPages) {
-    setSearchStatus(`正在搜索 ${indexedPages}/${totalPages} 页`);
+    setSearchStatus(msg`正在搜索 ${indexedPages}/${totalPages} 页`);
     return;
   }
   const hasSearchableText = searchScope.value === 'translation'
     ? translationSearchIndexes.size > 0
     : [...searchPageIndexes.values()].some((page) => page.text);
-  setSearchStatus(hasSearchableText ? '未找到' : '当前文档没有可搜索文字');
+  setSearchStatus(hasSearchableText ? t('未找到') : t('当前文档没有可搜索文字'));
+}
+
+function renderPdfSearchAssistance():void{
+  searchAssistance.replaceChildren();searchAssistance.hidden=true;if(!activeSearchQuery)return;
+  const epoch=documentEpoch,query=activeSearchQuery,scope=searchScope.value;
+  const applyAssisted=()=>{stopSearchIndexing();activeSearchQuery=normalizePdfSearchText(searchQuery.value);updatePdfSearchMatches(false);if(searchMatches.length)navigateToPdfSearchResult(0);if(activeSearchQuery)startPdfSearchIndexing()};
+  const change=(value:string,nextScope=scope)=>{if(epoch!==documentEpoch||query!==activeSearchQuery)return;assistedSearchOrigin??={query:searchQuery.value,scope:searchScope.value};searchQuery.value=value;searchScope.value=nextScope;searchQueryEdited=true;applyAssisted();searchQuery.focus({preventScroll:true})};
+  const noResults=!searchMatches.length&&!searchIndexing;
+  appendSearchAssistance(searchAssistance,{query:noResults?query:'',terms:pdfConfirmedTerms,onQuery:value=>change(value),matchedTerms:confirmedSearchAliases,
+    ...(noResults&&scope!=='all'&&((scope==='translation'&&pdfDocument)||(scope==='source'&&pdfDocumentTranslationBlocksState.some(block=>block.included&&block.status==='done'&&block.translatedText)))?{broaden:{label:t('同时查原文与译文'),run:()=>change(query,'all')}}:{}),
+    ...(assistedSearchOrigin?{restore:()=>{if(epoch!==documentEpoch)return;const saved=assistedSearchOrigin;if(!saved)return;assistedSearchOrigin=undefined;searchQuery.value=saved.query;searchScope.value=saved.scope;applyAssisted();searchQuery.focus({preventScroll:true})}}:{})});
+  searchAssistance.hidden=!searchAssistance.childElementCount;
 }
 
 function updatePdfSearchMatches(preserveCurrent: boolean): void {
   const currentIdentity = preserveCurrent
     ? searchMatchIdentity(searchMatches[searchResultIndex])
     : undefined;
-  searchMatches = searchScope.value === 'translation' ? [] : findPdfSearchMatches(searchPageIndexes.values(), activeSearchQuery, PDF_SEARCH_RESULT_LIMIT);
   translationSearchIndexes.clear();
-  if (searchScope.value !== 'source') {
-    for (const block of pdfDocumentTranslationBlocksState) {
-      if (!block.included || block.status !== 'done' || !block.translatedText) continue;
-      const index = buildPdfSearchPageIndex(block.pageNumber, [{str: block.formulaDocument ? formulaDocumentText(block.formulaDocument) : block.translatedText}]);
-      translationSearchIndexes.set(block.id, index);
-      const matches = findPdfSearchMatches([index], activeSearchQuery, Math.max(0, PDF_SEARCH_RESULT_LIMIT - searchMatches.length));
-      searchMatches.push(...matches.map(match => ({...match, translationBlockId: block.id})));
-    }
-    searchMatches.sort((left, right) => left.pageNumber - right.pageNumber);
+  if(searchScope.value!=='source')for(const block of pdfDocumentTranslationBlocksState){
+    if(block.included&&block.status==='done'&&block.translatedText)translationSearchIndexes.set(block.id,buildPdfSearchPageIndex(block.pageNumber,[{str:block.formulaDocument?formulaDocumentText(block.formulaDocument):block.translatedText}]));
   }
+  const find=(query:string):ReaderSearchMatch[]=>{
+    const matches:ReaderSearchMatch[]=searchScope.value==='translation'?[]:findPdfSearchMatches(searchPageIndexes.values(),query,PDF_SEARCH_RESULT_LIMIT);
+    for(const [id,index] of translationSearchIndexes)matches.push(...findPdfSearchMatches([index],query,Math.max(0,PDF_SEARCH_RESULT_LIMIT-matches.length)).map(match=>({...match,translationBlockId:id})));
+    return matches.sort((left,right)=>left.pageNumber-right.pageNumber);
+  };
+  const ready=!searchIndexing&&(searchScope.value==='translation'||!pdfDocument||searchPageIndexes.size>=pdfDocument.numPages);
+  const found=searchWithConfirmedTerms(activeSearchQuery,ready?pdfConfirmedTerms:[],find,match=>searchMatchIdentity(match)!);
+  confirmedSearchAliases=found.aliases;
+  searchMatches=found.matches.slice(0,PDF_SEARCH_RESULT_LIMIT).map(({item,query})=>({...item,matchedQuery:query})).sort((left,right)=>left.pageNumber-right.pageNumber);
   const preservedIndex = currentIdentity
     ? searchMatches.findIndex((match) => searchMatchIdentity(match) === currentIdentity)
     : -1;
@@ -6195,6 +6803,10 @@ function navigateToPdfSearchResult(index: number): void {
   if ((!pdf&&!cachedReadingContext) || !searchMatches.length) return;
   searchResultIndex = (index + searchMatches.length) % searchMatches.length;
   const match = searchMatches[searchResultIndex]!;
+  if (!searchSourceReturnSaved) {
+    pushPdfLinkHistory(visiblePageAnchor());
+    searchSourceReturnSaved = true;
+  }
   if (match.translationBlockId) {
     if (documentTranslationPanel.hidden) documentTranslationPanel.hidden = false;
     scrollToPageAnchor({pageNumber: match.pageNumber, ratio: 0});
@@ -6231,19 +6843,19 @@ function searchTextItemsForTemporaryOcrPage(
   return selectableOcrBlocks(page).map((block) => ({
     str: block.text,
     hasEOL: true,
-    topRatio: clamp(block.box.top, 0, 1),
+    topRatio: clamp(rotatePdfViewRect({leftRatio:block.box.left,topRatio:block.box.top,widthRatio:block.box.width,heightRatio:block.box.height},viewRotation).topRatio,0,1),
   }));
 }
 
 async function searchTextItemsForPage(page: PDFPageProxy): Promise<PdfSearchTextItem[]> {
   const content = await page.getTextContent();
-  const viewport = page.getViewport({ scale: 1 });
+  const viewport = page.getViewport({ scale: 1, rotation:(page.rotate+viewRotation)%360 });
   const items: PdfSearchTextItem[] = [];
   for (const item of content.items) {
     if (!('str' in item) || !normalizePdfSearchText(item.str)) continue;
-    const baseline = item.transform[5];
-    const topRatio = typeof baseline === 'number' && viewport.height > 0
-      ? clamp(1 - baseline / viewport.height, 0, 1)
+    const point = viewport.convertToViewportPoint(item.transform[4],item.transform[5]);
+    const topRatio = viewport.height > 0
+      ? clamp(point[1]! / viewport.height, 0, 1)
       : undefined;
     items.push({
       str: item.str,
@@ -6311,7 +6923,8 @@ function startPdfSearchIndexing(): void {
     }
     if (runId !== searchIndexRunId) return;
     searchIndexing = false;
-    syncPdfSearchStatus();
+    const hadMatches=searchMatches.length>0;updatePdfSearchMatches(true);
+    if(!hadMatches&&searchMatches.length)navigateToPdfSearchResult(searchResultIndex);
   })().catch(() => {
     if (runId !== searchIndexRunId) return;
     searchIndexing = false;
@@ -6334,6 +6947,8 @@ function applyPdfSearchQuery(): void {
 
 function openPdfSearch(): void {
   if (!pdfDocument&&!cachedReadingContext) return;
+  const selected=selectedReadingQuery(readingSelectionText(getSelection(),[viewer,documentTranslationPages],document.activeElement),searchQueryEdited);
+  if(selected!==undefined)searchQuery.value=selected;
   const returnFocus = !outlinePanel.hidden
     ? openOutline
     : document.activeElement instanceof HTMLElement
@@ -6342,6 +6957,7 @@ function openPdfSearch(): void {
   closePdfOutline(false);
   const view = documentTranslationPanel.hidden ? 'source' : pdfDocumentTranslationViewMode;
   if (view !== searchViewContext) {
+    assistedSearchOrigin=undefined;
     searchViewContext = view;
     searchScope.value = view === 'reading' ? 'translation' : view === 'compare' ? 'all' : 'source';
     stopSearchIndexing();
@@ -6369,6 +6985,7 @@ function closePdfSearch(restoreFocus = true): void {
     (menu?.querySelector<HTMLElement>(':scope > summary') ?? target).focus({ preventScroll: true });
   }
   searchReturnFocus = undefined;
+  searchSourceReturnSaved = false;
 }
 
 function resetPdfSearch(): void {
@@ -6376,12 +6993,15 @@ function resetPdfSearch(): void {
   stopSearchIndexing();
   searchPageIndexes.clear();
   searchMatches = [];
+  confirmedSearchAliases=[];
   searchResultIndex = -1;
   activeSearchQuery = '';
   searchQuery.value = '';
+  searchQueryEdited = false;
   searchReturnFocus = undefined;
   searchResultsExpanded = true;
   searchViewContext = '';
+  assistedSearchOrigin=undefined;
   searchScope.value = 'source';
   syncPdfSearchStatus();
 }
@@ -6420,8 +7040,9 @@ searchResults.addEventListener('keydown', (event) => {
   navigateToPdfSearchResult(nextIndex);
   focusPdfSearchResult(nextIndex);
 });
-searchQuery.addEventListener('input', applyPdfSearchQuery);
+searchQuery.addEventListener('input', ()=>{assistedSearchOrigin=undefined;searchQueryEdited=true;applyPdfSearchQuery()});
 searchScope.addEventListener('change', () => {
+  assistedSearchOrigin=undefined;
   stopSearchIndexing();
   updatePdfSearchMatches(false);
   if (searchMatches.length) navigateToPdfSearchResult(0);
@@ -6434,8 +7055,19 @@ searchQuery.addEventListener('keydown', (event) => {
 });
 // Register before the selection overlay's window capture handler so Escape in
 // the active PDF search closes search rather than collapsing the idle sidebar.
+function isEscapeInOpenPdfMenu(event:KeyboardEvent):boolean {
+  return event.key==='Escape'&&event.target instanceof Element&&Boolean(event.target.closest('#pdf-reader-menu[open], #pdf-document-translation-copy-menu[open]'));
+}
 window.addEventListener('keydown', (event) => {
-  if(paragraphEditor.open||pdfHistoryDialog.open||pdfTermsDialog.open)return;
+  if(keyEventDialog(event))return;
+  if(isEscapeInOpenPdfMenu(event)){
+    // The overlay also listens in window capture; close this focused menu before
+    // it can consume Escape and collapse the restored reading sidebar instead.
+    const menu=(event.target as Element).closest<HTMLDetailsElement>('#pdf-reader-menu[open], #pdf-document-translation-copy-menu[open]')!;
+    event.preventDefault();event.stopImmediatePropagation();menu.open=false;
+    menu.querySelector<HTMLElement>(':scope > summary')?.focus({preventScroll:true});
+    return;
+  }
   const searchShortcut = (event.ctrlKey || event.metaKey) &&
     !event.altKey && event.key.toLocaleLowerCase() === 'f';
   if (searchShortcut && (pdfDocument||cachedReadingContext)) {
@@ -6465,18 +7097,16 @@ openOutline.addEventListener('click', () => {
 outlineClose.addEventListener('click', () => closePdfOutline());
 outlineTab.addEventListener('click', () => setPdfNavigationView('outline'));
 bookmarksTab.addEventListener('click', () => setPdfNavigationView('bookmarks'));
-for (const tab of [outlineTab, bookmarksTab]) {
-  tab.addEventListener('keydown', (event) => {
-    if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+thumbnailsTab.addEventListener('click', () => setPdfNavigationView('thumbnails'));
+for (const tab of [outlineTab, thumbnailsTab, bookmarksTab]) {
+  tab.addEventListener('keydown', event => {
+    if (!['ArrowLeft','ArrowRight','Home','End'].includes(event.key)) return;
     event.preventDefault();
-    if (outlineTab.hidden) {
-      setPdfNavigationView('bookmarks', true);
-      return;
-    }
-    setPdfNavigationView(
-      event.key === 'ArrowLeft' || event.key === 'Home' ? 'outline' : 'bookmarks',
-      true,
-    );
+    const tabs = [outlineTab,thumbnailsTab,bookmarksTab].filter(tab => !tab.hidden);
+    const index = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length-1 :
+      (tabs.indexOf(tab)+(event.key==='ArrowLeft'?-1:1)+tabs.length)%tabs.length;
+    const next = tabs[index]!;
+    setPdfNavigationView(next===outlineTab?'outline':next===thumbnailsTab?'thumbnails':'bookmarks',true);
   });
 }
 bookmarkAdd.addEventListener('click', addCurrentPdfBookmark);
@@ -6554,7 +7184,7 @@ outlineTree.addEventListener('keydown', (event) => {
   focusTarget.focus({ preventScroll: true });
 });
 document.addEventListener('keydown', (event) => {
-  if (outlinePanel.hidden || event.key !== 'Escape') return;
+  if (keyEventDialog(event)||outlinePanel.hidden || event.key !== 'Escape') return;
   if (editingPdfBookmarkId) {
     event.preventDefault();
     event.stopImmediatePropagation();
@@ -6591,7 +7221,7 @@ function retainNearbyPages(): void {
   retentionFrame = undefined;
   if (!pdfDocument) return;
   const anchor = visiblePageAnchor();
-  updatePageControl(anchor);
+  updatePageControl();
   const pdf = pdfDocument;
   const generation = renderGeneration;
   for (const page of viewer.querySelectorAll<HTMLElement>('.pdf-page')) {
@@ -6731,11 +7361,11 @@ async function renderPdfLinkLayer(
       anchor.target = '_blank';
       anchor.rel = 'noopener noreferrer nofollow';
       anchor.referrerPolicy = 'no-referrer';
-      anchor.title = `打开外部链接：${hostname}`;
+      anchor.title = msg`打开外部链接：${hostname}`;
       anchor.setAttribute('aria-label', anchor.title);
     } else {
       anchor.href = `#page=${action.target.pageNumber}`;
-      anchor.title = `跳转到${action.target.destinationLabel}`;
+      anchor.title = msg`跳转到${action.target.destinationLabel}`;
       anchor.setAttribute('aria-label', anchor.title);
       anchor.addEventListener('click', (event) => {
         event.preventDefault();
@@ -6768,7 +7398,7 @@ async function renderPage(
   );
   pageElement.dataset.rendered = 'loading';
   const scale = currentZoom();
-  const viewport = page.getViewport({ scale });
+  const viewport = page.getViewport({ scale, rotation:(page.rotate+viewRotation)%360 });
   updatePageDimensions(pageElement, viewport.width, viewport.height);
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   const textContainer = pageElement.querySelector<HTMLElement>('.textLayer');
@@ -6829,6 +7459,7 @@ async function renderPage(
         );
     const hasText = hasNativeText || temporaryOcrCount > 0;
     pageElement.dataset.hasText = String(hasText);
+    pageElement.dataset.hasNativeText = String(hasNativeText);
     void annotationsPromise.then((annotations) => renderPdfLinkLayer(
       pdf,
       page,
@@ -6842,13 +7473,13 @@ async function renderPage(
     });
     if (!hasText && !scanHintShownForDocument && !isRegionModeActive()) {
       scanHintShownForDocument = true;
-      showNotice('可能是扫描版 PDF', {
+      showNotice(t('可能是扫描版 PDF'), {
         transient: true,
         tone: 'warning',
         sourceOnly: true,
         action: {
-          label: '识别本页',
-          ariaLabel: `识别第 ${pageElement.dataset.pageNumber ?? '当前'} 页并生成临时文字层`,
+          label: t('识别本页'),
+          ariaLabel: msg`识别第 ${pageElement.dataset.pageNumber ?? t('当前')} 页并生成临时文字层`,
           onClick: () => createPageRecognitionRegion(pageElement),
         },
       });
@@ -6888,14 +7519,30 @@ async function buildPages(
 
   const firstPage = await pdf.getPage(1);
   if (generation !== renderGeneration) return;
-  const defaultViewport = firstPage.getViewport({ scale });
+  const defaultViewport = firstPage.getViewport({ scale, rotation:(firstPage.rotate+viewRotation)%360 });
+  const safeTargetPage = Math.min(pdf.numPages, Math.max(1, Math.round(targetAnchor.pageNumber)));
+  // Mixed-size documents can otherwise appear too short to scroll while every
+  // placeholder still has page 1's height. Resolve only the nearby window's
+  // dimensions before applying the saved anchor; rendering remains lazy.
+  const nearbyViewports = new Map<number, typeof defaultViewport>();
+  await Promise.all(Array.from(
+    { length: Math.min(pdf.numPages, safeTargetPage + RETAINED_PAGE_RADIUS) - Math.max(1, safeTargetPage - RETAINED_PAGE_RADIUS) + 1 },
+    async (_, offset) => {
+      const pageNumber = Math.max(1, safeTargetPage - RETAINED_PAGE_RADIUS) + offset;
+      const page = await pdf.getPage(pageNumber);
+      nearbyViewports.set(pageNumber, page.getViewport({ scale, rotation:(page.rotate+viewRotation)%360 }));
+    },
+  ));
+  if (generation !== renderGeneration) return;
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
     const pageElement = document.createElement('article');
     pageElement.className = 'pdf-page';
     pageElement.dataset.pageNumber = String(pageNumber);
-    pageElement.ariaLabel = `第 ${pageNumber} 页`;
-    pageElement.style.width = `${defaultViewport.width}px`;
-    pageElement.style.height = `${defaultViewport.height}px`;
+    pageElement.dataset.viewRotation = String(viewRotation);
+    pageElement.ariaLabel = msg`第 ${pageNumber} 页`;
+    const viewport = nearbyViewports.get(pageNumber) ?? defaultViewport;
+    pageElement.style.width = `${viewport.width}px`;
+    pageElement.style.height = `${viewport.height}px`;
     const canvas = document.createElement('canvas');
     canvas.ariaHidden = 'true';
     const textLayer = document.createElement('div');
@@ -6906,10 +7553,6 @@ async function buildPages(
     viewer.append(pageElement);
     pageObserver.observe(pageElement);
   }
-  const safeTargetPage = Math.min(
-    pdf.numPages,
-    Math.max(1, Math.round(targetAnchor.pageNumber)),
-  );
   scrollToPageAnchor({ pageNumber: safeTargetPage, ratio: targetAnchor.ratio });
   updatePageControl({ pageNumber: safeTargetPage, ratio: targetAnchor.ratio });
   schedulePageRetention();
@@ -6924,7 +7567,7 @@ async function openPdfData(
   readingIdentity?: string,
 ): Promise<void> {
   if (!isCurrentOpen(operation)) return;
-  setLoading('正在加载阅读组件…', 'runtime');
+  setLoading(t('正在加载阅读组件…'), 'runtime');
   let nextDocument: PDFDocumentProxy | undefined;
   const nextPdfBackgroundData = data.slice();
   try {
@@ -6936,7 +7579,7 @@ async function openPdfData(
       : Promise.resolve({ bookmarks: [], updatedAt: 0 });
     const runtime = await loadPdfRuntime();
     if (!isCurrentOpen(operation)) return;
-    setLoading('正在解析 PDF…', 'parsing');
+    setLoading(t('正在解析 PDF…'), 'parsing');
     const task = runtime.getDocument({ data, isEvalSupported: false });
     openLoadingTask = task;
     nextDocument = await task.promise;
@@ -6957,8 +7600,17 @@ async function openPdfData(
     currentPdfBackgroundData = nextPdfBackgroundData;
     const digest=await crypto.subtle.digest('SHA-256',nextPdfBackgroundData);
     if(!isCurrentOpen(operation))return;
-    currentPdfContentFingerprint=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
-    restoredState = await getPdfReadingState(`pdf-content:${currentPdfContentFingerprint}`).catch(()=>undefined) ?? restoredState;
+    const fingerprint=Array.from(new Uint8Array(digest),byte=>byte.toString(16).padStart(2,'0')).join('');
+    try{const guard=await getPdfRepairGuard(fingerprint);if(guard)pdfUncertainRepairDocuments.set(fingerprint,guard.signature);pdfRepairStorageUncertain=Boolean(guard)||pdfUncertainRepairDocuments.has(fingerprint)}catch{pdfRepairStorageUncertain=true}
+    pdfRepairVersions.hidden=true;pdfRepairVersions.replaceChildren();
+    await recentReading.verify(fingerprint);
+    if(!isCurrentOpen(operation))return;
+    currentPdfContentFingerprint=fingerprint;
+    void refreshPdfRepairArchiveView();
+    const contentReadingState=await getPdfReadingState(`pdf-content:${currentPdfContentFingerprint}`).catch(()=>undefined);
+    if(!isCurrentOpen(operation))return;
+    restoredState=contentReadingState??restoredState;
+    readingHintResumePage=readingRecapPage(contentReadingState);
     const contentBookmarks=await getPdfReadingBookmarkState(`pdf-content:${currentPdfContentFingerprint}`).catch(()=>undefined);
     if(contentBookmarks&&contentBookmarks.updatedAt>=restoredBookmarks.updatedAt)restoredBookmarks=contentBookmarks;
     if(!isCurrentOpen(operation))return;
@@ -6970,6 +7622,9 @@ async function openPdfData(
     restoringReadingState = Boolean(restoredState);
     zoomLevel = restoredState?.zoomLevel ?? 1.25;
     fitWidthActive = restoredState?.fitWidth ?? false;
+    fitPageActive = restoredState?.fitPage ?? false;
+    viewRotation = restoredState?.rotation ?? 0;
+    thumbnails.reset(nextDocument,viewRotation);
     scanHintShownForDocument = false;
     currentSourceUrl = sourceUrl ?? location.href;
     currentSourceLabel = sourceUrl ? undefined : name;
@@ -6981,28 +7636,48 @@ async function openPdfData(
     pageCount.value = String(nextDocument.numPages);
     pageNumberInput.max = String(nextDocument.numPages);
     const targetPage = clamp(
-      Math.round(initialPage ?? restoredState?.pageNumber ?? 1),
+      Math.round(initialPage ?? restoredState?.pageNumber ?? recentReading.fallbackPage() ?? 1),
       1,
       nextDocument.numPages,
     );
     const targetRatio = initialPage === undefined ? restoredState?.pageRatio ?? 0 : 0;
     pageNumberInput.value = String(targetPage);
     setDocumentControls(true);
-    setLoading('正在准备页面…', 'pages');
+    setLoading(t('正在准备页面…'), 'pages');
     await buildPages(nextDocument, { pageNumber: targetPage, ratio: targetRatio });
     if (!isCurrentOpen(operation)) return;
+    // Read local bibliographic data after the visible page is ready. Never
+    // delay reading/OCR or let an older file's metadata attach to a new file.
+    documentName.dataset.citationState='reading';
+    void Promise.all([
+      nextDocument.getMetadata().catch(()=>undefined),
+      nextDocument.getPage(1).then(page=>page.getTextContent()).then(content=>content.items.map(item=>'str' in item?item.str:'').join(' ').slice(0,12_000)).catch(()=>''),
+    ]).then(([metadata,firstPage])=>{
+      if(!isCurrentOpen(operation)||pdfDocument!==nextDocument)return;
+      const xmp=Object.fromEntries(['dc:title','dc:creator','prism:doi','prism:publicationdate','prism:url'].map(key=>[key,metadata?.metadata?.get(key)]));
+      currentPdfCitation=pdfCitationMetadata((metadata?.info??{}) as Record<string,unknown>,xmp,firstPage);
+      documentName.dataset.citationState='ready';
+    });
     void loadPdfOutline(nextDocument, operation.epoch);
     restoringReadingState = false;
     const controller = await selectionTranslator;
     if (!isCurrentOpen(operation)) return;
     await controller.refreshPersistentMarkers();
+    await readingAnnotations.reload().catch(error=>showNotice(error instanceof Error?error.message:String(error),{tone:'error'}));
     if (!isCurrentOpen(operation)) return;
     if (restoredState?.sidebarExpanded) {
       if (isCurrentOpen(operation)) controller.openSidebar();
     }
-    if (fitWidthActive) scheduleFitWidthRefresh();
+    if (fitWidthActive || fitPageActive) scheduleFitWidthRefresh();
     scheduleReadingStateSave();
     if(libraryRestoreId)await restorePdfLibraryReading();
+    if(isCurrentOpen(operation))await excerptSource.restore();
+    if(isCurrentOpen(operation)){
+      void refreshPdfReadingHints();
+      recentReading.complete();
+      await persistReadingState(true);
+      await originalCopy.refresh();
+    }
   } catch (error) {
     if (!isCurrentOpen(operation)) return;
     if (pdfDocument === nextDocument) {
@@ -7059,7 +7734,7 @@ async function restorePdfLibraryReading():Promise<void>{
     preservePdfDocumentTranslationReferenceEntries();
     const scoped=pdfDocumentTranslationBlocksState.filter(block=>block.included);
     pdfDocumentTranslationPhase=scoped.every(block=>block.status==='done')?'complete':'paused';
-    pdfDocumentTranslationMessage=`已从文档库恢复 ${scoped.filter(block=>block.status==='done').length}/${scoped.length} 段`;
+    pdfDocumentTranslationMessage=msg`已从文档库恢复 ${scoped.filter(block=>block.status==='done').length}/${scoped.length} 段`;
     if(scoped.some(block=>block.status==='done'))documentTranslationSettings.open=false;
     const requestedSignature=new URL(location.href).searchParams.get('block');
     const requestedBlock=pdfDocumentTranslationBlocksState.find(block=>block.sessionSignature===requestedSignature);
@@ -7073,11 +7748,11 @@ async function restorePdfLibraryReading():Promise<void>{
     libraryRestoreDocumentKey=undefined;
     pdfDocumentTranslationSessionContext=currentPdfDocumentTranslationSessionContext();
     pdfDocumentTranslationRetainedLocally=false;
-    showNotice(error instanceof Error?error.message:'恢复失败，请重新选择原文件。',{tone:'error'});
+    showNotice(error instanceof Error?error.message:t('恢复失败，请重新选择原文件。'),{tone:'error'});
   }
 }
 
-async function openLocalFile(file: File): Promise<void> {
+async function openLocalFile(file: File, canOpen:()=>boolean=()=>true): Promise<void> {
   const validation = validateLocalPdfFiles([file]);
   if (!validation.ok) {
     showNotice(validation.message, { transient: true, tone: 'warning' });
@@ -7086,18 +7761,19 @@ async function openLocalFile(file: File): Promise<void> {
   try {
     const prefix = new Uint8Array(await file.slice(0, 1024).arrayBuffer());
     if (!hasPdfFileSignature(prefix)) {
-      showNotice('无法打开 PDF：文件可能已损坏，或并不是有效的 PDF。', {
+      showNotice(t('无法打开 PDF：文件可能已损坏，或并不是有效的 PDF。'), {
         tone: 'error',
       });
       return;
     }
   } catch (error) {
-    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。', {
+    showNotice(error instanceof Error ? msg`无法读取 PDF：${error.message}` : t('无法读取这个 PDF。'), {
       tone: 'error',
     });
     return;
   }
-  const operation = beginDocumentOpen('正在读取本地 PDF…', 'reading-local');
+  if(!canOpen())return;
+  const operation = beginDocumentOpen(t('正在读取本地 PDF…'), 'reading-local');
   try {
     const data = new Uint8Array(await file.arrayBuffer());
     if (!isCurrentOpen(operation)) return;
@@ -7112,7 +7788,7 @@ async function openLocalFile(file: File): Promise<void> {
   } catch (error) {
     if (!isCurrentOpen(operation)) return;
     emptyState.hidden = false;
-    showNotice(error instanceof Error ? `无法读取 PDF：${error.message}` : '无法读取这个 PDF。', {
+    showNotice(error instanceof Error ? msg`无法读取 PDF：${error.message}` : t('无法读取这个 PDF。'), {
       tone: 'error',
     });
     completeDocumentOpen(operation);
@@ -7234,7 +7910,7 @@ function createKeyboardRegion(): void {
   ) ?? viewer.querySelector<HTMLElement>('.pdf-page[data-rendered="ready"]');
   const canvas = pageElement?.querySelector<HTMLCanvasElement>('canvas');
   if (!pageElement || !canvas) {
-    showNotice('页面仍在渲染，请稍后再试。', { transient: true, tone: 'warning' });
+    showNotice(t('页面仍在渲染，请稍后再试。'), { transient: true, tone: 'warning' });
     return;
   }
   const bounds = pageElement.getBoundingClientRect();
@@ -7252,14 +7928,23 @@ function createKeyboardRegion(): void {
 }
 
 function createPageRecognitionRegion(pageElement: HTMLElement): void {
+  if (viewRotation) {
+    const pageNumber = Number(pageElement.dataset.pageNumber), epoch = documentEpoch;
+    void changeViewRotation(0).then(async () => {
+      const original = viewer.querySelector<HTMLElement>(`.pdf-page[data-page-number="${pageNumber}"]`);
+      if (!original || epoch !== documentEpoch || !await waitForPageReady(original,epoch)) return;
+      createPageRecognitionRegion(original);
+    });
+    return;
+  }
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   if (pageElement.dataset.rendered !== 'ready' || !canvas) {
-    showNotice('页面仍在渲染，请稍后再试。', { transient: true, tone: 'warning' });
+    showNotice(t('页面仍在渲染，请稍后再试。'), { transient: true, tone: 'warning' });
     return;
   }
   const bounds = pageElement.getBoundingClientRect();
   if (bounds.width <= 0 || bounds.height <= 0) {
-    showNotice('当前页面不可见，请滚动到页面后重试。', {
+    showNotice(t('当前页面不可见，请滚动到页面后重试。'), {
       transient: true,
       tone: 'warning',
     });
@@ -7275,7 +7960,7 @@ function createPageRecognitionRegion(pageElement: HTMLElement): void {
   );
   createRegionConfirmation(
     selection,
-    '仅发送本页选定区域；使用同一 Qwen Key 调用 qwen3.5-ocr，可先排除页眉与页脚',
+    t('仅发送本页选定区域；使用同一 Qwen Key 调用 qwen3.5-ocr，可先排除页眉与页脚'),
   );
   showNotice(undefined);
 }
@@ -7288,10 +7973,8 @@ function sourceLocationForRegion(
   return {
     documentId: currentDocumentSessionId,
     pageNumber,
-    leftRatio: region.left / pageBounds.width,
-    topRatio: region.top / pageBounds.height,
-    widthRatio: region.width / pageBounds.width,
-    heightRatio: region.height / pageBounds.height,
+    ...rotatePdfViewRect({leftRatio:region.left/pageBounds.width,topRatio:region.top/pageBounds.height,
+      widthRatio:region.width/pageBounds.width,heightRatio:region.height/pageBounds.height},-viewRotation),
   };
 }
 
@@ -7347,18 +8030,22 @@ function renderTemporaryOcrTextLayer(
   }
   const blocks = selectableOcrBlocks(page);
   const pageBounds = pageElement.getBoundingClientRect();
+  const quarterTurn = viewRotation % 180 !== 0;
+  const originalWidth = quarterTurn ? pageBounds.height : pageBounds.width;
+  const originalHeight = quarterTurn ? pageBounds.width : pageBounds.height;
   for (const block of blocks) {
     const span = document.createElement('span');
     span.dataset.piOcrBlock = block.id;
     span.textContent = block.text;
-    span.style.left = `${block.box.left * 100}%`;
-    span.style.top = `${block.box.top * 100}%`;
-    span.style.fontSize = `${Math.max(6, block.box.height * pageBounds.height * 0.88)}px`;
+    const point = rotatePdfViewRect({leftRatio:block.box.left,topRatio:block.box.top,widthRatio:0,heightRatio:0},viewRotation);
+    span.style.left = `${point.leftRatio * 100}%`;
+    span.style.top = `${point.topRatio * 100}%`;
+    span.style.fontSize = `${Math.max(6, block.box.height * originalHeight * 0.88)}px`;
     textLayer.append(span);
     const naturalWidth = span.getBoundingClientRect().width;
-    const targetWidth = block.box.width * pageBounds.width;
+    const targetWidth = block.box.width * originalWidth;
     if (naturalWidth > 0 && targetWidth > 0) {
-      span.style.transform = `scaleX(${Math.min(4, Math.max(0.25, targetWidth / naturalWidth))})`;
+      span.style.transform = `rotate(${viewRotation}deg) scaleX(${Math.min(4, Math.max(0.25, targetWidth / naturalWidth))})`;
     }
   }
   textLayer.classList.toggle('pi-ocr-text-layer', blocks.length > 0);
@@ -7453,7 +8140,7 @@ async function pageForSourceLocation(
   reference: PdfSourceLocation,
 ): Promise<HTMLElement | undefined> {
   if (reference.documentId !== currentDocumentSessionId || !pdfDocument) {
-    showNotice('原 PDF 已发生变化，无法恢复这个选区。', {
+    showNotice(t('原 PDF 已发生变化，无法恢复这个选区。'), {
       transient: true,
       tone: 'warning',
     });
@@ -7463,14 +8150,14 @@ async function pageForSourceLocation(
     `.pdf-page[data-page-number="${reference.pageNumber}"]`,
   );
   if (!pageElement) {
-    showNotice('找不到原选区所在页面。', { transient: true, tone: 'warning' });
+    showNotice(t('找不到原选区所在页面。'), { transient: true, tone: 'warning' });
     return undefined;
   }
-  scrollToPageAnchor({ pageNumber: reference.pageNumber, ratio: reference.topRatio });
+  scrollToPageAnchor({ pageNumber: reference.pageNumber, ratio:rotatePdfViewRect(reference,viewRotation).topRatio });
   requestPageRender(pdfDocument, pageElement, renderGeneration);
   if (!await waitForPageReady(pageElement, documentEpoch)) {
     if (!pageElement.isConnected) return undefined;
-    showNotice('页面尚未渲染完成，请稍后再试。', {
+    showNotice(t('页面尚未渲染完成，请稍后再试。'), {
       transient: true,
       tone: 'warning',
     });
@@ -7485,12 +8172,10 @@ function regionFromSourceLocation(
 ): RegionRect {
   const width = pageElement.clientWidth;
   const height = pageElement.clientHeight;
+  const rotated = rotatePdfViewRect(reference,viewRotation);
   return normalizeRegion(
-    { x: reference.leftRatio * width, y: reference.topRatio * height },
-    {
-      x: (reference.leftRatio + reference.widthRatio) * width,
-      y: (reference.topRatio + reference.heightRatio) * height,
-    },
+    { x: rotated.leftRatio * width, y: rotated.topRatio * height },
+    {x:(rotated.leftRatio+rotated.widthRatio)*width,y:(rotated.topRatio+rotated.heightRatio)*height},
     { left: 0, top: 0, width, height },
   );
 }
@@ -7500,7 +8185,8 @@ function scrollPdfSourceLocationsIntoView(
   pageElement: HTMLElement,
 ): void {
   const pageNumber = Number(pageElement.dataset.pageNumber);
-  const samePage = references.filter((reference) => reference.pageNumber === pageNumber);
+  const samePage = references.filter((reference) => reference.pageNumber === pageNumber)
+    .map(reference => rotatePdfViewRect(reference,viewRotation));
   if (!samePage.length) return;
   const pageHeight = pageElement.offsetHeight;
   const top = Math.min(...samePage.map((reference) => reference.topRatio)) * pageHeight;
@@ -7543,14 +8229,14 @@ async function restorePdfRegionSelection(reference: PdfSourceLocation): Promise<
   clearSourceRegionHighlight();
   const canvas = pageElement.querySelector<HTMLCanvasElement>('canvas');
   if (!canvas) {
-    showNotice('无法恢复原选区，请重新框选。', { transient: true, tone: 'warning' });
+    showNotice(t('无法恢复原选区，请重新框选。'), { transient: true, tone: 'warning' });
     return;
   }
   if (regionMode === 'off') setRegionMode('single');
   const region = regionFromSourceLocation(reference, pageElement);
   const selection = createActiveRegion(pageElement, canvas, region);
   createRegionConfirmation(selection);
-  showNotice('已恢复原选区，可拖动或调整角点后重新发送。', {
+  showNotice(t('已恢复原选区，可拖动或调整角点后重新发送。'), {
     transient: true,
     tone: 'success',
   });
@@ -7628,6 +8314,13 @@ async function navigateToPdfRegions(references: readonly PdfSourceLocation[], re
   }, pages.size > 1 ? 8000 : 1800);
 }
 
+async function navigateToPdfReadingSource(pageNumber:number,remember=true,summaryReturn?:ReadingSummaryReturn):Promise<void>{
+  if(!pdfDocument)return;
+  if(remember)pushPdfLinkHistory(visiblePageAnchor(),summaryReturn);
+  if(!documentTranslationPanel.hidden&&pdfDocumentTranslationViewMode==='reading')setPdfDocumentTranslationViewMode('compare');
+  await navigateToPdfMarkerPage(pageNumber);
+}
+
 async function navigateToPdfMarkerPage(pageNumber: number): Promise<void> {
   if (!pdfDocument) return;
   const pageElement = viewer.querySelector<HTMLElement>(
@@ -7643,7 +8336,7 @@ function enqueueRegionTranslation(
   task: Omit<QueuedRegionTranslation, 'id' | 'cancelled' | 'enqueuedAt'>,
 ): boolean {
   if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
-    showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', {
+    showNotice(t('翻译队列已满（最多 3 项），请等待当前任务完成。'), {
       transient: true,
       tone: 'warning',
     });
@@ -7656,7 +8349,7 @@ function enqueueRegionTranslation(
     enqueuedAt: performance.now(),
   });
   updateRegionAction();
-  showNotice(`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, {
+  showNotice(msg`已加入翻译队列 · ${pendingRegionTranslationCount()}/3`, {
     transient: true,
     tone: 'success',
   });
@@ -7694,7 +8387,7 @@ async function drainRegionTranslationQueue(): Promise<void> {
       } catch (error) {
         if (task.cancelled || task.documentEpoch !== documentEpoch) continue;
         showNotice(
-          error instanceof Error ? error.message : '框选翻译失败，请稍后重试。',
+          error instanceof Error ? error.message : t('框选翻译失败，请稍后重试。'),
           { transient: true, tone: 'error' },
         );
       } finally {
@@ -7711,7 +8404,7 @@ async function drainRegionTranslationQueue(): Promise<void> {
 
 function createRegionConfirmation(
   selection: ActiveRegionSelection,
-  noteText = '优先本地提取文字，必要时仅发送此区域',
+  noteText = t('优先本地提取文字，必要时仅发送此区域'),
 ): void {
   if (notice.classList.contains('transient')) showNotice(undefined);
   selection.confirm?.remove();
@@ -7720,7 +8413,7 @@ function createRegionConfirmation(
   confirmation.setAttribute('role', 'group');
   confirmation.setAttribute(
     'aria-label',
-    selection.purpose === 'page-recognition' ? '扫描页文字识别确认' : '框选翻译确认',
+    selection.purpose === 'page-recognition' ? t('扫描页文字识别确认') : t('框选翻译确认'),
   );
   const note = document.createElement('span');
   note.className = 'region-confirm-note';
@@ -7730,21 +8423,23 @@ function createRegionConfirmation(
   const confirm = document.createElement('button');
   confirm.className = 'confirm';
   confirm.type = 'button';
-  confirm.textContent = selection.purpose === 'page-recognition' ? '识别文字' : '发送并翻译';
+  confirm.textContent = selection.purpose === 'page-recognition' ? t('识别文字') : t('发送并翻译');
   const cancel = document.createElement('button');
   cancel.type = 'button';
-  cancel.textContent = '取消';
-  actions.append(confirm, cancel);
+  cancel.textContent = t('取消');
+  const saveAreaNote=document.createElement('button');saveAreaNote.type='button';saveAreaNote.textContent=t('区域笔记');
+  saveAreaNote.addEventListener('click',()=>{if(activeRegion!==selection||selection.documentEpoch!==documentEpoch)return;const bounds=selection.pageElement.getBoundingClientRect(),anchor=sourceLocationForRegion(Number(selection.pageElement.dataset.pageNumber),selection.region,bounds);clearRegionSelection();setRegionMode('off');readingAnnotations.annotateArea({kind:'region',...anchor})});
+  actions.append(confirm,saveAreaNote,cancel);
   confirmation.append(note, actions);
   selection.pageElement.append(confirmation);
   selection.confirm = confirmation;
   selection.box.classList.add('adjustable');
-  selection.box.title = '拖动选框可移动，拖动角点可调整大小';
+  selection.box.title = t('拖动选框可移动，拖动角点可调整大小');
   selection.box.tabIndex = 0;
   selection.box.setAttribute('role', 'group');
   selection.box.setAttribute(
     'aria-label',
-    '翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。',
+    t('翻译选区。方向键移动，Shift 加方向键调整宽度或高度。按 Tab 进入确认按钮。'),
   );
   for (const handle of ['nw', 'ne', 'se', 'sw'] satisfies RegionResizeHandle[]) {
     const grip = document.createElement('span');
@@ -7781,12 +8476,12 @@ function createRegionConfirmation(
     if (activePageRecognitionRequestId) {
       clearRegionSelection();
       if (regionMode === 'single') setRegionMode('off');
-      showNotice('已取消本页识别。', { transient: true, tone: 'success' });
+      showNotice(t('已取消本页识别。'), { transient: true, tone: 'success' });
       return;
     }
     if (regionMode === 'continuous') {
       clearRegionSelection();
-      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', {
+      showNotice(t('连续框选已开启 · 可继续拖动框选 · Esc 退出'), {
         transient: true,
         tone: 'info',
       });
@@ -7796,7 +8491,7 @@ function createRegionConfirmation(
   });
   confirm.addEventListener('click', () => {
     if (pendingRegionTranslationCount() >= MAX_REGION_TRANSLATION_QUEUE) {
-      showNotice('翻译队列已满（最多 3 项），请等待当前任务完成。', {
+      showNotice(t('翻译队列已满（最多 3 项），请等待当前任务完成。'), {
         transient: true,
         tone: 'warning',
       });
@@ -7806,8 +8501,8 @@ function createRegionConfirmation(
     cancel.disabled = true;
     showNotice(
       selection.purpose === 'page-recognition'
-        ? '正在识别本页文字…'
-        : '正在检查框选内容…',
+        ? t('正在识别本页文字…')
+        : t('正在检查框选内容…'),
       { tone: 'info' },
     );
     const captureEpoch = selection.documentEpoch;
@@ -7829,7 +8524,7 @@ function createRegionConfirmation(
       clearRegionSelection();
       if (regionMode === 'single') setRegionMode('off');
       else if (regionMode === 'continuous') {
-        showNotice('连续框选已开启 · 可继续拖动框选 · Esc 退出', {
+        showNotice(t('连续框选已开启 · 可继续拖动框选 · Esc 退出'), {
           transient: true,
           tone: 'info',
         });
@@ -7839,7 +8534,7 @@ function createRegionConfirmation(
       const recognitionRequestId = crypto.randomUUID();
       activePageRecognitionRequestId = recognitionRequestId;
       cancel.disabled = false;
-      cancel.textContent = '取消识别';
+      cancel.textContent = t('取消识别');
       void (async () => {
         const captureStartedAt = performance.now();
         const captured = await captureCanvasRegion(
@@ -7870,13 +8565,13 @@ function createRegionConfirmation(
           activePageRecognitionRequestId = undefined;
           confirm.disabled = false;
           cancel.disabled = false;
-          cancel.textContent = '取消';
+          cancel.textContent = t('取消');
           const recovery=translationErrorRecovery(response.error.code,response.error.retryable,'vision');
           showNotice(
             translationErrorMessage(response.error.code,response.error.message),
             {
               tone: 'error',
-              ...(recovery.settingsFocus?{action:{label:recovery.settingsLabel??'检查图像 API',onClick:()=>{void openPdfSettings(recovery.settingsFocus)}}}:{}),
+              ...(recovery.settingsFocus?{action:{label:recovery.settingsLabel??t('检查图像 API'),onClick:()=>{void openPdfSettings(recovery.settingsFocus)}}}:{}),
             },
           );
           return;
@@ -7895,7 +8590,7 @@ function createRegionConfirmation(
         selection.pageElement.dataset.hasText = 'true';
         activePageRecognitionRequestId = undefined;
         finishSelection();
-        showNotice(`已生成临时文字层 · ${lineCount} 行 · 现在可以直接划选翻译`, {
+        showNotice(msg`已生成临时文字层 · ${lineCount} 行 · 现在可以直接划选翻译`, {
           transient: true,
           tone: 'success',
         });
@@ -7908,8 +8603,8 @@ function createRegionConfirmation(
         activePageRecognitionRequestId = undefined;
         confirm.disabled = false;
         cancel.disabled = false;
-        cancel.textContent = '取消';
-        showNotice(error instanceof Error ? error.message : '本页文字识别失败，请继续使用框选翻译。', {
+        cancel.textContent = t('取消');
+        showNotice(error instanceof Error ? error.message : t('本页文字识别失败，请继续使用框选翻译。'), {
           tone: 'error',
         });
       });
@@ -7927,7 +8622,7 @@ function createRegionConfirmation(
       enqueueRegionTranslation({
         documentEpoch: captureEpoch,
         payload: { kind: 'text', capture: captureRequest },
-        pageLabel: pageNumber ? `第 ${pageNumber} 页框选` : 'PDF 框选区域',
+        pageLabel: pageNumber ? msg`第 ${pageNumber} 页框选` : t('PDF 框选区域'),
       });
       return;
     }
@@ -7965,13 +8660,13 @@ function createRegionConfirmation(
       enqueueRegionTranslation({
         documentEpoch: captureEpoch,
         payload: { kind: 'image', capture: captureRequest },
-        pageLabel: pageNumber ? `第 ${pageNumber} 页框选` : 'PDF 框选区域',
+        pageLabel: pageNumber ? msg`第 ${pageNumber} 页框选` : t('PDF 框选区域'),
       });
     })().catch((error: unknown) => {
       if (documentEpoch !== captureEpoch || activeRegion !== selection) return;
       confirm.disabled = false;
       cancel.disabled = false;
-      showNotice(error instanceof Error ? error.message : '无法处理框选区域，请重新框选。', {
+      showNotice(error instanceof Error ? error.message : t('无法处理框选区域，请重新框选。'), {
         tone: 'error',
       });
     });
@@ -8047,7 +8742,7 @@ viewer.addEventListener('pointerup', (event) => {
   selection.interaction = undefined;
   if (interaction.kind === 'draw' && !isUsableRegion(selection.region)) {
     clearRegionSelection();
-    showNotice('框选范围太小，请拖动选择更大的文字或图片区域。', {
+    showNotice(t('框选范围太小，请拖动选择更大的文字或图片区域。'), {
       transient: true,
       tone: 'warning',
     });
@@ -8085,7 +8780,7 @@ recognizePage.addEventListener('click', () => {
     `.pdf-page[data-page-number="${pageNumber}"]`,
   );
   if (!pageElement) {
-    showNotice('找不到当前页，请稍后重试。', { transient: true, tone: 'warning' });
+    showNotice(t('找不到当前页，请稍后重试。'), { transient: true, tone: 'warning' });
     return;
   }
   createPageRecognitionRegion(pageElement);
@@ -8123,6 +8818,8 @@ function isPdfReadingShortcutContext(event: KeyboardEvent): boolean {
 }
 
 document.addEventListener('keydown', (event) => {
+  // Focused dialogs and menus keep background search/selection intact.
+  if(keyEventDialog(event)||isEscapeInOpenPdfMenu(event))return;
   if (event.key === 'Escape' && !regionQueuePanel.hidden) {
     closeRegionQueuePanel();
     event.preventDefault();
@@ -8132,7 +8829,7 @@ document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && isRegionModeActive()) {
     if (activeRegion && regionMode === 'continuous') {
       clearRegionSelection();
-      showNotice('连续框选已开启 · 可继续拖动框选 · Esc 再次退出', {
+      showNotice(t('连续框选已开启 · 可继续拖动框选 · Esc 再次退出'), {
         transient: true,
         tone: 'info',
       });
@@ -8161,7 +8858,7 @@ document.addEventListener('keydown', (event) => {
 
 async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
   const operation = beginDocumentOpen(
-    source.protocol === 'file:' ? '正在读取本地 PDF…' : '正在读取在线 PDF…',
+    source.protocol === 'file:' ? t('正在读取本地 PDF…') : t('正在读取在线 PDF…'),
     source.protocol === 'file:' ? 'reading-local' : 'reading-online',
   );
   try {
@@ -8171,16 +8868,16 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     ) {
       emptyState.hidden = false;
       showNotice(
-        'Edge 尚未允许 Pi Translator 读取本地 PDF。请在扩展详情中开启“允许访问文件 URL”，再返回重试。',
+        t('Edge 尚未允许 Pi Translator 读取本地 PDF。请在扩展详情中开启“允许访问文件 URL”，再返回重试。'),
         {
           tone: 'warning',
           action: {
-            label: '打开扩展管理页',
+            label: t('打开扩展管理页'),
             onClick: () => {
               void browser.tabs.create({
                 url: `edge://extensions/?id=${browser.runtime.id}`,
                 active: true,
-              }).catch(() => showNotice('请手动打开 edge://extensions，并进入 Pi Translator 详情。', {
+              }).catch(() => showNotice(t('请手动打开 edge://extensions，并进入 Pi Translator 详情。'), {
                 tone: 'error',
               }));
             },
@@ -8194,15 +8891,15 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     if (permission && !await browser.permissions.contains({ origins: [permission] })) {
       emptyState.hidden = false;
       showNotice(
-        'Pi PDF 还没有当前 PDF 地址的读取权限。授权只针对当前文件来源。',
+        t('Pi PDF 还没有当前 PDF 地址的读取权限。授权只针对当前文件来源。'),
         {
           tone: 'warning',
           action: {
-            label: '授权并重试',
+            label: t('授权并重试'),
             onClick: () => {
               void browser.permissions.request({ origins: [permission] }).then((granted) => {
                 if (granted) void openPdfSource(source, initialPage);
-              }).catch(() => showNotice('未能发起 PDF 地址授权，请返回快捷面板后重试。', {
+              }).catch(() => showNotice(t('未能发起 PDF 地址授权，请返回快捷面板后重试。'), {
                 tone: 'error',
               }));
             },
@@ -8229,15 +8926,15 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     const contentType = (response.headers.get('content-type') ?? '').toLowerCase();
     if (contentType.includes('text/html') || contentType.includes('application/json')) {
       throw new Error(isOverleafSource
-        ? 'Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件'
-        : '这个地址返回的不是 PDF 文件');
+        ? t('Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件')
+        : t('这个地址返回的不是 PDF 文件'));
     }
     const data = new Uint8Array(await response.arrayBuffer());
     const responseStart = new TextDecoder().decode(data.subarray(0, 256)).trimStart();
     if (/^(?:<!doctype\s+html|<html\b|\{\s*["'])/iu.test(responseStart)) {
       throw new Error(isOverleafSource
-        ? 'Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件'
-        : '这个地址返回的不是 PDF 文件');
+        ? t('Overleaf 返回了登录页或项目页面，而不是 PDF。请在 Overleaf 下载当前编译 PDF，再用 Pi PDF 打开下载文件')
+        : t('这个地址返回的不是 PDF 文件'));
     }
     if (!isCurrentOpen(operation)) return;
     await openPdfData(
@@ -8252,7 +8949,7 @@ async function openPdfSource(source: URL, initialPage?: number): Promise<void> {
     if (!isCurrentOpen(operation)) return;
     emptyState.hidden = false;
     showNotice(
-      `${error instanceof Error ? error.message : '在线 PDF 读取失败'}。你仍可点击“打开 PDF”选择已下载的本地文件。`,
+      msg`${error instanceof Error ? error.message : t('在线 PDF 读取失败')}。你仍可点击“打开 PDF”选择已下载的本地文件。`,
       { tone: 'error' },
     );
     completeDocumentOpen(operation);
@@ -8278,8 +8975,8 @@ function dropPresentation(transfer: DataTransfer): {
   if (items.length > 1) {
     return {
       invalid: true,
-      title: '一次只能打开一份 PDF',
-      description: '请只保留一个文件后重试',
+      title: t('一次只能打开一份 PDF'),
+      description: t('请只保留一个文件后重试'),
     };
   }
   const knownType = items[0]?.type.toLowerCase();
@@ -8289,16 +8986,16 @@ function dropPresentation(transfer: DataTransfer): {
   ) {
     return {
       invalid: true,
-      title: '这里只能打开 PDF',
-      description: '当前拖入的文件类型不受支持',
+      title: t('这里只能打开 PDF'),
+      description: t('当前拖入的文件类型不受支持'),
     };
   }
   return {
     invalid: false,
-    title: pdfDocument ? '松开以更换当前 PDF' : '松开以打开 PDF',
+    title: pdfDocument ? t('松开以更换当前 PDF') : t('松开以打开 PDF'),
     description: pdfDocument
-      ? '新文档将在当前阅读器中打开'
-      : '文件只在当前标签页中读取',
+      ? t('新文档将在当前阅读器中打开')
+      : t('文件只在当前标签页中读取'),
   };
 }
 
@@ -8351,11 +9048,12 @@ window.addEventListener('drop', (event) => {
 
 chooseFile.addEventListener('click', chooseLocalPdf);
 emptyOpen.addEventListener('click', chooseLocalPdf);
-fileInput.addEventListener('change', () => {
+function openSelectedLocalPdf():void {
   const file = fileInput.files?.[0];
   if (file) void openLocalFile(file);
   fileInput.value = '';
-});
+}
+fileInput.addEventListener('change', openSelectedLocalPdf);
 
 function steppedZoom(direction: -1 | 1, fromZoom = currentZoom()): number {
   if (direction < 0) {
@@ -8387,7 +9085,7 @@ function commitWheelZoom(): void {
     nextZoom = steppedZoom(direction, nextZoom);
   }
   if (Math.abs(nextZoom - currentZoom()) < 0.001) return;
-  fitWidthActive = false;
+  fitWidthActive = false; fitPageActive = false;
   rebuildAtZoom(nextZoom, anchor);
 }
 
@@ -8408,17 +9106,19 @@ function fitDocumentToAvailableWidth(anchor = visiblePageAnchor()): Promise<void
   const pdf = pdfDocument;
   if (!pdf) return Promise.resolve();
   const epoch = documentEpoch;
+  const rotation = viewRotation;
   const task = pdf.getPage(anchor.pageNumber).then((page) => {
-    if (pdfDocument !== pdf || documentEpoch !== epoch || !fitWidthActive) return;
-    const baseViewport = page.getViewport({ scale: 1 });
+    if (pdfDocument !== pdf || documentEpoch !== epoch || viewRotation !== rotation || !(fitWidthActive || fitPageActive)) return;
+    const baseViewport = page.getViewport({ scale: 1, rotation:(page.rotate+viewRotation)%360 });
     const horizontalPadding = matchMedia('(max-width: 720px)').matches ? 28 : 68;
     const availableWidth = Math.max(100, stage.clientWidth - horizontalPadding - 2);
-    const nextZoom = clamp(availableWidth / Math.max(1, baseViewport.width), 0.1, ZOOM_LEVELS.at(-1)!);
+    const widthZoom = availableWidth / Math.max(1, baseViewport.width);
+    const nextZoom = clamp(fitPageActive ? Math.min(widthZoom,Math.max(80,stage.clientHeight-44)/Math.max(1,baseViewport.height)) : widthZoom,0.1,ZOOM_LEVELS.at(-1)!);
     if (Math.abs(nextZoom - currentZoom()) < .001) { setDocumentControls(true); return; }
     return rebuildAtZoom(nextZoom, anchor);
   }).catch((error: unknown) => {
     if (pdfDocument !== pdf || documentEpoch !== epoch) return;
-    showNotice(error instanceof Error ? error.message : '无法计算适合宽度。', {
+    showNotice(error instanceof Error ? error.message : t('无法计算适合宽度。'), {
       tone: 'error',
     });
   });
@@ -8430,7 +9130,7 @@ function fitDocumentToAvailableWidth(anchor = visiblePageAnchor()): Promise<void
 function scheduleFitWidthRefresh(): void {
   if (fitWidthTimer) clearTimeout(fitWidthTimer);
   fitWidthTimer = undefined;
-  if (!fitWidthActive || !pdfDocument) return;
+  if (!(fitWidthActive || fitPageActive) || !pdfDocument) return;
   fitWidthTimer = setTimeout(() => {
     fitWidthTimer = undefined;
     fitDocumentToAvailableWidth();
@@ -8440,7 +9140,7 @@ function scheduleFitWidthRefresh(): void {
 function rebuildAtZoom(nextZoom: number, anchor = visiblePageAnchor()): Promise<void> {
   if (!pdfDocument) return Promise.resolve();
   completedTextSelectionGesture = undefined;
-  zoomLevel = clamp(nextZoom, fitWidthActive ? 0.1 : ZOOM_LEVELS[0], ZOOM_LEVELS.at(-1)!);
+  zoomLevel = clamp(nextZoom, fitWidthActive || fitPageActive ? 0.1 : ZOOM_LEVELS[0], ZOOM_LEVELS.at(-1)!);
   setDocumentControls(true);
   const task = buildPages(pdfDocument, anchor);
   scheduleReadingStateSave();
@@ -8449,21 +9149,58 @@ function rebuildAtZoom(nextZoom: number, anchor = visiblePageAnchor()): Promise<
 
 zoomOut.addEventListener('click', () => {
   if (!pdfDocument || zoomOut.disabled) return;
-  fitWidthActive = false;
+  fitWidthActive = false; fitPageActive = false;
   rebuildAtZoom(steppedZoom(-1));
 });
 zoomIn.addEventListener('click', () => {
   if (!pdfDocument || zoomIn.disabled) return;
-  fitWidthActive = false;
+  fitWidthActive = false; fitPageActive = false;
   rebuildAtZoom(steppedZoom(1));
 });
 fitWidth.addEventListener('click', () => {
   if (!pdfDocument) return;
-  fitWidthActive = true;
+  fitWidthActive = true; fitPageActive = false;
   fitDocumentToAvailableWidth();
   scheduleReadingStateSave();
 });
 
+fitPage.addEventListener('click', () => {
+  if (!pdfDocument) return;
+  fitPageActive = true; fitWidthActive = false;
+  fitDocumentToAvailableWidth({pageNumber:visiblePageAnchor(false).pageNumber,ratio:0});
+  scheduleReadingStateSave();
+});
+
+async function changeViewRotation(rotation: PdfViewRotation): Promise<void> {
+  if (!pdfDocument) return;
+  const pdf = pdfDocument, epoch = documentEpoch;
+  const anchor = visiblePageAnchor();
+  viewRotation = rotation;
+  thumbnails.reset(pdfDocument,rotation);
+  stopSearchIndexing(); searchPageIndexes.clear();
+  if (fitWidthActive || fitPageActive) await fitDocumentToAvailableWidth(anchor);
+  if (pdfDocument !== pdf || documentEpoch !== epoch || viewRotation !== rotation) return;
+  // Fit can yield the same zoom (e.g. a square page), but orientation still needs rebuilding.
+  if (viewer.querySelector('.pdf-page')?.getAttribute('data-view-rotation') !== String(rotation)) {
+    await rebuildAtZoom(currentZoom(),anchor);
+  }
+  if (pdfDocument !== pdf || documentEpoch !== epoch || viewRotation !== rotation) return;
+  updatePdfSearchMatches(true); startPdfSearchIndexing();
+  scheduleReadingStateSave();
+}
+rotatePage.addEventListener('click', () => { void changeViewRotation(((viewRotation+90)%360) as PdfViewRotation); });
+readerFullscreen.addEventListener('click', () => {
+  const task = document.fullscreenElement ? document.exitFullscreen() : document.documentElement.requestFullscreen();
+  void task.catch(() => showNotice(t('无法进入全屏，请使用浏览器的全屏功能。'),{tone:'warning',transient:true}));
+});
+document.addEventListener('fullscreenchange', () => {
+  const active = Boolean(document.fullscreenElement);
+  readerFullscreen.textContent = active ? t('退出全屏') : t('全屏阅读');
+  readerFullscreen.setAttribute('aria-pressed',String(active));
+  scheduleFitWidthRefresh();
+});
+
+let pageJumpCommittedByEnter: string | undefined;
 function commitPageJump(): void {
   const total = pdfDocument?.numPages ?? 0;
   if (!total) return;
@@ -8474,11 +9211,17 @@ function commitPageJump(): void {
   schedulePageRetention();
 }
 
-pageNumberInput.addEventListener('change', commitPageJump);
+pageNumberInput.addEventListener('input', () => { pageJumpCommittedByEnter = undefined; });
+pageNumberInput.addEventListener('change', () => {
+  const alreadyCommitted = pageJumpCommittedByEnter === pageNumberInput.value;
+  pageJumpCommittedByEnter = undefined;
+  if (!alreadyCommitted) commitPageJump();
+});
 pageNumberInput.addEventListener('keydown', (event) => {
   if (event.key === 'Enter') {
     event.preventDefault();
     commitPageJump();
+    pageJumpCommittedByEnter = pageNumberInput.value;
     pageNumberInput.select();
   } else if (event.key === 'Escape') {
     updatePageControl();
@@ -8493,7 +9236,7 @@ stage.addEventListener('scroll', () => {
     pdfDocumentTranslationRangeMode !== 'current'
   ) {
     documentTranslationRangeCurrent.textContent =
-      `当前页（第 ${visiblePageAnchor().pageNumber} 页）`;
+      msg`当前页（第 ${visiblePageAnchor().pageNumber} 页）`;
   }
 }, { passive: true });
 stage.addEventListener('pointerdown', () => closePdfOutline(false), { passive: true });
@@ -8510,11 +9253,17 @@ translateDocument.addEventListener('click', () => {
 documentTranslationClose.addEventListener('click', () => {if(cachedReadingContext){void persistReadingState().finally(()=>{location.href=browser.runtime.getURL('/options.html#storage')});return}closePdfDocumentTranslation()});
 element<HTMLButtonElement>('pdf-library-back').addEventListener('click',()=>documentTranslationClose.click());
 element<HTMLButtonElement>('pdf-library-search').addEventListener('click',()=>{documentTranslationCopyMenu.open=false;openPdfSearch()});
+async function locatePdfSummarySource(source:import('../../core/content/note-summary').NoteSummarySource,summaryReturn?:ReadingSummaryReturn):Promise<boolean>{
+  const result=await excerptSource.tryReuse(source.id,summaryReturn);return result.matched&&!result.draft;
+}
+element<HTMLButtonElement>('pdf-note-summary').addEventListener('click',()=>{const fingerprint=currentPdfContentFingerprint;if(!fingerprint){showNotice(t('请先选择原 PDF 核验文档身份。'));return}documentTranslationCopyMenu.open=false;void pdfReadingStateId(`pdf-content:${fingerprint}`).then(documentId=>{if(currentPdfContentFingerprint===fingerprint)openNoteSummary({kind:'pdf',documentId},{isCurrent:()=>currentPdfContentFingerprint===fingerprint,onLocateSource:locatePdfSummarySource})}).catch(error=>showNotice(String(error)))});
 element<HTMLButtonElement>('pdf-library-source').addEventListener('click',()=>{
   if(cachedReadingContext?.kind!=='pdf')return;
   libraryRestoreId=cachedReadingContext.id;
   const url=new URL(location.href);url.searchParams.delete('library');url.searchParams.set('restore',libraryRestoreId);history.replaceState(null,'',url);
-  documentTranslationCopyMenu.open=false;fileInput.click();
+  documentTranslationCopyMenu.open=false;
+  const fingerprint=cachedReadingContext.record.sourceFingerprint;
+  void(async()=>{if(!fingerprint||!await originalCopy.open(await pdfReadingStateId(`pdf-content:${fingerprint}`)))fileInput.click()})().catch(error=>showNotice(error instanceof Error?error.message:t('请重新选择原 PDF。'),{tone:'error'}));
 });
 documentReview.addEventListener('toggle', syncPdfReviewQueue);
 documentReviewFilter.addEventListener('change', syncPdfReviewQueue);
@@ -8565,10 +9314,10 @@ documentTranslationCopyBilingual.addEventListener('click', () => {
   void handlePdfDocumentTranslationExport('copy-bilingual');
 });
 documentTranslationDownloadArchive.addEventListener('click', () => {
-  const text = '# 旧分段译文备查\n\n这些结果来自同一 PDF 的旧分段，未套用到当前段落。公式、人工修正和核对提示按原记录保留。\n\n' +
-    pdfDocumentTranslationArchivedBlocks.map(block => `## ${block.signature}\n\n${block.formulaDocument ? formulaDocumentText(block.formulaDocument) : block.translatedText}\n\n${[block.formulaReviewDraft ? '未确认草稿' : '', block.formulaReviewMessage, block.visualFallbackMessage, block.reviewConfirmation ? '已人工核对' : ''].filter(Boolean).join('；')}`).join('\n\n');
+  const text = t('# 旧分段译文备查\n\n这些结果来自同一 PDF 的旧分段，未套用到当前段落。公式、人工修正和核对提示按原记录保留。\n\n') +
+    pdfDocumentTranslationArchivedBlocks.map(block => `## ${block.signature}\n\n${block.formulaDocument ? formulaDocumentText(block.formulaDocument) : block.translatedText}\n\n${[block.formulaReviewDraft ? t('未确认草稿') : '', block.formulaReviewMessage, block.visualFallbackMessage, block.reviewConfirmation ? t('已人工核对') : ''].filter(Boolean).join('；')}`).join('\n\n');
   const url = URL.createObjectURL(new Blob([text], {type:'text/markdown;charset=utf-8'}));
-  const anchor = document.createElement('a');anchor.href = url;anchor.download = '旧分段译文.md';anchor.click();
+  const anchor = document.createElement('a');anchor.href = url;anchor.download = t('旧分段译文.md');anchor.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);documentTranslationCopyMenu.open = false;
 });
 documentTranslationDownloadTranslation.addEventListener('click', () => {
@@ -8661,18 +9410,54 @@ documentTranslationSkipAppendix.addEventListener('change', () => {
 });
 
 let pdfMarkerSnapshot:{identity:string;markers:Awaited<ReturnType<typeof getPdfTranslationMarkerState>>['markers']}|undefined;
+const pdfReadingHints=bindReadingHints({host:document.body,target:()=>readingHintTarget,resumePage:()=>readingHintResumePage,locate:locatePdfSummarySource});
+async function refreshPdfReadingHints():Promise<void>{
+  const fingerprint=currentPdfContentFingerprint;if(!fingerprint)return;
+  const documentId=await pdfReadingStateId(`pdf-content:${fingerprint}`);
+  if(currentPdfContentFingerprint!==fingerprint)return;readingHintTarget={kind:'pdf',documentId};await pdfReadingHints.refresh();
+}
+const readingAnnotations=bindPdfReadingAnnotations({
+  rotation:()=>viewRotation,
+  viewer,
+  modeHost:document.querySelector<HTMLElement>('.document-actions')!,
+  currentDocument:()=>pdfDocument&&currentPdfContentFingerprint?{identity:`pdf-content:${currentPdfContentFingerprint}`,title:documentName.textContent?.trim()||'PDF',url:currentSourceUrl,citation:currentPdfCitation}:undefined,
+  navigate:navigateToPdfReadingSource,
+  notice:(text,transient)=>showNotice(text,{...(transient?{transient:true}:{})}),
+  onNewProjectNote:async(kind,documentId,noteId)=>{const projectId=new URL(location.href).searchParams.get('project');return projectId?addDocumentToProject(JSON.stringify([kind,documentId,noteId]),projectId):undefined},
+  onModeChange:async enabled=>{
+    (await selectionTranslator).setReadingAnnotationMode(enabled);
+  },
+});
+const originalCopy=bindPdfOriginalCopy({current:()=>pdfDocument&&currentPdfBackgroundData&&currentPdfContentFingerprint?{data:currentPdfBackgroundData,name:documentName.textContent?.trim()||'PDF',fingerprint:currentPdfContentFingerprint}:undefined,open:openLocalFile,notice:text=>showNotice(text,{transient:true})});
+const recentReading=bindPdfRecentReading({empty:emptyState,notice:text=>showNotice(text),openCopy:originalCopy.open});
+const excerptOpenOperation=openOperationId;
+const excerptSource=bindPdfExcerptSource({
+  empty:emptyState,viewer,
+  openCopy:originalCopy.open,canAutoOpen:()=>openOperationId===excerptOpenOperation,
+  current:()=>pdfDocument&&currentPdfContentFingerprint?{fingerprint:currentPdfContentFingerprint,identity:currentReadingIdentity,rotation:viewRotation}:undefined,
+  navigate:navigateToPdfReadingSource,
+  notice:text=>showNotice(text),
+});
+element<HTMLButtonElement>('pdf-open-annotations').addEventListener('click',()=>{
+  element<HTMLDetailsElement>('pdf-reader-menu').open=false;readingAnnotations.open();
+});
 const selectionTranslator = startSelectionTranslator(
   { onInvalidated: (callback) => invalidationCallbacks.push(callback) },
   'pdf',
   {
     pageUrl: () => currentSourceUrl,
+    citationMetadata: () => currentPdfCitation,
     sourceLabel: () => currentSourceLabel,
     documentId: () => currentReadingIdentity,
+    glossaryDocumentId:pdfGlossaryDocumentId,
     allowSitePause: false,
     viewportInsets: () => ({ top: toolbar.getBoundingClientRect().bottom }),
     shouldIgnoreSelection: (selection) => Boolean(
       (selection.anchorNode && documentTranslationPanel.contains(selection.anchorNode)) ||
-      (selection.focusNode && documentTranslationPanel.contains(selection.focusNode)),
+      (selection.focusNode && documentTranslationPanel.contains(selection.focusNode)) ||
+      (selection.anchorNode && readingAnnotations.contains(selection.anchorNode)) ||
+      (selection.focusNode && readingAnnotations.contains(selection.focusNode)) ||
+      (document.activeElement && readingAnnotations.contains(document.activeElement)),
     ),
     onSidebarLayoutChange: applyPdfSidebarLayout,
     onSidebarActiveChange: (active) => {
@@ -8682,6 +9467,7 @@ const selectionTranslator = startSelectionTranslator(
       }
     },
     selectionPreview: pdfSelectionPreview,
+    onAnnotateSelection:readingAnnotations.annotateSelection,
     onAdjustPdfRegion: restorePdfRegionSelection,
     onNavigateToPdfRegion: navigateToPdfRegion,
     onNavigateToPdfMarker: navigateToPdfMarkerPage,
@@ -8705,8 +9491,10 @@ const selectionTranslator = startSelectionTranslator(
         const identity = currentReadingIdentity;
         if(!identity)return;
         if(pdfMarkerSnapshot?.identity!==identity)throw new Error('PDF 摘录尚未读取完成，请稍后再试。');
+        const oldIds=new Set(pdfMarkerSnapshot.markers.map(marker=>marker.markerId)),newIds=markers.filter(marker=>!oldIds.has(marker.markerId)).map(marker=>marker.markerId),projectId=new URL(location.href).searchParams.get('project');
         const saved=await savePdfTranslationMarkers(identity,markers,pdfMarkerSnapshot.markers);
         if(currentReadingIdentity===identity)pdfMarkerSnapshot={identity,markers:saved.markers};
+        if(projectId&&newIds.length)try{const documentId=await pdfReadingStateId(identity);for(const noteId of newIds)await addDocumentToProject(JSON.stringify(['pdf',documentId,noteId]),projectId)}catch{showNotice(t('笔记已保存，但未加入项目；可在文档库重新选择。'),{tone:'warning'})}
       },
       clear: async () => {
         const identity = currentReadingIdentity;
@@ -8748,10 +9536,25 @@ const selectionTranslator = startSelectionTranslator(
 );
 
 const onPdfViewportResize = (): void => {
+  scheduleFitWidthRefresh();
   applyPdfSidebarLayout(pdfSidebarLayout);
   updatePdfDocumentTranslationInset();
 };
 window.addEventListener('resize', onPdfViewportResize, { passive: true });
+
+let readingSourceTabId:number|undefined;
+void browser.tabs.getCurrent().then(tab=>{readingSourceTabId=tab?.id});
+browser.runtime.onMessage.addListener((value:unknown)=>{
+  if(!isRuntimeMessage(value)||value.type!=='REUSE_READING_SOURCE'||value.payload.tabId!==readingSourceTabId)return;
+  return (async()=>{
+    const target=pdfReadingTarget(value.payload.url,browser.runtime.getURL('/pdf.html'));
+    const fingerprint=currentPdfContentFingerprint;
+    if(!target||!pdfDocument||!fingerprint)return {ok:true,data:{matched:false}};
+    if(target.kind==='excerpt')return {ok:true,data:await excerptSource.tryReuse(target.id)};
+    const matched=await recentReading.matches(fingerprint,target.id);
+    return {ok:true,data:{matched:matched&&fingerprint===currentPdfContentFingerprint,...(hasReadingDraft()?{draft:true}:{})}};
+  })().catch(()=>({ok:true,data:{matched:false}}));
+});
 
 browser.runtime.onMessage.addListener((value: unknown): undefined => {
   if (
@@ -8794,6 +9597,16 @@ window.addEventListener('beforeunload', () => {
 setDocumentControls(false);
 syncPdfDocumentTranslationUi();
 bindPdfResearchReferences(documentTranslationPages,element<HTMLButtonElement>('pdf-research-return'),{
+  preview:async(target,host,signal)=>{
+    const pdf=pdfDocument,epoch=documentEpoch,block=pdfDocumentTranslationBlocksState.find(item=>item.id===target.blockId);
+    if(!pdf){const message=document.createElement('p');message.textContent=t('未加载原 PDF，可跳转到已保存译文；原始图表需选择原文件后查看。');host.append(message);return}
+    const page=await pdf.getPage(target.pageNumber);signal.throwIfAborted();if(pdfDocument!==pdf||documentEpoch!==epoch)return;
+    const base=page.getViewport({scale:1,rotation:(page.rotate+viewRotation)%360}),scale=Math.min(1,620/base.width,Math.sqrt(2_000_000/(base.width*base.height)));
+    const viewport=page.getViewport({scale,rotation:base.rotation}),canvas=document.createElement('canvas');canvas.width=Math.ceil(viewport.width);canvas.height=Math.ceil(viewport.height);canvas.style.maxWidth='100%';canvas.ariaLabel=t('原 PDF 页面预览');
+    const context=canvas.getContext('2d');if(!context)throw new Error('无法创建来源预览。');host.append(canvas);
+    const render=page.render({canvas,canvasContext:context,viewport}),cancel=()=>render.cancel();signal.addEventListener('abort',cancel,{once:true});
+    try{await render.promise;signal.throwIfAborted();if(documentEpoch!==epoch){canvas.remove();return}if(block?.sourceAnchor){const rect=rotatePdfViewRect(block.sourceAnchor,viewRotation);host.scrollTop=Math.max(0,rect.topRatio*canvas.height-16)}}finally{signal.removeEventListener('abort',cancel)}
+  },
   documentKey:()=>currentReadingIdentity??currentDocumentSessionId,
   blocks:()=>pdfDocumentTranslationBlocksState.map(block=>({...block,headingLevel:pdfDisplayHeadingLevel(block)})),
   capture:()=>({mode:pdfDocumentTranslationViewMode,scrollTop:documentTranslationPages.scrollTop,source:visiblePageAnchor()}),
@@ -8812,8 +9625,8 @@ bindPdfResearchReferences(documentTranslationPages,element<HTMLButtonElement>('p
   },
 });
 if(libraryRestoreId){
-  emptyState.querySelector('h1')!.textContent='选择原 PDF 恢复阅读';
-  emptyState.querySelector('p')!.textContent='在本机核验文件后恢复保留译文，不发送新的翻译请求。';
+  emptyState.querySelector('h1')!.textContent=t('选择原 PDF 恢复阅读');
+  emptyState.querySelector('p')!.textContent=t('在本机核验文件后恢复保留译文，不发送新的翻译请求。');
 }
 const initialSource = parsePdfSourceUrl(
   new URLSearchParams(location.search).get('url') ?? undefined,
@@ -8822,3 +9635,13 @@ const initialPage = pdfInitialPage(location.href) ?? pdfInitialPage(initialSourc
 if (initialSource) void openPdfSource(initialSource, initialPage);
 const initialLibraryId=new URL(location.href).searchParams.get('library');
 if(initialLibraryId)void openCachedLibraryReading(initialLibraryId);
+void excerptSource.prepare();
+void recentReading.prepare();
+// The user may have selected a file while UI language initialization was waiting.
+// Start it only after the reader and its annotation controls are fully bound.
+chooseFile.disabled=emptyOpen.disabled=false;
+if(fileInput.files?.length)openSelectedLocalPdf();
+
+}
+
+void startUi();

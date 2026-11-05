@@ -1,3 +1,4 @@
+import { msg } from '../core/i18n/ui-language';
 import { formulaDocumentParts, formulaReviewLabel, type FormulaDocument } from '../core/translation/formula-document';
 import { renderTranslationContents, type TranslationContentTarget } from './translation-content';
 
@@ -23,7 +24,7 @@ export async function renderFormulaDocument(
     if (entry.review) {
       element.className = 'pdf-formula-reference-review';
       element.textContent = formulaReviewLabel(entry);
-      element.title = `公式 ${entry.id.slice(1)} 待核对：${entry.review}；查看完整原文`;
+      element.title = msg`公式 ${entry.id.slice(1)} 待核对：${entry.review}；查看完整原文`;
       element.setAttribute('aria-label', element.title);
       if (onReview) {
         (element as HTMLButtonElement).type = 'button';

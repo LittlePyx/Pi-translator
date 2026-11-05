@@ -1,0 +1,1370 @@
+{
+  "version": 1,
+  "createdAt": "2026-10-17T14:26:26.514526+00:00",
+  "purpose": "Fixed historical first-translation regression, not a semantic checker or new quality pass.",
+  "selectionRule": "All 42 earlier actual Qwen outputs from both fixed source-grounding arms, plus all four actual translations from the last anchor study; inherited labels unchanged. No model inference, new corruption, best-result selection or relabeling.",
+  "limits": "46 related outputs are not 46 independent source cases. Synthetic source text is distinct from manual corruption: every observed translation here was actually generated. Known diagnostics and the unadopted grounded arm are not current production acceptance. Offline replay cannot measure present generation quality, recall, speed or tokens. No-confirmed-fault is not perfect translation.",
+  "counts": {
+    "no-confirmed-material-fault": 36,
+    "fault": 7,
+    "uncertain": 3
+  },
+  "openCoreDefects": 8,
+  "cases": [
+    {
+      "id": "E01",
+      "caseId": "synth-carbon-ocean",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The sample contains carbon dioxide from the subsurface ocean. No biological source has been established.",
+      "observedTranslation": "该样本含有来自地下海洋的二氧化碳。尚未确定任何生物来源。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-carbon-ocean--current.json",
+      "originSha256": "b6dd2bb6aa13438ed2f43b7ba70f3b1afab4082e963bc077a09439c95e8ea3d1",
+      "providerContent": "{\n  \"translation\": \"该样本含有来自地下海洋的二氧化碳。尚未确定任何生物来源。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"该样本含有来自地下海洋的二氧化碳。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"尚未确定任何生物来源。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The sample contains carbon dioxide from the subsurface ocean. No biological source has been established."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E02",
+      "caseId": "k2-ocean",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The abundance of methane and carbon dioxide, and shortage of ammonia, support the hypothesis that there may be a water ocean underneath a hydrogen-rich atmosphere in K2-18 b. These initial Webb observations also provided a possible detection of a molecule called dimethyl sulfide (DMS).",
+      "observedTranslation": "甲烷和二氧化碳的丰度以及氨的短缺，支持了K2-18 b在富氢大气层下可能存在水海洋的假说。这些韦布望远镜的初步观测结果还提供了一个可能检测到二甲基硫醚（DMS）分子的证据。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-ocean--grounded.json",
+      "originSha256": "dee042582a81fc6d9defa49f9f5c3f846fa6166541986837e68f93e44acadf95",
+      "providerContent": "{\n  \"translation\": \"甲烷和二氧化碳的丰度以及氨的短缺，支持了K2-18 b在富氢大气层下可能存在水海洋的假说。这些韦布望远镜的初步观测结果还提供了一个可能检测到二甲基硫醚（DMS）分子的证据。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"甲烷和二氧化碳的丰度以及氨的短缺，支持了K2-18 b在富氢大气层下可能存在水海洋的假说。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"这些韦布望远镜的初步观测结果还提供了一个可能检测到二甲基硫醚（DMS）分子的证据。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"dimethyl sulfide (DMS)\",\n      \"target\": \"二甲基硫醚（DMS）\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The abundance of methane and carbon dioxide, and shortage of ammonia, support the hypothesis that there may be a water ocean underneath a hydrogen-rich atmosphere in K2-18 b. These initial Webb observations also provided a possible detection of a molecule called dimethyl sulfide (DMS).",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The abundance of methane and carbon dioxide, and shortage of ammonia, support the hypothesis that there may be a water ocean underneath a hydrogen-rich atmosphere in K2-18 b."
+          },
+          {
+            "id": "s2",
+            "text": "These initial Webb observations also provided a possible detection of a molecule called dimethyl sulfide (DMS)."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E03",
+      "caseId": "europa-exchange",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Webb finds that on Europa’s surface, carbon dioxide is most abundant in a region called Tara Regio – a geologically young area of generally resurfaced terrain known as “chaos terrain.” The surface ice has been disrupted, and there likely has been an exchange of material between the subsurface ocean and the icy surface.",
+      "observedTranslation": "韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。地表冰层已被扰乱，地下海洋与冰面之间很可能存在物质交换。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-exchange--grounded.json",
+      "originSha256": "d2b32b09745b0ab1ecb755d79f81b615a37e9759c7d78d7a374d0a508a7450bc",
+      "providerContent": "{\n  \"translation\": \"韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。地表冰层已被扰乱，地下海洋与冰面之间很可能存在物质交换。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"地表冰层已被扰乱，地下海洋与冰面之间很可能存在物质交换。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"Europa\",\n      \"target\": \"木卫二\"\n    },\n    {\n      \"source\": \"Tara Regio\",\n      \"target\": \"塔拉雷吉奥\"\n    },\n    {\n      \"source\": \"chaos terrain\",\n      \"target\": \"混沌地形\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Webb finds that on Europa’s surface, carbon dioxide is most abundant in a region called Tara Regio – a geologically young area of generally resurfaced terrain known as “chaos terrain.” The surface ice has been disrupted, and there likely has been an exchange of material between the subsurface ocean and the icy surface.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "Webb finds that on Europa’s surface, carbon dioxide is most abundant in a region called Tara Regio – a geologically young area of generally resurfaced terrain known as “chaos terrain.”"
+          },
+          {
+            "id": "s2",
+            "text": "The surface ice has been disrupted, and there likely has been an exchange of material between the subsurface ocean and the icy surface."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E04",
+      "caseId": "gj-lock",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "It orbits a red dwarf star in just under 1.5 Earth days. It is expected to be tidally locked, with a permanent day side and a permanent night side.",
+      "observedTranslation": "它绕一颗红矮星运行的周期略少于1.5个地球日。预计其处于潮汐锁定状态，拥有永久的昼侧和夜侧。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-lock--grounded.json",
+      "originSha256": "9942d7167314afb12aa0db5499ac26fc9eb32f728414c8a05d637e6bc46c2578",
+      "providerContent": "{\n  \"translation\": \"它绕一颗红矮星运行的周期略少于1.5个地球日。预计其处于潮汐锁定状态，拥有永久的昼侧和夜侧。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"它绕一颗红矮星运行的周期略少于1.5个地球日。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"预计其处于潮汐锁定状态，拥有永久的昼侧和夜侧。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "It orbits a red dwarf star in just under 1.5 Earth days. It is expected to be tidally locked, with a permanent day side and a permanent night side.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "It orbits a red dwarf star in just under 1.5 Earth days."
+          },
+          {
+            "id": "s2",
+            "text": "It is expected to be tidally locked, with a permanent day side and a permanent night side."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E05",
+      "caseId": "europa-exchange",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Webb finds that on Europa’s surface, carbon dioxide is most abundant in a region called Tara Regio – a geologically young area of generally resurfaced terrain known as “chaos terrain.” The surface ice has been disrupted, and there likely has been an exchange of material between the subsurface ocean and the icy surface.",
+      "observedTranslation": "韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。地表冰层已被扰乱，并且地下海洋与冰面之间可能存在物质交换。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-exchange--current.json",
+      "originSha256": "d7bafa6c151b298eb8392a4ff8bb12c0c12c0a868131587e65e869a71b54e8c2",
+      "providerContent": "{\n  \"translation\": \"韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。地表冰层已被扰乱，并且地下海洋与冰面之间可能存在物质交换。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"韦布发现，在木卫二表面，二氧化碳最丰富的区域是被称为塔拉雷吉奥（Tara Regio）的地区——这是一个地质上年轻的、通常被重新覆盖的地形区域，被称为“混沌地形”。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"地表冰层已被扰乱，并且地下海洋与冰面之间可能存在物质交换。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"Europa\",\n      \"target\": \"木卫二\"\n    },\n    {\n      \"source\": \"Tara Regio\",\n      \"target\": \"塔拉雷吉奥\"\n    },\n    {\n      \"source\": \"chaos terrain\",\n      \"target\": \"混沌地形\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Webb finds that on Europa’s surface, carbon dioxide is most abundant in a region called Tara Regio – a geologically young area of generally resurfaced terrain known as “chaos terrain.” The surface ice has been disrupted, and there likely has been an exchange of material between the subsurface ocean and the icy surface."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E06",
+      "caseId": "known-nasa-grade",
+      "sourceKind": "known-diagnostic",
+      "arm": "grounded",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "addition",
+          "category": "location",
+          "sourceQuote": "",
+          "translationQuote": "海洋",
+          "reason": "原文未指定飓风发生于海洋。"
+        }
+      ],
+      "source": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth. It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere.",
+      "observedTranslation": "新发现的急流速度约为每小时320英里（515公里/小时），是地球上海洋五级飓风持续风速的两倍。它位于云层上方约25英里（40公里）处，处于木星的下平流层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--known-nasa-grade--grounded.json",
+      "originSha256": "c2f63b5af48802043d0bc8054c05075efc78b5b6836e247eab07390141bb0fad",
+      "providerContent": "{\n  \"translation\": \"新发现的急流速度约为每小时320英里（515公里/小时），是地球上海洋五级飓风持续风速的两倍。它位于云层上方约25英里（40公里）处，处于木星的下平流层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"新发现的急流速度约为每小时320英里（515公里/小时），是地球上海洋五级飓风持续风速的两倍。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"它位于云层上方约25英里（40公里）处，处于木星的下平流层。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth. It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth."
+          },
+          {
+            "id": "s2",
+            "text": "It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E07",
+      "caseId": "enceladus-percent",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "mistranslation",
+          "category": "entity",
+          "sourceQuote": "the moon’s water vapor plumes",
+          "translationQuote": "月球",
+          "reason": "原文土星系统语境的卫星被收窄为地球的月球。"
+        }
+      ],
+      "source": "The Webb observations directly demonstrate how the moon’s water vapor plumes feed the torus. By analyzing the Webb data, astronomers have determined roughly 30 percent of the water stays within this torus, and the other 70 percent escapes to supply the rest of the Saturnian system of water.",
+      "observedTranslation": "韦布观测直接证明了月球的水蒸气羽流如何为环提供物质。通过分析韦布数据，天文学家确定大约30%的水保留在这个环中，其余70%逃逸出去，为土星系统其余部分的水供应来源。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-percent--grounded.json",
+      "originSha256": "11d7c8ab2627f13500faf1041d12c320afcf0cfae41ae3d54bd29dd1f783a35a",
+      "providerContent": "{\n  \"translation\": \"韦布观测直接证明了月球的水蒸气羽流如何为环提供物质。通过分析韦布数据，天文学家确定大约30%的水保留在这个环中，其余70%逃逸出去，为土星系统其余部分的水供应来源。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"韦布观测直接证明了月球的水蒸气羽流如何为环提供物质。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"通过分析韦布数据，天文学家确定大约30%的水保留在这个环中，其余70%逃逸出去，为土星系统其余部分的水供应来源。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The Webb observations directly demonstrate how the moon’s water vapor plumes feed the torus. By analyzing the Webb data, astronomers have determined roughly 30 percent of the water stays within this torus, and the other 70 percent escapes to supply the rest of the Saturnian system of water.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The Webb observations directly demonstrate how the moon’s water vapor plumes feed the torus."
+          },
+          {
+            "id": "s2",
+            "text": "By analyzing the Webb data, astronomers have determined roughly 30 percent of the water stays within this torus, and the other 70 percent escapes to supply the rest of the Saturnian system of water."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E08",
+      "caseId": "europa-origin",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Analysis indicates that this carbon likely originated in the subsurface ocean and was not delivered by meteorites or other external sources. Moreover, it was deposited on a geologically recent timescale.",
+      "observedTranslation": "分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源带来。此外，它是在地质学上较新的时间尺度上沉积的。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-origin--grounded.json",
+      "originSha256": "436b3ffea9446dc4e28c3b25c0b45b9a4009fa5f56886d64b07f5ba7fd6ae432",
+      "providerContent": "{\n  \"translation\": \"分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源带来。此外，它是在地质学上较新的时间尺度上沉积的。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源带来。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"此外，它是在地质学上较新的时间尺度上沉积的。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Analysis indicates that this carbon likely originated in the subsurface ocean and was not delivered by meteorites or other external sources. Moreover, it was deposited on a geologically recent timescale.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "Analysis indicates that this carbon likely originated in the subsurface ocean and was not delivered by meteorites or other external sources."
+          },
+          {
+            "id": "s2",
+            "text": "Moreover, it was deposited on a geologically recent timescale."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E09",
+      "caseId": "synth-inland",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The camera recorded clouds above a dry inland plateau. No measurements over water were reported.",
+      "observedTranslation": "相机记录了干燥内陆高原上方的云层。未报告任何水域的测量数据。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-inland--current.json",
+      "originSha256": "b05e820f80b5b0e597bffb635ebbcd1aaf6f10fb03c111c6743864f1702e0942",
+      "providerContent": "{\n  \"translation\": \"相机记录了干燥内陆高原上方的云层。未报告任何水域的测量数据。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"相机记录了干燥内陆高原上方的云层。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"未报告任何水域的测量数据。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The camera recorded clouds above a dry inland plateau. No measurements over water were reported."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E10",
+      "caseId": "enceladus-reservoir",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": null,
+      "gold": [],
+      "source": "Sandwiched between the moon’s icy outer crust and its rocky core is a global reservoir of salty water.",
+      "observedTranslation": "在月球冰质外壳与岩石内核之间，存在一个全球性的咸水储层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-reservoir--grounded.json",
+      "originSha256": "c1590094e9ec4e3a3f31c3eff28b5a8e3120b8ec8375c689c8f3087c55c4d981",
+      "providerContent": "{\n  \"translation\": \"在月球冰质外壳与岩石内核之间，存在一个全球性的咸水储层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"在月球冰质外壳与岩石内核之间，存在一个全球性的咸水储层。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Sandwiched between the moon’s icy outer crust and its rocky core is a global reservoir of salty water.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "Sandwiched between the moon’s icy outer crust and its rocky core is a global reservoir of salty water."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E11",
+      "caseId": "synth-grade-unknown",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The report compares this wind with a Category 3 hurricane but does not specify where that hurricane occurs.",
+      "observedTranslation": "该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-unknown--grounded.json",
+      "originSha256": "8443148cca45a801beccb67454b14d551f62a9ff9845a2c54de14c5fc4654e1d",
+      "providerContent": "{\n  \"translation\": \"该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The report compares this wind with a Category 3 hurricane but does not specify where that hurricane occurs.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The report compares this wind with a Category 3 hurricane but does not specify where that hurricane occurs."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E12",
+      "caseId": "synth-grade-ocean",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": null,
+      "gold": [],
+      "source": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane over the ocean on Earth.",
+      "observedTranslation": "该乐队以每小时240英里的速度行进，这是地球海洋上四级飓风持续风速的两倍。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-ocean--current.json",
+      "originSha256": "ff760ef1273bbfc87d5959a677c60e796d253c768cdda18f0332bbf9ce47dc5f",
+      "providerContent": "{\n  \"translation\": \"该乐队以每小时240英里的速度行进，这是地球海洋上四级飓风持续风速的两倍。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [\n    \"The term 'band' is translated as '乐队' (music band), which may be contextually incorrect if the source refers to a meteorological or physical phenomenon (e.g., a cloud band, wind band, or particle beam). Without further context, the literal translation of the most common meaning was used.\"\n  ],\n  \"segments\": [\n    {\n      \"id\": 1,\n      \"translation\": \"该乐队以每小时240英里的速度行进，这是地球海洋上四级飓风持续风速的两倍。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane over the ocean on Earth."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E13",
+      "caseId": "enceladus-percent",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "mistranslation",
+          "category": "entity",
+          "sourceQuote": "the moon’s water vapor plumes",
+          "translationQuote": "月球",
+          "reason": "原文土星系统语境的卫星被收窄为地球的月球。"
+        }
+      ],
+      "source": "The Webb observations directly demonstrate how the moon’s water vapor plumes feed the torus. By analyzing the Webb data, astronomers have determined roughly 30 percent of the water stays within this torus, and the other 70 percent escapes to supply the rest of the Saturnian system of water.",
+      "observedTranslation": "韦布观测直接展示了月球的水蒸气羽流如何为环带提供物质。通过分析韦布数据，天文学家确定大约30%的水保留在该环带内，其余70%逃逸并供给土星系统其余部分的水。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-percent--current.json",
+      "originSha256": "c93c48c0bed63f618e39841e1a8d2c6bc2df515dfe7075d8658fc40581d93ec2",
+      "providerContent": "{\n  \"translation\": \"韦布观测直接展示了月球的水蒸气羽流如何为环带提供物质。通过分析韦布数据，天文学家确定大约30%的水保留在该环带内，其余70%逃逸并供给土星系统其余部分的水。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 1,\n      \"translation\": \"韦布观测直接展示了月球的水蒸气羽流如何为环带提供物质。\"\n    },\n    {\n      \"id\": 2,\n      \"translation\": \"通过分析韦布数据，天文学家确定大约30%的水保留在该环带内，其余70%逃逸并供给土星系统其余部分的水。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"Webb\",\n      \"target\": \"韦布\"\n    },\n    {\n      \"source\": \"torus\",\n      \"target\": \"环带\"\n    },\n    {\n      \"source\": \"Saturnian system\",\n      \"target\": \"土星系统\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The Webb observations directly demonstrate how the moon’s water vapor plumes feed the torus. By analyzing the Webb data, astronomers have determined roughly 30 percent of the water stays within this torus, and the other 70 percent escapes to supply the rest of the Saturnian system of water."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E14",
+      "caseId": "synth-formula",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The estimate is v = 2u, with u = 120 km/h. The report gives no physical cause for the ratio.",
+      "observedTranslation": "估计值为 v = 2u，其中 u = 120 km/h。该报告未给出该比值的物理成因。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-formula--current.json",
+      "originSha256": "0f19fdf93d0d344b15bd5390c9a1936adefad960c3d82bc456134dc3eb923503",
+      "providerContent": "{\n  \"translation\": \"估计值为 v = 2u，其中 u = 120 km/h。该报告未给出该比值的物理成因。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"估计值为 v = 2u，其中 u = 120 km/h。该报告未给出该比值的物理成因。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The estimate is v = 2u, with u = 120 km/h. The report gives no physical cause for the ratio."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E15",
+      "caseId": "known-nasa-grade",
+      "sourceKind": "known-diagnostic",
+      "arm": "current",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "addition",
+          "category": "tsunami",
+          "sourceQuote": "",
+          "translationQuote": "海啸",
+          "reason": "原文没有海啸这一灾害概念。"
+        }
+      ],
+      "source": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth. It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere.",
+      "observedTranslation": "新发现的急流速度约为每小时320英里（515公里），是地球上海啸五级飓风持续风速的两倍。它位于云层上方约25英里（40公里）处，处于木星的下平流层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--known-nasa-grade--current.json",
+      "originSha256": "a156aa432f923f4c691d91af79812381c0a4c67d5b321b050e2c635c1321652e",
+      "providerContent": "{\n  \"translation\": \"新发现的急流速度约为每小时320英里（515公里），是地球上海啸五级飓风持续风速的两倍。它位于云层上方约25英里（40公里）处，处于木星的下平流层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [\n    \"原文中的'Category 5 hurricane'被翻译为'海啸五级飓风'，但根据上下文应为'五级飓风'。此处可能存在术语误译风险。\"\n  ],\n  \"segments\": [],\n  \"termCandidates\": [\n    {\n      \"source\": \"jet stream\",\n      \"target\": \"急流\"\n    },\n    {\n      \"source\": \"lower stratosphere\",\n      \"target\": \"下平流层\"\n    },\n    {\n      \"source\": \"Category 5 hurricane\",\n      \"target\": \"五级飓风\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The newly discovered jet stream travels at about 320 miles per hour (515 kilometers per hour), twice the sustained winds of a Category 5 hurricane here on Earth. It is located around 25 miles (40 kilometers) above the clouds, in Jupiter’s lower stratosphere."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E16",
+      "caseId": "k2-habitable",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "While K2-18 b lies in the habitable zone, and is now known to harbor carbon-bearing molecules, this does not necessarily mean that the planet can support life.",
+      "observedTranslation": "尽管K2-18 b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-habitable--grounded.json",
+      "originSha256": "1e963bd146526989639ec6d73da59763fbd3051ceced8ef891fdc3cf9d13d5f9",
+      "providerContent": "{\n  \"translation\": \"尽管K2-18 b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"尽管K2-18 b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "While K2-18 b lies in the habitable zone, and is now known to harbor carbon-bearing molecules, this does not necessarily mean that the planet can support life.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "While K2-18 b lies in the habitable zone, and is now known to harbor carbon-bearing molecules, this does not necessarily mean that the planet can support life."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E17",
+      "caseId": "synth-grade-unspecified",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "mistranslation",
+          "category": "grade",
+          "sourceQuote": "Category 4",
+          "translationQuote": "一级4级",
+          "reason": "4级被写成一级4级，形成等级冲突；额外云带选义不作为核心缺陷。"
+        }
+      ],
+      "source": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane on Earth.",
+      "observedTranslation": "该云带以每小时240英里的速度移动，这是地球上一级4级飓风持续风速的两倍。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-unspecified--grounded.json",
+      "originSha256": "5b0d6e07f6139bc6944803d960326e0e1125a0c78db2106c74a4f3f91ec90d00",
+      "providerContent": "{\n  \"translation\": \"该云带以每小时240英里的速度移动，这是地球上一级4级飓风持续风速的两倍。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"该云带以每小时240英里的速度移动，这是地球上一级4级飓风持续风速的两倍。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane on Earth.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane on Earth."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E18",
+      "caseId": "gj-vapor",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "If the water vapor is associated with the planet, that would indicate that it has an atmosphere despite its scorching temperature and close proximity to its star. Water vapor has been seen on gaseous exoplanets before, but to date no atmosphere has been definitely detected around a rocky exoplanet. However, the team cautions that the water vapor could be on the star itself – specifically, in cool starspots – and not from the planet at all.",
+      "observedTranslation": "如果水蒸气与行星有关联，则表明尽管其温度极高且距离恒星极近，它仍拥有大气层。此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。然而，研究团队警告称，这些水蒸气可能源自恒星本身——具体而言是位于较冷的黑子区域——而非来自行星。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-vapor--grounded.json",
+      "originSha256": "026475e328aee6db7035ecc1c8ba758a858b17c6b25c18fe8935e5f67cc3eee4",
+      "providerContent": "{\n  \"translation\": \"如果水蒸气与行星有关联，则表明尽管其温度极高且距离恒星极近，它仍拥有大气层。此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。然而，研究团队警告称，这些水蒸气可能源自恒星本身——具体而言是位于较冷的黑子区域——而非来自行星。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"如果水蒸气与行星有关联，则表明尽管其温度极高且距离恒星极近，它仍拥有大气层。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。\"\n    },\n    {\n      \"id\": \"s3\",\n      \"translation\": \"然而，研究团队警告称，这些水蒸气可能源自恒星本身——具体而言是位于较冷的黑子区域——而非来自行星。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"water vapor\",\n      \"target\": \"水蒸气\"\n    },\n    {\n      \"source\": \"exoplanets\",\n      \"target\": \"系外行星\"\n    },\n    {\n      \"source\": \"starspots\",\n      \"target\": \"黑子\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "If the water vapor is associated with the planet, that would indicate that it has an atmosphere despite its scorching temperature and close proximity to its star. Water vapor has been seen on gaseous exoplanets before, but to date no atmosphere has been definitely detected around a rocky exoplanet. However, the team cautions that the water vapor could be on the star itself – specifically, in cool starspots – and not from the planet at all.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "If the water vapor is associated with the planet, that would indicate that it has an atmosphere despite its scorching temperature and close proximity to its star."
+          },
+          {
+            "id": "s2",
+            "text": "Water vapor has been seen on gaseous exoplanets before, but to date no atmosphere has been definitely detected around a rocky exoplanet."
+          },
+          {
+            "id": "s3",
+            "text": "However, the team cautions that the water vapor could be on the star itself – specifically, in cool starspots – and not from the planet at all."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E19",
+      "caseId": "europa-origin",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Analysis indicates that this carbon likely originated in the subsurface ocean and was not delivered by meteorites or other external sources. Moreover, it was deposited on a geologically recent timescale.",
+      "observedTranslation": "分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源输送。此外，它是在地质学上较新的时间尺度上沉积的。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-origin--current.json",
+      "originSha256": "e2f4f56393bdb4758baddd818b3f58ad14d72bbf4054c32f75f11e2557e32724",
+      "providerContent": "{\n  \"translation\": \"分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源输送。此外，它是在地质学上较新的时间尺度上沉积的。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"分析表明，该碳可能源自地下海洋，而非由陨石或其他外部来源输送。此外，它是在地质学上较新的时间尺度上沉积的。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Analysis indicates that this carbon likely originated in the subsurface ocean and was not delivered by meteorites or other external sources. Moreover, it was deposited on a geologically recent timescale."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E20",
+      "caseId": "synth-formula",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The estimate is v = 2u, with u = 120 km/h. The report gives no physical cause for the ratio.",
+      "observedTranslation": "估计值为 v = 2u，其中 u = 120 km/h。该报告未给出该比值的物理原因。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-formula--grounded.json",
+      "originSha256": "8a6a2c6ec7d76c2849c5a9e0c6470f5a508481c9f76c59163b5a8aeab82784b5",
+      "providerContent": "{\n  \"translation\": \"估计值为 v = 2u，其中 u = 120 km/h。该报告未给出该比值的物理原因。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"估计值为 v = 2u，其中 u = 120 km/h。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"该报告未给出该比值的物理原因。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The estimate is v = 2u, with u = 120 km/h. The report gives no physical cause for the ratio.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The estimate is v = 2u, with u = 120 km/h."
+          },
+          {
+            "id": "s2",
+            "text": "The report gives no physical cause for the ratio."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E21",
+      "caseId": "k2-validation",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The inference of DMS is less robust and requires further validation.",
+      "observedTranslation": "DMS的推断稳健性较低，需要进一步验证。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-validation--grounded.json",
+      "originSha256": "caa4dba9510bc80bff40e729415e39ecdc0c23bcc7af330641b67c203c80ceeb",
+      "providerContent": "{\n  \"translation\": \"DMS的推断稳健性较低，需要进一步验证。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"DMS的推断稳健性较低，需要进一步验证。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The inference of DMS is less robust and requires further validation.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The inference of DMS is less robust and requires further validation."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E22",
+      "caseId": "synth-grade-unknown",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The report compares this wind with a Category 3 hurricane but does not specify where that hurricane occurs.",
+      "observedTranslation": "该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-unknown--current.json",
+      "originSha256": "1d3d13fe34b4c5e79c65eebc19346875515b04d204f0215a7b2b4827338f2c5e",
+      "providerContent": "{\n  \"translation\": \"该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"该报告将此风与三级飓风进行比较，但未指明该飓风的发生地点。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The report compares this wind with a Category 3 hurricane but does not specify where that hurricane occurs."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E23",
+      "caseId": "synth-vapor-negative",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The signal may come from the star; it is not evidence that the planet has an ocean.",
+      "observedTranslation": "该信号可能来自恒星，并非行星拥有海洋的证据。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-vapor-negative--current.json",
+      "originSha256": "9e883d8cf018a4e93a582a39043b3c053ddbad1fb2ad40a0aeaafd538b59f6ab",
+      "providerContent": "{\n  \"translation\": \"该信号可能来自恒星，并非行星拥有海洋的证据。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"该信号可能来自恒星，并非行星拥有海洋的证据。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The signal may come from the star; it is not evidence that the planet has an ocean."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E24",
+      "caseId": "enceladus-rate",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The length of the plume was not the only characteristic that intrigued researchers. The rate at which the water vapor is gushing out, about 79 gallons per second, is also particularly impressive. At this rate, you could fill an Olympic-sized swimming pool in just a couple of hours. In comparison, doing so with a garden hose on Earth would take more than 2 weeks.",
+      "observedTranslation": "羽流的长度并非唯一令研究人员着迷的特征。水蒸气喷涌而出的速率——每秒约79加仑——同样令人印象深刻。以这一速率，仅需数小时即可注满一个奥运标准游泳池。相比之下，若使用地球上的花园水管完成同样的注水任务，则需耗时超过两周。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-rate--current.json",
+      "originSha256": "52201039f2ff70cc287d7877dcc47825410ad0a45257ab4112c6a21cbcb8cec5",
+      "providerContent": "{\n  \"translation\": \"羽流的长度并非唯一令研究人员着迷的特征。水蒸气喷涌而出的速率——每秒约79加仑——同样令人印象深刻。以这一速率，仅需数小时即可注满一个奥运标准游泳池。相比之下，若使用地球上的花园水管完成同样的注水任务，则需耗时超过两周。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"羽流的长度并非唯一令研究人员着迷的特征。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"水蒸气喷涌而出的速率——每秒约79加仑——同样令人印象深刻。\"\n    },\n    {\n      \"id\": 2,\n      \"translation\": \"以这一速率，仅需数小时即可注满一个奥运标准游泳池。\"\n    },\n    {\n      \"id\": 3,\n      \"translation\": \"相比之下，若使用地球上的花园水管完成同样的注水任务，则需耗时超过两周。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"plume\",\n      \"target\": \"羽流\"\n    },\n    {\n      \"source\": \"water vapor\",\n      \"target\": \"水蒸气\"\n    },\n    {\n      \"source\": \"Olympic-sized swimming pool\",\n      \"target\": \"奥运标准游泳池\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The length of the plume was not the only characteristic that intrigued researchers. The rate at which the water vapor is gushing out, about 79 gallons per second, is also particularly impressive. At this rate, you could fill an Olympic-sized swimming pool in just a couple of hours. In comparison, doing so with a garden hose on Earth would take more than 2 weeks."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E25",
+      "caseId": "synth-grade-ocean",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane over the ocean on Earth.",
+      "observedTranslation": "该带状结构以每小时240英里的速度移动，这是地球海洋上四级飓风持续风速的两倍。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-ocean--grounded.json",
+      "originSha256": "4fcda89ae9abad4b728c95c3f2d6a0b71bbdb83cad9b181159edf438c84dccc2",
+      "providerContent": "{\n  \"translation\": \"该带状结构以每小时240英里的速度移动，这是地球海洋上四级飓风持续风速的两倍。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"该带状结构以每小时240英里的速度移动，这是地球海洋上四级飓风持续风速的两倍。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane over the ocean on Earth.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane over the ocean on Earth."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E26",
+      "caseId": "gj-open-question",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "As a result, one important open question in astronomy is whether a rocky planet could maintain, or reestablish, an atmosphere in such a harsh environment.",
+      "observedTranslation": "因此，天文学中一个重要的未解问题是：一颗岩石行星能否在如此恶劣的环境中维持或重新建立大气层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-open-question--current.json",
+      "originSha256": "1d365086bd9268483785d9db3e327cc416e465e9fbc192b388a60d7f8b0fbc13",
+      "providerContent": "{\n  \"translation\": \"因此，天文学中一个重要的未解问题是：一颗岩石行星能否在如此恶劣的环境中维持或重新建立大气层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"因此，天文学中一个重要的未解问题是：一颗岩石行星能否在如此恶劣的环境中维持或重新建立大气层。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "As a result, one important open question in astronomy is whether a rocky planet could maintain, or reestablish, an atmosphere in such a harsh environment."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E27",
+      "caseId": "europa-recent",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Carbon dioxide isn’t stable on Europa’s surface. Therefore, the scientists say it’s likely that it was supplied on a geologically recent timescale – a conclusion bolstered by its concentration in a region of young terrain.",
+      "observedTranslation": "二氧化碳在欧罗巴表面并不稳定。因此，科学家认为它很可能是在地质学上较近的时期内被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-recent--current.json",
+      "originSha256": "a867f75af2eb6139c6659ff37a13986587bf1d50370dd3f5903746159321492f",
+      "providerContent": "{\n  \"translation\": \"二氧化碳在欧罗巴表面并不稳定。因此，科学家认为它很可能是在地质学上较近的时期内被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"二氧化碳在欧罗巴表面并不稳定。因此，科学家认为它很可能是在地质学上较近的时期内被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Carbon dioxide isn’t stable on Europa’s surface. Therefore, the scientists say it’s likely that it was supplied on a geologically recent timescale – a conclusion bolstered by its concentration in a region of young terrain."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E28",
+      "caseId": "synth-inland",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The camera recorded clouds above a dry inland plateau. No measurements over water were reported.",
+      "observedTranslation": "相机记录了干燥内陆高原上空的云层。未报告任何水域上的测量数据。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-inland--grounded.json",
+      "originSha256": "f4add69d622df86faaa5da2ed502442c2ac7b6f7bf832cba82e77477a8fab91b",
+      "providerContent": "{\n  \"translation\": \"相机记录了干燥内陆高原上空的云层。未报告任何水域上的测量数据。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"相机记录了干燥内陆高原上空的云层。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"未报告任何水域上的测量数据。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The camera recorded clouds above a dry inland plateau. No measurements over water were reported.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The camera recorded clouds above a dry inland plateau."
+          },
+          {
+            "id": "s2",
+            "text": "No measurements over water were reported."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E29",
+      "caseId": "gj-vapor",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "If the water vapor is associated with the planet, that would indicate that it has an atmosphere despite its scorching temperature and close proximity to its star. Water vapor has been seen on gaseous exoplanets before, but to date no atmosphere has been definitely detected around a rocky exoplanet. However, the team cautions that the water vapor could be on the star itself – specifically, in cool starspots – and not from the planet at all.",
+      "observedTranslation": "如果水蒸气与行星有关，则表明尽管其温度极高且距离恒星非常近，它仍拥有大气层。此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。然而，研究团队警告称，这些水蒸气可能来自恒星本身——具体而言是位于较冷的星斑中——而非源自行星。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-vapor--current.json",
+      "originSha256": "b7ddadad82bf6a563b84ad54eea511f572e57a557034f9e418360eb2c1255b8c",
+      "providerContent": "{\n  \"translation\": \"如果水蒸气与行星有关，则表明尽管其温度极高且距离恒星非常近，它仍拥有大气层。此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。然而，研究团队警告称，这些水蒸气可能来自恒星本身——具体而言是位于较冷的星斑中——而非源自行星。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"如果水蒸气与行星有关，则表明尽管其温度极高且距离恒星非常近，它仍拥有大气层。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"此前已在气态系外行星上观测到水蒸气，但迄今为止尚未在岩石系外行星周围明确探测到大气层。\"\n    },\n    {\n      \"id\": 2,\n      \"translation\": \"然而，研究团队警告称，这些水蒸气可能来自恒星本身——具体而言是位于较冷的星斑中——而非源自行星。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"water vapor\",\n      \"target\": \"水蒸气\"\n    },\n    {\n      \"source\": \"gaseous exoplanets\",\n      \"target\": \"气态系外行星\"\n    },\n    {\n      \"source\": \"rocky exoplanet\",\n      \"target\": \"岩石系外行星\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "If the water vapor is associated with the planet, that would indicate that it has an atmosphere despite its scorching temperature and close proximity to its star. Water vapor has been seen on gaseous exoplanets before, but to date no atmosphere has been definitely detected around a rocky exoplanet. However, the team cautions that the water vapor could be on the star itself – specifically, in cool starspots – and not from the planet at all."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E30",
+      "caseId": "enceladus-rate",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The length of the plume was not the only characteristic that intrigued researchers. The rate at which the water vapor is gushing out, about 79 gallons per second, is also particularly impressive. At this rate, you could fill an Olympic-sized swimming pool in just a couple of hours. In comparison, doing so with a garden hose on Earth would take more than 2 weeks.",
+      "observedTranslation": "羽流的长度并非唯一引起研究人员兴趣的特征。水蒸气喷涌而出的速率，约为每秒79加仑，同样令人印象深刻。以这一速率，仅需数小时即可注满一个奥运标准游泳池。相比之下，在地球上使用花园水管完成相同任务则需要超过2周的时间。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-rate--grounded.json",
+      "originSha256": "b6d169fa7187c3b1259f420550505b41d448cd314375eb5bb9a0f8217cd90a1f",
+      "providerContent": "{\n  \"translation\": \"羽流的长度并非唯一引起研究人员兴趣的特征。水蒸气喷涌而出的速率，约为每秒79加仑，同样令人印象深刻。以这一速率，仅需数小时即可注满一个奥运标准游泳池。相比之下，在地球上使用花园水管完成相同任务则需要超过2周的时间。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"羽流的长度并非唯一引起研究人员兴趣的特征。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"水蒸气喷涌而出的速率，约为每秒79加仑，同样令人印象深刻。\"\n    },\n    {\n      \"id\": \"s3\",\n      \"translation\": \"以这一速率，仅需数小时即可注满一个奥运标准游泳池。\"\n    },\n    {\n      \"id\": \"s4\",\n      \"translation\": \"相比之下，在地球上使用花园水管完成相同任务则需要超过2周的时间。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The length of the plume was not the only characteristic that intrigued researchers. The rate at which the water vapor is gushing out, about 79 gallons per second, is also particularly impressive. At this rate, you could fill an Olympic-sized swimming pool in just a couple of hours. In comparison, doing so with a garden hose on Earth would take more than 2 weeks.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The length of the plume was not the only characteristic that intrigued researchers."
+          },
+          {
+            "id": "s2",
+            "text": "The rate at which the water vapor is gushing out, about 79 gallons per second, is also particularly impressive."
+          },
+          {
+            "id": "s3",
+            "text": "At this rate, you could fill an Olympic-sized swimming pool in just a couple of hours."
+          },
+          {
+            "id": "s4",
+            "text": "In comparison, doing so with a garden hose on Earth would take more than 2 weeks."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E31",
+      "caseId": "synth-carbon-unknown",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The sample contains carbon dioxide. Its origin has not been determined.",
+      "observedTranslation": "样品中含有二氧化碳。其来源尚未确定。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-carbon-unknown--grounded.json",
+      "originSha256": "000dd7aa614ad60feabe7b6650e0ad8ef29ab053b689ea1e6e29356d14c202b7",
+      "providerContent": "{\n  \"translation\": \"样品中含有二氧化碳。其来源尚未确定。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"样品中含有二氧化碳。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"其来源尚未确定。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The sample contains carbon dioxide. Its origin has not been determined.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The sample contains carbon dioxide."
+          },
+          {
+            "id": "s2",
+            "text": "Its origin has not been determined."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E32",
+      "caseId": "enceladus-reservoir",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": null,
+      "gold": [],
+      "source": "Sandwiched between the moon’s icy outer crust and its rocky core is a global reservoir of salty water.",
+      "observedTranslation": "在月球冰外地壳与岩石内核之间，存在一个全球性的咸水储层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--enceladus-reservoir--current.json",
+      "originSha256": "495ca6eceb3e177e973dd0d01010dfffc27571cfad786caacf49ecaa5eab6c54",
+      "providerContent": "{\n  \"translation\": \"在月球冰外地壳与岩石内核之间，存在一个全球性的咸水储层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"在月球冰外地壳与岩石内核之间，存在一个全球性的咸水储层。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"icy outer crust\",\n      \"target\": \"冰外地壳\"\n    },\n    {\n      \"source\": \"rocky core\",\n      \"target\": \"岩石内核\"\n    },\n    {\n      \"source\": \"global reservoir of salty water\",\n      \"target\": \"全球性咸水储层\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Sandwiched between the moon’s icy outer crust and its rocky core is a global reservoir of salty water."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E33",
+      "caseId": "synth-carbon-ocean",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The sample contains carbon dioxide from the subsurface ocean. No biological source has been established.",
+      "observedTranslation": "该样本含有来自地下海洋的二氧化碳。尚未确定任何生物来源。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-carbon-ocean--grounded.json",
+      "originSha256": "c799a80c9ac59cd375ecc0ee6015ebedefd0038a766ec88b0d5c734d0ee35068",
+      "providerContent": "{\n  \"translation\": \"该样本含有来自地下海洋的二氧化碳。尚未确定任何生物来源。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"该样本含有来自地下海洋的二氧化碳。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"尚未确定任何生物来源。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The sample contains carbon dioxide from the subsurface ocean. No biological source has been established.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The sample contains carbon dioxide from the subsurface ocean."
+          },
+          {
+            "id": "s2",
+            "text": "No biological source has been established."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E34",
+      "caseId": "k2-habitable",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "While K2-18 b lies in the habitable zone, and is now known to harbor carbon-bearing molecules, this does not necessarily mean that the planet can support life.",
+      "observedTranslation": "尽管K2-18b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-habitable--current.json",
+      "originSha256": "b51839b2fe895cba23d54b2edb567d8ff5b132121a91081c08890482972f9cfb",
+      "providerContent": "{\n  \"translation\": \"尽管K2-18b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"尽管K2-18b位于宜居带，且现已确认其含有含碳分子，但这并不必然意味着该行星能够支持生命。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"habitable zone\",\n      \"target\": \"宜居带\"\n    },\n    {\n      \"source\": \"carbon-bearing molecules\",\n      \"target\": \"含碳分子\"\n    },\n    {\n      \"source\": \"support life\",\n      \"target\": \"支持生命\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "While K2-18 b lies in the habitable zone, and is now known to harbor carbon-bearing molecules, this does not necessarily mean that the planet can support life."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E35",
+      "caseId": "synth-carbon-unknown",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The sample contains carbon dioxide. Its origin has not been determined.",
+      "observedTranslation": "样品中含有二氧化碳。其来源尚未确定。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-carbon-unknown--current.json",
+      "originSha256": "4ad28e8bd59aed954689d235c205c147f122f3d1b2fa04d7105047f6a1b042b9",
+      "providerContent": "{\n  \"translation\": \"样品中含有二氧化碳。其来源尚未确定。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"样品中含有二氧化碳。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"其来源尚未确定。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"carbon dioxide\",\n      \"target\": \"二氧化碳\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The sample contains carbon dioxide. Its origin has not been determined."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E36",
+      "caseId": "gj-lock",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "It orbits a red dwarf star in just under 1.5 Earth days. It is expected to be tidally locked, with a permanent day side and a permanent night side.",
+      "observedTranslation": "它围绕一颗红矮星运行，公转周期略少于1.5个地球日。预计其处于潮汐锁定状态，具有永久的昼侧和永久的夜侧。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-lock--current.json",
+      "originSha256": "7c26a09f8e58b9539cada405221068bee4e7d6ab37ea2d3ce7b7588ee6915696",
+      "providerContent": "{\n  \"translation\": \"它围绕一颗红矮星运行，公转周期略少于1.5个地球日。预计其处于潮汐锁定状态，具有永久的昼侧和永久的夜侧。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"它围绕一颗红矮星运行，公转周期略少于1.5个地球日。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"预计其处于潮汐锁定状态，具有永久的昼侧和永久的夜侧。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "It orbits a red dwarf star in just under 1.5 Earth days. It is expected to be tidally locked, with a permanent day side and a permanent night side."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E37",
+      "caseId": "europa-recent",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Carbon dioxide isn’t stable on Europa’s surface. Therefore, the scientists say it’s likely that it was supplied on a geologically recent timescale – a conclusion bolstered by its concentration in a region of young terrain.",
+      "observedTranslation": "二氧化碳在欧罗巴表面并不稳定。因此，科学家认为它很可能是在地质学上较近的时期被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--europa-recent--grounded.json",
+      "originSha256": "49ac1d1f2b149ff29660f4a34141cc751bc599debbce0cde483e1ad45a7f313b",
+      "providerContent": "{\n  \"translation\": \"二氧化碳在欧罗巴表面并不稳定。因此，科学家认为它很可能是在地质学上较近的时期被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"二氧化碳在欧罗巴表面并不稳定。\"\n    },\n    {\n      \"id\": \"s2\",\n      \"translation\": \"因此，科学家认为它很可能是在地质学上较近的时期被供给的——这一结论因其在该年轻地形区域的浓度而得到加强。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Carbon dioxide isn’t stable on Europa’s surface. Therefore, the scientists say it’s likely that it was supplied on a geologically recent timescale – a conclusion bolstered by its concentration in a region of young terrain.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "Carbon dioxide isn’t stable on Europa’s surface."
+          },
+          {
+            "id": "s2",
+            "text": "Therefore, the scientists say it’s likely that it was supplied on a geologically recent timescale – a conclusion bolstered by its concentration in a region of young terrain."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E38",
+      "caseId": "gj-open-question",
+      "sourceKind": "public-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "As a result, one important open question in astronomy is whether a rocky planet could maintain, or reestablish, an atmosphere in such a harsh environment.",
+      "observedTranslation": "因此，天文学中一个重要的未解问题是：在如此恶劣的环境中，岩石行星是否能够维持或重新建立大气层。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--gj-open-question--grounded.json",
+      "originSha256": "677a8ac7110087ba4da607a6154cb96bf2b05d5b209129cb4e89b0b8a04f7e63",
+      "providerContent": "{\n  \"translation\": \"因此，天文学中一个重要的未解问题是：在如此恶劣的环境中，岩石行星是否能够维持或重新建立大气层。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"因此，天文学中一个重要的未解问题是：在如此恶劣的环境中，岩石行星是否能够维持或重新建立大气层。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "As a result, one important open question in astronomy is whether a rocky planet could maintain, or reestablish, an atmosphere in such a harsh environment.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "As a result, one important open question in astronomy is whether a rocky planet could maintain, or reestablish, an atmosphere in such a harsh environment."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E39",
+      "caseId": "synth-vapor-negative",
+      "sourceKind": "synthetic-new",
+      "arm": "grounded",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The signal may come from the star; it is not evidence that the planet has an ocean.",
+      "observedTranslation": "该信号可能来自恒星；它并非行星存在海洋的证据。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-vapor-negative--grounded.json",
+      "originSha256": "50bfefc5abd498d62137354a02485b6f97202ed4e6504cdaea64513a7aefc8e3",
+      "providerContent": "{\n  \"translation\": \"该信号可能来自恒星；它并非行星存在海洋的证据。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": \"s1\",\n      \"translation\": \"该信号可能来自恒星；它并非行星存在海洋的证据。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "0963fc6c503e0bf2fc7ddb12b231d7e365b0b8a3ec7afcc195514cd27c1b1f0b",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The signal may come from the star; it is not evidence that the planet has an ocean.",
+        "sourceUnits": [
+          {
+            "id": "s1",
+            "text": "The signal may come from the star; it is not evidence that the planet has an ocean."
+          }
+        ]
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E40",
+      "caseId": "k2-validation",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The inference of DMS is less robust and requires further validation.",
+      "observedTranslation": "DMS的推断稳健性较差，需要进一步验证。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-validation--current.json",
+      "originSha256": "40d6d2b6304231702dee81e1797b79e6fca9df9f90ae3026794a9cfcf66ce4f1",
+      "providerContent": "{\n  \"translation\": \"DMS的推断稳健性较差，需要进一步验证。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"DMS的推断稳健性较差，需要进一步验证。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The inference of DMS is less robust and requires further validation."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E41",
+      "caseId": "k2-ocean",
+      "sourceKind": "public-new",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The abundance of methane and carbon dioxide, and shortage of ammonia, support the hypothesis that there may be a water ocean underneath a hydrogen-rich atmosphere in K2-18 b. These initial Webb observations also provided a possible detection of a molecule called dimethyl sulfide (DMS).",
+      "observedTranslation": "甲烷和二氧化碳的丰度以及氨的短缺，支持在K2-18 b的富氢大气层下可能存在水海洋的假设。这些韦布望远镜的初步观测结果还提供了一个被称为二甲基硫醚（DMS）分子的可能探测信号。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--k2-ocean--current.json",
+      "originSha256": "c6c2d58d8796812566c93603477cf42d97e8996aa7bdb5be916a2952a101eb84",
+      "providerContent": "{\n  \"translation\": \"甲烷和二氧化碳的丰度以及氨的短缺，支持在K2-18 b的富氢大气层下可能存在水海洋的假设。这些韦布望远镜的初步观测结果还提供了一个被称为二甲基硫醚（DMS）分子的可能探测信号。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"甲烷和二氧化碳的丰度以及氨的短缺，支持在K2-18 b的富氢大气层下可能存在水海洋的假设。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"这些韦布望远镜的初步观测结果还提供了一个被称为二甲基硫醚（DMS）分子的可能探测信号。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"methane\",\n      \"target\": \"甲烷\"\n    },\n    {\n      \"source\": \"carbon dioxide\",\n      \"target\": \"二氧化碳\"\n    },\n    {\n      \"source\": \"dimethyl sulfide (DMS)\",\n      \"target\": \"二甲基硫醚（DMS）\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The abundance of methane and carbon dioxide, and shortage of ammonia, support the hypothesis that there may be a water ocean underneath a hydrogen-rich atmosphere in K2-18 b. These initial Webb observations also provided a possible detection of a molecule called dimethyl sulfide (DMS)."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "E42",
+      "caseId": "synth-grade-unspecified",
+      "sourceKind": "synthetic-new",
+      "arm": "current",
+      "expectedFault": true,
+      "gold": [
+        {
+          "type": "addition",
+          "category": "location",
+          "sourceQuote": "",
+          "translationQuote": "海洋",
+          "reason": "原文未指定飓风发生于海洋。"
+        }
+      ],
+      "source": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane on Earth.",
+      "observedTranslation": "该带以每小时240英里的速度移动，相当于地球上海洋四级飓风的持续风速的两倍。",
+      "origin": "output/source-grounding-2026-10-17/responses/qwen3.6-flash--synth-grade-unspecified--current.json",
+      "originSha256": "9823a79b100e7fac82662028be3fa8126ca324b8733d75cb983108a02f96c7c7",
+      "providerContent": "{\n  \"translation\": \"该带以每小时240英里的速度移动，相当于地球上海洋四级飓风的持续风速的两倍。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 1,\n      \"translation\": \"该带以每小时240英里的速度移动，相当于地球上海洋四级飓风的持续风速的两倍。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"Category 4 hurricane\",\n      \"target\": \"四级飓风\"\n    },\n    {\n      \"source\": \"sustained wind speed\",\n      \"target\": \"持续风速\"\n    },\n    {\n      \"source\": \"miles per hour\",\n      \"target\": \"英里/小时\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The band travels at 240 miles per hour, twice the sustained wind speed of a Category 4 hurricane on Earth."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "N01",
+      "caseId": "entity-deimos",
+      "sourceKind": "public-natural",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Deimos is the smaller of Mars' two moons. It's 9 by 7 by 6.8 miles in size (15 by 12 by 11 kilometers). Deimos orbits Mars every 30 hours.",
+      "observedTranslation": "火卫二是火星两颗卫星中较小的一颗。其尺寸为9英里×7英里×6.8英里（15公里×12公里×11公里）。火卫每30小时绕火星公转一周。",
+      "origin": "output/checker-anchors-2026-10-17/generation-responses/N01.json",
+      "originSha256": "95657061898fc61be462f0e184f82ef99f7b9d81608ac47545897d9c1419f878",
+      "providerContent": "{\n  \"translation\": \"火卫二是火星两颗卫星中较小的一颗。其尺寸为9英里×7英里×6.8英里（15公里×12公里×11公里）。火卫每30小时绕火星公转一周。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"火卫二是火星两颗卫星中较小的一颗。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"其尺寸为9英里×7英里×6.8英里（15公里×12公里×11公里）。\"\n    },\n    {\n      \"id\": 2,\n      \"translation\": \"火卫每30小时绕火星公转一周。\"\n    }\n  ],\n  \"termCandidates\": [\n    {\n      \"source\": \"Deimos\",\n      \"target\": \"火卫二\"\n    },\n    {\n      \"source\": \"Mars\",\n      \"target\": \"火星\"\n    },\n    {\n      \"source\": \"moons\",\n      \"target\": \"卫星\"\n    }\n  ]\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Deimos is the smaller of Mars' two moons. It's 9 by 7 by 6.8 miles in size (15 by 12 by 11 kilometers). Deimos orbits Mars every 30 hours."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "N02",
+      "caseId": "entity-europa",
+      "sourceKind": "public-natural",
+      "arm": "current",
+      "expectedFault": true,
+      "gold": [
+        {
+          "category": "entity",
+          "sourceQuote": "Europa",
+          "translationQuote": "木卫四",
+          "reason": "Europa的既定名称是木卫二，木卫四指另一卫星。"
+        },
+        {
+          "category": "rank",
+          "sourceQuote": "fourth largest",
+          "translationQuote": "最大的卫星之一",
+          "reason": "明确第四大的排序信息丢失，不能仅称最大之一。"
+        }
+      ],
+      "source": "Europa is the fourth largest of Jupiter’s moons. It's the sixth-closest moon to the planet.",
+      "observedTranslation": "木卫四是木星最大的卫星之一，也是距离木星第六近的卫星。",
+      "origin": "output/checker-anchors-2026-10-17/generation-responses/N02.json",
+      "originSha256": "72bf33a182b86ad7d008a8ac91465f10b833f0b66afecae829a2aa36224817e8",
+      "providerContent": "{\n  \"translation\": \"木卫四是木星最大的卫星之一，也是距离木星第六近的卫星。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 1,\n      \"translation\": \"木卫四是木星最大的卫星之一\"\n    },\n    {\n      \"id\": 2,\n      \"translation\": \"也是距离木星第六近的卫星\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Europa is the fourth largest of Jupiter’s moons. It's the sixth-closest moon to the planet."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "N03",
+      "caseId": "entity-receptor",
+      "sourceKind": "synthetic-source-natural",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "Protein L binds receptor R. In the next sentence, 'it' refers to the receptor, not the protein.",
+      "observedTranslation": "蛋白L与受体R结合。在下一句中，“it”指代的是受体，而非蛋白。",
+      "origin": "output/checker-anchors-2026-10-17/generation-responses/N03.json",
+      "originSha256": "297ec7dac91593bdd12b7bfce2ff2d4c070ad17e4de3b286615802ddd24403d7",
+      "providerContent": "{\n  \"translation\": \"蛋白L与受体R结合。在下一句中，“it”指代的是受体，而非蛋白。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"蛋白L与受体R结合。在下一句中，“it”指代的是受体，而非蛋白。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "Protein L binds receptor R. In the next sentence, 'it' refers to the receptor, not the protein."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    },
+    {
+      "id": "N04",
+      "caseId": "grade-letter-c",
+      "sourceKind": "synthetic-source-natural",
+      "arm": "current",
+      "expectedFault": false,
+      "gold": [],
+      "source": "The assay belongs to Grade C. Sample count is 12.",
+      "observedTranslation": "该测定属于C级。样本数量为12。",
+      "origin": "output/checker-anchors-2026-10-17/generation-responses/N04.json",
+      "originSha256": "8cbdff12944823f5b18033a5a9cab2b14874c788d44e2e384472291c915d52a8",
+      "providerContent": "{\n  \"translation\": \"该测定属于C级。样本数量为12。\",\n  \"detectedLanguage\": \"en\",\n  \"warnings\": [],\n  \"segments\": [\n    {\n      \"id\": 0,\n      \"translation\": \"该测定属于C级。\"\n    },\n    {\n      \"id\": 1,\n      \"translation\": \"样本数量为12。\"\n    }\n  ],\n  \"termCandidates\": []\n}",
+      "historicalSystemSha256": "c5617f867c003d9012d394d4dbf60e4405483e27b49424552a3ba50561c4d30c",
+      "historicalUserPayload": {
+        "task": "translate",
+        "text": "The assay belongs to Grade C. Sample count is 12."
+      },
+      "model": "qwen3.6-flash",
+      "temperature": 0.2,
+      "maxTokens": 8192,
+      "stream": true,
+      "finishReason": "stop",
+      "status": 200
+    }
+  ]
+}

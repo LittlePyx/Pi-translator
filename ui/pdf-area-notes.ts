@@ -1,0 +1,35 @@
+import {t,msg} from '../core/i18n/ui-language';
+import {fillMissingCitationFields} from '../core/content/local-citation';
+import {citationUrl} from '../core/content/excerpt-citation';
+import type {CitationMetadata} from '../core/content/citation-metadata';
+import {revealPdfSource} from './pdf-source-location';
+import {listPdfAreaNotes,mutatePdfAreaNote,type PdfAreaNote,type PdfAreaAnchor} from '../core/pdf/area-note-repository';
+import {pdfReadingStateId} from '../core/pdf/reading-state';
+import {rotatePdfViewRect} from '../core/pdf/reader-view';
+import {showUndoNotice} from './action-feedback';
+interface Context {identity:string;title:string;url:string;citation?:CitationMetadata}
+export function createPdfAreaNotes(options:{viewer:HTMLElement;current:()=>Context|undefined;rotation:()=>number;navigate:(page:number)=>Promise<void>;notice:(message:string)=>void;onNewProjectNote?:(kind:'pdf-note'|'pdf-area',documentId:string,noteId:string)=>Promise<string|undefined>}){
+  let loaded='',records:PdfAreaNote[]=[];
+  async function reload(){const current=options.current();if(!current){records=[];loaded='';return}const data=await listPdfAreaNotes(),id=await pdfReadingStateId(current.identity);if(options.current()?.identity!==current.identity)return;loaded=current.identity;records=data[id]?.notes??[];paint()}
+  function paint(){
+    options.viewer.querySelectorAll('.pdf-area-note-mark').forEach(node=>node.remove());if(options.current()?.identity!==loaded)return;
+    for(const note of records){const page=options.viewer.querySelector<HTMLElement>(`.pdf-page[data-page-number="${note.anchor.pageNumber}"][data-rendered="ready"]`);if(!page)continue;const rect=rotatePdfViewRect(note.anchor,options.rotation()),mark=document.createElement('span');mark.className='pdf-area-note-mark';mark.dataset.areaNoteId=note.id;mark.ariaHidden='true';Object.assign(mark.style,{position:'absolute',pointerEvents:'none',border:'2px solid #a5892b',background:'rgba(223,190,65,.12)',left:`${rect.leftRatio*100}%`,top:`${rect.topRatio*100}%`,width:`${rect.widthRatio*100}%`,height:`${rect.heightRatio*100}%`});page.append(mark)}
+  }
+  async function locate(note:PdfAreaNote){const identity=options.current()?.identity;await options.navigate(note.anchor.pageNumber);if(identity!==options.current()?.identity)return;paint();const mark=[...options.viewer.querySelectorAll<HTMLElement>('.pdf-area-note-mark')].find(node=>node.dataset.areaNoteId===note.id);if(mark)revealPdfSource(options.viewer,mark);else options.notice(t('已返回记录页码，区域暂时无法显示。'))}
+  function edit(anchor:PdfAreaAnchor,expected?:PdfAreaNote){
+    const current=options.current();if(!current)return;const origin=document.activeElement as HTMLElement|null,dialog=document.createElement('dialog');dialog.className='pdf-annotations-dialog';dialog.ariaLabel=t('区域笔记');const form=document.createElement('form');form.className='pdf-annotations-body';
+    const title=document.createElement('h2');title.textContent=msg`区域笔记 · 第 ${anchor.pageNumber} 页`;const hint=document.createElement('p');hint.textContent=t('只保存区域位置和个人笔记，不识别文字、不发送图片、不改动原 PDF。');const label=document.createElement('label');label.textContent=t('个人笔记');const note=document.createElement('textarea');note.name='note';note.maxLength=2000;note.rows=5;note.value=expected?.note??'';label.append(note);
+    const status=document.createElement('p');status.role='status';const actions=document.createElement('div');actions.className='pdf-annotation-actions';const cancel=document.createElement('button'),save=document.createElement('button');cancel.type='button';cancel.textContent=t('取消');save.type='submit';save.textContent=t('保存笔记');actions.append(cancel,save);form.append(title,hint,label,status,actions);dialog.append(form);document.body.append(dialog);let busy=false;
+    cancel.addEventListener('click',()=>dialog.close());dialog.addEventListener('cancel',event=>{if(busy)event.preventDefault()});dialog.addEventListener('close',()=>{dialog.remove();if(origin?.isConnected)origin.focus({preventScroll:true})},{once:true});
+
+    form.addEventListener('submit',event=>{event.preventDefault();if(busy)return;if(options.current()?.identity!==current.identity){status.textContent=t('文档已切换，尚未保存。请重新选择原文。');return}const latest=options.current()!;const sourceUrl=citationUrl(latest.url);const citation=fillMissingCitationFields({sourceTitle:latest.citation?.title??current.title,...(sourceUrl?{sourceUrl}:{})},latest.citation??{});busy=true;note.readOnly=true;save.disabled=cancel.disabled=true;const now=Date.now(),submittedNote=note.value,item={...(expected??{id:crypto.randomUUID(),...citation,anchor,createdAt:now}),note:submittedNote,updatedAt:Math.max(now,(expected?.updatedAt??0)+1)};let projectFailed=false,projectName:string|undefined;void pdfReadingStateId(current.identity).then(async id=>{await mutatePdfAreaNote(id,item,expected);if(!expected&&options.onNewProjectNote)try{projectName=await options.onNewProjectNote('pdf-area',id,item.id)}catch{projectFailed=true}}).then(async()=>{await reload();dialog.close();options.notice(projectFailed?t('笔记已保存，但未加入项目；可在文档库重新选择。'):projectName?msg`区域笔记已保存 · 已加入项目 ${projectName}`:t('区域笔记已保存。'))}).catch(error=>{status.textContent=String(error instanceof Error?error.message:error)}).finally(()=>{busy=false;note.readOnly=false;save.disabled=cancel.disabled=false})});dialog.showModal();note.focus();
+  }
+  function appendList(body:HTMLElement,close:()=>void){
+    for(const note of records){const row=document.createElement('article');row.className='pdf-reading-annotation';const meta=document.createElement('small');meta.textContent=msg`区域笔记 · 第 ${note.anchor.pageNumber} 页`;const text=document.createElement('p');text.className='pdf-reading-annotation-note';text.textContent=note.note??'';
+      const actions=document.createElement('div');actions.className='pdf-annotation-actions';const go=document.createElement('button'),change=document.createElement('button'),remove=document.createElement('button');for(const button of [go,change,remove])button.type='button';go.textContent=t('定位原文');change.textContent=t('编辑笔记');remove.textContent=t('删除');go.addEventListener('click',()=>{close();void locate(note).catch(error=>options.notice(String(error)))});change.addEventListener('click',()=>{close();edit(note.anchor,note)});
+      remove.addEventListener('click',()=>{if(remove.dataset.confirm!=='true'){remove.dataset.confirm='true';remove.textContent=t('确认删除');return}const current=options.current();if(!current)return;remove.disabled=true;void pdfReadingStateId(current.identity).then(id=>mutatePdfAreaNote(id,undefined,note)).then(async()=>{await reload();row.remove();showUndoNotice(t('批注已删除'),async()=>{await mutatePdfAreaNote(await pdfReadingStateId(current.identity),note);await reload()})}).catch(error=>{remove.disabled=false;options.notice(String(error))})});remove.addEventListener('blur',()=>{delete remove.dataset.confirm;remove.textContent=t('删除')});actions.append(go,change,remove);row.append(meta,text,actions);body.append(row);
+    }
+    return records.length;
+  }
+  return {reload,paint,appendList,edit};
+}

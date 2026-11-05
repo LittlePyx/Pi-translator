@@ -1163,13 +1163,16 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       buttonHeights: [...footer.querySelectorAll<HTMLElement>('.reading-jump')]
         .map((button) => button.getBoundingClientRect().height),
       childTops: [...footer.children]
-        .filter((child) => (child as HTMLElement).offsetParent !== null)
+        .filter((child) => (child as HTMLElement).offsetParent !== null && !child.matches('.result-navigation,.correction-undo'))
         .map((child) => Math.round(child.getBoundingClientRect().top)),
+      navigationTop: footer.querySelector('.result-navigation')?.getBoundingClientRect().top,
+      primaryBottom: Math.max(...[...footer.children].filter(child=>(child as HTMLElement).offsetParent!==null&&!child.matches('.result-navigation,.correction-undo')).map(child=>child.getBoundingClientRect().bottom)),
     }));
     expect(readingNavigationLayout.scrollWidth)
       .toBeLessThanOrEqual(readingNavigationLayout.clientWidth + 1);
     expect(readingNavigationLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
     expect(Math.max(...readingNavigationLayout.childTops)-Math.min(...readingNavigationLayout.childTops)).toBeLessThanOrEqual(2);
+    if(readingNavigationLayout.navigationTop!==undefined)expect(readingNavigationLayout.navigationTop).toBeGreaterThanOrEqual(readingNavigationLayout.primaryBottom);
 
     await readingBottom.click();
     await expect(readingBottom).toBeDisabled();

@@ -45,9 +45,14 @@ export function isLikelySourceCode(value: string): boolean {
     return true;
   }
 
+  // Tool names can also begin ordinary sentences, such as “Git models …”.
+  // A sentence-length explanation is not a shell command without a prompt.
   const strongLines = lines.filter((line) => (
     PROGRAMMING_LINE.test(line) ||
-    COMMAND_LINE.test(line) ||
+    (COMMAND_LINE.test(line) && !(
+      !/^[$>#]\s/u.test(line) &&
+      sentenceLikeWordCount(line) >= 8 && /[.!?。！？](?:\s|$)/u.test(line)
+    )) ||
     STACK_TRACE_LINE.test(line) ||
     COMMENT_LINE.test(line) ||
     /^(?:\}|\])\)?;?$/u.test(line)

@@ -1,4 +1,35 @@
-const NON_CHAT_MODEL = /(?:^|[-/:._])(?:embed(?:ding)?|rerank|moderation|whisper|tts|speech|audio|image-generation|text-to-image|video)(?:$|[-/:._])/iu;
+const NON_CHAT_MODEL = /(?:^|[-/:._])(?:embed(?:ding)?|rerank|moderation|whisper|tts|speech|audio|image|ocr|asr|realtime|livetranslate|video|transcribe|dall-e|sora|codex|computer-use|deep-research)(?:$|[-/:._])/iu;
+
+export const MODEL_FAMILIES = [
+  { id: 'all', name: '全部系列' },
+  { id: 'gpt', name: 'GPT / OpenAI' },
+  { id: 'claude', name: 'Claude' },
+  { id: 'gemini', name: 'Gemini' },
+  { id: 'qwen', name: 'Qwen / 千问' },
+  { id: 'deepseek', name: 'DeepSeek' },
+  { id: 'kimi', name: 'Kimi' },
+  { id: 'glm', name: 'GLM' },
+  { id: 'minimax', name: 'MiniMax' },
+  { id: 'grok', name: 'Grok' },
+  { id: 'mistral', name: 'Mistral' },
+  { id: 'llama', name: 'Llama' },
+  { id: 'other', name: '其他模型' },
+] as const;
+
+export function modelFamily(model: string): string {
+  if (/(?:gpt|openai|(?:^|\/)o[1-9](?:[-.]|$))/iu.test(model)) return 'gpt';
+  for (const family of MODEL_FAMILIES.slice(2, -1)) {
+    if (model.toLowerCase().includes(family.id)) return family.id;
+  }
+  if (/moonshot/iu.test(model)) return 'kimi';
+  return 'other';
+}
+
+/** Provider IDs only: no invented catalog, authorization or quality claims. */
+export function translationModelChoices(models: string[], family = 'all'): string[] {
+  return normalizeModels(models).filter((model) => !NON_CHAT_MODEL.test(model) &&
+    (family === 'all' || modelFamily(model) === family));
+}
 
 const TEXT_MODEL_HINT = /(?:^|[-/:._])(?:chat|instruct|reasoner|assistant|plus|pro|flash|turbo|latest)(?:$|[-/:._])/iu;
 

@@ -1,3 +1,14 @@
+import type {ReadingSummaryReturn} from '../core/content/reading-navigation';
+import {openPassageExplanation,resultPassageInput} from './passage-explanation';
+import {keyEventDialog} from './dialog-navigation';
+import {openNoteSummary} from './note-summary';
+import {bindReadingHints} from './reading-hints';
+import { t, msg, uiSelector, localizeErrorMessage } from '../core/i18n/ui-language';
+import {documentGlossaryControl} from './document-glossary';
+import {correctionTermSuggestions,deduplicateCorrectionTerms} from '../core/translation/correction-term-suggestions';
+import {renderCorrectionTermSuggestions,renderCorrectionTermReadFailure,watchCorrectionTerms} from './correction-term-suggestions';
+import {bindActionHints} from './action-feedback';
+import {actionGuideButton} from './action-guide';
 import type { ViewportRect } from '../core/selection/types';
 import productTheme from './product-theme.css?inline';
 import productOverlay from './product-overlay.css?inline';
@@ -235,6 +246,7 @@ export interface TranslationOverlayOptions {
 }
 
 export interface SelectionTriggerPreview {
+  annotationOnly?: boolean;
   text: string;
   warning?: string;
   actionLabel?: string;
@@ -276,6 +288,7 @@ export type OverlayRetryTarget =
     };
 interface OverlayActions {
   onTranslate: () => void;
+  onAnnotateSelection?: () => void;
   onRetry: (target: OverlayRetryTarget) => void;
   onTranslateText: (text: string) => void;
   onStartWebRegion?: () => void;
@@ -332,7 +345,11 @@ interface OverlayActions {
   onNavigateSourceMark?: (markerId: string) => Promise<TranslationMarkerLocationState>;
   onRemoveSourceMark?: (markerId: string) => Promise<void>;
   onUpdateSourceMarkCitation?: (markerId: string, citation: ExcerptCitation) => Promise<void>;
-  onSetSourceMarkSaved?: (markerId:string,saved:boolean)=>Promise<void>;
+  onSetSourceMarkSaved?: (markerId:string,saved:boolean)=>Promise<{existingMarkerId?:string}|void>;
+  onViewExistingSourceMark?:(markerId:string,host:ShadowRoot)=>void;
+  onNoteSummaryTarget?:()=>import('../core/content/note-summary').NoteSummaryTarget|undefined;
+  onLocateNoteSummarySource?:(id:string,summaryReturn?:ReadingSummaryReturn)=>Promise<boolean>;
+  onDocumentGlossaryLocator?:()=>import('../core/messaging/messages').DocumentMemoryLocator;
   onGetDocumentMemory?: () => Promise<DocumentMemorySnapshot>;
   onConfirmDocumentTerm?: (candidateId: string) => Promise<DocumentMemorySnapshot>;
   onUpsertDocumentTerm?: (term: { id?: string; source: string; target: string }) => Promise<DocumentMemorySnapshot>;
@@ -357,6 +374,7 @@ interface OverlayActions {
   onSidebarChange: (active: boolean) => void;
   onSidebarWidthChange: (width: number) => void;
   onSidebarLayoutChange: (expanded: boolean, side: SidebarSide, width: number) => void;
+  onSurfaceLayoutChange?: () => void;
   onPreferencesChange: (preferences: Pick<OverlayPreferences, 'targetLanguage' | 'style'>) => void;
   onStop: () => void;
   onDismiss: () => void;
@@ -382,7 +400,11 @@ export class TranslationOverlay {
   private documentMemoryActive = false;
   private documentMemory?: DocumentMemorySnapshot;
   private documentMemoryError: string | undefined = undefined;
+  private documentMemoryReadFailed = false;
   private documentMemoryRequestRevision = 0;
+  private correctionTermsController:AbortController|undefined;
+  private documentGlossaryController:AbortController|undefined;
+  private documentGlossary:ReturnType<typeof documentGlossaryControl>|undefined;
   private editingDocumentTermId: string | 'new' | undefined = undefined;
   private documentTermFocusSource: string | undefined = undefined;
   private editingDocumentCandidateId: string | undefined = undefined;
@@ -432,6 +454,21 @@ export class TranslationOverlay {
   private sidebarObstructionHintDismissed = false;
   private sidebarObstructionHintPresented = false;
   private continuousTranslationPaused = false;
+  private readingReturn:HTMLElement|undefined;
+  private readingHints:ReturnType<typeof bindReadingHints>|undefined;
+  bindReadingHints(options:Omit<Parameters<typeof bindReadingHints>[0],'host'>):ReturnType<typeof bindReadingHints>{
+    this.readingHints?.dispose();return this.readingHints=bindReadingHints({...options,host:this.root});
+  }
+
+  clearReadingReturn():void{this.readingReturn?.remove();this.readingReturn=undefined}
+  showReadingReturn(restore:()=>boolean,dismiss:()=>void,label=t('← 返回阅读处')):void{
+    this.clearReadingReturn();
+    const notice=document.createElement('div');notice.className='source-reading-return';
+    const back=this.button(label,'source-reading-back'),close=this.button('×','source-reading-dismiss',t('关闭'));
+    const status=document.createElement('span');status.className='source-reading-status';status.hidden=true;status.setAttribute('role','status');
+    back.addEventListener('click',()=>{if(!restore()){status.textContent=t('请先保存或取消未完成的编辑，再返回阅读位置。');status.hidden=false}});
+    close.addEventListener('click',dismiss);notice.append(back,close,status);this.readingReturn=notice;this.root.append(notice);
+  }
 
   constructor(
     private readonly actions: OverlayActions,
@@ -441,6 +478,7 @@ export class TranslationOverlay {
     this.normalizeFormulaPresentation=options.normalizeFormulaPresentation === true;
     this.host.id = 'tex-selection-translator-root';
     this.root = this.host.attachShadow({mode:'open'});
+    bindActionHints(this.root);
     const style=document.createElement('style');style.textContent=STYLES+productTheme+productOverlay;this.resultFeedback=document.createElement('span');this.resultFeedback.className='sr-only result-feedback';this.resultFeedback.setAttribute('role','status');this.resultFeedback.setAttribute('aria-live','polite');this.resultFeedback.setAttribute('aria-atomic','true');this.root.append(style,this.resultFeedback);
     document.documentElement.append(this.host);this.refreshViewportInsets();this.setView('hidden');this.trackTheme();
     window.addEventListener('keydown',this.onKeyDown,true);
@@ -460,6 +498,7 @@ export class TranslationOverlay {
     const anchor = document.getSelection()?.anchorNode;
     return Boolean(anchor && anchor.getRootNode() === this.root);
   }
+  ownsFocusTarget(target: EventTarget | null): boolean { return target === this.host; }
 
   openSidebar(): void {
     this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=false;this.sidebarActive=true;this.sidebarCollapsed=false;this.actions.onSidebarChange(true);
@@ -475,10 +514,11 @@ export class TranslationOverlay {
 
   showTrigger(rect:ViewportRect,preview?:SelectionTriggerPreview):void {
     if(this.sidebarActive)return;if(!this.progressState)this.finishActiveProgressFeedback();this.resultFeedback.textContent='';this.lastRect=rect;this.cardPosition=undefined;const active=document.activeElement;this.cardReturnFocus=active instanceof HTMLElement&&active!==this.host&&active!==document.body&&active!==document.documentElement?active:undefined;this.clear();
-    const button=this.button('', 'trigger','翻译选中的文本');const sparkle=document.createElement('span');sparkle.className='sparkle';sparkle.textContent='✦';
+    const button=this.button('', 'trigger',t('翻译选中的文本'));const sparkle=document.createElement('span');sparkle.className='sparkle';sparkle.textContent='✦';
     button.append(this.logo('trigger-logo'),sparkle);button.addEventListener('pointerdown',e=>e.preventDefault());button.addEventListener('keydown',event=>{if(event.key==='Enter'||event.key===' ')this.focusNextSurface=true});button.addEventListener('click',this.actions.onTranslate);
-    const shell=document.createElement('div');shell.className='trigger-shell';shell.append(button);if(this.actions.onPauseSite){const dismiss=this.button('×','trigger-dismiss','隐藏本次划词提示');dismiss.addEventListener('pointerdown',event=>event.preventDefault());dismiss.addEventListener('click',event=>{event.stopPropagation();this.dismissTrigger()});shell.append(dismiss)}
-    this.refreshViewportInsets();if(preview?.text){const placement=document.createElement('div');placement.className='trigger-placement';const summary=document.createElement('div');summary.className='selection-preview';summary.setAttribute('aria-label','发送前选区预览');const text=document.createElement('div');text.className='selection-preview-text';text.textContent=preview.text;text.title=preview.text;summary.append(text);if(preview.warning||(preview.actionLabel&&preview.onAction)){const detail=document.createElement('div');detail.className='selection-preview-detail';if(preview.warning){const warning=document.createElement('div');warning.className='selection-preview-warning';warning.textContent=preview.warning;warning.title=preview.warning;detail.append(warning)}if(preview.actionLabel&&preview.onAction){const action=this.button(preview.actionLabel,'selection-preview-action',preview.actionLabel);action.addEventListener('pointerdown',event=>event.preventDefault());action.addEventListener('click',()=>{this.hide();preview.onAction?.()});detail.append(action)}summary.append(detail)}placement.append(summary,shell);this.root.append(placement);this.place(placement,rect);this.observeSize(placement)}else{this.root.append(shell);this.place(shell,rect);this.observeSize(shell)}this.setView('trigger');
+    const shell=document.createElement('div');shell.className='trigger-shell';if(!preview?.annotationOnly)shell.append(button);if(this.actions.onPauseSite){const dismiss=this.button('×','trigger-dismiss',t('隐藏本次划词提示'));dismiss.addEventListener('pointerdown',event=>event.preventDefault());dismiss.addEventListener('click',event=>{event.stopPropagation();this.dismissTrigger()});shell.append(dismiss)}
+    if(this.actions.onAnnotateSelection){const annotate=this.button(t('高亮 / 笔记'),'selection-annotate',t('保存阅读批注'));annotate.addEventListener('pointerdown',event=>event.preventDefault());annotate.addEventListener('click',()=>{this.actions.onAnnotateSelection?.();this.hideTrigger()});shell.append(annotate)}
+    this.refreshViewportInsets();if(preview?.text){const placement=document.createElement('div');placement.className='trigger-placement';const summary=document.createElement('div');summary.className='selection-preview';summary.setAttribute('aria-label',t('发送前选区预览'));const text=document.createElement('div');text.className='selection-preview-text';text.textContent=preview.text;text.title=preview.text;summary.append(text);if(preview.warning||(preview.actionLabel&&preview.onAction)){const detail=document.createElement('div');detail.className='selection-preview-detail';if(preview.warning){const warning=document.createElement('div');warning.className='selection-preview-warning';warning.textContent=preview.warning;warning.title=preview.warning;detail.append(warning)}if(preview.actionLabel&&preview.onAction){const action=this.button(preview.actionLabel,'selection-preview-action',preview.actionLabel);action.addEventListener('pointerdown',event=>event.preventDefault());action.addEventListener('click',()=>{this.hide();preview.onAction?.()});detail.append(action)}summary.append(detail)}placement.append(summary,shell);this.root.append(placement);this.place(placement,rect);this.observeSize(placement)}else{this.root.append(shell);this.place(shell,rect);this.observeSize(shell)}this.setView('trigger');
   }
 
   showLoading(requestId:string,rect?:ViewportRect):void {
@@ -503,7 +543,7 @@ export class TranslationOverlay {
     const status=this.root.querySelector<HTMLElement>('.loading-status');if(status)status.textContent=this.progressStatus(this.progressState);const preview=this.root.querySelector<HTMLElement>('.stream-preview');if(preview&&this.progressState.partialText){const followOutput=preview.hidden||shouldFollowStreamPreview(preview);preview.hidden=false;preview.textContent=this.progressState.partialText;if(followOutput)preview.scrollTop=preview.scrollHeight}else if(!this.sidebarCollapsed&&!this.root.querySelector('.progress'))this.renderProgress()
   }
 
-  showSensitiveNotice(rect?:ViewportRect):void { this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;const surface=this.surface('连续翻译');const notice=document.createElement('div');notice.className='notice';const title=document.createElement('strong');title.textContent='已跳过敏感输入区域';const text=document.createElement('span');text.textContent='检测到密码、验证码或支付字段，内容没有发送到翻译 API。手动右键翻译仍由你决定。';notice.append(title,text);surface.append(notice);this.showSurface(surface); }
+  showSensitiveNotice(rect?:ViewportRect):void { this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;const surface=this.surface(t('连续翻译'));const notice=document.createElement('div');notice.className='notice';const title=document.createElement('strong');title.textContent=t('已跳过敏感输入区域');const text=document.createElement('span');text.textContent=t('检测到密码、验证码或支付字段，内容没有发送到翻译 API。手动右键翻译仍由你决定。');notice.append(title,text);surface.append(notice);this.showSurface(surface); }
 
   showResult(result:TranslateResult,rect?:ViewportRect,history:TranslationHistoryEntry[]=[],alignedByDefault=false):void {
     this.finishActiveProgressFeedback();this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(rect)this.lastRect=rect;this.currentResult=result;this.latestRequestId=result.requestId;this.history=history;
@@ -521,12 +561,20 @@ export class TranslationOverlay {
       if(requestRevision!==this.documentMemoryRequestRevision)return;
       const currentDocumentId=this.currentResult?.documentId;
       if(currentDocumentId&&memory.documentId!==currentDocumentId){this.documentTermFocusSource=undefined;return}
-      this.documentMemory=memory;this.documentMemoryError=undefined;
-      if(this.documentMemoryActive){this.renderDocumentMemory();this.documentTermFocusSource=undefined}else this.updateDocumentMemoryButton();
-    }).catch((error:unknown)=>{
+      this.documentMemory=memory;this.documentMemoryError=undefined;this.documentMemoryReadFailed=false;
+      if(this.documentMemoryActive){if(this.editingDocumentTermId||this.editingDocumentCandidateId)this.syncDocumentMemoryReadNotice();else this.renderDocumentMemory();this.documentTermFocusSource=undefined}else this.updateDocumentMemoryButton();
+    }).catch(()=>{
       if(requestRevision!==this.documentMemoryRequestRevision||!this.documentMemoryActive)return;
-      this.documentMemoryError=error instanceof Error?error.message:'无法读取本文记忆';this.renderDocumentMemory();this.documentTermFocusSource=undefined;
+      this.documentMemoryError=t('暂时无法读取本文术语，请重新读取；草稿仍保留。');this.documentMemoryReadFailed=true;if(this.editingDocumentTermId||this.editingDocumentCandidateId)this.syncDocumentMemoryReadNotice();else this.renderDocumentMemory();this.documentTermFocusSource=undefined;
     });
+  }
+
+  private documentMemoryErrorView():HTMLElement{
+    const error=document.createElement('div');error.className='error';error.dataset.documentMemoryError='';error.setAttribute('role','status');error.append(document.createTextNode(this.documentMemoryError??''));
+    if(this.documentMemoryReadFailed){const retry=this.button(t('重新读取'),'document-action');retry.addEventListener('click',()=>this.refreshDocumentMemory(true));error.append(retry)}return error;
+  }
+  private syncDocumentMemoryReadNotice():void{
+    const previous=this.root.querySelector<HTMLElement>('[data-document-memory-error]');if(!this.documentMemoryError){previous?.remove();return}const next=this.documentMemoryErrorView();if(previous)previous.replaceWith(next);else this.root.querySelector('.document-meta')?.after(next);
   }
 
   updateHistory(history:TranslationHistoryEntry[]):void {
@@ -582,7 +630,7 @@ export class TranslationOverlay {
   private restoreVisibleResultReadingPosition():void { if(this.currentResult&&this.root.querySelector('.result-scroll'))this.restoreResultReadingPosition(this.currentResult) }
 
   private updateResultReadingControls(scroll=this.root.querySelector<HTMLElement>('.result-scroll')):void {
-    if(!scroll)return;const navigation=this.root.querySelector<HTMLElement>('.result-reading-nav');const progress=this.root.querySelector<HTMLElement>('.reading-progress');const top=this.root.querySelector<HTMLButtonElement>('.reading-top');const bottom=this.root.querySelector<HTMLButtonElement>('.reading-bottom');if(!navigation||!progress||!top||!bottom)return;const maximum=Math.max(0,scroll.scrollHeight-scroll.clientHeight);const overflowed=maximum>4;navigation.hidden=!overflowed;if(!overflowed)return;const ratio=Math.min(1,Math.max(0,scroll.scrollTop/maximum));const percentage=Math.round(ratio*100);const atTop=scroll.scrollTop<=1;const atBottom=maximum-scroll.scrollTop<=1;progress.textContent=atTop?'顶部':atBottom?'底部':`${percentage}%`;progress.ariaLabel=`译文阅读进度 ${percentage}%`;top.disabled=atTop;bottom.disabled=atBottom;
+    if(!scroll)return;const navigation=this.root.querySelector<HTMLElement>('.result-reading-nav');const progress=this.root.querySelector<HTMLElement>('.reading-progress');const top=this.root.querySelector<HTMLButtonElement>('.reading-top');const bottom=this.root.querySelector<HTMLButtonElement>('.reading-bottom');if(!navigation||!progress||!top||!bottom)return;const maximum=Math.max(0,scroll.scrollHeight-scroll.clientHeight);const overflowed=maximum>4;navigation.hidden=!overflowed;if(!overflowed)return;const ratio=Math.min(1,Math.max(0,scroll.scrollTop/maximum));const percentage=Math.round(ratio*100);const atTop=scroll.scrollTop<=1;const atBottom=maximum-scroll.scrollTop<=1;progress.textContent=atTop?t('顶部'):atBottom?t('底部'):`${percentage}%`;progress.ariaLabel=msg`译文阅读进度 ${percentage}%`;top.disabled=atTop;bottom.disabled=atBottom;
   }
 
   private scrollResultToEdge(edge:'top'|'bottom'):void { const scroll=this.root.querySelector<HTMLElement>('.result-scroll');if(!scroll)return;const moveReadingFocus=this.root.activeElement?.classList.contains('reading-jump')??false;scroll.scrollTop=edge==='top'?0:scroll.scrollHeight;this.rememberVisibleResultReadingPosition();this.updateResultReadingControls(scroll);if(moveReadingFocus)queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>(edge==='top'?'.reading-bottom':'.reading-top'))?.focus({preventScroll:true})) }
@@ -610,8 +658,8 @@ export class TranslationOverlay {
     const context=document.createElement('div');context.className='version-context';context.setAttribute('role','note');
     const copy=document.createElement('div');copy.className='version-context-copy';const label=document.createElement('strong');label.textContent=translationVersionLabel(result);copy.append(label);
     const scopeLabel=translationVersionScopeLabel(result.revision?.scope);if(scopeLabel){const scope=document.createElement('span');scope.className='version-context-detail version-scope';scope.textContent=scopeLabel;copy.append(scope)}
-    const change=document.createElement('span');change.className='version-context-detail version-change';const relation=comparisonDirection==='older'?'较上一版':'后续版本';change.textContent=summary.kind==='segments'?`${relation}调整 ${summary.changedCount} 句`:summary.kind==='full'?`${relation}调整全文`:comparisonDirection==='older'?'与上一版内容相同':'与后续版本内容相同';copy.append(change);context.append(copy);
-    const visibleChangedId=summary.changedSegmentIds.find(id=>result.alignedSegments?.some(segment=>segment.id===id));if(visibleChangedId){const locate=this.button(this.alignedView?'定位':'逐句查看','version-locate',this.alignedView?'定位第一处版本改动':'切换逐句对照并定位第一处版本改动');locate.addEventListener('click',()=>{if(!this.alignedView){this.alignedView=true;this.rememberResultViewMode(result,true);this.renderResult(result);requestAnimationFrame(()=>requestAnimationFrame(()=>this.focusVersionChange(visibleChangedId)));return}this.focusVersionChange(visibleChangedId)});context.append(locate)}
+    const change=document.createElement('span');change.className='version-context-detail version-change';const relation=comparisonDirection==='older'?t('较上一版'):t('后续版本');change.textContent=summary.kind==='segments'?msg`${relation}调整 ${summary.changedCount} 句`:summary.kind==='full'?msg`${relation}调整全文`:comparisonDirection==='older'?t('与上一版内容相同'):t('与后续版本内容相同');copy.append(change);context.append(copy);
+    const visibleChangedId=summary.changedSegmentIds.find(id=>result.alignedSegments?.some(segment=>segment.id===id));if(visibleChangedId){const locate=this.button(this.alignedView?t('定位'):t('逐句查看'),'version-locate',this.alignedView?t('定位第一处版本改动'):t('切换逐句对照并定位第一处版本改动'));locate.addEventListener('click',()=>{if(!this.alignedView){this.alignedView=true;this.rememberResultViewMode(result,true);this.renderResult(result);requestAnimationFrame(()=>requestAnimationFrame(()=>this.focusVersionChange(visibleChangedId)));return}this.focusVersionChange(visibleChangedId)});context.append(locate)}
     context.ariaLabel=[translationVersionLabel(result),scopeLabel,change.textContent].filter(Boolean).join('，');return context;
   }
 
@@ -631,28 +679,29 @@ export class TranslationOverlay {
   }
 
   private webCapturePermissionSection(intent:'start'|'restore'):HTMLElement {
-    const permission=document.createElement('section');permission.className='capture-permission';permission.setAttribute('aria-label','网页截图授权');const copy=document.createElement('div');copy.className='capture-permission-copy';const title=document.createElement('strong');title.textContent=intent==='start'?'首次框选需要一次截图授权':'首次使用需要一次截图授权';const note=document.createElement('span');note.textContent=intent==='start'?'只截取你主动框选的当前可见区域，允许后立即进入框选。':'只截取你主动框选的当前可见区域，授权后自动恢复刚才的框选。';copy.append(title,note);const frame=document.createElement('iframe');frame.className='capture-permission-frame';const params=new URLSearchParams({theme:this.host.dataset.piTheme==='dark'?'dark':'light',intent});frame.src=`${this.webCapturePermissionUrl}?${params}`;frame.title=intent==='start'?'允许 Pi Translator 截图并开始框选':'允许 Pi Translator 截取主动框选的网页区域';frame.referrerPolicy='no-referrer';frame.dataset.piFocusTarget='true';permission.append(copy,frame);return permission;
+    const permission=document.createElement('section');permission.className='capture-permission';permission.setAttribute('aria-label',t('网页截图授权'));const copy=document.createElement('div');copy.className='capture-permission-copy';const title=document.createElement('strong');title.textContent=intent==='start'?t('首次框选需要一次截图授权'):t('首次使用需要一次截图授权');const note=document.createElement('span');note.textContent=intent==='start'?t('只截取你主动框选的当前可见区域，允许后立即进入框选。'):t('只截取你主动框选的当前可见区域，授权后自动恢复刚才的框选。');copy.append(title,note);const frame=document.createElement('iframe');frame.className='capture-permission-frame';const params=new URLSearchParams({theme:this.host.dataset.piTheme==='dark'?'dark':'light',intent});frame.src=`${this.webCapturePermissionUrl}?${params}`;frame.title=intent==='start'?t('允许 Pi Translator 截图并开始框选'):t('允许 Pi Translator 截取主动框选的网页区域');frame.referrerPolicy='no-referrer';frame.dataset.piFocusTarget='true';permission.append(copy,frame);return permission;
   }
 
   private webCapturePermissionFallback():HTMLButtonElement {
-    const fallback=this.button('改用浏览器侧栏授权','action capture-permission-fallback');fallback.addEventListener('click',()=>{fallback.disabled=true;fallback.textContent='正在打开浏览器侧栏…';void this.actions.onOpenWebCapturePermissionPanel?.().then(()=>{fallback.textContent='授权入口已打开'}).catch(()=>{fallback.disabled=false;fallback.textContent='重新打开浏览器侧栏'})});return fallback;
+    const fallback=this.button(t('改用浏览器侧栏授权'),'action capture-permission-fallback');fallback.addEventListener('click',()=>{fallback.disabled=true;fallback.textContent=t('正在打开浏览器侧栏…');void this.actions.onOpenWebCapturePermissionPanel?.().then(()=>{fallback.textContent=t('授权入口已打开')}).catch(()=>{fallback.disabled=false;fallback.textContent=t('重新打开浏览器侧栏')})});return fallback;
   }
 
   showWebCapturePermissionPrompt():void {
-    this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(this.sidebarActive)this.sidebarCollapsed=false;const surface=this.surface('框选网页',{showWebRegionAction:false});surface.append(this.webCapturePermissionSection('start'));const footer=document.createElement('div');footer.className='footer';footer.append(this.webCapturePermissionFallback());surface.append(footer);this.showSurface(surface);
+    this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(this.sidebarActive)this.sidebarCollapsed=false;const surface=this.surface(t('框选网页'),{showWebRegionAction:false});surface.append(this.webCapturePermissionSection('start'));const footer=document.createElement('div');footer.className='footer';footer.append(this.webCapturePermissionFallback());surface.append(footer);this.showSurface(surface);
   }
 
   showError(error:ErrorDisplay,rect?:ViewportRect):void {
-    this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?'翻译中断':'翻译失败');
+    error={...error,message:localizeErrorMessage(error.message)};
+    this.finishActiveProgressFeedback();this.progressState=undefined;this.resultFeedback.textContent='';if(rect)this.lastRect=rect;if(this.sidebarActive)this.sidebarCollapsed=false;const partialText=error.partialText?.trim();const surface=this.surface(partialText?t('翻译中断'):t('翻译失败'));
     const body=document.createElement('div');body.className='error';body.setAttribute('role','alert');body.setAttribute('aria-live','assertive');body.textContent=error.message;surface.append(body);
-    if(partialText){const partial=document.createElement('section');partial.className='partial-result';const label=document.createElement('div');label.className='partial-result-label';label.textContent='已保留收到的部分译文';const preview=document.createElement('div');preview.className='stream-preview';preview.textContent=partialText;partial.append(label,preview);surface.append(partial)}
+    if(partialText){const partial=document.createElement('section');partial.className='partial-result';const label=document.createElement('div');label.className='partial-result-label';label.textContent=t('已保留收到的部分译文');const preview=document.createElement('div');preview.className='stream-preview';preview.textContent=partialText;partial.append(label,preview);surface.append(partial)}
     const footer=document.createElement('div');footer.className='footer';const showRetry=error.retryable??true;const showWebRegionRecovery=Boolean(error.webRegionRecovery&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion);const showCapturePermissionRecovery=Boolean(error.webCapturePermissionRecovery&&this.actions.onOpenWebCapturePermissionPanel);
     if(showCapturePermissionRecovery)surface.append(this.webCapturePermissionSection('restore'))
     if(showCapturePermissionRecovery)footer.append(this.webCapturePermissionFallback())
-    if(showWebRegionRecovery){const adjust=this.button('调整区域',`action${showCapturePermissionRecovery?'':' primary'}`);if(!showCapturePermissionRecovery)adjust.dataset.piFocusTarget='true';adjust.addEventListener('click',()=>this.actions.onAdjustWebRegion?.());const reselect=this.button('重新框选','action');reselect.addEventListener('click',()=>this.actions.onReselectWebRegion?.());footer.append(adjust,reselect)}
-    if(showRetry){const retry=this.button(showWebRegionRecovery?'重试原区域':'重试',`action${showWebRegionRecovery?'':' primary'}`);if(!showWebRegionRecovery)retry.dataset.piFocusTarget='true';retry.addEventListener('click',()=>{retry.disabled=true;retry.textContent='正在重试…';this.actions.onRetry({kind:'failed'})});footer.append(retry)}
-    if(error.showSettings){const settings=this.button(error.settingsLabel??'打开设置',`action${showRetry||showWebRegionRecovery||showCapturePermissionRecovery?'':' primary'}`);if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
-    if(partialText){const copy=this.button('复制部分译文','action copy-action');if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),'已复制','部分译文已复制到剪贴板'));footer.append(copy)}
+    if(showWebRegionRecovery){const adjust=this.button(t('调整区域'),`action${showCapturePermissionRecovery?'':' primary'}`);if(!showCapturePermissionRecovery)adjust.dataset.piFocusTarget='true';adjust.addEventListener('click',()=>this.actions.onAdjustWebRegion?.());const reselect=this.button(t('重新框选'),'action');reselect.addEventListener('click',()=>this.actions.onReselectWebRegion?.());footer.append(adjust,reselect)}
+    if(showRetry){const retry=this.button(showWebRegionRecovery?t('重试原区域'):t('重试'),`action${showWebRegionRecovery?'':' primary'}`);if(!showWebRegionRecovery)retry.dataset.piFocusTarget='true';retry.addEventListener('click',()=>{retry.disabled=true;retry.textContent=t('正在重试…');this.actions.onRetry({kind:'failed'})});footer.append(retry)}
+    if(error.showSettings){const settings=this.button(error.settingsLabel??t('打开设置'),`action${showRetry||showWebRegionRecovery||showCapturePermissionRecovery?'':' primary'}`);if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery)settings.dataset.piFocusTarget='true';this.bindSettingsButton(settings,error.settingsFocus,error.settingsRecovery);footer.append(settings)}
+    if(partialText){const copy=this.button(t('复制部分译文'),'action copy-action');if(!showRetry&&!showWebRegionRecovery&&!showCapturePermissionRecovery&&!error.showSettings)copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(partialText),t('已复制'),t('部分译文已复制到剪贴板')));footer.append(copy)}
     if(footer.childElementCount)surface.append(footer);this.showSurface(surface);
   }
 
@@ -663,12 +712,12 @@ export class TranslationOverlay {
     if(rect)this.lastRect=rect;
     if(this.sidebarActive)this.sidebarCollapsed=false;
     const preserved=partialText?.trim();
-    const surface=this.surface('已停止');
+    const surface=this.surface(t('已停止'));
     const status=document.createElement('div');
     status.className='stopped-status';
     status.setAttribute('role','status');
     status.setAttribute('aria-live','polite');
-    status.textContent=preserved?'已停止 · 已保留部分译文':'翻译已停止';
+    status.textContent=preserved?t('已停止 · 已保留部分译文'):t('翻译已停止');
     surface.append(status);
     if(preserved){
       const partial=document.createElement('section');
@@ -680,9 +729,9 @@ export class TranslationOverlay {
       surface.append(partial);
       const footer=document.createElement('div');
       footer.className='footer';
-      const copy=this.button('复制部分译文','action copy-action');
+      const copy=this.button(t('复制部分译文'),'action copy-action');
       copy.dataset.piFocusTarget='true';
-      copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(preserved),'已复制','部分译文已复制到剪贴板'));
+      copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(preserved),t('已复制'),t('部分译文已复制到剪贴板')));
       footer.append(copy);
       surface.append(footer);
     }
@@ -701,17 +750,17 @@ export class TranslationOverlay {
     this.resultFeedback.textContent='';
     if(rect)this.lastRect=rect;
     if(this.sidebarActive)this.sidebarCollapsed=false;
-    const surface=this.surface('配置已完成');
+    const surface=this.surface(t('配置已完成'));
     const notice=document.createElement('div');
     notice.className='notice';
     notice.setAttribute('role','status');
     notice.setAttribute('aria-live','polite');
     const title=document.createElement('strong');
-    title.textContent=partialText?'已保留收到的部分译文':'请确认是否重新翻译';
+    title.textContent=partialText?t('已保留收到的部分译文'):t('请确认是否重新翻译');
     const text=document.createElement('span');
     text.textContent=partialText
-      ?'为避免重复计费，扩展没有自动再次请求 API。你可以保留下面的内容，或明确选择重新翻译。'
-      :'配置已经通过验证。此次错误不适合静默重试，请确认后再重新发送。';
+      ?t('为避免重复计费，扩展没有自动再次请求 API。你可以保留下面的内容，或明确选择重新翻译。')
+      :t('配置已经通过验证。此次错误不适合静默重试，请确认后再重新发送。');
     notice.append(title,text);
     surface.append(notice);
     if(partialText){
@@ -722,9 +771,9 @@ export class TranslationOverlay {
     }
     const footer=document.createElement('div');
     footer.className='footer';
-    const retry=this.button('重新翻译（会再次请求 API）','action primary');
+    const retry=this.button(t('重新翻译（会再次请求 API）'),'action primary');
     retry.dataset.piFocusTarget='true';
-    const keep=this.button(partialText?'保留部分结果':'暂不重试','action');
+    const keep=this.button(partialText?t('保留部分结果'):t('暂不重试'),'action');
     retry.addEventListener('click',()=>{
       retry.disabled=true;
       keep.disabled=true;
@@ -734,8 +783,8 @@ export class TranslationOverlay {
       retry.remove();
       keep.remove();
       text.textContent=partialText
-        ?'已保留当前部分译文，没有再次调用 API。'
-        :'当前任务已保留，不会自动调用 API。';
+        ?t('已保留当前部分译文，没有再次调用 API。')
+        :t('当前任务已保留，不会自动调用 API。');
       footer.remove();
     });
     footer.append(retry,keep);
@@ -749,15 +798,15 @@ export class TranslationOverlay {
       void this.actions.onOpenSettings(focus,recovery).then((opened)=>{
         button.disabled=false;
         if(opened){
-          button.textContent='设置已打开，完成后将返回';
+          button.textContent=t('设置已打开，完成后将返回');
           return;
         }
-        button.textContent='无法打开，请从扩展菜单进入';
-        button.title='请从 Edge 扩展菜单打开 Pi Translator 设置';
+        button.textContent=t('无法打开，请从扩展菜单进入');
+        button.title=t('请从 Edge 扩展菜单打开 Pi Translator 设置');
       }).catch(()=>{
         button.disabled=false;
-        button.textContent='无法打开，请从扩展菜单进入';
-        button.title='请从 Edge 扩展菜单打开 Pi Translator 设置';
+        button.textContent=t('无法打开，请从扩展菜单进入');
+        button.title=t('请从 Edge 扩展菜单打开 Pi Translator 设置');
       });
     });
   }
@@ -782,10 +831,10 @@ export class TranslationOverlay {
     for(const summary of summaries){
       const item=byId.get(summary.markerId)!;item.classList.toggle('missing',summary.locationState==='missing');
       const main=item.querySelector<HTMLButtonElement>('.marker-note-main');
-      if(main){const label=summary.locationState==='missing'?'原文位置已变化，仍可跳转到原页':'跳转到原文';main.ariaLabel=label;main.title=label}
+      if(main){const label=summary.locationState==='missing'?t('原文位置已变化，仍可跳转到原页'):t('跳转到原文');main.ariaLabel=label;main.title=label}
       const meta=item.querySelector<HTMLElement>('.marker-note-meta');if(!meta)continue;
       let status=meta.querySelector<HTMLElement>('.marker-note-status');
-      const statusText=summary.locationState==='missing'?'原文位置已变化':summary.locationState==='pending'?'点击定位':'';
+      const statusText=summary.locationState==='missing'?t('原文位置已变化'):summary.locationState==='pending'?t('点击定位'):'';
       if(statusText){if(!status){status=document.createElement('span');status.className='marker-note-status';meta.append(status)}status.textContent=statusText}else status?.remove();
     }
     this.markerLocationSignature=signature;
@@ -796,11 +845,11 @@ export class TranslationOverlay {
     this.renderAfterMarkToggle(this.currentResult,true);
   }
 
-  destroy():void { this.progressFeedbackController.dispose();this.activeFeedbackIdentity=undefined;this.progressFeedback=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.actions.onSidebarChange(false)}if(this.themeTimer)clearTimeout(this.themeTimer);this.clear();this.themeObserver?.disconnect();this.colorSchemeQuery?.removeEventListener('change',this.onColorSchemeChange);window.removeEventListener('keydown',this.onKeyDown,true);document.removeEventListener('pointerdown',this.onDocumentPointerDown,true);window.removeEventListener('resize',this.onViewportChange);window.removeEventListener('scroll',this.onViewportChange,true);window.visualViewport?.removeEventListener('resize',this.onViewportChange);window.visualViewport?.removeEventListener('scroll',this.onViewportChange);this.host.remove(); }
+  destroy():void { this.readingHints?.dispose();this.root.querySelectorAll<HTMLDialogElement>('dialog.pi-note-summary[open]').forEach(dialog=>dialog.close());this.progressFeedbackController.dispose();this.activeFeedbackIdentity=undefined;this.progressFeedback=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.actions.onSidebarChange(false)}if(this.themeTimer)clearTimeout(this.themeTimer);this.clear();this.themeObserver?.disconnect();this.colorSchemeQuery?.removeEventListener('change',this.onColorSchemeChange);window.removeEventListener('keydown',this.onKeyDown,true);document.removeEventListener('pointerdown',this.onDocumentPointerDown,true);window.removeEventListener('resize',this.onViewportChange);window.removeEventListener('scroll',this.onViewportChange,true);window.visualViewport?.removeEventListener('resize',this.onViewportChange);window.visualViewport?.removeEventListener('scroll',this.onViewportChange);this.host.remove(); }
 
   private renderSidebarIdle():void {
-    const surface=this.surface('连续翻译');const idle=document.createElement('div');idle.className='idle';const logo=this.logo('logo');
-    const title=document.createElement('strong');title.textContent='侧栏已固定';const text=document.createElement('p');text.className='idle-continuous-copy';text.textContent=this.continuousTranslationPaused?'自动翻译已暂停；仍可使用框选网页、右键菜单或快捷键。':'现在直接选中网页或 Overleaf 中的句子，译文会自动出现在这里。';idle.append(logo,title,text);surface.append(idle);this.showSurface(surface);
+    const surface=this.surface(t('连续翻译'));const idle=document.createElement('div');idle.className='idle';const logo=this.logo('logo');
+    const title=document.createElement('strong');title.textContent=t('侧栏已固定');const text=document.createElement('p');text.className='idle-continuous-copy';text.textContent=this.continuousTranslationPaused?t('自动翻译已暂停；仍可使用框选网页、右键菜单或快捷键。'):t('现在直接选中网页或 Overleaf 中的句子，译文会自动出现在这里。');idle.append(logo,title,text);surface.append(idle);this.showSurface(surface);
   }
 
   private historySearchResults():TranslationHistoryEntry[] {
@@ -829,23 +878,23 @@ export class TranslationOverlay {
   }
 
   private renderHistoryNavigator():void {
-    const surface=this.surface('翻译历史');surface.classList.add('history-surface');
+    const surface=this.surface(t('翻译历史'));surface.classList.add('history-surface');
     const searchbar=document.createElement('div');searchbar.className='history-searchbar';
-    const input=document.createElement('input');input.type='search';input.className='history-search-field';input.value=this.historySearchQuery;input.placeholder='搜索原文、译文或来源';input.ariaLabel='搜索翻译历史';input.autocomplete='off';input.spellcheck=false;input.dataset.piFocusKey='history-search';input.dataset.piFocusTarget='true';input.setAttribute('aria-keyshortcuts','Alt+/');
+    const input=document.createElement('input');input.type='search';input.className='history-search-field';input.value=this.historySearchQuery;input.placeholder=t('搜索原文、译文或来源');input.ariaLabel=t('搜索翻译历史');input.autocomplete='off';input.spellcheck=false;input.dataset.piFocusKey='history-search';input.dataset.piFocusTarget='true';input.setAttribute('aria-keyshortcuts','Alt+/');
     const hasMarked=this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry));
-    const filter=this.button('仅标记','history-filter','仅显示已标记翻译');filter.hidden=!hasMarked;filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));
-    const clear=this.button('清空','history-clear','清空历史搜索');clear.hidden=!this.historySearchQuery;
+    const filter=this.button(t('仅标记'),'history-filter',t('仅显示已标记翻译'));filter.dataset.piIcon='glyph';filter.prepend(this.markerIcon());filter.hidden=!hasMarked;filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));
+    const clear=this.button(t('清空'),'history-clear',t('清空历史搜索'));clear.dataset.piIcon='clear';clear.hidden=!this.historySearchQuery;
     searchbar.append(input,filter,clear);
     const summary=document.createElement('div');summary.className='history-summary';summary.id='pi-history-search-summary';summary.setAttribute('role','status');summary.setAttribute('aria-live','polite');input.setAttribute('aria-describedby',summary.id);
     const list=document.createElement('div');list.className='history-list';list.id='pi-history-search-results';input.setAttribute('aria-controls',list.id);
     const renderEntries=()=>{
-      const entries=this.historySearchResults();list.replaceChildren();const filtered=Boolean(this.historySearchQuery.trim())||this.markedOnly;summary.textContent=filtered?`${entries.length} 条匹配`:`${entries.length} 条历史翻译`;clear.hidden=!this.historySearchQuery;
+      const entries=this.historySearchResults();list.replaceChildren();const filtered=Boolean(this.historySearchQuery.trim())||this.markedOnly;summary.textContent=filtered?msg`${entries.length} 条匹配`:msg`${entries.length} 条历史翻译`;clear.hidden=!this.historySearchQuery;
       for(const entry of entries){
-        const item=this.button('','history-item');item.title='查看这条历史翻译';item.ariaLabel=`查看历史翻译：${entry.originalText.slice(0,80)}`;item.dataset.piFocusKey=`history-entry:${entry.requestId}`;item.classList.toggle('current',entry.requestId===this.currentResult?.requestId);if(entry.requestId===this.currentResult?.requestId)item.setAttribute('aria-current','true');
-        const meta=document.createElement('div');meta.className='history-item-meta';const time=document.createElement('span');time.textContent=formatTranslationClockTime(entry.createdAt);meta.append(time);if(entry.sourceHost){const host=document.createElement('span');host.textContent=entry.sourceHost;host.title=entry.sourceHost;meta.append(host)}if(this.actions.hasSourceMarksForResult?.(entry)){const marked=document.createElement('span');marked.className='history-marked';marked.textContent='已标记';meta.append(marked)}if(entry.requestId===this.currentResult?.requestId){const current=document.createElement('span');current.className='history-current';current.textContent='当前';meta.append(current)}
+        const item=this.button('','history-item');item.title=t('查看这条历史翻译');item.ariaLabel=msg`查看历史翻译：${entry.originalText.slice(0,80)}`;item.dataset.piFocusKey=`history-entry:${entry.requestId}`;item.classList.toggle('current',entry.requestId===this.currentResult?.requestId);if(entry.requestId===this.currentResult?.requestId)item.setAttribute('aria-current','true');
+        const meta=document.createElement('div');meta.className='history-item-meta';const time=document.createElement('span');time.textContent=formatTranslationClockTime(entry.createdAt);meta.append(time);if(entry.sourceHost){const host=document.createElement('span');host.textContent=entry.sourceHost;host.title=entry.sourceHost;meta.append(host)}if(this.actions.hasSourceMarksForResult?.(entry)){const marked=document.createElement('span');marked.className='history-marked';marked.textContent=t('已标记');meta.append(marked)}if(entry.requestId===this.currentResult?.requestId){const current=document.createElement('span');current.className='history-current';current.textContent=t('当前');meta.append(current)}
         const source=document.createElement('div');source.className='history-item-source';source.textContent=entry.originalText;const target=document.createElement('div');target.className='history-item-target';target.textContent=entry.translatedText;item.append(meta,source,target);item.addEventListener('click',()=>this.openHistoryResult(entry));item.addEventListener('keydown',event=>{if(!['ArrowDown','ArrowUp','Home','End'].includes(event.key))return;event.preventDefault();const items=[...list.querySelectorAll<HTMLButtonElement>('.history-item')];const index=items.indexOf(item);const targetIndex=event.key==='Home'?0:event.key==='End'?items.length-1:Math.min(items.length-1,Math.max(0,index+(event.key==='ArrowDown'?1:-1)));items[targetIndex]?.focus({preventScroll:true})});list.append(item);
       }
-      if(!entries.length){const empty=document.createElement('div');empty.className='history-empty';const message=document.createElement('span');message.textContent='没有匹配的历史翻译';const reset=this.button('显示全部历史','','清除搜索和标记筛选');reset.addEventListener('click',()=>{this.historySearchQuery='';this.markedOnly=false;input.value='';filter.classList.remove('active');filter.setAttribute('aria-pressed','false');renderEntries();input.focus({preventScroll:true})});empty.append(message,reset);list.append(empty)}
+      if(!entries.length){const empty=document.createElement('div');empty.className='history-empty';const message=document.createElement('span');message.textContent=t('没有匹配的历史翻译');const reset=this.button(t('显示全部历史'),'',t('清除搜索和标记筛选'));reset.addEventListener('click',()=>{this.historySearchQuery='';this.markedOnly=false;input.value='';filter.classList.remove('active');filter.setAttribute('aria-pressed','false');renderEntries();input.focus({preventScroll:true})});empty.append(message,reset);list.append(empty)}
     };
     input.addEventListener('input',()=>{this.historySearchQuery=input.value;renderEntries()});input.addEventListener('keydown',event=>{if(event.key==='ArrowDown'){const first=list.querySelector<HTMLButtonElement>('.history-item');if(first){event.preventDefault();first.focus({preventScroll:true})}}else if(event.key==='Enter'){const first=list.querySelector<HTMLButtonElement>('.history-item');if(first){event.preventDefault();first.click()}}});
     filter.addEventListener('click',()=>{this.markedOnly=!this.markedOnly;filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));renderEntries();input.focus({preventScroll:true})});clear.addEventListener('click',()=>{this.historySearchQuery='';input.value='';renderEntries();input.focus({preventScroll:true})});
@@ -865,22 +914,23 @@ export class TranslationOverlay {
     const summaries=this.actions.getSourceMarkSummaries?.()??[];
     this.markerLocationSignature=summaries
       .map(summary=>`${summary.markerId}:${summary.locationState}`).join('|');
-    const surface=this.surface('本文标记');
-    const toolbar=document.createElement('div');toolbar.className='marker-notes-toolbar';const count=document.createElement('span');count.textContent=`${summaries.length} 条 · 带出处笔记`;toolbar.append(count);
-    if(summaries.length&&this.actions.onCopyMarkedNotes){const copyAll=this.button('复制全部','','复制本文标记为 Markdown');copyAll.addEventListener('click',()=>{void this.actions.onCopyMarkedNotes?.().then((copied)=>{copyAll.textContent=`已复制 ${copied} 条`})});toolbar.append(copyAll)}
+    const surface=this.surface(t('本文标记'));
+    const toolbar=document.createElement('div');toolbar.className='marker-notes-toolbar';const count=document.createElement('span');count.textContent=String(summaries.length);count.title=count.ariaLabel=msg`${summaries.length} 条标记`;toolbar.append(count);
+    if(this.actions.onNoteSummaryTarget){const summary=this.button(t('本篇笔记小结…'),'note-summary-action');summary.addEventListener('click',()=>{const target=this.actions.onNoteSummaryTarget?.();if(target)openNoteSummary(target,{host:this.root,isCurrent:()=>JSON.stringify(this.actions.onNoteSummaryTarget?.())===JSON.stringify(target),...(this.actions.onLocateNoteSummarySource?{onLocateSource:(source:import('../core/content/note-summary').NoteSummarySource,summaryReturn?:ReadingSummaryReturn)=>this.actions.onLocateNoteSummarySource!(source.id,summaryReturn)}:{})})});toolbar.append(summary)}
+    if(summaries.length&&this.actions.onCopyMarkedNotes){const title=t('复制本文标记为 Markdown'),copyAll=this.button(t('复制全部'),'',title);copyAll.dataset.piIcon='copy';copyAll.addEventListener('click',()=>{copyAll.disabled=true;void this.actions.onCopyMarkedNotes?.().then((copied)=>{copyAll.title=copyAll.ariaLabel=msg`已复制 ${copied} 条`;this.flashButtonFeedback(copyAll,copyAll.title,1800,'success',()=>{copyAll.title=copyAll.ariaLabel=title})}).catch(()=>{copyAll.title=copyAll.ariaLabel=t('复制失败，请检查剪贴板权限');this.flashButtonFeedback(copyAll,t('复制失败'),3200,'error',()=>{copyAll.title=copyAll.ariaLabel=title})}).finally(()=>{copyAll.disabled=false})});toolbar.append(copyAll)}
     surface.append(toolbar);
-    if(!summaries.length){const empty=document.createElement('div');empty.className='idle';const title=document.createElement('strong');title.textContent='本文暂无标记';const text=document.createElement('p');text.textContent='轻标记重要译句后，会按页码显示在这里。';empty.append(title,text);surface.append(empty);this.showSurface(surface);return}
+    if(!summaries.length){const empty=document.createElement('div');empty.className='idle';const title=document.createElement('strong');title.textContent=t('本文暂无标记');const text=document.createElement('p');text.textContent=t('轻标记重要译句后，会按页码显示在这里。');empty.append(title,text);surface.append(empty);this.showSurface(surface);return}
     const list=document.createElement('div');list.className='marker-notes-list';
     for(const [index,summary] of summaries.entries()){
       const item=document.createElement('article');item.className=`marker-note${summary.locationState==='missing'?' missing':''}`;
       item.dataset.markerId=summary.markerId;
-      const main=this.button('','marker-note-main',summary.locationState==='missing'?(summary.pageNumber?'原文位置已变化，仍可跳转到原页':'原文位置已变化，可阅读已保存摘录'):'跳转到原文');
+      const main=this.button('','marker-note-main',summary.locationState==='missing'?(summary.pageNumber?t('原文位置已变化，仍可跳转到原页'):t('原文位置已变化，可阅读已保存摘录')):t('跳转到原文'));
       const meta=document.createElement('div');meta.className='marker-note-meta';
-      const page=document.createElement('span');page.textContent=summary.pageNumber?`第 ${summary.pageNumber} 页`:'当前页面';meta.append(page);
+      const page=document.createElement('span');page.textContent=summary.pageNumber?msg`第 ${summary.pageNumber} 页`:t('当前页面');meta.append(page);
       if(summary.locationState==='missing'){
-        const status=document.createElement('span');status.className='marker-note-status';status.textContent='原文位置已变化';meta.append(status);
+        const status=document.createElement('span');status.className='marker-note-status';status.textContent=t('原文位置已变化');meta.append(status);
       }else if(summary.locationState==='pending'){
-        const status=document.createElement('span');status.className='marker-note-status';status.textContent='点击定位';meta.append(status);
+        const status=document.createElement('span');status.className='marker-note-status';status.textContent=t('点击定位');meta.append(status);
       }
       const source=document.createElement('div');source.className='marker-note-source';source.textContent=summary.originalText;
       const citation=document.createElement('div');citation.className='marker-note-citation';citation.textContent=summary.sourceTitle;citation.title=summary.sourceTitle+(summary.doi?` · DOI: ${summary.doi}`:'');
@@ -890,45 +940,55 @@ export class TranslationOverlay {
       main.addEventListener('click',()=>{
         const task=this.actions.onNavigateSourceMark?.(summary.markerId);if(!task)return;
         void task.then(()=>{
+          if(this.root.querySelector('.excerpt-citation-editor,.correction-editor,.segment-correction,.recognized-editor'))return;
           const narrow=globalThis.matchMedia?.('(max-width:620px)')?.matches??innerWidth<=620;
           if(narrow){this.collapseSidebar();return}
           this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index));
         });
       });
       const actions=document.createElement('div');actions.className='marker-note-actions';
-      const more=document.createElement('details');more.className='more marker-note-more';const summaryButton=document.createElement('summary');summaryButton.textContent='更多';summaryButton.ariaLabel='这条标记的更多操作';const menu=document.createElement('div');menu.className='menu';more.append(summaryButton,menu);
+      const more=document.createElement('details');more.className='more marker-note-more';const summaryButton=document.createElement('summary');summaryButton.textContent=t('更多');summaryButton.dataset.piIcon='more';summaryButton.title=summaryButton.ariaLabel=t('这条标记的更多操作');const menu=document.createElement('div');menu.className='menu';more.append(summaryButton,menu);
       more.addEventListener('toggle',()=>{if(more.open){this.placeMoreMenu(more,menu);requestAnimationFrame(()=>this.placeMoreMenu(more,menu))}});
-      if(this.actions.onSetSourceMarkSaved){const save=this.button(summary.retained?'取消本机保存':'保存到本机','','保存或取消保存这条网页摘录');save.addEventListener('click',()=>{save.disabled=true;void this.actions.onSetSourceMarkSaved!(summary.markerId,!summary.retained).then(()=>this.renderMarkerNavigator()).catch(error=>{save.disabled=false;let status=item.querySelector<HTMLElement>('.marker-note-save-status');if(!status){status=document.createElement('p');status.className='marker-note-save-status';status.setAttribute('role','status');item.append(status)}status.textContent=error instanceof Error?error.message:'保存失败，请重试。';more.open=false})});menu.append(save)}
-      const copy=this.button('复制','', '复制这条标记');
-      copy.addEventListener('click',()=>{this.copyWithFeedback(copy,buildTranslationMarkerMarkdown([{...summary,originalText:normalizeLatexForClipboard(summary.originalText),translatedText:normalizeLatexForClipboard(summary.translatedText)}]),'已复制','带出处的标记笔记已复制到剪贴板')});
+      if(this.actions.onSetSourceMarkSaved){
+        let retained=summary.retained??false;const save=this.button(retained?t('取消本机保存'):t('保存到本机'),'',t('保存或取消保存这条网页摘录'));
+        const feedback=(text:string,existingMarkerId?:string)=>{let status=item.querySelector<HTMLElement>('.marker-note-save-status');if(!status){status=document.createElement('p');status.className='marker-note-save-status';status.setAttribute('role','status');item.append(status)}status.replaceChildren(document.createTextNode(text));if(existingMarkerId&&this.actions.onViewExistingSourceMark){const view=this.button(t('查看已有笔记'),'existing-note-open');view.addEventListener('click',()=>this.actions.onViewExistingSourceMark?.(existingMarkerId,this.root));status.append(view)}more.open=false};
+        save.addEventListener('click',()=>{save.disabled=true;void this.actions.onSetSourceMarkSaved!(summary.markerId,!retained).then(result=>{
+          if(result?.existingMarkerId){feedback(t('这段原文已有笔记，旧内容和当前草稿均保留。'),result.existingMarkerId);return}
+          retained=!retained;
+          if(this.root.querySelector('.excerpt-citation-editor,.correction-editor')){save.textContent=retained?t('取消本机保存'):t('保存到本机');feedback(t('已保存'));return}
+          this.renderMarkerNavigator();
+        }).catch(error=>feedback(error instanceof Error?error.message:t('保存失败，请重试。'))).finally(()=>{save.disabled=false})});menu.append(save);
+      }
+      const copy=this.button(t('复制'),'', t('复制这条标记'));
+      copy.addEventListener('click',()=>{this.copyWithFeedback(copy,buildTranslationMarkerMarkdown([{...summary,originalText:normalizeLatexForClipboard(summary.originalText),translatedText:normalizeLatexForClipboard(summary.translatedText)}]),t('已复制'),t('带出处的标记笔记已复制到剪贴板'))});
       if(this.actions.onUpdateSourceMarkCitation){
-        const edit=this.button('出处','','编辑这条标记的出处和笔记');
+        const edit=this.button(t('出处'),'',t('编辑这条标记的出处和笔记'));
         edit.addEventListener('click',()=>{
           more.open=false;
           const existing=item.querySelector('.excerpt-citation-editor');if(existing){existing.remove();return}
           const editor=document.createElement('div');editor.className='excerpt-citation-editor';
           const fields=new Map<string,HTMLInputElement|HTMLTextAreaElement>();
-          for(const [key,label,value] of [['sourceTitle','论文或来源标题',summary.sourceTitle],['sourceUrl','来源链接（可选）',summary.sourceUrl??''],['doi','DOI（可选）',summary.doi??''],['note','个人笔记（可选）',summary.note??'']] as const){
+          for(const [key,label,value] of [['sourceTitle',t('论文或来源标题'),summary.sourceTitle],['sourceUrl',t('来源链接（可选）'),summary.sourceUrl??''],['doi',t('DOI（可选）'),summary.doi??''],['note',t('个人笔记（可选）'),summary.note??'']] as const){
             const wrapper=document.createElement('label');const caption=document.createElement('span');caption.textContent=label;
             const input=key==='note'?document.createElement('textarea'):document.createElement('input');input.value=value;input.maxLength=key==='sourceUrl'?4000:key==='note'?2000:key==='doi'?200:500;input.ariaLabel=label;
             fields.set(key,input);wrapper.append(caption,input);editor.append(wrapper);
           }
-          const hint=document.createElement('p');hint.textContent=summary.retained?'此摘录已保存到本机，出处和笔记会同步更新。':this.actions.onSetSourceMarkSaved?'当前摘录尚未保存到本机；可在更多菜单中主动保存。':'PDF 已保存的标记会同步保存出处。';
+          const hint=document.createElement('p');hint.textContent=summary.retained?t('此摘录已保存到本机，出处和笔记会同步更新。'):this.actions.onSetSourceMarkSaved?t('当前摘录尚未保存到本机；可在更多菜单中主动保存。'):t('PDF 已保存的标记会同步保存出处。');
           const feedback=document.createElement('p');feedback.setAttribute('role','status');
-          const save=this.button('保存出处','','保存这条标记的出处和笔记');
-          save.addEventListener('click',()=>{save.disabled=true;void this.actions.onUpdateSourceMarkCitation?.(summary.markerId,{sourceTitle:fields.get('sourceTitle')!.value,sourceUrl:fields.get('sourceUrl')!.value,doi:fields.get('doi')!.value,note:fields.get('note')!.value}).then(()=>{this.renderMarkerNavigator();this.flashButtonFeedback(this.root.querySelector<HTMLButtonElement>('[aria-label="编辑这条标记的出处和笔记"]')??edit,'已保存')}).catch(error=>{feedback.textContent=error instanceof Error?error.message:'保存失败，请重试。';save.disabled=false})});
-          const cancel=this.button('取消','correction-cancel','取消编辑出处');cancel.addEventListener('click',()=>{editor.remove();edit.focus()});
+          const save=this.button(t('保存出处'),'',t('保存这条标记的出处和笔记'));
+          save.addEventListener('click',()=>{save.disabled=true;void this.actions.onUpdateSourceMarkCitation?.(summary.markerId,{sourceTitle:fields.get('sourceTitle')!.value,sourceUrl:fields.get('sourceUrl')!.value,doi:fields.get('doi')!.value,note:fields.get('note')!.value}).then(()=>{this.renderMarkerNavigator();this.flashButtonFeedback(this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="编辑这条标记的出处和笔记"]'))??edit,t('已保存'))}).catch(error=>{feedback.textContent=error instanceof Error?error.message:t('保存失败，请重试。');save.disabled=false})});
+          const cancel=this.button(t('取消'),'correction-cancel',t('取消编辑出处'));cancel.addEventListener('click',()=>{editor.remove();edit.focus()});
           editor.append(hint,feedback,save,cancel);item.append(editor);fields.get('sourceTitle')?.focus();
         });menu.append(edit);
       }
-      const remove=this.button('删除','', '删除这条标记');
-      const resetRemove=()=>{delete remove.dataset.confirmDelete;remove.textContent='删除';remove.ariaLabel='删除这条标记'};
+      const remove=this.button(t('删除'),'', t('删除这条标记'));
+      const resetRemove=()=>{delete remove.dataset.confirmDelete;remove.textContent=t('删除');remove.ariaLabel=t('删除这条标记')};
       remove.addEventListener('click',()=>{
         if(remove.dataset.confirmDelete!=='true'){
-          remove.dataset.confirmDelete='true';remove.textContent='确认';remove.ariaLabel='再次点击删除这条标记';return;
+          remove.dataset.confirmDelete='true';remove.textContent=t('确认');remove.ariaLabel=t('再次点击删除这条标记');return;
         }
         const task=this.actions.onRemoveSourceMark?.(summary.markerId);if(!task)return;
-        void task.then(()=>{this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index))}).catch(()=>{resetRemove();this.flashButtonFeedback(remove,'删除失败',3200)});
+        void task.then(()=>{this.renderMarkerNavigator();queueMicrotask(()=>this.focusMarkerNavigatorFallback(index))}).catch(()=>{resetRemove();this.flashButtonFeedback(remove,t('删除失败'),3200)});
       });
       remove.addEventListener('blur',()=>{if(remove.dataset.confirmDelete==='true')resetRemove()});
       menu.append(remove);actions.append(copy,more);item.append(main,actions);list.append(item);
@@ -939,7 +999,7 @@ export class TranslationOverlay {
   private focusMarkerNavigatorFallback(preferredIndex=0):void {
     const markers=[...this.root.querySelectorAll<HTMLButtonElement>('.marker-note-main')];
     const marker=markers[Math.min(preferredIndex,Math.max(0,markers.length-1))];
-    (marker??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))
+    (marker??this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="返回翻译结果"]')))
       ?.focus({preventScroll:true});
   }
 
@@ -947,13 +1007,13 @@ export class TranslationOverlay {
     if(!this.actions.onGetDocumentMemory)return;
     this.rememberVisibleResultReadingPosition();
     this.documentTermFocusSource=termSource;
-    this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=true;this.sidebarCollapsed=false;this.documentMemoryError=undefined;
+    this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=true;this.sidebarCollapsed=false;this.documentMemoryError=undefined;this.documentMemoryReadFailed=false;
     this.renderDocumentMemory();
     this.refreshDocumentMemory(true);
   }
 
   private updateDocumentMemory(task:Promise<DocumentMemorySnapshot>,focusAfterRender?:()=>void):void {
-    this.documentMemoryError=undefined;const requestRevision=++this.documentMemoryRequestRevision;
+    this.documentMemoryError=undefined;this.documentMemoryReadFailed=false;const requestRevision=++this.documentMemoryRequestRevision;
     void task.then((memory)=>{
       if(requestRevision!==this.documentMemoryRequestRevision)return;
       this.documentMemory=memory;
@@ -963,7 +1023,7 @@ export class TranslationOverlay {
       }else this.updateDocumentMemoryButton();
     }).catch((error:unknown)=>{
       if(requestRevision!==this.documentMemoryRequestRevision)return;
-      this.documentMemoryError=error instanceof Error?error.message:'操作失败';
+      this.documentMemoryError=error instanceof Error?error.message:t('操作失败');
       if(this.documentMemoryActive){
         this.renderDocumentMemory();
         if(focusAfterRender)queueMicrotask(focusAfterRender);
@@ -973,13 +1033,13 @@ export class TranslationOverlay {
 
   private focusDocumentReviewFallback():void {
     (this.root.querySelector<HTMLButtonElement>('.document-review-actions .review-resolve')
-      ??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))
+      ??this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="返回翻译结果"]')))
       ?.focus({preventScroll:true});
   }
 
   private focusDocumentClearFallback():void {
     (this.root.querySelector<HTMLButtonElement>('.document-clear')
-      ??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))
+      ??this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="返回翻译结果"]')))
       ?.focus({preventScroll:true});
   }
 
@@ -1002,18 +1062,18 @@ export class TranslationOverlay {
     targetValue:string,
     id?:string,
   ):HTMLElement {
-    const editor=document.createElement('div');editor.className='document-edit';const source=document.createElement('input');source.value=sourceValue;source.placeholder='原文术语';source.ariaLabel='原文术语';const target=document.createElement('input');target.value=targetValue;target.placeholder='固定译法';target.ariaLabel='固定译法';const actions=document.createElement('div');actions.className='document-edit-actions';const restore=()=>{this.editingDocumentTermId=undefined;this.renderDocumentMemory();queueMicrotask(()=>{const fallback=this.root.querySelector<HTMLButtonElement>('[title="添加本文术语"]');const matching=id?[...this.root.querySelectorAll<HTMLButtonElement>('[data-document-term-id]')].find(button=>button.dataset.documentTermId===id):undefined;(matching??fallback)?.focus()})};const commit=()=>{const cleanSource=source.value.trim(),cleanTarget=target.value.trim();if(!cleanSource||!cleanTarget){(!cleanSource?source:target).focus();return}this.editingDocumentTermId=undefined;this.updateDocumentMemory(this.actions.onUpsertDocumentTerm!({...(id?{id}:{}),source:cleanSource,target:cleanTarget}))};const save=this.button('保存','','保存本文术语');save.addEventListener('click',commit);const cancel=this.button('取消','correction-cancel','取消编辑本文术语');cancel.addEventListener('click',restore);const onKeyDown=(event:KeyboardEvent)=>{if(event.key==='Enter'){event.preventDefault();commit()}};source.addEventListener('keydown',onKeyDown);target.addEventListener('keydown',onKeyDown);actions.append(cancel,save);editor.append(source,target,actions);return editor;
+    const editor=document.createElement('div');editor.className='document-edit';const source=document.createElement('input');source.value=sourceValue;source.placeholder=t('原文术语');source.ariaLabel=t('原文术语');const target=document.createElement('input');target.value=targetValue;target.placeholder=t('固定译法');target.ariaLabel=t('固定译法');const actions=document.createElement('div');actions.className='document-edit-actions';const restore=()=>{this.editingDocumentTermId=undefined;this.renderDocumentMemory();queueMicrotask(()=>{const fallback=this.root.querySelector<HTMLButtonElement>(uiSelector('[title="添加本文术语"]'));const matching=id?[...this.root.querySelectorAll<HTMLButtonElement>('[data-document-term-id]')].find(button=>button.dataset.documentTermId===id):undefined;(matching??fallback)?.focus()})};const commit=()=>{const cleanSource=source.value.trim(),cleanTarget=target.value.trim();if(!cleanSource||!cleanTarget){(!cleanSource?source:target).focus();return}this.editingDocumentTermId=undefined;this.updateDocumentMemory(this.actions.onUpsertDocumentTerm!({...(id?{id}:{}),source:cleanSource,target:cleanTarget}))};const save=this.button(t('保存'),'',t('保存本文术语'));save.addEventListener('click',commit);const cancel=this.button(t('取消'),'correction-cancel',t('取消编辑本文术语'));cancel.addEventListener('click',restore);const onKeyDown=(event:KeyboardEvent)=>{if(event.key==='Enter'){event.preventDefault();commit()}};source.addEventListener('keydown',onKeyDown);target.addEventListener('keydown',onKeyDown);actions.append(cancel,save);editor.append(source,target,actions);return editor;
   }
 
   private documentCandidateEditor(sourceValue:string,targetValue:string,id:string):HTMLElement {
     const editor=document.createElement('div');editor.className='document-edit document-candidate-edit';
     const source=document.createElement('div');source.className='document-source';source.textContent=sourceValue;
-    const target=document.createElement('input');target.value=targetValue;target.placeholder='修改候选译法';target.ariaLabel=`修改 ${sourceValue} 的候选译法`;
+    const target=document.createElement('input');target.value=targetValue;target.placeholder=t('修改候选译法');target.ariaLabel=msg`修改 ${sourceValue} 的候选译法`;
     const actions=document.createElement('div');actions.className='document-edit-actions';
     const cancel=()=>{this.editingDocumentCandidateId=undefined;this.renderDocumentMemory();queueMicrotask(()=>{[...this.root.querySelectorAll<HTMLButtonElement>('[data-document-candidate-id]')].find(button=>button.dataset.documentCandidateId===id)?.focus()})};
     const commit=()=>{const cleanTarget=target.value.trim();if(!cleanTarget){target.focus();return}this.editingDocumentCandidateId=undefined;this.updateDocumentMemory(this.actions.onUpsertDocumentTerm!({source:sourceValue,target:cleanTarget}))};
-    const save=this.button('保存','','保存修改并采用');save.addEventListener('click',commit);
-    const dismiss=this.button('取消','correction-cancel','取消修改');dismiss.addEventListener('click',cancel);
+    const save=this.button(t('保存'),'',t('保存修改并采用'));save.addEventListener('click',commit);
+    const dismiss=this.button(t('取消'),'correction-cancel',t('取消修改'));dismiss.addEventListener('click',cancel);
     target.addEventListener('keydown',(event)=>{if(event.key==='Enter'){event.preventDefault();commit()}else if(event.key==='Escape'){event.preventDefault();cancel()}});
     actions.append(save,dismiss);editor.append(source,target,actions);return editor;
   }
@@ -1025,10 +1085,11 @@ export class TranslationOverlay {
   }
 
   private renderDocumentMemory():void {
-    const surface=this.surface('本文');
-    const meta=document.createElement('div');meta.className='document-meta';meta.textContent=this.documentMemory?`${this.documentMemory.label} · 仅保存在本机`:'正在读取本文记忆…';surface.append(meta);
-    if(this.documentMemoryError){const error=document.createElement('div');error.className='error';error.textContent=this.documentMemoryError;surface.append(error)}
+    const surface=this.surface(t('本文'));
+    const meta=document.createElement('div');meta.className='document-meta';meta.textContent=this.documentMemory?msg`${this.documentMemory.label} · 仅保存在本机`:t(this.documentMemoryReadFailed?'本文术语暂不可用':'正在读取本文记忆…');surface.append(meta);
+    if(this.documentMemoryError)surface.append(this.documentMemoryErrorView());
     const memory=this.documentMemory;if(!memory){this.showSurface(surface);return}
+    const glossaryController=new AbortController(),glossary=documentGlossaryControl({pageUrl:location.href,...this.actions.onDocumentGlossaryLocator?.(),documentId:memory.documentId},glossaryController.signal,{targetLanguage:()=>this.currentResult?.targetLanguage??'',evidenceText:()=>[...memory.confirmedTerms.map(term=>term.source),...memory.recentTranslations.map(item=>item.originalText)].join('\n').slice(0,6000)});surface.append(glossary.element);
     const requestedTermSource=this.documentTermFocusSource;
     if(requestedTermSource){const sourceKey=requestedTermSource.trim().toLocaleLowerCase();const matching=memory.confirmedTerms.find(term=>term.source.trim().toLocaleLowerCase()===sourceKey);if(matching){this.editingDocumentCandidateId=undefined;this.editingDocumentTermId=matching.id}}
 
@@ -1037,7 +1098,7 @@ export class TranslationOverlay {
     if(pendingReviews.length){
       const reviews=document.createElement('section');reviews.className='document-section document-review-section';
       const head=document.createElement('div');head.className='document-section-head';
-      const title=document.createElement('strong');title.textContent='图像识别待核对';
+      const title=document.createElement('strong');title.textContent=t('图像识别待核对');
       const count=document.createElement('span');count.textContent=String(pendingReviews.length);
       head.append(title,count);reviews.append(head);
       const list=document.createElement('div');list.className='document-review-list';
@@ -1045,16 +1106,16 @@ export class TranslationOverlay {
         const review=entry.review!;
         const row=document.createElement('article');row.className='document-review-row';
         const meta=document.createElement('div');meta.className='document-review-meta';
-        const page=document.createElement('span');page.textContent=entry.sourceLocation?`第 ${entry.sourceLocation.pageNumber} 页`:'PDF 选区';
+        const page=document.createElement('span');page.textContent=entry.sourceLocation?msg`第 ${entry.sourceLocation.pageNumber} 页`:t('PDF 选区');
         const reason=document.createElement('strong');
-        const reasons=[review.formulaNeedsReview?'公式结构待核对':'',review.uncertainSpans.length?`${review.uncertainSpans.length} 处内容待核对`:''].filter(Boolean);
+        const reasons=[review.formulaNeedsReview?t('公式结构待核对'):'',review.uncertainSpans.length?msg`${review.uncertainSpans.length} 处内容待核对`:''].filter(Boolean);
         reason.textContent=reasons.join(' · ');
         const time=document.createElement('span');time.textContent=formatTranslationClockTime(review.updatedAt);
         meta.append(page,reason,time);
         const source=document.createElement('div');source.className='document-review-source';source.textContent=entry.originalText;
         const actions=document.createElement('div');actions.className='document-review-actions';
         if(entry.sourceLocation&&this.actions.onNavigateToPdfRegion){
-          const locate=this.button('返回区域','','返回 PDF 原选区');locate.ariaLabel='返回区域';
+          const locate=this.button(t('返回区域'),'',t('返回 PDF 原选区'));locate.ariaLabel=t('返回区域');
           locate.addEventListener('click',()=>{
             this.actions.onNavigateToPdfRegion?.(entry.sourceLocation!);
             const narrow=globalThis.matchMedia?.('(max-width:620px)')?.matches??innerWidth<=620;
@@ -1062,14 +1123,14 @@ export class TranslationOverlay {
           });
           actions.append(locate);
         }
-        const open=this.button('打开结果','','查看待核对译文');open.ariaLabel='打开结果';
+        const open=this.button(t('打开结果'),'',t('查看待核对译文'));open.ariaLabel=t('打开结果');
         open.addEventListener('click',()=>this.openDocumentTranslation(entry));actions.append(open);
         if(this.actions.canRetryDocumentReview?.(entry)&&this.actions.onRetryDocumentReview){
-          const retry=this.button('重新识别','','重新截图识别这个区域');retry.ariaLabel='重新识别';
+          const retry=this.button(t('重新识别'),'',t('重新截图识别这个区域'));retry.ariaLabel=t('重新识别');
           retry.addEventListener('click',()=>this.actions.onRetryDocumentReview?.(entry));actions.append(retry);
         }
         if(this.actions.onResolveDocumentReview){
-          const resolve=this.button('已核对','review-resolve','标记为已人工核对');resolve.ariaLabel='已核对';
+          const resolve=this.button(t('已核对'),'review-resolve',t('标记为已人工核对'));resolve.ariaLabel=t('已核对');
           resolve.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onResolveDocumentReview!(review.id),()=>this.focusDocumentReviewFallback()));actions.append(resolve);
         }
         row.append(meta,source,actions);list.append(row);
@@ -1080,16 +1141,16 @@ export class TranslationOverlay {
     if(reviewSummary.terminologyTranslations.length){
       const reviews=document.createElement('section');reviews.className='document-section document-term-review-section';
       const head=document.createElement('div');head.className='document-section-head';
-      const title=document.createElement('strong');title.textContent='术语待核对';
+      const title=document.createElement('strong');title.textContent=t('术语待核对');
       const count=document.createElement('span');count.textContent=String(reviewSummary.terminologyCount);
       head.append(title,count);reviews.append(head);
-      const intro=document.createElement('div');intro.className='document-term-review-intro';intro.textContent='配置译法未直接出现在译文中；同义表达也可能触发，请结合上下文核对。';reviews.append(intro);
+      const intro=document.createElement('div');intro.className='document-term-review-intro';intro.textContent=t('配置译法未直接出现在译文中；同义表达也可能触发，请结合上下文核对。');reviews.append(intro);
       const list=document.createElement('div');list.className='document-review-list';
       for(const {translation:entry,terms} of reviewSummary.terminologyTranslations){
         const row=document.createElement('article');row.className='document-review-row document-term-review-row';
         const meta=document.createElement('div');meta.className='document-review-meta';
-        const location=document.createElement('span');location.textContent=entry.sourceLocation?`第 ${entry.sourceLocation.pageNumber} 页`:'译文';
-        const reason=document.createElement('strong');reason.textContent=`${terms.length} 个术语`;
+        const location=document.createElement('span');location.textContent=entry.sourceLocation?msg`第 ${entry.sourceLocation.pageNumber} 页`:t('译文');
+        const reason=document.createElement('strong');reason.textContent=msg`${terms.length} 个术语`;
         const time=document.createElement('span');time.textContent=formatTranslationClockTime(entry.completedAt);
         meta.append(location,reason,time);
         const source=document.createElement('div');source.className='document-review-source';source.textContent=entry.originalText;
@@ -1099,12 +1160,12 @@ export class TranslationOverlay {
           const termSource=document.createElement('span');termSource.className='document-term-review-source';termSource.textContent=term.source;
           const arrow=document.createElement('span');arrow.className='document-term-review-arrow';arrow.textContent='→';
           const target=document.createElement('span');target.className='document-term-review-target';target.textContent=term.target;
-          const scope=document.createElement('span');scope.className='document-term-review-scope';scope.textContent=term.scope==='document'?'本文':'全局';
+          const scope=document.createElement('span');scope.className='document-term-review-scope';scope.textContent=term.scope==='document'?t('本文'):t('全局');
           pair.append(termSource,arrow,target,scope);pairs.append(pair);
         }
         const actions=document.createElement('div');actions.className='document-review-actions';
         if(entry.sourceLocation&&this.actions.onNavigateToPdfRegion){
-          const locate=this.button('返回区域','','返回 PDF 原选区');locate.ariaLabel='返回区域';
+          const locate=this.button(t('返回区域'),'',t('返回 PDF 原选区'));locate.ariaLabel=t('返回区域');
           locate.addEventListener('click',()=>{
             this.actions.onNavigateToPdfRegion?.(entry.sourceLocation!);
             const narrow=globalThis.matchMedia?.('(max-width:620px)')?.matches??innerWidth<=620;
@@ -1112,26 +1173,28 @@ export class TranslationOverlay {
           });
           actions.append(locate);
         }
-        const open=this.button('打开译文','','打开含待核对术语的译文');open.ariaLabel=`打开含 ${terms.length} 个待核对术语的译文`;
+        const open=this.button(t('打开译文'),'',t('打开含待核对术语的译文'));open.ariaLabel=msg`打开含 ${terms.length} 个待核对术语的译文`;
         open.addEventListener('click',()=>this.openDocumentTranslation(entry));actions.append(open);
         row.append(meta,source,pairs,actions);list.append(row);
       }
       reviews.append(list);surface.append(reviews);
     }
 
-    const confirmed=document.createElement('section');confirmed.className='document-section';const confirmedHead=document.createElement('div');confirmedHead.className='document-section-head';const confirmedTitle=document.createElement('strong');confirmedTitle.textContent='固定译法';const confirmedCount=document.createElement('span');confirmedCount.textContent=String(memory.confirmedTerms.length);const add=this.button('＋添加','document-action','添加本文术语');add.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId='new';this.renderDocumentMemory()});confirmedHead.append(confirmedTitle,confirmedCount,add);confirmed.append(confirmedHead);const confirmedList=document.createElement('div');
+    const confirmed=document.createElement('section');confirmed.className='document-section';const confirmedHead=document.createElement('div');confirmedHead.className='document-section-head';const confirmedTitle=document.createElement('strong');confirmedTitle.textContent=t('固定译法');const confirmedCount=document.createElement('span');confirmedCount.textContent=String(memory.confirmedTerms.length);const add=this.button(t('＋添加'),'document-action',t('添加本文术语'));add.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId='new';this.renderDocumentMemory()});confirmedHead.append(confirmedTitle,confirmedCount,add);confirmed.append(confirmedHead);const confirmedList=document.createElement('div');
     if(this.editingDocumentTermId==='new')confirmedList.append(this.documentTermEditor('',''));
-    for(const term of memory.confirmedTerms){const row=document.createElement('div');row.className='document-row';if(this.editingDocumentTermId===term.id){row.style.display='block';row.append(this.documentTermEditor(term.source,term.target,term.id));confirmedList.append(row);continue}const pair=document.createElement('div');pair.className='document-pair';const source=document.createElement('div');source.className='document-source';source.textContent=term.source;const target=document.createElement('div');target.className='document-target';target.textContent=term.target;pair.append(source,target);const actions=document.createElement('div');actions.className='document-row-actions';const edit=this.button('编辑','','编辑本文术语');edit.dataset.documentTermId=term.id;edit.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId=term.id;this.renderDocumentMemory()});const remove=this.button('删除','','删除本文术语');remove.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onRemoveDocumentTerm!(term.id)));actions.append(edit,remove);row.append(pair,actions);confirmedList.append(row)}
-    if(!memory.confirmedTerms.length&&this.editingDocumentTermId!=='new'){const empty=document.createElement('div');empty.className='document-empty';empty.textContent='确认术语后，后续译句会优先沿用这里的译法。';confirmedList.append(empty)}confirmed.append(confirmedList);surface.append(confirmed);
+    for(const term of memory.confirmedTerms){const row=document.createElement('div');row.className='document-row';if(this.editingDocumentTermId===term.id){row.style.display='block';row.append(this.documentTermEditor(term.source,term.target,term.id));confirmedList.append(row);continue}const pair=document.createElement('div');pair.className='document-pair';const source=document.createElement('div');source.className='document-source';source.textContent=term.source;const target=document.createElement('div');target.className='document-target';target.textContent=term.target;pair.append(source,target);const actions=document.createElement('div');actions.className='document-row-actions';const edit=this.button(t('编辑'),'',t('编辑本文术语'));edit.dataset.documentTermId=term.id;edit.addEventListener('click',()=>{this.editingDocumentCandidateId=undefined;this.editingDocumentTermId=term.id;this.renderDocumentMemory()});const remove=this.button(t('删除'),'',t('删除本文术语'));remove.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onRemoveDocumentTerm!(term.id)));actions.append(edit,remove);row.append(pair,actions);confirmedList.append(row)}
+    if(!memory.confirmedTerms.length&&this.editingDocumentTermId!=='new'){const empty=document.createElement('div');empty.className='document-empty';empty.textContent=t('确认术语后，后续译句会优先沿用这里的译法。');confirmedList.append(empty)}confirmed.append(confirmedList);surface.append(confirmed);
 
-    if(memory.candidateTerms.length){const candidates=document.createElement('section');candidates.className='document-section';const head=document.createElement('div');head.className='document-section-head';const title=document.createElement('strong');title.textContent='待确认术语';const count=document.createElement('span');count.textContent=String(memory.candidateTerms.length);head.append(title,count);candidates.append(head);const list=document.createElement('div');list.className='document-list';for(const term of memory.candidateTerms){const row=document.createElement('div');row.className='document-row';if(this.editingDocumentCandidateId===term.id){row.style.display='block';row.append(this.documentCandidateEditor(term.source,term.target,term.id));list.append(row);continue}const pair=document.createElement('div');pair.className='document-pair';const source=document.createElement('div');source.className='document-source';source.textContent=term.source;const target=document.createElement('div');target.className='document-target';target.textContent=term.target;pair.append(source,target);const actions=document.createElement('div');actions.className='document-row-actions';const confirm=this.button('采用','','采用为本文固定译法');confirm.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onConfirmDocumentTerm!(term.id)));const edit=this.button('修改','','修改候选译法后采用');edit.dataset.documentCandidateId=term.id;edit.addEventListener('click',()=>{this.editingDocumentTermId=undefined;this.editingDocumentCandidateId=term.id;this.renderDocumentMemory()});const dismiss=this.button('忽略','','不再推荐此映射');dismiss.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onDismissDocumentTermCandidate!(term.id)));actions.append(confirm,edit,dismiss);row.append(pair,actions);list.append(row)}candidates.append(list);surface.append(candidates)}
+    if(memory.candidateTerms.length){const candidates=document.createElement('section');candidates.className='document-section';const head=document.createElement('div');head.className='document-section-head';const title=document.createElement('strong');title.textContent=t('待确认术语');const count=document.createElement('span');count.textContent=String(memory.candidateTerms.length);head.append(title,count);candidates.append(head);const list=document.createElement('div');list.className='document-list';for(const term of memory.candidateTerms){const row=document.createElement('div');row.className='document-row';if(this.editingDocumentCandidateId===term.id){row.style.display='block';row.append(this.documentCandidateEditor(term.source,term.target,term.id));list.append(row);continue}const pair=document.createElement('div');pair.className='document-pair';const source=document.createElement('div');source.className='document-source';source.textContent=term.source;const target=document.createElement('div');target.className='document-target';target.textContent=term.target;pair.append(source,target);const actions=document.createElement('div');actions.className='document-row-actions';const confirm=this.button(t('采用'),'',t('采用为本文固定译法'));confirm.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onConfirmDocumentTerm!(term.id)));const edit=this.button(t('修改'),'',t('修改候选译法后采用'));edit.dataset.documentCandidateId=term.id;edit.addEventListener('click',()=>{this.editingDocumentTermId=undefined;this.editingDocumentCandidateId=term.id;this.renderDocumentMemory()});const dismiss=this.button(t('忽略'),'',t('不再推荐此映射'));dismiss.addEventListener('click',()=>this.updateDocumentMemory(this.actions.onDismissDocumentTermCandidate!(term.id)));actions.append(confirm,edit,dismiss);row.append(pair,actions);list.append(row)}candidates.append(list);surface.append(candidates)}
 
-    const recent=document.createElement('section');recent.className='document-section';const recentHead=document.createElement('div');recentHead.className='document-section-head';const recentTitle=document.createElement('strong');recentTitle.textContent='最近翻译';const recentCount=document.createElement('span');recentCount.textContent=String(memory.recentTranslations.length);recentHead.append(recentTitle,recentCount);recent.append(recentHead);const recentList=document.createElement('div');recentList.className='document-list';for(const entry of memory.recentTranslations){const button=this.button('','document-translation','查看这条翻译');const source=document.createElement('div');source.className='document-source';source.textContent=entry.originalText;const target=document.createElement('div');target.className='document-target';renderTranslationContent(target,entry.translatedText,false);button.append(source,target);button.addEventListener('click',()=>this.openDocumentTranslation(entry));recentList.append(button)}if(!memory.recentTranslations.length){const empty=document.createElement('div');empty.className='document-empty';empty.textContent='本文完成的翻译会出现在这里。';recentList.append(empty)}recent.append(recentList);surface.append(recent);
+    const recent=document.createElement('section');recent.className='document-section';const recentHead=document.createElement('div');recentHead.className='document-section-head';const recentTitle=document.createElement('strong');recentTitle.textContent=t('最近翻译');const recentCount=document.createElement('span');recentCount.textContent=String(memory.recentTranslations.length);recentHead.append(recentTitle,recentCount);recent.append(recentHead);const recentList=document.createElement('div');recentList.className='document-list';for(const entry of memory.recentTranslations){const button=this.button('','document-translation',t('查看这条翻译'));const source=document.createElement('div');source.className='document-source';source.textContent=entry.originalText;const target=document.createElement('div');target.className='document-target';renderTranslationContent(target,entry.translatedText,false);button.append(source,target);button.addEventListener('click',()=>this.openDocumentTranslation(entry));recentList.append(button)}if(!memory.recentTranslations.length){const empty=document.createElement('div');empty.className='document-empty';empty.textContent=t('本文完成的翻译会出现在这里。');recentList.append(empty)}recent.append(recentList);surface.append(recent);
 
     const hasMemoryContent=Boolean(memory.confirmedTerms.length||memory.candidateTerms.length||memory.recentTranslations.length);
-    if(this.actions.onClearDocumentMemory&&hasMemoryContent){const footer=document.createElement('div');footer.className='document-footer';const clear=this.button('清空本文记忆','document-clear');clear.dataset.piFocusKey='document-clear';const resetClear=()=>{clear.textContent='清空本文记忆';delete clear.dataset.confirmClear};clear.addEventListener('click',()=>{if(clear.dataset.confirmClear!=='true'){clear.textContent='再次点击清空';clear.dataset.confirmClear='true';return}clear.disabled=true;clear.textContent='正在清空…';this.updateDocumentMemory(this.actions.onClearDocumentMemory!(),()=>this.focusDocumentClearFallback())});clear.addEventListener('blur',()=>{if(clear.dataset.confirmClear==='true')resetClear()});footer.append(clear);surface.append(footer)}
-    this.showSurface(surface);const activeEditor=requestedTermSource?surface.querySelector<HTMLInputElement>('.document-edit input[aria-label="固定译法"]'):surface.querySelector<HTMLInputElement>('.document-edit input');if(activeEditor)queueMicrotask(()=>{activeEditor.focus();if(this.editingDocumentCandidateId||requestedTermSource)activeEditor.select()});
+    if(this.actions.onClearDocumentMemory&&hasMemoryContent){const footer=document.createElement('div');footer.className='document-footer';const clear=this.button(t('清空本文记忆'),'document-clear');clear.dataset.piFocusKey='document-clear';const resetClear=()=>{clear.textContent=t('清空本文记忆');delete clear.dataset.confirmClear};clear.addEventListener('click',()=>{if(clear.dataset.confirmClear!=='true'){clear.textContent=t('再次点击清空');clear.dataset.confirmClear='true';return}clear.disabled=true;clear.textContent=t('正在清空…');this.updateDocumentMemory(this.actions.onClearDocumentMemory!(),()=>this.focusDocumentClearFallback())});clear.addEventListener('blur',()=>{if(clear.dataset.confirmClear==='true')resetClear()});footer.append(clear);surface.append(footer)}
+    this.showSurface(surface);this.documentGlossaryController=glossaryController;this.documentGlossary=glossary;const activeEditor=requestedTermSource?surface.querySelector<HTMLInputElement>(uiSelector('.document-edit input[aria-label="固定译法"]')):surface.querySelector<HTMLInputElement>('.document-edit input');if(activeEditor)queueMicrotask(()=>{activeEditor.focus();if(this.editingDocumentCandidateId||requestedTermSource)activeEditor.select()});
   }
+
+  refreshDocumentGlossary():void{void this.documentGlossary?.refresh()}
 
   private sameFeedbackIdentity(
     left:TranslationProgressIdentity|undefined,
@@ -1193,12 +1256,12 @@ export class TranslationOverlay {
   private progressStatus(progress:OverlayProgressState):string {
     const feedback=this.progressFeedback;
     if(feedback&&feedback.stage===progress.progressStage&&feedback.requestId===progress.requestId&&feedback.revisionKey===progress.revisionKey)return feedback.message;
-    if(progress.progressStage==='provider'&&progress.partialText)return TRANSLATION_PROGRESS_MESSAGES.provider.receiving;
-    if(progress.totalChunks>1)return `正在翻译长文本 ${Math.min(progress.completedChunks+1,progress.totalChunks)}/${progress.totalChunks}…`;
-    return '正在翻译…';
+    if(progress.progressStage==='provider'&&progress.partialText)return t(TRANSLATION_PROGRESS_MESSAGES.provider.receiving);
+    if(progress.totalChunks>1)return msg`正在翻译长文本 ${Math.min(progress.completedChunks+1,progress.totalChunks)}/${progress.totalChunks}…`;
+    return t('正在翻译…');
   }
 
-  private renderProgress():void { const progressState=this.progressState;if(!progressState)return;const surface=this.surface('正在翻译');surface.setAttribute('aria-busy','true');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');body.setAttribute('aria-atomic','true');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const stop=this.button('停止','stop-translation','停止翻译并保留已收到的译文');stop.dataset.piFocusKey='stop-translation';stop.dataset.piFocusTarget='true';stop.addEventListener('pointerdown',event=>event.preventDefault());stop.addEventListener('click',()=>{if(stop.disabled)return;stop.disabled=true;stop.textContent='停止中…';this.actions.onStop()});const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text,stop);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
+  private renderProgress():void { const progressState=this.progressState;if(!progressState)return;const surface=this.surface(t('正在翻译'));surface.setAttribute('aria-busy','true');const progress=document.createElement('div');progress.className='progress';const body=document.createElement('div');body.className='loading';body.setAttribute('role','status');body.setAttribute('aria-live','polite');body.setAttribute('aria-atomic','true');const spinner=document.createElement('span');spinner.className='spinner';spinner.ariaHidden='true';const text=document.createElement('span');text.className='loading-status';text.textContent=this.progressStatus(progressState);const stop=this.button(t('停止'),'stop-translation',t('停止翻译并保留已收到的译文'));stop.dataset.piFocusKey='stop-translation';stop.dataset.piFocusTarget='true';stop.addEventListener('pointerdown',event=>event.preventDefault());stop.addEventListener('click',()=>{if(stop.disabled)return;stop.disabled=true;stop.textContent=t('停止中…');this.actions.onStop()});const preview=document.createElement('div');preview.className='stream-preview';preview.hidden=!progressState.partialText;if(progressState.partialText)preview.textContent=progressState.partialText;body.append(spinner,text,stop);progress.append(body,preview);surface.append(progress);this.showSurface(surface);if(progressState.partialText)preview.scrollTop=preview.scrollHeight }
 
   private resultContainsLatex(result:TranslateResult):boolean {
     return containsRenderableLatex(result.translatedText)||Boolean(
@@ -1229,7 +1292,7 @@ export class TranslationOverlay {
   private speakLookupSource(result:TranslateResult,button:HTMLButtonElement):void {
     if(typeof window.speechSynthesis==='undefined'||typeof SpeechSynthesisUtterance==='undefined')return;
     if(this.activeSpeechRequestId===result.requestId){window.speechSynthesis.cancel();this.activeSpeechRequestId=undefined;button.classList.remove('active');button.setAttribute('aria-pressed','false');return}
-    const language=normalizedSpeechLanguage(result.detectedLanguage);const voice=selectLocalSpeechVoice(window.speechSynthesis.getVoices(),language);if(!voice){this.resultFeedback.textContent='当前没有可用的本地语音，原文没有发送到语音服务';return}
+    const language=normalizedSpeechLanguage(result.detectedLanguage);const voice=selectLocalSpeechVoice(window.speechSynthesis.getVoices(),language);if(!voice){this.resultFeedback.textContent=t('当前没有可用的本地语音，原文没有发送到语音服务');return}
     window.speechSynthesis.cancel();this.activeSpeechRequestId=result.requestId;button.classList.add('active');button.setAttribute('aria-pressed','true');
     const utterance=new SpeechSynthesisUtterance(result.originalText);utterance.voice=voice;utterance.lang=voice.lang;
     const finish=()=>{if(this.activeSpeechRequestId!==result.requestId)return;this.activeSpeechRequestId=undefined;if(button.isConnected){button.classList.remove('active');button.setAttribute('aria-pressed','false')}};utterance.onend=finish;utterance.onerror=finish;window.speechSynthesis.speak(utterance);
@@ -1240,12 +1303,12 @@ export class TranslationOverlay {
     renderLatex:boolean,
     onPerformance:(metrics:TranslationRenderPerformance)=>void,
   ):HTMLElement {
-    const lookup=result.lexicalLookup!;const section=document.createElement('section');section.className='lexical-lookup';section.setAttribute('aria-label','短词和短语释义');
+    const lookup=result.lexicalLookup!;const section=document.createElement('section');section.className='lexical-lookup';section.setAttribute('aria-label',t('短词和短语释义'));
     const head=document.createElement('div');head.className='lexical-head';const sourceWrap=document.createElement('div');const source=document.createElement('div');source.className='lexical-source';source.textContent=result.originalText;sourceWrap.append(source);
     const meta=document.createElement('div');meta.className='lexical-meta';if(lookup.pronunciation){const pronunciation=document.createElement('span');pronunciation.textContent=lookup.pronunciation;meta.append(pronunciation)}if(lookup.partOfSpeech){const part=document.createElement('span');part.textContent=lookup.partOfSpeech;meta.append(part)}if(meta.childElementCount)sourceWrap.append(meta);head.append(sourceWrap);
-    if(typeof window.speechSynthesis!=='undefined'&&typeof SpeechSynthesisUtterance!=='undefined'){const speak=this.button('朗读','lexical-speak','朗读原文');speak.prepend(this.speakerIcon());speak.setAttribute('aria-pressed','false');speak.addEventListener('click',()=>this.speakLookupSource(result,speak));head.append(speak)}section.append(head);
-    const primary=document.createElement('div');primary.className='lexical-primary';const label=document.createElement('span');label.className='lexical-label';label.textContent='当前语境';const meaning=this.translatedTextElement(result.translatedText,'lexical-meaning',renderLatex,onPerformance);primary.append(label,meaning);section.append(primary);
-    const normalizedPrimary=result.translatedText.trim().replace(/\s+/gu,' ').toLocaleLowerCase();const senses=lookup.senses.filter(sense=>sense.meaning.trim().replace(/\s+/gu,' ').toLocaleLowerCase()!==normalizedPrimary);if(senses.length){const list=document.createElement('div');list.className='lexical-senses';for(const sense of senses){const row=document.createElement('div');row.className='lexical-sense';const part=document.createElement('span');part.className='lexical-sense-pos';part.textContent=sense.partOfSpeech??lookup.partOfSpeech??'释义';const senseMeaning=document.createElement('span');senseMeaning.className='lexical-sense-meaning';senseMeaning.textContent=sense.meaning;row.append(part,senseMeaning);list.append(row)}section.append(list)}return section;
+    if(typeof window.speechSynthesis!=='undefined'&&typeof SpeechSynthesisUtterance!=='undefined'){const speak=this.button(t('朗读'),'lexical-speak',t('朗读原文'));speak.prepend(this.speakerIcon());speak.setAttribute('aria-pressed','false');speak.addEventListener('click',()=>this.speakLookupSource(result,speak));head.append(speak)}section.append(head);
+    const primary=document.createElement('div');primary.className='lexical-primary';const label=document.createElement('span');label.className='lexical-label';label.textContent=t('当前语境');const meaning=this.translatedTextElement(result.translatedText,'lexical-meaning',renderLatex,onPerformance);primary.append(label,meaning);section.append(primary);
+    const normalizedPrimary=result.translatedText.trim().replace(/\s+/gu,' ').toLocaleLowerCase();const senses=lookup.senses.filter(sense=>sense.meaning.trim().replace(/\s+/gu,' ').toLocaleLowerCase()!==normalizedPrimary);if(senses.length){const details=document.createElement('details');details.className='lexical-details';details.open=normalizedPrimary===result.originalText.trim().replace(/\s+/gu,' ').toLocaleLowerCase();const summary=document.createElement('summary');summary.textContent=msg`补充释义（${senses.length}）`;const list=document.createElement('div');list.className='lexical-senses';for(const sense of senses){const row=document.createElement('div');row.className='lexical-sense';const part=document.createElement('span');part.className='lexical-sense-pos';part.textContent=sense.partOfSpeech??lookup.partOfSpeech??t('释义');const senseMeaning=document.createElement('span');senseMeaning.className='lexical-sense-meaning';senseMeaning.textContent=sense.meaning;row.append(part,senseMeaning);list.append(row)}details.append(summary,list);section.append(details)}return section;
   }
 
   private recordResultRenderPerformance(
@@ -1286,54 +1349,54 @@ export class TranslationOverlay {
   private appliedGlossaryTerms(result:TranslateResult):HTMLDetailsElement|undefined {
     const terms=result.appliedGlossaryTerms;if(!terms?.length)return undefined;
     const details=document.createElement('details');details.className='applied-terms';
-    const summary=document.createElement('summary');summary.ariaLabel=`查看本次采用的 ${terms.length} 个术语`;
-    const count=document.createElement('span');count.className='applied-term-count';count.textContent=`已采用术语 ${terms.length}`;
+    const summary=document.createElement('summary');summary.ariaLabel=msg`查看本次采用的 ${terms.length} 个术语`;
+    const count=document.createElement('span');count.className='applied-term-count';count.textContent=msg`已采用术语 ${terms.length}`;
     const documentCount=terms.filter(term=>term.scope==='document').length;const globalCount=terms.length-documentCount;
-    const scopes=document.createElement('span');scopes.className='applied-term-scope-summary';scopes.textContent=[documentCount?`本文 ${documentCount}`:'',globalCount?`全局 ${globalCount}`:''].filter(Boolean).join(' · ');
+    const scopes=document.createElement('span');scopes.className='applied-term-scope-summary';scopes.textContent=[documentCount?msg`本文 ${documentCount}`:'',globalCount?msg`全局 ${globalCount}`:''].filter(Boolean).join(' · ');
     summary.append(count,scopes);details.append(summary);
     const list=document.createElement('div');list.className='applied-term-list';
-    for(const term of terms){const row=document.createElement('div');row.className='applied-term-row';const pair=document.createElement('div');pair.className='applied-term-pair';pair.title=`${term.source} → ${term.target}`;const source=document.createElement('span');source.className='applied-term-source';source.textContent=term.source;const arrow=document.createElement('span');arrow.className='applied-term-arrow';arrow.textContent='→';const target=document.createElement('span');target.className='applied-term-target';target.textContent=term.target;pair.append(source,arrow,target);const actions=document.createElement('div');actions.className='applied-term-actions';const scope=document.createElement('span');scope.className='applied-term-scope';scope.textContent=term.scope==='document'?'本文':'全局';const edit=this.button('调整','applied-term-edit',term.scope==='document'?`调整本文术语 ${term.source}`:`在设置中调整全局术语 ${term.source}`);if(term.scope==='document'){edit.addEventListener('click',()=>this.openDocumentMemory(term.source))}else this.bindSettingsButton(edit,'glossary');actions.append(scope,edit);row.append(pair,actions);list.append(row)}
+    for(const term of terms){const row=document.createElement('div');row.className='applied-term-row';const pair=document.createElement('div');pair.className='applied-term-pair';pair.title=`${term.source} → ${term.target}`;const source=document.createElement('span');source.className='applied-term-source';source.textContent=term.source;const arrow=document.createElement('span');arrow.className='applied-term-arrow';arrow.textContent='→';const target=document.createElement('span');target.className='applied-term-target';target.textContent=term.target;pair.append(source,arrow,target);const actions=document.createElement('div');actions.className='applied-term-actions';const scope=document.createElement('span');scope.className='applied-term-scope';scope.textContent=term.scope==='document'?t('本文'):t('全局');const edit=this.button(t('调整'),'applied-term-edit',term.scope==='document'?msg`调整本文术语 ${term.source}`:msg`在设置中调整全局术语 ${term.source}`);if(term.scope==='document'){edit.addEventListener('click',()=>this.openDocumentMemory(term.source))}else this.bindSettingsButton(edit,'glossary');actions.append(scope,edit);row.append(pair,actions);list.append(row)}
     details.append(list);return details;
   }
 
   private glossaryTermsNeedingReview(result:TranslateResult):HTMLDetailsElement|undefined {
     const terms=result.glossaryTermsNeedingReview;if(!terms?.length)return undefined;
     const details=document.createElement('details');details.className='glossary-review';
-    const summary=document.createElement('summary');summary.ariaLabel=`查看 ${terms.length} 个待核对术语`;
-    const count=document.createElement('span');count.className='glossary-review-count';count.textContent=`术语待核对 ${terms.length}`;
+    const summary=document.createElement('summary');summary.ariaLabel=msg`查看 ${terms.length} 个待核对术语`;
+    const count=document.createElement('span');count.className='glossary-review-count';count.textContent=msg`术语待核对 ${terms.length}`;
     const documentCount=terms.filter(term=>term.scope==='document').length;const globalCount=terms.length-documentCount;
-    const scopes=document.createElement('span');scopes.className='applied-term-scope-summary';scopes.textContent=[documentCount?`本文 ${documentCount}`:'',globalCount?`全局 ${globalCount}`:''].filter(Boolean).join(' · ');
+    const scopes=document.createElement('span');scopes.className='applied-term-scope-summary';scopes.textContent=[documentCount?msg`本文 ${documentCount}`:'',globalCount?msg`全局 ${globalCount}`:''].filter(Boolean).join(' · ');
     summary.append(count,scopes);details.append(summary);
-    const intro=document.createElement('div');intro.className='glossary-review-intro';intro.textContent='原文出现了固定术语，但当前译文中未找到对应目标译法；同义表达也可能触发，请按需核对。';details.append(intro);
+    const intro=document.createElement('div');intro.className='glossary-review-intro';intro.textContent=t('原文出现了固定术语，但当前译文中未找到对应目标译法；同义表达也可能触发，请按需核对。');details.append(intro);
     const list=document.createElement('div');list.className='applied-term-list';
-    for(const term of terms){const row=document.createElement('div');row.className='applied-term-row glossary-review-row';const pair=document.createElement('div');pair.className='applied-term-pair';pair.title=`${term.source} → ${term.target}`;const source=document.createElement('span');source.className='applied-term-source';source.textContent=term.source;const arrow=document.createElement('span');arrow.className='applied-term-arrow';arrow.textContent='→';const target=document.createElement('span');target.className='applied-term-target';target.textContent=term.target;pair.append(source,arrow,target);const actions=document.createElement('div');actions.className='applied-term-actions';const scope=document.createElement('span');scope.className='applied-term-scope';scope.textContent=term.scope==='document'?'本文':'全局';actions.append(scope);if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correct=this.button('修正','applied-term-edit',`本地修正术语 ${term.source}`);correct.addEventListener('click',()=>this.openTranslationCorrection(result,correct,term));actions.append(correct)}const manage=this.button('管理','applied-term-edit',term.scope==='document'?`管理本文术语 ${term.source}`:`在设置中管理全局术语 ${term.source}`);if(term.scope==='document')manage.addEventListener('click',()=>this.openDocumentMemory(term.source));else this.bindSettingsButton(manage,'glossary');actions.append(manage);row.append(pair,actions);list.append(row)}
+    for(const term of terms){const row=document.createElement('div');row.className='applied-term-row glossary-review-row';const pair=document.createElement('div');pair.className='applied-term-pair';pair.title=`${term.source} → ${term.target}`;const source=document.createElement('span');source.className='applied-term-source';source.textContent=term.source;const arrow=document.createElement('span');arrow.className='applied-term-arrow';arrow.textContent='→';const target=document.createElement('span');target.className='applied-term-target';target.textContent=term.target;pair.append(source,arrow,target);const actions=document.createElement('div');actions.className='applied-term-actions';const scope=document.createElement('span');scope.className='applied-term-scope';scope.textContent=term.scope==='document'?t('本文'):t('全局');actions.append(scope);if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correct=this.button(t('修正'),'applied-term-edit',msg`本地修正术语 ${term.source}`);correct.addEventListener('click',()=>this.openTranslationCorrection(result,correct,term));actions.append(correct)}const manage=this.button(t('管理'),'applied-term-edit',term.scope==='document'?msg`管理本文术语 ${term.source}`:msg`在设置中管理全局术语 ${term.source}`);if(term.scope==='document')manage.addEventListener('click',()=>this.openDocumentMemory(term.source));else this.bindSettingsButton(manage,'glossary');actions.append(manage);row.append(pair,actions);list.append(row)}
     details.append(list);return details;
   }
 
   private renderResult(result:TranslateResult,announceCompletion=false):void {
-    this.rememberVisibleResultReadingPosition();this.finishActiveProgressFeedback();const renderRevision=++this.resultRenderRevision;result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;this.rememberResultViewMode(result,this.alignedView);const lexicalView=this.shouldRenderLexicalLookup(result);if(announceCompletion){this.resultFeedback.textContent='';window.requestAnimationFrame(()=>{if(this.isShowingCard()&&this.currentResult?.requestId===result.requestId)this.resultFeedback.textContent=lexicalView?'查词完成，语境释义已显示':'翻译完成，译文已显示'})}const surface=this.surface(lexicalView?'简明释义':'翻译结果',{showWebRegionAction:false});surface.dataset.state='complete';surface.classList.add('result-surface');const scroll=document.createElement('div');scroll.className='result-scroll';scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.ariaLabel=lexicalView?'短词和短语释义':'译文内容';scroll.setAttribute('aria-keyshortcuts','Home End PageUp PageDown');scroll.dataset.readingKey=this.resultReadingPositionKey(result);scroll.addEventListener('scroll',()=>{if(!scroll.isConnected||this.root.querySelector('.result-scroll')!==scroll)return;this.rememberResultReadingPosition(scroll.dataset.readingKey!,scroll);this.updateResultReadingControls(scroll)},{passive:true});scroll.addEventListener('keydown',event=>{if(event.target!==scroll||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||!['Home','End'].includes(event.key))return;event.preventDefault();this.scrollResultToEdge(event.key==='Home'?'top':'bottom')});const tools=surface.querySelector<HTMLElement>('.header-tools');
+    this.rememberVisibleResultReadingPosition();this.finishActiveProgressFeedback();const renderRevision=++this.resultRenderRevision;result=normalizeResultForPresentation(result,this.normalizeFormulaPresentation);this.currentResult=result;this.rememberResultViewMode(result,this.alignedView);const lexicalView=this.shouldRenderLexicalLookup(result);if(announceCompletion){this.resultFeedback.textContent='';window.requestAnimationFrame(()=>{if(this.isShowingCard()&&this.currentResult?.requestId===result.requestId)this.resultFeedback.textContent=lexicalView?t('查词完成，语境释义已显示'):t('翻译完成，译文已显示')})}const surface=this.surface(lexicalView?t('简明释义'):t('翻译结果'),{showWebRegionAction:false});surface.dataset.state='complete';surface.classList.add('result-surface');const scroll=document.createElement('div');scroll.className='result-scroll';scroll.tabIndex=0;scroll.setAttribute('role','region');scroll.ariaLabel=lexicalView?t('短词和短语释义'):t('译文内容');scroll.setAttribute('aria-keyshortcuts','Home End PageUp PageDown');scroll.dataset.readingKey=this.resultReadingPositionKey(result);scroll.addEventListener('scroll',()=>{if(!scroll.isConnected||this.root.querySelector('.result-scroll')!==scroll)return;this.rememberResultReadingPosition(scroll.dataset.readingKey!,scroll);this.updateResultReadingControls(scroll)},{passive:true});scroll.addEventListener('keydown',event=>{if(event.target!==scroll||event.altKey||event.ctrlKey||event.metaKey||event.shiftKey||!['Home','End'].includes(event.key))return;event.preventDefault();this.scrollResultToEdge(event.key==='Home'?'top':'bottom')});const tools=surface.querySelector<HTMLElement>('.header-tools');
     const navigationHistory=this.navigationHistory();this.historyIndex=navigationHistory.findIndex(entry=>entry.requestId===result.requestId);
-    if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter','仅查看已标记翻译');filter.dataset.piFocusKey='marked-filter';filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
-    const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);const comparisonDirection: 'older'|'newer'=versionIndex<versions.length-1?'older':'newer';const comparisonVersion=versions.length>1&&versionIndex>=0?versions[comparisonDirection==='older'?versionIndex+1:versionIndex-1]:undefined;const versionChange=comparisonVersion?summarizeTranslationVersionChange(result,comparisonVersion):undefined;const changedVersionSegments=new Set(versionChange?.changedSegmentIds??[]);const versionContextElement=versionChange?this.versionContext(result,versionChange,comparisonDirection):undefined;if(tools&&versions.length>1&&versionIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group version-navigation';navigation.setAttribute('role','group');navigation.ariaLabel='译文版本导航';const older=this.button('‹','icon','查看上一版译文');older.dataset.piFocusKey='older-version';older.disabled=versionIndex>=versions.length-1;older.addEventListener('click',()=>this.navigateVersion(result,1));const counter=document.createElement('span');counter.className='counter version-counter';counter.textContent=`v${versionIndex+1}/${versions.length}`;counter.setAttribute('role','status');counter.ariaLabel=`第 ${versionIndex+1} 版，共 ${versions.length} 版`;const newer=this.button('›','icon','查看下一版译文');newer.dataset.piFocusKey='newer-version';newer.disabled=versionIndex<=0;newer.addEventListener('click',()=>this.navigateVersion(result,-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-version-navigation')}
-    if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group history-navigation';navigation.setAttribute('role','group');navigation.ariaLabel='翻译历史导航';const older=this.button('‹','icon','上一条翻译（Alt+↑）');older.dataset.piFocusKey='older-translation';older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=this.button(`${this.historyIndex+1}/${navigationHistory.length}`,'counter history-counter history-open','查看和搜索翻译历史（Alt+/）');counter.dataset.piFocusKey='history-open';counter.setAttribute('aria-keyshortcuts','Alt+/');counter.ariaLabel=`第 ${this.historyIndex+1} 条，共 ${navigationHistory.length} 条`;counter.addEventListener('click',()=>this.openHistoryNavigator());const newer=this.button('›','icon','下一条翻译（Alt+↓）');newer.dataset.piFocusKey='newer-translation';newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-history-navigation')}
+    if(tools&&this.sidebarActive&&this.history.some(entry=>this.actions.hasSourceMarksForResult?.(entry))){const filter=this.button('','icon mark-filter',t('仅查看已标记翻译'));filter.dataset.piFocusKey='marked-filter';filter.append(this.markerIcon());filter.classList.toggle('active',this.markedOnly);filter.setAttribute('aria-pressed',String(this.markedOnly));filter.addEventListener('click',()=>this.toggleMarkedFilter());tools.prepend(filter)}
+    const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);const comparisonDirection: 'older'|'newer'=versionIndex<versions.length-1?'older':'newer';const comparisonVersion=versions.length>1&&versionIndex>=0?versions[comparisonDirection==='older'?versionIndex+1:versionIndex-1]:undefined;const versionChange=comparisonVersion?summarizeTranslationVersionChange(result,comparisonVersion):undefined;const changedVersionSegments=new Set(versionChange?.changedSegmentIds??[]);const versionContextElement=versionChange?this.versionContext(result,versionChange,comparisonDirection):undefined;if(tools&&versions.length>1&&versionIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group version-navigation';navigation.setAttribute('role','group');navigation.ariaLabel=t('译文版本导航');const older=this.button('‹','icon',t('查看上一版译文'));older.dataset.piFocusKey='older-version';older.disabled=versionIndex>=versions.length-1;older.addEventListener('click',()=>this.navigateVersion(result,1));const counter=document.createElement('span');counter.className='counter version-counter';counter.textContent=`v${versionIndex+1}/${versions.length}`;counter.setAttribute('role','status');counter.ariaLabel=msg`第 ${versionIndex+1} 版，共 ${versions.length} 版`;const newer=this.button('›','icon',t('查看下一版译文'));newer.dataset.piFocusKey='newer-version';newer.disabled=versionIndex<=0;newer.addEventListener('click',()=>this.navigateVersion(result,-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-version-navigation')}
+    if(tools&&navigationHistory.length>1&&this.historyIndex>=0){const navigation=document.createElement('div');navigation.className='navigation-group history-navigation';navigation.setAttribute('role','group');navigation.ariaLabel=t('翻译历史导航');const older=this.button('‹','icon',t('上一条翻译（Alt+↑）'));older.dataset.piFocusKey='older-translation';older.disabled=this.historyIndex>=navigationHistory.length-1;older.addEventListener('click',()=>this.navigate(1));const counter=this.button(`${this.historyIndex+1}/${navigationHistory.length}`,'counter history-counter history-open',t('查看和搜索翻译历史（Alt+/）'));counter.dataset.piFocusKey='history-open';counter.setAttribute('aria-keyshortcuts','Alt+/');counter.ariaLabel=msg`第 ${this.historyIndex+1} 条，共 ${navigationHistory.length} 条`;counter.addEventListener('click',()=>this.openHistoryNavigator());const newer=this.button('›','icon',t('下一条翻译（Alt+↓）'));newer.dataset.piFocusKey='newer-translation';newer.disabled=this.historyIndex<=0;newer.addEventListener('click',()=>this.navigate(-1));navigation.append(older,counter,newer);tools.prepend(navigation);tools.classList.add('has-history-navigation')}
     if(tools){
-      const navigation=document.createElement('nav');navigation.className='result-navigation';navigation.ariaLabel='译文导航';
+      const navigation=document.createElement('nav');navigation.className='result-navigation';navigation.ariaLabel=t('译文导航');
       for(const group of tools.querySelectorAll<HTMLElement>('.navigation-group')){
-        const label=document.createElement('span');label.className='navigation-label';label.textContent=group.classList.contains('version-navigation')?'版本':'最近';group.prepend(label);navigation.append(group);
+        const label=document.createElement('span');label.className='navigation-label';label.textContent=group.classList.contains('version-navigation')?t('版本'):t('最近');group.prepend(label);navigation.append(group);
       }
       const markedFilter=tools.querySelector('.mark-filter');if(markedFilter)navigation.append(markedFilter);
       tools.classList.remove('has-version-navigation','has-history-navigation');
       if(navigation.childElementCount)surface.append(navigation);
     }
-    const topLine=document.createElement('div');topLine.className='result-topline';const meta=document.createElement('div');meta.className='meta';if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text'){const sourceKind=document.createElement('span');sourceKind.className='source-badge';sourceKind.textContent=result.sourceKind==='image-region'?'图像识别':'文字提取';meta.append(sourceKind)}if(result.sourceHost){const host=document.createElement('span');host.className='source-host';host.textContent=result.sourceHost;host.title=result.sourceHost;meta.append(host)}if(result.sourceLocation&&this.actions.onNavigateToPdfRegion){const location=this.button(`第 ${result.sourceLocation.pageNumber} 页`,'source-location','返回 PDF 原选区');location.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(result.sourceLocation!));meta.append(location)}if(result.completedAt){const time=document.createElement('span');time.className='meta-dot';time.textContent=formatTranslationClockTime(result.completedAt);meta.append(time)}const duration=result.cached?undefined:formatTranslationDuration(result.latencyMs);if(duration){const latency=document.createElement('span');latency.className='meta-dot';latency.textContent=duration;meta.append(latency)}if(result.cached){const cache=document.createElement('span');cache.className='cache-badge';cache.textContent='会话缓存';meta.append(cache)}if(result.contextUsed){const context=document.createElement('span');context.className='cache-badge';context.textContent='含上下文';meta.append(context)}if((result.chunkCount??1)>1){const chunks=document.createElement('span');chunks.className='meta-dot';chunks.textContent=`${result.chunkCount} 段`;meta.append(chunks)}if(meta.childElementCount)topLine.append(meta);
+    const topLine=document.createElement('div');topLine.className='result-topline';const meta=document.createElement('div');meta.className='meta';if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text'){const sourceKind=document.createElement('span');sourceKind.className='source-badge';sourceKind.textContent=result.sourceKind==='image-region'?t('图像识别'):t('文字提取');meta.append(sourceKind)}if(result.sourceHost){const host=document.createElement('span');host.className='source-host';host.textContent=result.sourceHost;host.title=result.sourceHost;meta.append(host)}if(result.sourceLocation&&this.actions.onNavigateToPdfRegion){const location=this.button(msg`第 ${result.sourceLocation.pageNumber} 页`,'source-location',t('返回 PDF 原选区'));location.addEventListener('click',()=>this.actions.onNavigateToPdfRegion?.(result.sourceLocation!));meta.append(location)}if(result.completedAt){const time=document.createElement('span');time.className='meta-dot';time.textContent=formatTranslationClockTime(result.completedAt);meta.append(time)}const duration=result.cached?undefined:formatTranslationDuration(result.latencyMs);if(duration){const latency=document.createElement('span');latency.className='meta-dot';latency.textContent=duration;meta.append(latency)}if(result.cached){const cache=document.createElement('span');cache.className='cache-badge';cache.textContent=t('会话缓存');meta.append(cache)}if(result.contextUsed){const context=document.createElement('span');context.className='cache-badge';context.textContent=t('含上下文');meta.append(context)}if((result.chunkCount??1)>1){const chunks=document.createElement('span');chunks.className='meta-dot';chunks.textContent=msg`${result.chunkCount} 段`;meta.append(chunks)}if(meta.childElementCount)topLine.append(meta);
     const viewControls=document.createElement('div');viewControls.className='result-view-controls';
     if(result.lexicalLookup){
       topLine.classList.add('has-lookup-view');
       const switcher=document.createElement('div');switcher.className='lookup-view-switch';
-      switcher.setAttribute('role','group');switcher.setAttribute('aria-label','释义与译文');
-      for(const [text,showLookup] of [['释义',true],['译文',false]] as const){
+      switcher.setAttribute('role','group');switcher.setAttribute('aria-label',t('释义与译文'));
+      for(const [text,showLookup] of [[t('释义'),true],[t('译文'),false]] as const){
         const selected=lexicalView===showLookup;
-        const button=this.button(text,`view-button lexical-view${selected?' active':''}`,`查看${text}`);
+        const button=this.button(text,`view-button lexical-view${selected?' active':''}`,msg`查看${text}`);
         button.dataset.piFocusKey=showLookup?'lookup-meaning-view':'lookup-translation-view';
         button.setAttribute('aria-pressed',String(selected));
         button.addEventListener('click',()=>{if(selected)return;this.setLexicalView(result,showLookup);this.renderResult(result)});
@@ -1341,10 +1404,10 @@ export class TranslationOverlay {
       }
       viewControls.append(switcher);
     }
-    if(!lexicalView&&!result.lexicalLookup&&result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label','译文显示方式');const full=this.button('全文',`view-button${this.alignedView?'':' active'}`,'显示完整译文');full.dataset.piFocusKey='full-view';const aligned=this.button('逐句',`view-button${this.alignedView?' active':''}`,'显示逐句对照');aligned.dataset.piFocusKey='aligned-view';full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.rememberResultViewMode(result,false);this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.rememberResultViewMode(result,true);this.renderResult(result)});switcher.append(full,aligned);viewControls.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?'源码':'公式',`view-button formula-view${rendered?' active':''}`,rendered?'显示可编辑的 LaTeX 源码':'渲染译文中的 LaTeX 公式');formulaView.dataset.piFocusKey='formula-view';formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResultPreservingScroll(result)});viewControls.append(formulaView)}if(viewControls.childElementCount)topLine.append(viewControls);if(topLine.childElementCount)scroll.append(topLine);
+    if(!lexicalView&&!result.lexicalLookup&&result.alignedSegments?.length){const switcher=document.createElement('div');switcher.className='view-switch';switcher.setAttribute('role','group');switcher.setAttribute('aria-label',t('译文显示方式'));const full=this.button(t('全文'),`view-button${this.alignedView?'':' active'}`,t('显示完整译文'));full.dataset.piFocusKey='full-view';const aligned=this.button(t('逐句'),`view-button${this.alignedView?' active':''}`,t('显示逐句对照'));aligned.dataset.piFocusKey='aligned-view';full.setAttribute('aria-pressed',String(!this.alignedView));aligned.setAttribute('aria-pressed',String(this.alignedView));full.addEventListener('click',()=>{this.alignedView=false;this.rememberResultViewMode(result,false);this.renderResult(result)});aligned.addEventListener('click',()=>{this.alignedView=true;this.rememberResultViewMode(result,true);this.renderResult(result)});switcher.append(full,aligned);viewControls.append(switcher)}if(this.resultContainsLatex(result)){const rendered=this.shouldRenderLatex(result);const formulaView=this.button(rendered?t('源码'):t('公式'),`view-button formula-view${rendered?' active':''}`,rendered?t('显示可编辑的 LaTeX 源码'):t('渲染译文中的 LaTeX 公式'));formulaView.dataset.piFocusKey='formula-view';formulaView.setAttribute('aria-pressed',String(rendered));formulaView.addEventListener('click',()=>{this.latexViewOverrides.set(result.requestId,!rendered);this.renderResultPreservingScroll(result)});viewControls.append(formulaView)}if(viewControls.childElementCount)topLine.append(viewControls);if(topLine.childElementCount)scroll.append(topLine);
     const appliedTerms=this.appliedGlossaryTerms(result);if(appliedTerms)scroll.append(appliedTerms);
     const glossaryReview=this.glossaryTermsNeedingReview(result);if(glossaryReview)scroll.append(glossaryReview);
-    if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text')scroll.append(this.recognizedSource(result,result.sourceKind==='image-region'?'查看识别原文':'查看提取原文'));
+    if(result.sourceKind==='image-region'||result.sourceKind==='pdf-region-text')scroll.append(this.recognizedSource(result,result.sourceKind==='image-region'?t('查看识别原文'):t('查看提取原文')));
     const renderLatex=this.shouldRenderLatex(result);
     const renderIdentity=renderLatex&&this.resultContainsLatex(result)?{requestId:result.requestId,revisionKey:renderRevision}:undefined;
     if(renderIdentity)this.beginProgressFeedback(renderIdentity,'rendering');
@@ -1354,20 +1417,20 @@ export class TranslationOverlay {
       const list=document.createElement('div');list.className='aligned-list';
       const renderTargets:TranslationContentTarget[]=[];
       for(const [segmentIndex,segment] of result.alignedSegments.entries()){
-        const row=document.createElement('section');row.className='segment';row.tabIndex=0;row.dataset.segmentId=segment.id;if(changedVersionSegments.has(segment.id)){row.classList.add('version-changed');row.dataset.versionChanged='true';const changedNotice=document.createElement('span');changedNotice.className='sr-only';changedNotice.textContent='此句在相邻版本中有改动';row.append(changedNotice)}
+        const row=document.createElement('section');row.className='segment';row.tabIndex=0;row.dataset.segmentId=segment.id;if(changedVersionSegments.has(segment.id)){row.classList.add('version-changed');row.dataset.versionChanged='true';const changedNotice=document.createElement('span');changedNotice.className='sr-only';changedNotice.textContent=t('此句在相邻版本中有改动');row.append(changedNotice)}
         const num=document.createElement('span');num.className='segment-number';num.textContent=String(segmentIndex+1);
         const content=document.createElement('div');
         const pair=document.createElement('div');pair.className='segment-pair';
-        const sourceColumn=document.createElement('div');sourceColumn.className='segment-source-column';const source=document.createElement('div');source.className='segment-source';source.textContent=segment.originalText;const sourceKey=`${result.requestId}:${segment.id}`;if(segment.originalText.length>420){const sourceId=`pi-segment-source-${renderRevision}-${segmentIndex}`;source.id=sourceId;source.classList.add('collapsible');const expanded=this.expandedAlignedSources.has(sourceKey);source.classList.toggle('expanded',expanded);const toggle=this.button(expanded?'收起原文':'展开原文','segment-source-toggle',expanded?'收起完整原文':'展开完整原文');toggle.setAttribute('aria-controls',sourceId);toggle.setAttribute('aria-expanded',String(expanded));toggle.addEventListener('click',()=>{const next=!source.classList.contains('expanded');source.classList.toggle('expanded',next);toggle.textContent=next?'收起原文':'展开原文';toggle.title=next?'收起完整原文':'展开完整原文';toggle.ariaLabel=toggle.title;toggle.setAttribute('aria-expanded',String(next));if(next)this.expandedAlignedSources.add(sourceKey);else this.expandedAlignedSources.delete(sourceKey)});sourceColumn.append(source,toggle)}else sourceColumn.append(source);
+        const sourceColumn=document.createElement('div');sourceColumn.className='segment-source-column';const source=document.createElement('div');source.className='segment-source';source.textContent=segment.originalText;const sourceKey=`${result.requestId}:${segment.id}`;if(segment.originalText.length>420){const sourceId=`pi-segment-source-${renderRevision}-${segmentIndex}`;source.id=sourceId;source.classList.add('collapsible');const expanded=this.expandedAlignedSources.has(sourceKey);source.classList.toggle('expanded',expanded);const toggle=this.button(expanded?t('收起原文'):t('展开原文'),'segment-source-toggle',expanded?t('收起完整原文'):t('展开完整原文'));toggle.setAttribute('aria-controls',sourceId);toggle.setAttribute('aria-expanded',String(expanded));toggle.addEventListener('click',()=>{const next=!source.classList.contains('expanded');source.classList.toggle('expanded',next);toggle.textContent=next?t('收起原文'):t('展开原文');toggle.title=next?t('收起完整原文'):t('展开完整原文');toggle.ariaLabel=toggle.title;toggle.setAttribute('aria-expanded',String(next));if(next)this.expandedAlignedSources.add(sourceKey);else this.expandedAlignedSources.delete(sourceKey)});sourceColumn.append(source,toggle)}else sourceColumn.append(source);
         const target=document.createElement('div');target.className='segment-target';
         renderTargets.push({container:target,text:segment.translatedText,renderLatex});
         pair.append(sourceColumn,target);
         const actions=document.createElement('div');actions.className='segment-actions';
-        const copy=this.button('复制','mini','复制本句译文');copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(segment.translatedText),'已复制','本句译文已复制到剪贴板'));
+        const copy=this.button(t('复制'),'mini',t('复制本句译文'));copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(segment.translatedText),t('已复制'),t('本句译文已复制到剪贴板')));
         actions.append(copy);
-        if(this.actions.onSaveSegmentTranslationEdit&&result.requestId===this.latestRequestId){const correct=this.button('修正','mini segment-correct','只修正本句，不调用 API');correct.addEventListener('click',()=>this.openSegmentCorrection(result,segment,segmentIndex+1,content,pair,actions,correct));actions.append(correct)}
+        if(this.actions.onSaveSegmentTranslationEdit&&result.requestId===this.latestRequestId){const correct=this.button(t('修正'),'mini segment-correct',t('只修正本句，不调用 API'));correct.addEventListener('click',()=>this.openSegmentCorrection(result,segment,segmentIndex+1,content,pair,actions,correct));actions.append(correct)}
         if(this.actions.canMarkSource?.(result,segment)){
-          const mark=this.button('','mini segment-mark',this.actions.isSourceMarked?.(result,segment)?'取消本句标记':'轻标记本句');
+          const mark=this.button('','mini segment-mark',this.actions.isSourceMarked?.(result,segment)?t('取消本句标记'):t('轻标记本句'));
           mark.dataset.piFocusKey=`segment-mark:${segment.id}`;
           mark.append(this.markerIcon());
           mark.classList.toggle('active',Boolean(this.actions.isSourceMarked?.(result,segment)));
@@ -1388,52 +1451,55 @@ export class TranslationOverlay {
       renderLatex,
       onRenderPerformance,
     ))}
-    if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?'公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。':`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;scroll.append(uncertain)}
-    if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent='部分 LaTeX 使用了保守保护策略，请复制后检查。';scroll.append(warning)}
-    const footer=document.createElement('div');footer.className='footer result-footer';const copy=this.button('复制译文','action copy-action','复制译文（保留标准 LaTeX）');copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(result.translatedText),'已复制','译文已复制到剪贴板'));footer.append(copy);if(this.correctionUndo?.correctedRequestId===result.requestId&&this.actions.onUndoTranslationEdit){const notice=document.createElement('span');notice.className='correction-undo';notice.setAttribute('role','status');const message=document.createElement('span');message.className='correction-undo-message';message.textContent='已修正 ·';const undo=this.button('撤销','','撤销上次译文修正');undo.addEventListener('click',()=>this.undoTranslationCorrection(result,notice));notice.append(message,undo);footer.append(notice)}if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?'已标记':'标记','mark-action');mark.dataset.piFocusKey='source-mark';mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?'取消原文标记':markable?'标记原文，悬停查看译文':'保持或重新选中对应原文，然后点击标记';mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}const readingNavigation=document.createElement('div');readingNavigation.className='result-reading-nav';readingNavigation.hidden=true;readingNavigation.setAttribute('role','group');readingNavigation.ariaLabel='长译文阅读导航';const readingProgress=document.createElement('span');readingProgress.className='reading-progress';readingProgress.textContent='顶部';const readingTop=this.button('↑','reading-jump reading-top','回到译文顶部（Home）');readingTop.setAttribute('aria-keyshortcuts','Home');readingTop.addEventListener('click',()=>this.scrollResultToEdge('top'));const readingBottom=this.button('↓','reading-jump reading-bottom','前往译文底部（End）');readingBottom.setAttribute('aria-keyshortcuts','End');readingBottom.addEventListener('click',()=>this.scrollResultToEdge('bottom'));readingNavigation.append(readingProgress,readingTop,readingBottom);footer.append(readingNavigation,this.moreMenu(result,viewControls,meta));const undoNotice=footer.querySelector('.correction-undo');if(undoNotice)footer.append(undoNotice);if(!meta.childElementCount)meta.remove();if(!viewControls.childElementCount)viewControls.remove();if(!topLine.childElementCount)topLine.remove();if(versionContextElement)surface.append(versionContextElement);surface.append(scroll,footer);this.showSurface(surface);this.restoreResultReadingPosition(result);this.updateResultReadingControls(scroll);requestAnimationFrame(()=>this.updateResultReadingControls(scroll));
+    if(result.uncertainSpans?.length){const uncertain=document.createElement('div');uncertain.className='uncertain-note';uncertain.textContent=result.formulaNeedsReview?t('公式未能自动通过结构校验，已保留可用译文，请核对 LaTeX。'):msg`有 ${result.uncertainSpans.length} 处内容无法完全确认，已在原文中标记。`;scroll.append(uncertain)}
+    if(result.lexicalLookup&&result.originalText.trim().toLocaleLowerCase()===result.translatedText.trim().toLocaleLowerCase()){const notice=document.createElement('div');notice.className='warning';notice.textContent=t('主释义保留了原文，请结合下方释义核对。');scroll.append(notice)}
+    if(result.warnings.length){const warning=document.createElement('div');warning.className='warning';warning.textContent=t('部分 LaTeX 使用了保守保护策略，请复制后检查。');scroll.append(warning)}
+    const footer=document.createElement('div');footer.className='footer result-footer';const copy=this.button(t('复制译文'),'action copy-action',t('复制译文（保留标准 LaTeX）'));copy.dataset.piFocusTarget='true';copy.addEventListener('click',()=>this.copyWithFeedback(copy,normalizeLatexForClipboard(result.translatedText),t('已复制'),t('译文已复制到剪贴板')));footer.append(copy);if(this.correctionUndo?.correctedRequestId===result.requestId&&this.actions.onUndoTranslationEdit){const notice=document.createElement('span');notice.className='correction-undo';notice.setAttribute('role','status');const message=document.createElement('span');message.className='correction-undo-message';message.textContent=t('已修正 ·');const undo=this.button(t('撤销'),'',t('撤销上次译文修正'));undo.addEventListener('click',()=>this.undoTranslationCorrection(result,notice));notice.append(message,undo);footer.append(notice)}if(this.actions.onToggleSourceMark){const markable=Boolean(this.actions.canMarkSource?.(result));const marked=Boolean(this.actions.isSourceMarked?.(result));const mark=this.button(marked?t('已标记'):t('标记'),'mark-action');mark.dataset.piIcon='glyph';mark.dataset.piFocusKey='source-mark';mark.prepend(this.markerIcon());mark.classList.toggle('active',marked);mark.classList.toggle('needs-anchor',!markable&&!marked);mark.setAttribute('aria-pressed',String(marked));mark.title=marked?t('取消原文标记'):markable?t('标记原文，悬停查看译文'):t('保持或重新选中对应原文，然后点击标记');mark.ariaLabel=mark.title;mark.addEventListener('pointerdown',event=>event.preventDefault());mark.addEventListener('click',()=>this.toggleSourceMark(result));footer.append(mark)}const readingNavigation=document.createElement('div');readingNavigation.className='result-reading-nav';readingNavigation.hidden=true;readingNavigation.setAttribute('role','group');readingNavigation.ariaLabel=t('长译文阅读导航');const readingProgress=document.createElement('span');readingProgress.className='reading-progress';readingProgress.textContent=t('顶部');const readingTop=this.button('↑','reading-jump reading-top',t('回到译文顶部（Home）'));readingTop.setAttribute('aria-keyshortcuts','Home');readingTop.addEventListener('click',()=>this.scrollResultToEdge('top'));const readingBottom=this.button('↓','reading-jump reading-bottom',t('前往译文底部（End）'));readingBottom.setAttribute('aria-keyshortcuts','End');readingBottom.addEventListener('click',()=>this.scrollResultToEdge('bottom'));readingNavigation.append(readingProgress,readingTop,readingBottom);const navigation=surface.querySelector<HTMLElement>(':scope > .result-navigation');footer.append(readingNavigation,this.moreMenu(result,viewControls,meta));const undoNotice=footer.querySelector('.correction-undo');if(undoNotice)footer.append(undoNotice);if(navigation)footer.append(navigation);if(!meta.childElementCount)meta.remove();if(!viewControls.childElementCount)viewControls.remove();if(!topLine.childElementCount)topLine.remove();if(versionContextElement)surface.append(versionContextElement);surface.append(scroll,footer);this.showSurface(surface);this.restoreResultReadingPosition(result);this.updateResultReadingControls(scroll);requestAnimationFrame(()=>this.updateResultReadingControls(scroll));
   }
 
   private moreMenu(result:TranslateResult,viewControls:HTMLElement,meta:HTMLElement):HTMLElement {
-    const details=document.createElement('details');details.className='more';const summary=document.createElement('summary');summary.textContent='更多';summary.title='更多操作';summary.ariaLabel='更多翻译操作';const menu=document.createElement('div');menu.className='menu';
+    const details=document.createElement('details');details.className='more';const summary=document.createElement('summary');summary.textContent=t('更多');summary.dataset.piIcon='more';summary.title=t('更多操作');summary.ariaLabel=t('更多翻译操作');const menu=document.createElement('div');menu.className='menu';
     const group=(label:string)=>{const section=document.createElement('div');section.className='menu-group';const heading=document.createElement('span');heading.className='menu-group-label';heading.textContent=label;section.append(heading);menu.append(section);return section};
-    const editing=group('译文');
-    if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correction=this.menuButton('修正译文',()=>this.openTranslationCorrection(result,correction));correction.className='correction-action';editing.append(correction)}
+    const editing=group(t('译文'));
+    editing.append(this.menuButton(t('解释本段'),()=>{const input=resultPassageInput(result);openPassageExplanation(input,{host:this.root,isCurrent:()=>this.currentResult===result&&JSON.stringify(resultPassageInput(result))===JSON.stringify(input)})}));
+    if(this.actions.onSaveTranslationEdit&&result.requestId===this.latestRequestId){const correction=this.menuButton(t('修正译文'),()=>this.openTranslationCorrection(result,correction));correction.className='correction-action';editing.append(correction)}
     const formulaView=viewControls.querySelector('.formula-view');if(formulaView)editing.append(formulaView);
     const versions=this.versionsFor(result);const versionIndex=versions.findIndex(version=>version.requestId===result.requestId);
-    if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation)menu.append(this.menuButton('让模型调整…',()=>this.openModelAdjustment(result)));if(this.actions.canAdjustWebRegion?.(result)&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion){menu.append(this.menuButton('调整区域',()=>this.actions.onAdjustWebRegion?.(result)),this.menuButton('重新框选',()=>this.actions.onReselectWebRegion?.(result)))}const repeatLabel=result.sourceKind==='image-region'?'重新识别此区域':'重新翻译';menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton('调整原选区',()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton('采用当前版本',()=>this.adoptTranslationVersion(result)))}
+    if(result.requestId===this.latestRequestId){if(this.actions.onAdjustTranslation)menu.append(this.menuButton(t('让模型调整…'),()=>this.openModelAdjustment(result)));if(this.actions.canAdjustWebRegion?.(result)&&this.actions.onAdjustWebRegion&&this.actions.onReselectWebRegion){menu.append(this.menuButton(t('调整区域'),()=>this.actions.onAdjustWebRegion?.(result)),this.menuButton(t('重新框选'),()=>this.actions.onReselectWebRegion?.(result)))}const repeatLabel=result.sourceKind==='image-region'?t('重新识别此区域'):t('重新翻译');menu.append(this.menuButton(repeatLabel,()=>this.actions.onRetry({kind:'result',result,intent:'repeat'})));if(result.sourceLocation&&this.actions.onAdjustPdfRegion)menu.append(this.menuButton(t('调整原选区'),()=>this.beginPdfRegionAdjustment()))}else if(versionIndex>0&&this.actions.onSaveTranslationEdit){menu.append(this.menuButton(t('采用当前版本'),()=>this.adoptTranslationVersion(result)))}
     editing.append(...[...menu.children].filter(child=>child instanceof HTMLButtonElement));
-    const notes=group('标记与摘录');
-    const markerCount=this.actions.getSourceMarkSummaries?.().length??0;if(markerCount)menu.append(this.menuButton(`查看本文标记（${markerCount}）`,()=>this.openMarkerNavigator()));
-    if(this.actions.hasAnySourceMarks?.()&&this.actions.onCopyMarkedNotes){menu.append(this.menuButton('复制标记笔记',()=>{void this.actions.onCopyMarkedNotes?.().then((count)=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,`已复制 ${count} 条标记`)}).catch(()=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,'复制失败',3200)})}));const exportButton=menu.lastElementChild;if(exportButton instanceof HTMLElement)exportButton.dataset.markExport='true'}
+    const notes=group(t('标记与摘录'));
+    const markerCount=this.actions.getSourceMarkSummaries?.().length??0;if(markerCount)menu.append(this.menuButton(msg`查看本文标记（${markerCount}）`,()=>this.openMarkerNavigator()));
+    if(this.actions.hasAnySourceMarks?.()&&this.actions.onCopyMarkedNotes){menu.append(this.menuButton(t('复制标记笔记'),()=>{void this.actions.onCopyMarkedNotes?.().then((count)=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,msg`已复制 ${count} 条标记`)}).catch(()=>{const button=menu.querySelector<HTMLButtonElement>('[data-mark-export]');if(button)this.flashButtonFeedback(button,t('复制失败'),3200)})}));const exportButton=menu.lastElementChild;if(exportButton instanceof HTMLElement)exportButton.dataset.markExport='true'}
     if(this.actions.canPersistSourceMarks?.()&&this.actions.onSetSourceMarkPersistence){
       const enabled=Boolean(this.actions.isSourceMarkPersistenceEnabled?.());
       const markCurrent=!enabled&&Boolean(this.actions.canMarkSource?.(result))&&!Boolean(this.actions.isSourceMarked?.(result));
-      menu.append(this.menuButton(enabled?'停止保存本文标记':markCurrent?'标记当前译句并保存':'保存本文标记',()=>{if(markCurrent)this.actions.onToggleSourceMark?.(result);void this.actions.onSetSourceMarkPersistence?.(!enabled).then(()=>this.renderResult(result))}));
+      menu.append(this.menuButton(enabled?t('停止保存本文标记'):markCurrent?t('标记当前译句并保存'):t('保存本文标记'),()=>{if(markCurrent)this.actions.onToggleSourceMark?.(result);void this.actions.onSetSourceMarkPersistence?.(!enabled).then(()=>this.renderResult(result))}));
       if((this.actions.hasAnySourceMarks?.()||this.actions.hasStoredSourceMarks?.())&&this.actions.onClearSourceMarks){
-        const clearMarks=this.menuButton('清除本文标记',()=>{
+        const clearMarks=this.menuButton(t('清除本文标记'),()=>{
           if(clearMarks.dataset.confirmClear!=='true'){
-            clearMarks.dataset.confirmClear='true';clearMarks.textContent='再次点击清除全部';clearMarks.ariaLabel='再次点击清除全部本文标记';return;
+            clearMarks.dataset.confirmClear='true';clearMarks.textContent=t('再次点击清除全部');clearMarks.ariaLabel=t('再次点击清除全部本文标记');return;
           }
           clearMarks.disabled=true;
           void this.actions.onClearSourceMarks!().then(()=>{
             this.renderResult(result);
             queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus({preventScroll:true}));
           }).catch(()=>{
-            clearMarks.disabled=false;delete clearMarks.dataset.confirmClear;clearMarks.textContent='清除本文标记';clearMarks.ariaLabel='清除本文标记';
-            this.flashButtonFeedback(clearMarks,'清除失败',3200);
+            clearMarks.disabled=false;delete clearMarks.dataset.confirmClear;clearMarks.textContent=t('清除本文标记');clearMarks.ariaLabel=t('清除本文标记');
+            this.flashButtonFeedback(clearMarks,t('清除失败'),3200);
           });
         });
-        clearMarks.addEventListener('blur',()=>{if(clearMarks.dataset.confirmClear==='true'&&!clearMarks.disabled){delete clearMarks.dataset.confirmClear;clearMarks.textContent='清除本文标记';clearMarks.ariaLabel='清除本文标记'}});
+        clearMarks.addEventListener('blur',()=>{if(clearMarks.dataset.confirmClear==='true'&&!clearMarks.disabled){delete clearMarks.dataset.confirmClear;clearMarks.textContent=t('清除本文标记');clearMarks.ariaLabel=t('清除本文标记')}});
         menu.append(clearMarks);
       }
     }
     notes.append(...[...menu.children].filter(child=>child instanceof HTMLButtonElement));if(notes.childElementCount===1)notes.remove();
-    const tools=group('显示与工具');
-    if(this.sidebarActive&&this.actions.onStartWebRegion){const capture=this.menuButton('框选网页',()=>this.actions.onStartWebRegion?.());capture.className='sidebar-region-action';capture.title='框选当前网页中的文字、公式、图表或图像';capture.ariaLabel=capture.title;tools.append(capture)}
-    const languageLabel=document.createElement('label');languageLabel.textContent='目标语言';const language=document.createElement('select');for(const {value,label} of SUPPORTED_TARGET_LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);tools.append(languageLabel);
+    const tools=group(t('显示与工具'));
+    if(this.sidebarActive&&this.actions.onStartWebRegion){const capture=this.menuButton(t('框选网页'),()=>this.actions.onStartWebRegion?.());capture.className='sidebar-region-action';capture.title=t('框选当前网页中的文字、公式、图表或图像');capture.ariaLabel=capture.title;tools.append(capture)}
+    const languageLabel=document.createElement('label');languageLabel.textContent=t('目标语言');const language=document.createElement('select');for(const {value,label} of SUPPORTED_TARGET_LANGUAGES){const option=document.createElement('option');option.value=value;option.textContent=label;option.selected=value===this.preferences.targetLanguage;language.append(option)}languageLabel.append(language);tools.append(languageLabel);
     language.addEventListener('change',()=>{this.preferences={...this.preferences,targetLanguage:language.value};this.actions.onPreferencesChange({targetLanguage:language.value,style:this.preferences.style});details.open=false;this.actions.onRetry({kind:'result',result,intent:'language-change'})});
-    if(this.actions.onOpenBrowserSidebar){if(this.sidebarActive||this.preferences.sidebarMode==='floating'){const browserSidebar=this.menuButton('在浏览器侧栏中显示',()=>this.openBrowserSidebarFromControl(result,browserSidebar));menu.append(browserSidebar)}else{menu.append(this.menuButton('在页面侧栏中显示',()=>this.openSidebar()))}}
-    if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton('暂停本网站连续翻译',()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface()).catch(()=>{this.resultFeedback.textContent='暂停失败，请在扩展面板重试'})));const settings=this.menuButton('完整设置',()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);tools.append(...[...menu.children].filter(child=>child instanceof HTMLButtonElement));
+    if(this.actions.onOpenBrowserSidebar){if(this.sidebarActive||this.preferences.sidebarMode==='floating'){const browserSidebar=this.menuButton(t('在浏览器侧栏中显示'),()=>this.openBrowserSidebarFromControl(result,browserSidebar));menu.append(browserSidebar)}else{menu.append(this.menuButton(t('在页面侧栏中显示'),()=>this.openSidebar()))}}
+    if(this.sidebarActive&&this.actions.onPauseSite)menu.append(this.menuButton(t('暂停本网站连续翻译'),()=>void this.actions.onPauseSite?.().then(()=>this.closeSurface()).catch(()=>{this.resultFeedback.textContent=t('暂停失败，请在扩展面板重试')})));const settings=this.menuButton(t('完整设置'),()=>{details.open=false});this.bindSettingsButton(settings);menu.append(settings);tools.append(...[...menu.children].filter(child=>child instanceof HTMLButtonElement));
+    menu.append(actionGuideButton(this.root,[{label:t('复制译文'),selector:'.copy-action'},{label:t('标记'),selector:'.mark-action'},{label:t('修正'),selector:'.correction-action'},{label:t('本文'),selector:'.document-action'}]));
     const info=document.createElement('div');info.className='menu-result-info';info.append(...meta.querySelectorAll('.meta-dot,.cache-badge'));if(info.childElementCount)menu.append(info);
     editing.addEventListener('click',event=>{if(event.target instanceof Element&&event.target.closest('.correction-action,.formula-view'))details.open=false});
     details.append(summary,menu);details.addEventListener('toggle',()=>{const surface=details.closest<HTMLElement>('.surface');surface?.classList.toggle('menu-open',details.open);if(details.open){this.placeMoreMenu(details,menu);requestAnimationFrame(()=>this.placeMoreMenu(details,menu))}});return details;
@@ -1452,17 +1518,17 @@ export class TranslationOverlay {
     const session=createManualCorrectionSession({translatedText:segment.translatedText,sourceText:segment.originalText});
     const draft=createManualCorrectionDraft(session);
     const editEpoch=this.translationEpoch;const editRequestId=this.latestRequestId;
-    const editor=document.createElement('div');editor.className='segment-correction';editor.setAttribute('role','group');editor.setAttribute('aria-label',`修正第 ${segmentNumber} 句，公式已锁定`);
+    const editor=document.createElement('div');editor.className='segment-correction';editor.setAttribute('role','group');editor.setAttribute('aria-label',msg`修正第 ${segmentNumber} 句，公式已锁定`);
     const inputs=new Map<string,HTMLTextAreaElement>();let textPartNumber=0,formulaNumber=0;
-    for(const part of draft.parts){if(part.kind==='text'){if(!part.text.length)continue;textPartNumber+=1;const input=document.createElement('textarea');input.className='correction-text-part';input.value=part.text;input.maxLength=24000;input.setAttribute('aria-label',`可编辑本句译文第 ${textPartNumber} 段`);inputs.set(part.id,input);editor.append(input)}else{formulaNumber+=1;const locked=document.createElement('div');locked.className='correction-latex';locked.textContent=part.text;locked.setAttribute('role','textbox');locked.setAttribute('aria-readonly','true');locked.setAttribute('aria-label',`受保护公式 ${formulaNumber}，不可编辑`);locked.tabIndex=0;editor.append(locked)}}
-    const controls=document.createElement('div');controls.className='segment-correction-actions';const status=document.createElement('span');status.className='segment-correction-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');const cancel=this.button('取消','mini correction-cancel');const save=this.button('保存','mini segment-correction-save');controls.append(status,cancel,save);editor.append(controls);pair.hidden=true;segmentActions.hidden=true;content.append(editor);
+    for(const part of draft.parts){if(part.kind==='text'){if(!part.text.length)continue;textPartNumber+=1;const input=document.createElement('textarea');input.className='correction-text-part';input.value=part.text;input.maxLength=24000;input.setAttribute('aria-label',msg`可编辑本句译文第 ${textPartNumber} 段`);inputs.set(part.id,input);editor.append(input)}else{formulaNumber+=1;const locked=document.createElement('div');locked.className='correction-latex';locked.textContent=part.text;locked.setAttribute('role','textbox');locked.setAttribute('aria-readonly','true');locked.setAttribute('aria-label',msg`受保护公式 ${formulaNumber}，不可编辑`);locked.tabIndex=0;editor.append(locked)}}
+    const controls=document.createElement('div');controls.className='segment-correction-actions';const status=document.createElement('span');status.className='segment-correction-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');const cancel=this.button(t('取消'),'mini correction-cancel');const save=this.button(t('保存'),'mini segment-correction-save');controls.append(status,cancel,save);editor.append(controls);pair.hidden=true;segmentActions.hidden=true;content.append(editor);
     const setStatus=(message:string,isError=false)=>{status.textContent=message;status.classList.toggle('is-error',isError);status.setAttribute('role',isError?'alert':'status')};
-    const showSaveFailure=(message:string)=>{setStatus(message,true);save.textContent='重试';queueMicrotask(()=>{status.scrollIntoView({block:'nearest'});save.focus({preventScroll:true})})};
-    const resetSaveError=()=>{if(!status.classList.contains('is-error'))return;setStatus('');save.textContent='保存'};for(const input of inputs.values())input.addEventListener('input',resetSaveError);
+    const showSaveFailure=(message:string)=>{setStatus(message,true);save.textContent=t('重试');queueMicrotask(()=>{status.scrollIntoView({block:'nearest'});save.focus({preventScroll:true})})};
+    const resetSaveError=()=>{if(!status.classList.contains('is-error'))return;setStatus('');save.textContent=t('保存')};for(const input of inputs.values())input.addEventListener('input',resetSaveError);
     const restoreFocus=()=>{this.renderResultPreservingScroll(result);queueMicrotask(()=>{const row=[...this.root.querySelectorAll<HTMLElement>('.segment')].find(candidate=>candidate.dataset.segmentId===segment.id);(row?.querySelector<HTMLButtonElement>('.segment-correct')??row??trigger).focus({preventScroll:true})})};
     cancel.addEventListener('click',restoreFocus);
     editor.addEventListener('keydown',(event)=>{if(event.key!=='Escape')return;event.preventDefault();restoreFocus()});
-    save.addEventListener('click',()=>{const edits:ManualCorrectionEdit[]=[...inputs].map(([partId,input])=>({partId,text:input.value}));let corrected:string;try{corrected=applyManualCorrection(session,{revision:draft.revision,edits}).correction.correctedTranslation}catch(error){setStatus(error instanceof ManualCorrectionError?(error.code==='NO_CHANGES'?'本句译文没有变化':error.code==='LATEX_CHANGED'?'公式已锁定，请只修改文字':'修正内容不完整，请检查'):error instanceof Error?error.message:'无法保存本句修正',true);return}const viewportOffset=this.segmentViewportOffset(segment.id);save.textContent='保存';save.disabled=true;cancel.disabled=true;for(const input of inputs.values())input.disabled=true;editor.setAttribute('aria-busy','true');setStatus('正在保存…');void this.actions.onSaveSegmentTranslationEdit!(result,segment.id,segment.translatedText,corrected).then((response)=>{if(this.translationEpoch!==editEpoch||this.latestRequestId!==editRequestId)return;this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,true);this.restoreSegmentReadingPosition(response.result,segment.id,viewportOffset)}).catch((error:unknown)=>{save.disabled=false;cancel.disabled=false;for(const input of inputs.values())input.disabled=false;editor.removeAttribute('aria-busy');showSaveFailure(error instanceof Error?error.message:'保存失败，请重试')})});
+    save.addEventListener('click',()=>{const edits:ManualCorrectionEdit[]=[...inputs].map(([partId,input])=>({partId,text:input.value}));let corrected:string;try{corrected=applyManualCorrection(session,{revision:draft.revision,edits}).correction.correctedTranslation}catch(error){setStatus(error instanceof ManualCorrectionError?(error.code==='NO_CHANGES'?t('本句译文没有变化'):error.code==='LATEX_CHANGED'?t('公式已锁定，请只修改文字'):t('修正内容不完整，请检查')):error instanceof Error?error.message:t('无法保存本句修正'),true);return}const viewportOffset=this.segmentViewportOffset(segment.id);save.textContent=t('保存');save.disabled=true;cancel.disabled=true;for(const input of inputs.values())input.disabled=true;editor.setAttribute('aria-busy','true');setStatus(t('正在保存…'));void this.actions.onSaveSegmentTranslationEdit!(result,segment.id,segment.translatedText,corrected).then((response)=>{if(this.translationEpoch!==editEpoch||this.latestRequestId!==editRequestId)return;this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,true);this.restoreSegmentReadingPosition(response.result,segment.id,viewportOffset)}).catch((error:unknown)=>{save.disabled=false;cancel.disabled=false;for(const input of inputs.values())input.disabled=false;editor.removeAttribute('aria-busy');showSaveFailure(error instanceof Error?error.message:t('保存失败，请重试'))})});
     queueMicrotask(()=>{(inputs.values().next().value??cancel).focus()});
   }
 
@@ -1475,60 +1541,80 @@ export class TranslationOverlay {
     const session=createManualCorrectionSession({translatedText:result.translatedText,sourceText:result.originalText});
     const draft=createManualCorrectionDraft(session);
     const editEpoch=this.translationEpoch;const editRequestId=this.latestRequestId;
-    const surface=this.surface('修正译文');surface.querySelector('.pin-action')?.remove();const panel=document.createElement('div');panel.className='revision-panel';
-    const editor=document.createElement('div');editor.className='correction-editor';editor.setAttribute('role','group');editor.setAttribute('aria-label','修正译文，公式已锁定');
+    const surface=this.surface(t('修正译文'));surface.querySelector('.pin-action')?.remove();const panel=document.createElement('div');panel.className='revision-panel';
+    const editor=document.createElement('div');editor.className='correction-editor';editor.setAttribute('role','group');editor.setAttribute('aria-label',t('修正译文，公式已锁定'));
     const inputs=new Map<string,HTMLTextAreaElement>();let textPartNumber=0,formulaNumber=0;
-    for(const part of draft.parts){if(part.kind==='text'){if(!part.text.length)continue;textPartNumber+=1;const input=document.createElement('textarea');input.className='correction-text-part';input.value=part.text;input.maxLength=24000;input.dataset.partId=part.id;input.setAttribute('aria-label',`可编辑译文第 ${textPartNumber} 段`);inputs.set(part.id,input);editor.append(input)}else{formulaNumber+=1;const locked=document.createElement('div');locked.className='correction-latex';locked.dataset.partId=part.id;locked.setAttribute('aria-label',`受保护公式 ${formulaNumber}，不可编辑`);locked.setAttribute('role','textbox');locked.setAttribute('aria-readonly','true');locked.tabIndex=0;locked.textContent=part.text;editor.append(locked)}}panel.append(editor);
-    const note=document.createElement('p');note.className='revision-note';note.id='pi-translation-correction-note';note.textContent=guidanceTerm?`请核对“${guidanceTerm.source}”的译法，并在需要时调整为“${guidanceTerm.target}”。保存修改不会调用 API。`:formulaNumber?'公式片段已锁定；保存只更新自然语言，不调用 API。':'保存修改不会调用 API。';if(guidanceTerm&&formulaNumber)note.textContent+=' 公式片段仍保持锁定。';if(result.alignedSegments?.length)note.textContent+=' 保存整段修正后将退出逐句对照。';panel.append(note);
-    const scopeLabel=document.createElement('label');scopeLabel.className='revision-scope';const scopeText=document.createElement('span');scopeText.textContent='译文保存';const scope=document.createElement('select');scope.ariaLabel='修正译文的保存范围';for(const [value,label] of [['current','仅本次'],['document','记住本文']] as const){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option)}scopeLabel.append(scopeText,scope);panel.append(scopeLabel);
-    const termDisclosure=document.createElement('details');termDisclosure.className='correction-term-disclosure';const termSummary=document.createElement('summary');termSummary.textContent='＋ 固定术语（可选）';const termFields=document.createElement('fieldset');termFields.className='correction-term-fields';const sourceLabel=document.createElement('label');sourceLabel.textContent='原文术语';const source=document.createElement('input');source.maxLength=120;source.placeholder='例如 adaptive sensing';source.ariaLabel='原文术语';sourceLabel.append(source);const targetLabel=document.createElement('label');targetLabel.textContent='固定译法';const target=document.createElement('input');target.maxLength=120;target.placeholder='例如 自适应感知';target.ariaLabel='固定译法';targetLabel.append(target);const termScopeLabel=document.createElement('label');termScopeLabel.className='correction-term-scope';termScopeLabel.append('保存到');const termScope=document.createElement('select');termScope.ariaLabel='术语保存范围';for(const [value,label] of [['document','本文'],['global','全局']] as const){const option=document.createElement('option');option.value=value;option.textContent=label;termScope.append(option)}termScopeLabel.append(termScope);termFields.append(sourceLabel,targetLabel,termScopeLabel);termDisclosure.append(termSummary,termFields);panel.append(termDisclosure);
-    const actions=document.createElement('div');actions.className='revision-actions';const status=document.createElement('span');status.className='revision-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');const cancel=this.button('取消','action correction-cancel');const save=this.button('保存','action primary correction-save');actions.append(status,cancel,save);panel.append(actions);
+    for(const part of draft.parts){if(part.kind==='text'){if(!part.text.length)continue;textPartNumber+=1;const input=document.createElement('textarea');input.className='correction-text-part';input.value=part.text;input.maxLength=24000;input.dataset.partId=part.id;input.setAttribute('aria-label',msg`可编辑译文第 ${textPartNumber} 段`);inputs.set(part.id,input);editor.append(input)}else{formulaNumber+=1;const locked=document.createElement('div');locked.className='correction-latex';locked.dataset.partId=part.id;locked.setAttribute('aria-label',msg`受保护公式 ${formulaNumber}，不可编辑`);locked.setAttribute('role','textbox');locked.setAttribute('aria-readonly','true');locked.tabIndex=0;locked.textContent=part.text;editor.append(locked)}}panel.append(editor);
+    const note=document.createElement('p');note.className='revision-note';note.id='pi-translation-correction-note';note.textContent=guidanceTerm?msg`请核对“${guidanceTerm.source}”的译法，并在需要时调整为“${guidanceTerm.target}”。保存修改不会调用 API。`:formulaNumber?t('公式片段已锁定；保存只更新自然语言，不调用 API。'):t('保存修改不会调用 API。');if(guidanceTerm&&formulaNumber)note.textContent+=t(' 公式片段仍保持锁定。');if(result.alignedSegments?.length)note.textContent+=t(' 保存整段修正后将退出逐句对照。');panel.append(note);
+    const scopeLabel=document.createElement('label');scopeLabel.className='revision-scope';const scopeText=document.createElement('span');scopeText.textContent=t('译文保存');const scope=document.createElement('select');scope.ariaLabel=t('修正译文的保存范围');for(const [value,label] of [['current',t('仅本次')],['document',t('记住本文')]] as const){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option)}scopeLabel.append(scopeText,scope);panel.append(scopeLabel);
+    const termDisclosure=document.createElement('details');termDisclosure.className='correction-term-disclosure';const termSummary=document.createElement('summary');termSummary.textContent=t('＋ 固定术语（可选）');const termFields=document.createElement('fieldset');termFields.className='correction-term-fields';const sourceLabel=document.createElement('label');sourceLabel.textContent=t('原文术语');const source=document.createElement('input');source.maxLength=120;source.placeholder=t('例如 adaptive sensing');source.ariaLabel=t('原文术语');sourceLabel.append(source);const targetLabel=document.createElement('label');targetLabel.textContent=t('固定译法');const target=document.createElement('input');target.maxLength=120;target.placeholder=t('例如 自适应感知');target.ariaLabel=t('固定译法');targetLabel.append(target);const termScopeLabel=document.createElement('label');termScopeLabel.className='correction-term-scope';termScopeLabel.append(t('保存到'));const termScope=document.createElement('select');termScope.ariaLabel=t('术语保存范围');for(const [value,label] of [['document',t('本文')],['global',t('全局')]] as const){const option=document.createElement('option');option.value=value;option.textContent=label;termScope.append(option)}termScopeLabel.append(termScope);termFields.append(sourceLabel,targetLabel,termScopeLabel);termDisclosure.append(termSummary,termFields);panel.append(termDisclosure);
+    const actions=document.createElement('div');actions.className='revision-actions';const status=document.createElement('span');status.className='revision-status';status.setAttribute('role','status');status.setAttribute('aria-live','polite');const cancel=this.button(t('取消'),'action correction-cancel');const save=this.button(t('保存'),'action primary correction-save');actions.append(status,cancel,save);panel.append(actions);
     status.id='pi-translation-correction-status';for(const input of inputs.values())input.setAttribute('aria-describedby',`${note.id} ${status.id}`);source.setAttribute('aria-describedby',status.id);target.setAttribute('aria-describedby',status.id);
     const setStatus=(message:string,isError=false)=>{status.textContent=message;status.classList.toggle('is-error',isError);status.setAttribute('role',isError?'alert':'status')};
-    const showSaveFailure=(message:string)=>{setStatus(message,true);save.textContent='重试';queueMicrotask(()=>{status.scrollIntoView({block:'nearest'});save.focus({preventScroll:true})})};
-    const resetSaveError=()=>{if(!status.classList.contains('is-error'))return;setStatus('');save.textContent='保存'};for(const input of inputs.values())input.addEventListener('input',resetSaveError);
+    const showSaveFailure=(message:string)=>{setStatus(message,true);save.textContent=t('重试');queueMicrotask(()=>{status.scrollIntoView({block:'nearest'});save.focus({preventScroll:true})})};
+    const resetSaveError=()=>{if(!status.classList.contains('is-error'))return;setStatus('');save.textContent=t('保存')};for(const input of inputs.values())input.addEventListener('input',resetSaveError);
     const clearTermErrors=()=>{source.removeAttribute('aria-invalid');target.removeAttribute('aria-invalid')};
-    const updateTermSummary=()=>{const hasSource=Boolean(source.value.trim());const hasTarget=Boolean(target.value.trim());termDisclosure.classList.toggle('has-value',hasSource&&hasTarget);termDisclosure.classList.toggle('has-error',hasSource!==hasTarget);termSummary.textContent=hasSource&&hasTarget?'✓ 已填写固定术语':hasSource!==hasTarget?'！固定术语待补充':'＋ 固定术语（可选）'};
-    const showTermValidationFailure=()=>{const sourceMissing=!source.value.trim();const targetMissing=!target.value.trim();const pairInvalid=!sourceMissing&&!targetMissing;source.setAttribute('aria-invalid',String(sourceMissing||pairInvalid));target.setAttribute('aria-invalid',String(targetMissing||pairInvalid));termDisclosure.classList.remove('has-value');termDisclosure.classList.add('has-error');termSummary.textContent='！固定术语需检查';termDisclosure.open=true;queueMicrotask(()=>(sourceMissing?source:targetMissing?target:source).focus({preventScroll:true}))};
+    const updateTermSummary=()=>{const hasSource=Boolean(source.value.trim());const hasTarget=Boolean(target.value.trim());termDisclosure.classList.toggle('has-value',hasSource&&hasTarget);termDisclosure.classList.toggle('has-error',hasSource!==hasTarget);termSummary.textContent=hasSource&&hasTarget?t('✓ 已填写固定术语'):hasSource!==hasTarget?t('！固定术语待补充'):t('＋ 固定术语（可选）')};
+    const showTermValidationFailure=()=>{const sourceMissing=!source.value.trim();const targetMissing=!target.value.trim();const pairInvalid=!sourceMissing&&!targetMissing;source.setAttribute('aria-invalid',String(sourceMissing||pairInvalid));target.setAttribute('aria-invalid',String(targetMissing||pairInvalid));termDisclosure.classList.remove('has-value');termDisclosure.classList.add('has-error');termSummary.textContent=t('！固定术语需检查');termDisclosure.open=true;queueMicrotask(()=>(sourceMissing?source:targetMissing?target:source).focus({preventScroll:true}))};
     const focusFirstTextPart=()=>queueMicrotask(()=>(inputs.values().next().value??scope).focus());
     const onTermInput=()=>{clearTermErrors();updateTermSummary();resetSaveError()};source.addEventListener('input',onTermInput);target.addEventListener('input',onTermInput);
+    const suggestions=document.createElement('div');termDisclosure.before(suggestions);
+    let currentTerms:import('../core/translation/types').GlossaryEntry[]|undefined,readUnavailable=false,retryTerms:()=>Promise<void>=async()=>{};
+    const refreshSuggestions=()=>{
+      if(readUnavailable){renderCorrectionTermReadFailure(suggestions,retryTerms);return}
+      const corrected=draft.parts.map(part=>part.kind==='text'?(inputs.get(part.id)?.value??part.text):part.text).join('');
+      renderCorrectionTermSuggestions(suggestions,(currentTerms?deduplicateCorrectionTerms(correctionTermSuggestions(result.originalText,result.translatedText,corrected,[...(result.appliedGlossaryTerms??[]),...currentTerms]),currentTerms):[]).map(item=>({...item,context:result.originalText.slice(0,180)})),item=>{
+        if(save.disabled)return;
+        if((source.value.trim()&&source.value!==item.source)||(target.value.trim()&&target.value!==item.target)){setStatus(t('已有词条草稿已保留，请先处理当前输入。'));termDisclosure.open=true;source.focus();return}
+        source.value=item.source;target.value=item.target;onTermInput();setStatus(t('词条已填入，保存修正时一并确认。'));termDisclosure.open=true;target.focus({preventScroll:true});
+        // Scroll only the extension surface, leaving the source page in place.
+        for(let container=target.parentElement;container&&this.root.contains(container);container=container.parentElement){
+          if(!/^(auto|scroll)$/u.test(getComputedStyle(container).overflowY)||container.scrollHeight<=container.clientHeight)continue;
+          const bottom=Math.min(container.getBoundingClientRect().bottom,actions.getBoundingClientRect().top)-12;
+          container.scrollTop+=Math.max(0,target.getBoundingClientRect().bottom-bottom);break;
+        }
+      });
+    };
+    for(const input of inputs.values())input.addEventListener('input',refreshSuggestions);refreshSuggestions();
     cancel.addEventListener('click',()=>{this.renderResult(result);queueMicrotask(()=>{(this.root.querySelector<HTMLElement>('details.more > summary')??trigger).focus()})});
-    save.addEventListener('click',()=>{const selectedScope=scope.value as TranslationMemoryScope;const edits:ManualCorrectionEdit[]=[...inputs].map(([partId,input])=>({partId,text:input.value}));const hasTermInput=Boolean(source.value.trim()||target.value.trim());const explicitTermCandidate=hasTermInput?{source:source.value,target:target.value}:undefined;let corrected:string;let term:TranslationCorrectionTermInput|undefined;clearTermErrors();try{const applied=applyManualCorrection(session,{revision:draft.revision,edits,...(explicitTermCandidate?{explicitTermCandidate}:{})});corrected=applied.correction.correctedTranslation;term=applied.correction.termCandidateDraft?{source:applied.correction.termCandidateDraft.source,target:applied.correction.termCandidateDraft.target,scope:termScope.value as TranslationCorrectionTermInput['scope']}:undefined}catch(error){setStatus(error instanceof ManualCorrectionError?(error.code==='NO_CHANGES'?'译文没有变化':error.code==='LATEX_CHANGED'?'公式已锁定，请只修改文字':error.code==='INVALID_TERM_CANDIDATE'?'请完整填写不含公式的简短术语和固定译法':'修正内容不完整，请检查'):error instanceof Error?error.message:'无法保存修正',true);if(error instanceof ManualCorrectionError&&error.code==='INVALID_TERM_CANDIDATE')showTermValidationFailure();else focusFirstTextPart();return}save.textContent='保存';save.disabled=true;cancel.disabled=true;scope.disabled=true;termScope.disabled=true;for(const input of inputs.values())input.disabled=true;source.disabled=true;target.disabled=true;panel.setAttribute('aria-busy','true');setStatus('正在保存…');void this.actions.onSaveTranslationEdit!(result,corrected,selectedScope,term).then((response)=>{if(this.translationEpoch!==editEpoch||this.latestRequestId!==editRequestId)return;this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,false);queueMicrotask(()=>this.root.querySelector<HTMLButtonElement>('.correction-undo button')?.focus())}).catch((error:unknown)=>{save.disabled=false;cancel.disabled=false;scope.disabled=false;termScope.disabled=false;for(const input of inputs.values())input.disabled=false;source.disabled=false;target.disabled=false;panel.removeAttribute('aria-busy');showSaveFailure(error instanceof Error?error.message:'保存失败，请重试')})});
-    surface.append(panel);this.showSurface(surface);queueMicrotask(()=>{(inputs.values().next().value??scope).focus()});
+    save.addEventListener('click',()=>{const selectedScope=scope.value as TranslationMemoryScope;const edits:ManualCorrectionEdit[]=[...inputs].map(([partId,input])=>({partId,text:input.value}));const hasTermInput=Boolean(source.value.trim()||target.value.trim());const explicitTermCandidate=hasTermInput?{source:source.value,target:target.value}:undefined;let corrected:string;let term:TranslationCorrectionTermInput|undefined;clearTermErrors();try{const applied=applyManualCorrection(session,{revision:draft.revision,edits,...(explicitTermCandidate?{explicitTermCandidate}:{})});corrected=applied.correction.correctedTranslation;term=applied.correction.termCandidateDraft?{source:applied.correction.termCandidateDraft.source,target:applied.correction.termCandidateDraft.target,scope:termScope.value as TranslationCorrectionTermInput['scope']}:undefined}catch(error){setStatus(error instanceof ManualCorrectionError?(error.code==='NO_CHANGES'?t('译文没有变化'):error.code==='LATEX_CHANGED'?t('公式已锁定，请只修改文字'):error.code==='INVALID_TERM_CANDIDATE'?t('请完整填写不含公式的简短术语和固定译法'):t('修正内容不完整，请检查')):error instanceof Error?error.message:t('无法保存修正'),true);if(error instanceof ManualCorrectionError&&error.code==='INVALID_TERM_CANDIDATE')showTermValidationFailure();else focusFirstTextPart();return}save.textContent=t('保存');save.disabled=true;cancel.disabled=true;scope.disabled=true;termScope.disabled=true;for(const input of inputs.values())input.disabled=true;source.disabled=true;target.disabled=true;panel.setAttribute('aria-busy','true');setStatus(t('正在保存…'));void this.actions.onSaveTranslationEdit!(result,corrected,selectedScope,term).then((response)=>{if(this.translationEpoch!==editEpoch||this.latestRequestId!==editRequestId)return;this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,false);queueMicrotask(()=>this.root.querySelector<HTMLButtonElement>('.correction-undo button')?.focus())}).catch((error:unknown)=>{save.disabled=false;cancel.disabled=false;scope.disabled=false;termScope.disabled=false;for(const input of inputs.values())input.disabled=false;source.disabled=false;target.disabled=false;panel.removeAttribute('aria-busy');showSaveFailure(error instanceof Error?error.message:t('保存失败，请重试'))})});
+    surface.append(panel);this.showSurface(surface);
+    this.correctionTermsController=new AbortController();retryTerms=watchCorrectionTerms({locator:{pageUrl:location.href,...this.actions.onDocumentGlossaryLocator?.(),...(result.documentId?{documentId:result.documentId}:{})},language:result.targetLanguage??'',evidence:result.originalText,signal:this.correctionTermsController.signal,onPending:()=>{currentTerms=undefined;readUnavailable=false;refreshSuggestions()},onChange:terms=>{currentTerms=terms;readUnavailable=false;refreshSuggestions()},onUnavailable:()=>{currentTerms=undefined;readUnavailable=true;refreshSuggestions()}});
+    queueMicrotask(()=>{(inputs.values().next().value??scope).focus()});
   }
 
   private undoTranslationCorrection(result:TranslateResult,notice:HTMLElement):void {
-    const receipt=this.correctionUndo;if(!receipt||!this.actions.onUndoTranslationEdit)return;const epoch=this.translationEpoch;const message=notice.querySelector<HTMLElement>('.correction-undo-message');notice.classList.remove('is-error');notice.setAttribute('role','status');notice.setAttribute('aria-busy','true');if(message)message.textContent='正在撤销…';const button=notice.querySelector<HTMLButtonElement>('button');if(button){button.textContent='撤销';button.disabled=true}void this.actions.onUndoTranslationEdit(result,receipt).then((response)=>{if(epoch!==this.translationEpoch||this.currentResult?.requestId!==result.requestId)return;this.correctionUndo=undefined;this.showResult(response.result,undefined,response.history,Boolean(receipt.segmentChange));if(response.termRollbackSkipped){const status=document.createElement('span');status.className='correction-undo';status.setAttribute('role','status');const statusMessage=document.createElement('span');statusMessage.className='correction-undo-message';statusMessage.textContent='译文已撤销；术语后来被修改，未自动覆盖';status.append(statusMessage);this.root.querySelector('.footer')?.prepend(status)}const segmentId=receipt.segmentChange?.segmentId;if(segmentId)this.restoreSegmentReadingPosition(response.result,segmentId);else queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus())}).catch((error:unknown)=>{notice.removeAttribute('aria-busy');notice.classList.add('is-error');notice.setAttribute('role','alert');if(message)message.textContent=error instanceof Error?`${error.message} ·`:'撤销失败 ·';if(button){button.textContent='重试';button.disabled=false;queueMicrotask(()=>{notice.scrollIntoView({block:'nearest'});button.focus({preventScroll:true})})}})
+    const receipt=this.correctionUndo;if(!receipt||!this.actions.onUndoTranslationEdit)return;const epoch=this.translationEpoch;const message=notice.querySelector<HTMLElement>('.correction-undo-message');notice.classList.remove('is-error');notice.setAttribute('role','status');notice.setAttribute('aria-busy','true');if(message)message.textContent=t('正在撤销…');const button=notice.querySelector<HTMLButtonElement>('button');if(button){button.textContent=t('撤销');button.disabled=true}void this.actions.onUndoTranslationEdit(result,receipt).then((response)=>{if(epoch!==this.translationEpoch||this.currentResult?.requestId!==result.requestId)return;this.correctionUndo=undefined;this.showResult(response.result,undefined,response.history,Boolean(receipt.segmentChange));if(response.termRollbackSkipped){const status=document.createElement('span');status.className='correction-undo';status.setAttribute('role','status');const statusMessage=document.createElement('span');statusMessage.className='correction-undo-message';statusMessage.textContent=t('译文已撤销；术语后来被修改，未自动覆盖');status.append(statusMessage);this.root.querySelector('.footer')?.prepend(status)}const segmentId=receipt.segmentChange?.segmentId;if(segmentId)this.restoreSegmentReadingPosition(response.result,segmentId);else queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus())}).catch((error:unknown)=>{notice.removeAttribute('aria-busy');notice.classList.add('is-error');notice.setAttribute('role','alert');if(message)message.textContent=error instanceof Error?`${error.message} ·`:t('撤销失败 ·');if(button){button.textContent=t('重试');button.disabled=false;queueMicrotask(()=>{notice.scrollIntoView({block:'nearest'});button.focus({preventScroll:true})})}})
   }
 
   private openModelAdjustment(result:TranslateResult):void {
     if(!this.actions.onAdjustTranslation)return;
-    const surface=this.surface('模型调整');surface.querySelector('.pin-action')?.remove();const panel=document.createElement('div');panel.className='revision-panel';
-    const note=document.createElement('p');note.className='revision-note';note.textContent='模型调整会发送原文和当前译稿，并产生一次新的 API 请求。';panel.append(note);
-    const scopeLabel=document.createElement('label');scopeLabel.className='revision-scope';const scopeText=document.createElement('span');scopeText.textContent='作用范围';const scope=document.createElement('select');scope.ariaLabel='译文调整作用范围';for(const [value,label] of [['current','仅本次'],['document','用于本文']] as const){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option)}scopeLabel.append(scopeText,scope);panel.append(scopeLabel);const selectedScope=()=>scope.value as TranslationRevisionScope;
-    const divider=document.createElement('div');divider.className='revision-divider';divider.textContent='选择调整方式';panel.append(divider);
+    const surface=this.surface(t('模型调整'));surface.querySelector('.pin-action')?.remove();const panel=document.createElement('div');panel.className='revision-panel';
+    const note=document.createElement('p');note.className='revision-note';note.textContent=t('模型调整会发送原文和当前译稿，并产生一次新的 API 请求。');panel.append(note);
+    const scopeLabel=document.createElement('label');scopeLabel.className='revision-scope';const scopeText=document.createElement('span');scopeText.textContent=t('作用范围');const scope=document.createElement('select');scope.ariaLabel=t('译文调整作用范围');for(const [value,label] of [['current',t('仅本次')],['document',t('用于本文')]] as const){const option=document.createElement('option');option.value=value;option.textContent=label;scope.append(option)}scopeLabel.append(scopeText,scope);panel.append(scopeLabel);const selectedScope=()=>scope.value as TranslationRevisionScope;
+    const divider=document.createElement('div');divider.className='revision-divider';divider.textContent=t('选择调整方式');panel.append(divider);
     const choices=document.createElement('div');choices.className='revision-choices';const run=(adjustment:Omit<TranslationAdjustmentRequest,'scope'>)=>{this.actions.onAdjustTranslation?.(result,{...adjustment,scope:selectedScope()})};
-    const faithful=this.button('更忠实原文','revision-choice');faithful.addEventListener('click',()=>run({kind:'faithful',label:'更忠实',instruction:'Keep the translation especially faithful to the source meaning, logical relations, qualifiers, and technical detail. Avoid paraphrasing or adding information.'}));
-    const natural=this.button('更自然简洁','revision-choice');natural.addEventListener('click',()=>run({kind:'natural',label:'更自然',instruction:'Use natural, concise target-language phrasing while preserving every technical claim and qualification in the source.'}));
-    const terminology=this.button('修正术语与公式','revision-choice');terminology.addEventListener('click',()=>run({kind:'terminology-formula',label:'术语与公式',instruction:'Prioritize consistent academic terminology and exact preservation of every protected formula, symbol, variable, equation number, and LaTeX structure.'}));
-    const customToggle=this.button('自定义调整要求…','revision-choice');choices.append(faithful,natural,terminology,customToggle);panel.append(choices);
-    const custom=document.createElement('div');custom.className='revision-custom';custom.hidden=true;const customInput=document.createElement('textarea');customInput.maxLength=500;customInput.placeholder='例如：将 sensing 统一译为“感知”，语气更正式';customInput.setAttribute('aria-label','自定义调整要求');const customCount=document.createElement('span');customCount.textContent='0/500';const customApply=this.button('按要求重译','action primary');custom.append(customInput,customCount,customApply);panel.append(custom);
-    customToggle.addEventListener('click',()=>{custom.hidden=!custom.hidden;if(!custom.hidden)queueMicrotask(()=>customInput.focus())});customInput.addEventListener('input',()=>{customCount.textContent=`${customInput.value.length}/500`});customApply.addEventListener('click',()=>{const instruction=customInput.value.trim();if(!instruction){customInput.focus();return}run({kind:'custom',label:'自定义调整',instruction})});
-    const actions=document.createElement('div');actions.className='revision-actions';const restore=()=>{this.renderResult(result);queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus())};const cancel=this.button('返回','action correction-cancel');cancel.addEventListener('click',restore);actions.append(cancel);panel.append(actions);
+    const faithful=this.button(t('更忠实原文'),'revision-choice');faithful.addEventListener('click',()=>run({kind:'faithful',label:t('更忠实'),instruction:'Keep the translation especially faithful to the source meaning, logical relations, qualifiers, and technical detail. Avoid paraphrasing or adding information.'}));
+    const natural=this.button(t('更自然简洁'),'revision-choice');natural.addEventListener('click',()=>run({kind:'natural',label:t('更自然'),instruction:'Use natural, concise target-language phrasing while preserving every technical claim and qualification in the source.'}));
+    const terminology=this.button(t('修正术语与公式'),'revision-choice');terminology.addEventListener('click',()=>run({kind:'terminology-formula',label:t('术语与公式'),instruction:'Prioritize consistent academic terminology and exact preservation of every protected formula, symbol, variable, equation number, and LaTeX structure.'}));
+    const customToggle=this.button(t('自定义调整要求…'),'revision-choice');choices.append(faithful,natural,terminology,customToggle);panel.append(choices);
+    const custom=document.createElement('div');custom.className='revision-custom';custom.hidden=true;const customInput=document.createElement('textarea');customInput.maxLength=500;customInput.placeholder=t('例如：将 sensing 统一译为“感知”，语气更正式');customInput.setAttribute('aria-label',t('自定义调整要求'));const customCount=document.createElement('span');customCount.textContent='0/500';const customApply=this.button(t('按要求重译'),'action primary');custom.append(customInput,customCount,customApply);panel.append(custom);
+    customToggle.addEventListener('click',()=>{custom.hidden=!custom.hidden;if(!custom.hidden)queueMicrotask(()=>customInput.focus())});customInput.addEventListener('input',()=>{customCount.textContent=`${customInput.value.length}/500`});customApply.addEventListener('click',()=>{const instruction=customInput.value.trim();if(!instruction){customInput.focus();return}run({kind:'custom',label:t('自定义调整'),instruction})});
+    const actions=document.createElement('div');actions.className='revision-actions';const restore=()=>{this.renderResult(result);queueMicrotask(()=>this.root.querySelector<HTMLElement>('details.more > summary')?.focus())};const cancel=this.button(t('返回'),'action correction-cancel');cancel.addEventListener('click',restore);actions.append(cancel);panel.append(actions);
     surface.append(panel);this.showSurface(surface);
   }
 
   private adoptTranslationVersion(result:TranslateResult):void {
     if(!this.actions.onSaveTranslationEdit)return;
-    const latest=this.versionsFor(result).find(version=>version.requestId===this.latestRequestId);if(!latest){this.showError({message:'当前最新版已经变化，请重新打开翻译结果。',showSettings:false,retryable:false});return}
-    void this.actions.onSaveTranslationEdit(latest,result.translatedText,'current').then((response)=>{this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,false)}).catch((error:unknown)=>{this.showError({message:error instanceof Error?error.message:'无法采用此版本',showSettings:false,retryable:false})});
+    const latest=this.versionsFor(result).find(version=>version.requestId===this.latestRequestId);if(!latest){this.showError({message:t('当前最新版已经变化，请重新打开翻译结果。'),showSettings:false,retryable:false});return}
+    void this.actions.onSaveTranslationEdit(latest,result.translatedText,'current').then((response)=>{this.correctionUndo=response.correctionReceipt;this.showResult(response.result,undefined,response.history,false)}).catch((error:unknown)=>{this.showError({message:error instanceof Error?error.message:t('无法采用此版本'),showSettings:false,retryable:false})});
   }
 
   private recognizedSource(result:TranslateResult,label:string):HTMLElement {
-    const recognizedText=normalizeLatexForClipboard(result.originalText);const recognized=document.createElement('details');recognized.className='recognized-source';const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='recognized-content';const source=document.createElement('div');source.className='recognized-text';source.textContent=recognizedText;const actions=document.createElement('div');actions.className='recognized-actions';const copy=this.button('复制原文','');const edit=this.button('编辑后重译','');actions.append(copy,edit);content.append(source,actions);recognized.append(summary,content);
-    if(result.formulaLatex?.length){const formulaSource=result.formulaLatex.map(normalizeFormulaLatexForClipboard).join('\n\n');const formulas=document.createElement('pre');formulas.className='formula-latex';formulas.textContent=formulaSource;content.insertBefore(formulas,actions);const copyFormula=this.button('复制公式 LaTeX','');copyFormula.title='复制标准单反斜杠 LaTeX';copyFormula.addEventListener('click',()=>this.copyWithFeedback(copyFormula,formulaSource,'已复制 LaTeX','公式 LaTeX 已复制到剪贴板'));actions.prepend(copyFormula)}
-    copy.addEventListener('click',()=>this.copyWithFeedback(copy,recognizedText,'已复制','识别原文已复制到剪贴板'));
-    edit.addEventListener('click',()=>{const editor=document.createElement('textarea');editor.className='recognized-editor';editor.value=recognizedText;editor.setAttribute('aria-label','编辑识别原文');source.replaceWith(editor);actions.replaceChildren();this.root.querySelector('.pin-action')?.remove();const commit=this.button('用修正文本重译','commit');const cancel=this.button('取消编辑','correction-cancel');actions.append(commit,cancel);commit.addEventListener('click',()=>{const text=editor.value.trim();if(!text){editor.focus();return}this.actions.onTranslateText(text)});cancel.addEventListener('click',()=>{this.renderResult(result);queueMicrotask(()=>this.root.querySelector<HTMLButtonElement>('.recognized-source summary')?.focus())});queueMicrotask(()=>{editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)})});
+    const recognizedText=normalizeLatexForClipboard(result.originalText);const recognized=document.createElement('details');recognized.className='recognized-source';const summary=document.createElement('summary');summary.textContent=label;const content=document.createElement('div');content.className='recognized-content';const source=document.createElement('div');source.className='recognized-text';source.textContent=recognizedText;const actions=document.createElement('div');actions.className='recognized-actions';const copy=this.button(t('复制原文'),'');const edit=this.button(t('编辑后重译'),'');actions.append(copy,edit);content.append(source,actions);recognized.append(summary,content);
+    if(result.formulaLatex?.length){const formulaSource=result.formulaLatex.map(normalizeFormulaLatexForClipboard).join('\n\n');const formulas=document.createElement('pre');formulas.className='formula-latex';formulas.textContent=formulaSource;content.insertBefore(formulas,actions);const copyFormula=this.button(t('复制公式 LaTeX'),'');copyFormula.title=t('复制标准单反斜杠 LaTeX');copyFormula.addEventListener('click',()=>this.copyWithFeedback(copyFormula,formulaSource,t('已复制 LaTeX'),t('公式 LaTeX 已复制到剪贴板')));actions.prepend(copyFormula)}
+    copy.addEventListener('click',()=>this.copyWithFeedback(copy,recognizedText,t('已复制'),t('识别原文已复制到剪贴板')));
+    edit.addEventListener('click',()=>{const editor=document.createElement('textarea');editor.className='recognized-editor';editor.value=recognizedText;editor.setAttribute('aria-label',t('编辑识别原文'));source.replaceWith(editor);actions.replaceChildren();this.root.querySelector('.pin-action')?.remove();const commit=this.button(t('用修正文本重译'),'commit');const cancel=this.button(t('取消编辑'),'correction-cancel');actions.append(commit,cancel);commit.addEventListener('click',()=>{const text=editor.value.trim();if(!text){editor.focus();return}this.actions.onTranslateText(text)});cancel.addEventListener('click',()=>{this.renderResult(result);queueMicrotask(()=>this.root.querySelector<HTMLButtonElement>('.recognized-source summary')?.focus())});queueMicrotask(()=>{editor.focus();editor.setSelectionRange(editor.value.length,editor.value.length)})});
     return recognized;
   }
 
@@ -1536,13 +1622,16 @@ export class TranslationOverlay {
 
   private openBrowserSidebarFromControl(result:TranslateResult|undefined,button:HTMLButtonElement):void {
     if(!this.actions.onOpenBrowserSidebar)return;
-    const originalLabel=button.textContent??'打开浏览器侧栏';
-    button.disabled=true;button.textContent='正在打开…';
+    if(this.root.querySelector('.correction-editor,.segment-correction,.recognized-editor,.excerpt-citation-editor,.revision-custom:not([hidden]),dialog[open]')){
+      this.resultFeedback.textContent=t('请先完成或取消当前编辑，再切换侧栏。');return;
+    }
+    const originalLabel=button.textContent??t('打开浏览器侧栏');
+    button.disabled=true;button.textContent=t('正在打开…');
     void this.actions.onOpenBrowserSidebar(result,{persistPreference:false}).catch((error:unknown)=>{
       if(!button.isConnected)return;
       button.disabled=false;button.textContent=originalLabel;
-      this.flashButtonFeedback(button,'无法打开，请重试',3200,'error');
-      const message=error instanceof Error&&error.message.trim()?error.message:'当前页面无法打开浏览器侧栏。';
+      this.flashButtonFeedback(button,t('无法打开，请重试'),3200,'error');
+      const message=error instanceof Error&&error.message.trim()?error.message:t('当前页面无法打开浏览器侧栏。');
       this.resultFeedback.textContent='';requestAnimationFrame(()=>{this.resultFeedback.textContent=message});
     });
   }
@@ -1576,18 +1665,18 @@ export class TranslationOverlay {
 
   private showSidebarObstructionHint():void {
     if(this.sidebarObstructionHintPresented||!this.sidebarActive||this.view!=='sidebar'||!this.sidebarObstructionLikely()||!this.actions.onOpenBrowserSidebar||!this.actions.onDismissSidebarObstructionHint)return;
-    const surface=this.root.querySelector<HTMLElement>('.surface.sidebar');if(!surface)return;const hint=document.createElement('aside');hint.className='sidebar-obstruction-hint';hint.setAttribute('role','status');hint.setAttribute('aria-label','页面侧栏遮挡提示');const icon=document.createElement('span');icon.className='sidebar-obstruction-icon';icon.ariaHidden='true';icon.textContent='↔';const copy=document.createElement('div');copy.className='sidebar-obstruction-copy';const title=document.createElement('strong');title.textContent='网页内容可能被侧栏遮住';const detail=document.createElement('span');detail.textContent='浏览器侧栏不会覆盖页面，可以按需切换。';copy.append(title,detail);const actions=document.createElement('div');actions.className='sidebar-obstruction-actions';const switchButton=this.button('改用浏览器侧栏','sidebar-obstruction-switch');const keepButton=this.button('继续使用','sidebar-obstruction-keep','继续使用页面侧栏，本网站不再提示');const status=document.createElement('span');status.className='sidebar-obstruction-status';status.setAttribute('role','alert');
-    switchButton.addEventListener('click',()=>{switchButton.disabled=true;keepButton.disabled=true;switchButton.textContent='正在切换…';void this.actions.onOpenBrowserSidebar?.(this.currentResult,{persistPreference:false}).then(()=>{this.sidebarObstructionHintDismissed=true;void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)}).catch(()=>{if(!switchButton.isConnected)return;switchButton.disabled=false;keepButton.disabled=false;switchButton.textContent='改用浏览器侧栏';status.textContent='暂时无法打开，请稍后重试。'})});
-    keepButton.addEventListener('click',()=>{this.sidebarObstructionHintDismissed=true;hint.remove();this.resultFeedback.textContent='已继续使用页面侧栏，本网站不再提示';void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)});actions.append(switchButton,keepButton);hint.append(icon,copy,actions,status);const anchor=surface.querySelector(':scope > .sidebar-region-action')??surface.querySelector(':scope > .header');anchor?.after(hint);this.sidebarObstructionHintPresented=true;
+    const surface=this.root.querySelector<HTMLElement>('.surface.sidebar');if(!surface)return;const hint=document.createElement('aside');hint.className='sidebar-obstruction-hint';hint.setAttribute('role','status');hint.setAttribute('aria-label',t('页面侧栏遮挡提示'));const icon=document.createElement('span');icon.className='sidebar-obstruction-icon';icon.ariaHidden='true';icon.textContent='↔';const copy=document.createElement('div');copy.className='sidebar-obstruction-copy';const title=document.createElement('strong');title.textContent=t('网页内容可能被侧栏遮住');const detail=document.createElement('span');detail.textContent=t('浏览器侧栏不会覆盖页面，可以按需切换。');copy.append(title,detail);const actions=document.createElement('div');actions.className='sidebar-obstruction-actions';const switchButton=this.button(t('改用浏览器侧栏'),'sidebar-obstruction-switch');const keepButton=this.button(t('继续使用'),'sidebar-obstruction-keep',t('继续使用页面侧栏，本网站不再提示'));const status=document.createElement('span');status.className='sidebar-obstruction-status';status.setAttribute('role','alert');
+    switchButton.addEventListener('click',()=>{switchButton.disabled=true;keepButton.disabled=true;switchButton.textContent=t('正在切换…');void this.actions.onOpenBrowserSidebar?.(this.currentResult,{persistPreference:false}).then(()=>{this.sidebarObstructionHintDismissed=true;void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)}).catch(()=>{if(!switchButton.isConnected)return;switchButton.disabled=false;keepButton.disabled=false;switchButton.textContent=t('改用浏览器侧栏');status.textContent=t('暂时无法打开，请稍后重试。')})});
+    keepButton.addEventListener('click',()=>{this.sidebarObstructionHintDismissed=true;hint.remove();this.resultFeedback.textContent=t('已继续使用页面侧栏，本网站不再提示');void this.actions.onDismissSidebarObstructionHint?.().catch(()=>undefined)});actions.append(switchButton,keepButton);hint.append(icon,copy,actions,status);const anchor=surface.querySelector(':scope > .sidebar-region-action')??surface.querySelector(':scope > .header');anchor?.after(hint);this.sidebarObstructionHintPresented=true;
   }
 
   private syncContinuousTranslationPauseUi():void {
-    const button=this.root.querySelector<HTMLButtonElement>('.live-badge');if(button){button.classList.toggle('paused',this.continuousTranslationPaused);button.textContent=this.continuousTranslationPaused?'已暂停':'自动翻译中';button.setAttribute('aria-pressed',String(this.continuousTranslationPaused));button.title=this.continuousTranslationPaused?'继续当前标签页的自动连续翻译':'暂停当前标签页的自动连续翻译';button.ariaLabel=button.title}
-    const idle=this.root.querySelector<HTMLElement>('.idle-continuous-copy');if(idle)idle.textContent=this.continuousTranslationPaused?'自动翻译已暂停；仍可使用框选网页、右键菜单或快捷键。':'现在直接选中网页或 Overleaf 中的句子，译文会自动出现在这里。';
+    const button=this.root.querySelector<HTMLButtonElement>('.live-badge');if(button){button.classList.toggle('paused',this.continuousTranslationPaused);button.textContent=this.continuousTranslationPaused?t('已暂停'):t('自动翻译中');button.setAttribute('aria-pressed',String(this.continuousTranslationPaused));button.title=this.continuousTranslationPaused?t('继续当前标签页的自动连续翻译'):t('暂停当前标签页的自动连续翻译');button.ariaLabel=button.title}
+    const idle=this.root.querySelector<HTMLElement>('.idle-continuous-copy');if(idle)idle.textContent=this.continuousTranslationPaused?t('自动翻译已暂停；仍可使用框选网页、右键菜单或快捷键。'):t('现在直接选中网页或 Overleaf 中的句子，译文会自动出现在这里。');
   }
 
   private toggleContinuousTranslationPause(button:HTMLButtonElement):void {
-    if(!this.actions.onSetContinuousTranslationPaused)return;const paused=!this.continuousTranslationPaused;button.disabled=true;button.textContent=paused?'正在暂停…':'正在继续…';void this.actions.onSetContinuousTranslationPaused(paused).then((actual)=>{this.setContinuousTranslationPaused(actual);if(button.isConnected)button.disabled=false;this.resultFeedback.textContent=actual?'已暂停当前标签页的自动连续翻译':'已继续当前标签页的自动连续翻译'}).catch(()=>{if(!button.isConnected)return;button.disabled=false;this.syncContinuousTranslationPauseUi();this.resultFeedback.textContent=paused?'暂时无法暂停自动翻译':'暂时无法继续自动翻译'});
+    if(!this.actions.onSetContinuousTranslationPaused)return;const paused=!this.continuousTranslationPaused;button.disabled=true;button.textContent=paused?t('正在暂停…'):t('正在继续…');void this.actions.onSetContinuousTranslationPaused(paused).then((actual)=>{this.setContinuousTranslationPaused(actual);if(button.isConnected)button.disabled=false;this.resultFeedback.textContent=actual?t('已暂停当前标签页的自动连续翻译'):t('已继续当前标签页的自动连续翻译')}).catch(()=>{if(!button.isConnected)return;button.disabled=false;this.syncContinuousTranslationPauseUi();this.resultFeedback.textContent=paused?t('暂时无法暂停自动翻译'):t('暂时无法继续自动翻译')});
   }
 
   private placeMoreMenu(details:HTMLElement,menu:HTMLElement):void { const surface=details.closest<HTMLElement>('.surface');if(!surface)return;menu.classList.remove('opens-down');menu.style.removeProperty('max-height');const anchorRect=details.getBoundingClientRect();const surfaceRect=surface.getBoundingClientRect();const headerBottom=surface.querySelector<HTMLElement>(':scope > .header')?.getBoundingClientRect().bottom??surfaceRect.top;const gap=2,margin=8;const isCard=surface.classList.contains('card');const visibleTop=isCard?Math.max(headerBottom,this.viewportInsets.top+margin):Math.max(surfaceRect.top,headerBottom,margin);const visibleBottom=isCard?innerHeight-this.viewportInsets.bottom-margin:Math.min(surfaceRect.bottom,innerHeight-margin);const above=Math.max(0,anchorRect.top-gap-visibleTop);const below=Math.max(0,visibleBottom-anchorRect.bottom-gap);const desired=Math.min(menu.scrollHeight,280);const opensDown=below>=desired||below>=above;const available=opensDown?below:above;menu.classList.toggle('opens-down',opensDown);menu.style.maxHeight=`${Math.max(1,Math.min(desired,available))}px`; }
@@ -1595,9 +1684,12 @@ export class TranslationOverlay {
   private surface(titleText:string,options?:{showWebRegionAction?:boolean}):HTMLDivElement {
     const docked=this.sidebarActive||this.markerNavigatorActive||this.historyNavigatorActive||this.documentMemoryActive;const surface=document.createElement('div');surface.className=`surface ${docked?'sidebar '+this.preferences.sidebarSide:'card'}`;surface.setAttribute('role',docked?'complementary':'dialog');surface.setAttribute('aria-label',`Pi Translator ${titleText}`);if(docked)surface.style.setProperty('--sidebar-width',`${this.sidebarWidth}px`);
     const header=document.createElement('div');header.className='header';const titleWrap=document.createElement('div');titleWrap.className='title-wrap';const title=document.createElement('div');title.className='title';title.textContent=titleText;titleWrap.append(this.logo('logo'),title);if(this.sidebarActive&&!this.markerNavigatorActive&&!this.documentMemoryActive){const live=this.button('','live-badge');live.addEventListener('click',()=>this.toggleContinuousTranslationPause(live));titleWrap.append(live);queueMicrotask(()=>this.syncContinuousTranslationPauseUi())}const tools=document.createElement('div');tools.className='header-tools';
-    if(this.historyNavigatorActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>this.returnFromHistoryNavigator());tools.append(back)}else if(this.documentMemoryActive){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon','返回翻译结果');back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewSummary=summarizeDocumentReviews(this.documentMemory);const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewSummary.totalCount?' has-review':''}`,documentReviewDescription(reviewSummary));documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon','收起侧栏');collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const browserResult=this.preferences.sidebarMode==='browser'&&!this.progressState&&this.currentResult&&this.actions.onOpenBrowserSidebar?this.currentResult:undefined;if(browserResult){const pin=this.button('浏览器侧栏','pin-action','在浏览器侧栏中显示');pin.addEventListener('click',()=>this.openBrowserSidebarFromControl(browserResult,pin));tools.append(pin)}else{const pin=this.button('页面侧栏','pin-action','在页面侧栏中显示');pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}}
-    const closeLabel=this.progressState?'停止并关闭':'关闭';const close=this.button('×','icon surface-close',closeLabel);close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
-    if(options?.showWebRegionAction!==false&&this.sidebarActive&&!this.historyNavigatorActive&&!this.markerNavigatorActive&&!this.documentMemoryActive&&this.actions.onStartWebRegion){const regionAction=this.button('','sidebar-region-action','框选当前网页中的文字、公式、图表或图像');regionAction.dataset.piFocusKey='web-region';const icon=document.createElement('span');icon.className='sidebar-region-icon';icon.ariaHidden='true';const label=document.createElement('span');label.className='sidebar-region-label';label.textContent='框选网页';const hint=document.createElement('span');hint.className='sidebar-region-hint';hint.textContent='文字 · 公式 · 图表';regionAction.append(icon,label,hint);regionAction.addEventListener('click',()=>this.actions.onStartWebRegion?.());surface.append(regionAction)}
+    if(this.historyNavigatorActive){const back=this.button('←','icon',t('返回翻译结果'));back.addEventListener('click',()=>this.returnFromHistoryNavigator());tools.append(back)}else if(this.documentMemoryActive){const back=this.button('←','icon',t('返回翻译结果'));back.addEventListener('click',()=>{this.documentMemoryActive=false;if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle()});tools.append(back)}else if(this.markerNavigatorActive){if(this.currentResult){const back=this.button('←','icon',t('返回翻译结果'));back.addEventListener('click',()=>{this.markerNavigatorActive=false;this.renderResult(this.currentResult!)});tools.append(back)}}else if(this.sidebarActive){if(this.actions.onGetDocumentMemory){const reviewSummary=summarizeDocumentReviews(this.documentMemory);const documentButton=this.button(this.documentMemoryButtonLabel(),`document-action document-memory-action${reviewSummary.totalCount?' has-review':''}`,documentReviewDescription(reviewSummary));documentButton.ariaLabel=this.documentMemoryButtonLabel();documentButton.addEventListener('click',()=>this.openDocumentMemory());tools.append(documentButton)}const collapse=this.button('›','icon',t('收起侧栏'));collapse.style.transform=this.preferences.sidebarSide==='left'?'rotate(180deg)':'';collapse.addEventListener('click',()=>this.collapseSidebar());tools.append(collapse)}else{const browserResult=this.preferences.sidebarMode==='browser'&&!this.progressState&&this.currentResult&&this.actions.onOpenBrowserSidebar?this.currentResult:undefined;if(browserResult){const pin=this.button(t('浏览器侧栏'),'pin-action',t('在浏览器侧栏中显示'));pin.dataset.piIcon='compare';pin.addEventListener('click',()=>this.openBrowserSidebarFromControl(browserResult,pin));tools.append(pin)}else{const pin=this.button(t('页面侧栏'),'pin-action',t('在页面侧栏中显示'));pin.dataset.piIcon='compare';pin.addEventListener('click',()=>this.openSidebar());tools.append(pin)}}
+    const closeLabel=this.progressState?t('停止并关闭'):t('关闭');const close=this.button('×','icon surface-close',closeLabel);close.addEventListener('click',()=>this.closeSurface());tools.append(close);header.append(titleWrap,tools);surface.append(header);
+    if(this.sidebarActive&&!this.markerNavigatorActive&&!this.documentMemoryActive&&!this.historyNavigatorActive&&!this.progressState&&this.currentResult&&this.actions.onOpenBrowserSidebar){
+      const switchButton=this.button(t('改用浏览器侧栏'),'sidebar-switch-action');switchButton.addEventListener('click',()=>this.openBrowserSidebarFromControl(this.currentResult,switchButton));tools.prepend(switchButton);
+    }
+    if(options?.showWebRegionAction!==false&&this.sidebarActive&&!this.historyNavigatorActive&&!this.markerNavigatorActive&&!this.documentMemoryActive&&this.actions.onStartWebRegion){const regionAction=this.button('','sidebar-region-action',t('框选当前网页中的文字、公式、图表或图像'));regionAction.dataset.piFocusKey='web-region';const icon=document.createElement('span');icon.className='sidebar-region-icon';icon.ariaHidden='true';const label=document.createElement('span');label.className='sidebar-region-label';label.textContent=t('框选网页');const hint=document.createElement('span');hint.className='sidebar-region-hint';hint.textContent=t('文字 · 公式 · 图表');regionAction.append(icon,label,hint);regionAction.addEventListener('click',()=>this.actions.onStartWebRegion?.());surface.append(regionAction)}
     if(docked)this.makeResizable(surface);else this.makeDraggable(surface,header);return surface;
   }
 
@@ -1629,7 +1721,7 @@ export class TranslationOverlay {
     if(shouldMoveFocus)queueMicrotask(restoreOverlayFocus);
   }
 
-  private collapseSidebar():void { this.rememberVisibleResultReadingPosition();const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const collapsedLabel=this.markerNavigatorActive?'本文标记':'连续翻译';const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,`展开 Pi Translator ${collapsedLabel}侧栏`);const label=document.createElement('span');label.textContent=collapsedLabel;tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.markerNavigatorActive)this.renderMarkerNavigator();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>('[aria-label="收起侧栏"]')??this.root.querySelector<HTMLButtonElement>('[aria-label="返回翻译结果"]'))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
+  private collapseSidebar():void { this.rememberVisibleResultReadingPosition();const restoreFocus=this.root.activeElement instanceof HTMLElement;this.sidebarCollapsed=true;this.clear();this.refreshViewportInsets();const collapsedLabel=this.markerNavigatorActive?t('本文标记'):t('连续翻译');const tab=this.button('','collapsed-tab '+this.preferences.sidebarSide,msg`展开 Pi Translator ${collapsedLabel}侧栏`);const label=document.createElement('span');label.textContent=this.markerNavigatorActive?t('标记'):t('翻译');tab.append(this.logo(''),label);tab.addEventListener('click',()=>{this.sidebarCollapsed=false;if(this.documentMemoryActive)this.renderDocumentMemory();else if(this.markerNavigatorActive)this.renderMarkerNavigator();else if(this.progressState)this.renderProgress();else if(this.currentResult)this.renderResult(this.currentResult);else this.renderSidebarIdle();queueMicrotask(()=>(this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="收起侧栏"]'))??this.root.querySelector<HTMLButtonElement>(uiSelector('[aria-label="返回翻译结果"]')))?.focus({preventScroll:true}))});this.root.append(tab);this.observeSize(tab);this.setView('sidebar-collapsed');this.scheduleReflow();if(restoreFocus)queueMicrotask(()=>tab.focus({preventScroll:true})); }
   private closeSurface():void { const restoreFocus=this.cardReturnFocus;this.cardReturnFocus=undefined;this.markerNavigatorActive=false;this.historyNavigatorActive=false;this.documentMemoryActive=false;this.progressState=undefined;if(this.sidebarActive){this.sidebarActive=false;this.sidebarCollapsed=false;this.markedOnly=false;this.actions.onSidebarChange(false)}this.hide();this.actions.onDismiss();if(restoreFocus?.isConnected)queueMicrotask(()=>restoreFocus.focus({preventScroll:true})); }
   private dismissTrigger():void {
     if(this.view!=='trigger')return;
@@ -1637,9 +1729,9 @@ export class TranslationOverlay {
     this.actions.onDismissTrigger?.();
     this.clear();
     const notice=document.createElement('div');notice.className='selection-dismiss-notice';notice.setAttribute('role','status');notice.setAttribute('aria-live','polite');notice.setAttribute('aria-atomic','true');
-    const message=document.createElement('span');message.textContent='本次已隐藏';
-    const pause=this.button('暂停此网站','selection-dismiss-action','暂停本网站自动划词');
-    pause.addEventListener('click',()=>{pause.disabled=true;pause.textContent='正在暂停…';void this.actions.onPauseSite?.().then(()=>{if(!notice.isConnected)return;message.textContent='已暂停本网站自动划词';pause.remove();this.armTriggerNoticeTimer(1800)}).catch(()=>{if(!notice.isConnected)return;message.textContent='暂停失败，请在扩展面板重试';pause.remove();this.armTriggerNoticeTimer(3200)})});
+    const message=document.createElement('span');message.textContent=t('本次已隐藏');
+    const pause=this.button(t('暂停此网站'),'selection-dismiss-action',t('暂停本网站自动划词'));
+    pause.addEventListener('click',()=>{pause.disabled=true;pause.textContent=t('正在暂停…');void this.actions.onPauseSite?.().then(()=>{if(!notice.isConnected)return;message.textContent=t('已暂停本网站自动划词');pause.remove();this.armTriggerNoticeTimer(1800)}).catch(()=>{if(!notice.isConnected)return;message.textContent=t('暂停失败，请在扩展面板重试');pause.remove();this.armTriggerNoticeTimer(3200)})});
     notice.append(message,pause);this.root.append(notice);this.setView('notice');this.armTriggerNoticeTimer(4800);
     if(restoreFocus?.isConnected)queueMicrotask(()=>restoreFocus.focus({preventScroll:true}));
   }
@@ -1669,7 +1761,7 @@ export class TranslationOverlay {
   private toggleSegmentSourceMark(result:TranslateResult,segment:TranslationSegment):void { this.actions.onToggleSourceMark?.(result,segment);this.renderAfterMarkToggle(result,true) }
   private menuButton(text:string,action:()=>void):HTMLButtonElement{const button=this.button(text,'');button.addEventListener('click',action);return button}
 
-  private copyWithFeedback(button:HTMLButtonElement,text:string,success='已复制',announcement='内容已复制到剪贴板'):void {
+  private copyWithFeedback(button:HTMLButtonElement,text:string,success=t('已复制'),announcement=t('内容已复制到剪贴板')):void {
     if(button.disabled)return;
     const restoreFocus=this.root.activeElement===button;
     const surface=button.closest<HTMLElement>('.surface');
@@ -1679,7 +1771,7 @@ export class TranslationOverlay {
     button.disabled=true;button.dataset.state='pending';
     void navigator.clipboard.writeText(text)
       .then(()=>{button.disabled=false;if(restoreFocus)queueMicrotask(()=>button.focus({preventScroll:true}));this.flashButtonFeedback(button,success,1800,'success',()=>{if(feedback)feedback.textContent=''});window.requestAnimationFrame(()=>{if(feedback)feedback.textContent=announcement})})
-      .catch(()=>{button.disabled=false;if(restoreFocus)queueMicrotask(()=>button.focus({preventScroll:true}));this.flashButtonFeedback(button,'复制失败',3200,'error',()=>{if(feedback)feedback.textContent=''});window.requestAnimationFrame(()=>{if(feedback)feedback.textContent='复制失败，请检查剪贴板权限'})});
+      .catch(()=>{button.disabled=false;if(restoreFocus)queueMicrotask(()=>button.focus({preventScroll:true}));this.flashButtonFeedback(button,t('复制失败'),3200,'error',()=>{if(feedback)feedback.textContent=''});window.requestAnimationFrame(()=>{if(feedback)feedback.textContent=t('复制失败，请检查剪贴板权限')})});
   }
 
   private flashButtonFeedback(button:HTMLButtonElement,message:string,duration=1600,state?:'success'|'error',onReset?:()=>void):void {
@@ -1841,14 +1933,15 @@ export class TranslationOverlay {
         const rect=this.lastRect??{top:innerHeight/2,bottom:innerHeight/2,left:innerWidth/2,right:innerWidth/2};
         this.cardPosition=this.place(card,rect);
       }
+      this.actions.onSurfaceLayoutChange?.();
     }
   }
-  private button(text:string,className:string,title?:string):HTMLButtonElement{const button=document.createElement('button');button.type='button';button.className=className;button.textContent=text;if(title){button.title=title;button.ariaLabel=title}return button}
+  private button(text:string,className:string,title?:string):HTMLButtonElement{const button=document.createElement('button');button.type='button';button.className=className;button.textContent=text;if(title){button.title=title;button.ariaLabel=title}if(className.split(' ').includes('copy-action')||(className==='mini'&&text===t('复制'))||title===t('复制这条标记')){button.dataset.piIcon='copy';button.title=title??text;button.ariaLabel=title??text}return button}
   private logo(className:string):HTMLImageElement{const image=document.createElement('img');image.className=className;image.src=this.logoUrl;image.alt='';return image}
-  private clear():void{this.surfaceResizeObserver?.disconnect();this.surfaceResizeObserver=undefined;if(this.reflowFrame!==undefined)cancelAnimationFrame(this.reflowFrame);this.reflowFrame=undefined;if(this.triggerNoticeTimer)clearTimeout(this.triggerNoticeTimer);this.triggerNoticeTimer=undefined;if(this.sidebarObstructionHintTimer)clearTimeout(this.sidebarObstructionHintTimer);this.sidebarObstructionHintTimer=undefined;for(const child of [...this.root.children])if(!(child instanceof HTMLStyleElement)&&child!==this.resultFeedback)child.remove()}
+  private clear():void{this.correctionTermsController?.abort();this.correctionTermsController=undefined;this.documentGlossaryController?.abort();this.documentGlossaryController=undefined;this.documentGlossary=undefined;this.surfaceResizeObserver?.disconnect();this.surfaceResizeObserver=undefined;if(this.reflowFrame!==undefined)cancelAnimationFrame(this.reflowFrame);this.reflowFrame=undefined;if(this.triggerNoticeTimer)clearTimeout(this.triggerNoticeTimer);this.triggerNoticeTimer=undefined;if(this.sidebarObstructionHintTimer)clearTimeout(this.sidebarObstructionHintTimer);this.sidebarObstructionHintTimer=undefined;for(const child of [...this.root.children])if(!(child instanceof HTMLStyleElement)&&child!==this.resultFeedback&&child!==this.readingReturn&&!child.hasAttribute('data-pi-reading-hint')&&!child.matches('dialog.pi-note-summary[open]'))child.remove()}
   private publishSidebarLayout():void{this.actions.onSidebarLayoutChange(this.view==='sidebar',this.preferences.sidebarSide,this.sidebarWidth)}
   private setView(view:OverlayView):void{this.view=view;this.host.dataset.piView=view;this.publishSidebarLayout()}
-  private readonly onKeyDown=(event:KeyboardEvent):void=>{if(this.view==='hidden')return;if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive){this.returnFromHistoryNavigator();return}const correctionCancel=this.root.querySelector<HTMLButtonElement>('.correction-cancel');if(correctionCancel){correctionCancel.click();return}const openMenu=this.root.querySelector<HTMLDetailsElement>('details.more[open]');if(openMenu){openMenu.open=false;openMenu.querySelector<HTMLElement>('summary')?.focus();return}if(this.sidebarActive)this.collapseSidebar();else this.closeSurface();return}if(event.altKey&&(event.key==='/'||event.code==='Slash')&&this.sidebarActive&&!this.sidebarCollapsed&&this.history.length>1&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive)this.root.querySelector<HTMLInputElement>('.history-search-field')?.focus({preventScroll:true});else this.openHistoryNavigator();return}const origin=event.composedPath()[0];const editable=origin instanceof HTMLInputElement||origin instanceof HTMLTextAreaElement||origin instanceof HTMLSelectElement||(origin instanceof HTMLElement&&origin.isContentEditable);const canNavigate=!editable&&!this.sidebarCollapsed&&!this.historyNavigatorActive&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState&&!this.root.querySelector('details.more[open],.recognized-editor,.segment-correction')&&Boolean(this.root.querySelector('.body,.aligned-list'));if(canNavigate&&event.altKey&&event.key==='ArrowUp'){event.preventDefault();this.navigate(1)}if(canNavigate&&event.altKey&&event.key==='ArrowDown'){event.preventDefault();this.navigate(-1)}};
+  private readonly onKeyDown=(event:KeyboardEvent):void=>{if(this.view==='hidden'||keyEventDialog(event))return;if(event.key==='Escape'){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive){this.returnFromHistoryNavigator();return}const correctionCancel=this.root.querySelector<HTMLButtonElement>('.correction-cancel');if(correctionCancel){correctionCancel.click();return}const openMenu=this.root.querySelector<HTMLDetailsElement>('details.more[open]');if(openMenu){openMenu.open=false;openMenu.querySelector<HTMLElement>('summary')?.focus();return}if(this.sidebarActive)this.collapseSidebar();else this.closeSurface();return}if(event.altKey&&(event.key==='/'||event.code==='Slash')&&this.sidebarActive&&!this.sidebarCollapsed&&this.history.length>1&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState){event.preventDefault();event.stopPropagation();if(this.historyNavigatorActive)this.root.querySelector<HTMLInputElement>('.history-search-field')?.focus({preventScroll:true});else this.openHistoryNavigator();return}const origin=event.composedPath()[0];const editable=origin instanceof HTMLInputElement||origin instanceof HTMLTextAreaElement||origin instanceof HTMLSelectElement||(origin instanceof HTMLElement&&origin.isContentEditable);const canNavigate=!editable&&!this.sidebarCollapsed&&!this.historyNavigatorActive&&!this.documentMemoryActive&&!this.markerNavigatorActive&&!this.progressState&&!this.root.querySelector('details.more[open],.recognized-editor,.segment-correction')&&Boolean(this.root.querySelector('.body,.aligned-list'));if(canNavigate&&event.altKey&&event.key==='ArrowUp'){event.preventDefault();this.navigate(1)}if(canNavigate&&event.altKey&&event.key==='ArrowDown'){event.preventDefault();this.navigate(-1)}};
   private readonly onDocumentPointerDown=(event:PointerEvent):void=>{const openMenu=this.root.querySelector<HTMLDetailsElement>('details.more[open]');if(!openMenu||event.composedPath().includes(openMenu))return;openMenu.open=false};
   private readonly onViewportChange=(event?:Event):void=>{this.scheduleReflow();if(event?.type==='resize'){this.refreshSidebarObstructionHint();this.scheduleSidebarObstructionHint(240)}};
   private readonly onColorSchemeChange=():void=>this.scheduleTheme();

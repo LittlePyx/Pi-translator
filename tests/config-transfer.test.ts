@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   exportSettingsConfiguration,
   importSettingsConfiguration,
+  importConfigurationReadingPreferences,
 } from '../core/settings/config-transfer';
 import { DEFAULT_SETTINGS, type ExtensionSettings } from '../core/settings/schema';
 
@@ -31,6 +32,33 @@ function configuredSettings(): ExtensionSettings {
 }
 
 describe('safe settings transfer', () => {
+  it('round trips only explicit site preferences and UI language, ignoring extra secret fields', () => {
+    const content=exportSettingsConfiguration(configuredSettings(),{
+      sites:{'docs.example.org':{targetLanguage:'en',paused:true,apiKey:'do-not-export'} as never},uiLanguage:'en',
+    });
+    expect(JSON.parse(content).version).toBe(2);
+    expect(content).not.toContain('do-not-export');
+    expect(importConfigurationReadingPreferences(content)).toEqual({sites:{'docs.example.org':{targetLanguage:'en',paused:true}},uiLanguage:'en'});
+    expect(importSettingsConfiguration(content,DEFAULT_SETTINGS).apiProfiles[0]?.model).toBe('example-model');
+  });
+
+  it('keeps version 1 compatible without applying injected reading preferences', () => {
+    const data=JSON.parse(exportSettingsConfiguration(configuredSettings()));
+    data.version=1;data.readingPreferences={sites:'invalid',uiLanguage:'invalid'};
+    expect(importSettingsConfiguration(JSON.stringify(data),DEFAULT_SETTINGS).targetLanguage).toBe('zh-CN');
+    expect(importConfigurationReadingPreferences(JSON.stringify(data))).toBeUndefined();
+  });
+
+  it.each([
+    {sites:{'https://docs.example.org/path':{targetLanguage:'en',paused:false}},uiLanguage:'en'},
+    {sites:{'docs.example.org':{targetLanguage:'invalid',paused:false}},uiLanguage:'en'},
+    {sites:{'docs.example.org':{targetLanguage:'en',paused:'false'}},uiLanguage:'en'},
+    {sites:{},uiLanguage:'invalid'},
+  ])('rejects invalid v2 preferences before applying API configuration: %j', readingPreferences => {
+    const data=JSON.parse(exportSettingsConfiguration(configuredSettings()));data.readingPreferences=readingPreferences;
+    expect(()=>importSettingsConfiguration(JSON.stringify(data),DEFAULT_SETTINGS)).toThrow('偏好');
+  });
+
   it('exports preferences without API keys or internal profile ids', () => {
     const exported = exportSettingsConfiguration(configuredSettings());
     const parsed = JSON.parse(exported) as Record<string, unknown>;

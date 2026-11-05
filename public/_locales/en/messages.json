@@ -1,0 +1,6 @@
+{
+  "extensionName": { "message": "Pi Translator" },
+  "extensionDescription": { "message": "Translate selected text on web pages, Overleaf and PDFs, with a continuous sidebar, streaming and LaTeX protection." },
+  "actionTitle": { "message": "Pi Translator quick controls" },
+  "commandDescription": { "message": "Translate selected text; open Pi Translator settings when nothing is selected" }
+}

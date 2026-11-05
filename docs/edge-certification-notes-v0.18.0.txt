@@ -1,0 +1,1 @@
+Pi Translator translates selected text and user-initiated web or PDF content using an API configured by the user. Settings, local reading materials and API credentials remain on the device unless the user explicitly initiates a translation request or export.

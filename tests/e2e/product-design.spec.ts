@@ -1,3 +1,4 @@
+import {openSettingsSection} from './support/settings-navigation';
 import {clickPdfReaderAction} from './support/translation-controls';
 import {ARTICLE_FIXTURE_URL,context,createMultilineTextPdf,expect,extensionId,installEdgeExtensionHooks,page,selectElementText,test} from './support/edge-extension-fixture';
 import {openTranslationMore} from './support/translation-controls';
@@ -18,7 +19,7 @@ test('captures settings hierarchy in light, dark and narrow layouts',async({},te
     await options.setViewportSize({width:1360,height:1000});await options.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(options.locator('#api-profile')).toHaveValue('default');
     for(const section of ['connection','translation','results','pages','cost','storage','support']){
-      await options.locator(`[data-settings-target="${section}"]`).click();
+      await openSettingsSection(options,section);
       await options.screenshot({path:testInfo.outputPath(`settings-${section}-light.png`),fullPage:true});
       await options.emulateMedia({colorScheme:'dark'});await options.screenshot({path:testInfo.outputPath(`settings-${section}-dark.png`),fullPage:true});await options.emulateMedia({colorScheme:'light'});
     }
@@ -40,13 +41,13 @@ test('captures settings hierarchy in light, dark and narrow layouts',async({},te
     await options.setViewportSize({width:360,height:1000});
     await options.locator('.settings-section details[open]:not(#model-price-editor)').evaluateAll(details=>details.forEach(detail=>{(detail as HTMLDetailsElement).open=false}));
     for(const section of ['connection','translation','results','pages','cost','storage','support']){
-      await options.locator(`[data-settings-target="${section}"]`).click();
+      await openSettingsSection(options,section);
       await expect.poll(()=>options.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
       await options.screenshot({path:testInfo.outputPath(`settings-${section}-mobile-dark.png`),fullPage:true});
       await options.emulateMedia({colorScheme:'light'});await options.screenshot({path:testInfo.outputPath(`settings-${section}-mobile-light.png`),fullPage:true});await options.emulateMedia({colorScheme:'dark'});
     }
-    for(const [section,disclosure] of [['connection','#vision-setup-details'],['results','#settings-results .advanced-panel'],['pages','#settings-pages details'],['support','#settings-support details:first-of-type']]){
-      await options.locator(`[data-settings-target="${section}"]`).click();await options.locator(`${disclosure} > summary`).click();
+    for(const [section,disclosure] of [['connection','#vision-setup-details'],['results','#settings-results .advanced-panel'],['pages','#settings-pages details'],['support','#settings-support details:first-of-type']] as const){
+      await openSettingsSection(options,section);await options.locator(`${disclosure} > summary`).click();
       await expect.poll(()=>options.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
       await options.screenshot({path:testInfo.outputPath(`settings-${section}-mobile-expanded-dark.png`),fullPage:true});
     }
@@ -80,6 +81,22 @@ test('captures PDF reading, preflight and result cards without changing translat
     await reader.setViewportSize({width:360,height:1000});await reader.screenshot({path:testInfo.outputPath('pdf-reading-mobile-dark.png')});
   }finally{await reader.close()}
 });
+test('keeps the webpage popup readable in a narrow toolbar window',async({},info)=>{
+  const popup=await context.newPage(),previousUrl=page.url();
+  try{
+    await page.goto(ARTICLE_FIXTURE_URL);
+    const tab=await context.serviceWorkers()[0]!.evaluate(async url=>(await(globalThis as any).chrome.tabs.query({url}))[0],ARTICLE_FIXTURE_URL);
+    await popup.addInitScript(tab=>{(globalThis as any).chrome.tabs.query=async()=>[tab]},tab);
+    await popup.setViewportSize({width:220,height:600});await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(popup.locator('#quick-actions')).not.toHaveAttribute('data-primary','loading');
+    await expect(popup.locator('#translate-page')).toBeEnabled();await expect(popup.locator('#open-library')).toHaveText('文档库');
+    expect(await popup.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
+    await popup.screenshot({path:info.outputPath('web-popup-220.png')});
+    await popup.locator('#popup-more-actions > summary').click();await expect(popup.locator('#site-control')).toBeVisible();
+    await popup.screenshot({path:info.outputPath('web-popup-more-220.png'),fullPage:true});
+  }finally{await popup.close();await page.goto(previousUrl)}
+});
+
 test('captures the quick popup and the in-page translation reading surface',async({},testInfo)=>{
   const popup=await context.newPage();
   try{
@@ -104,6 +121,7 @@ test('captures the quick popup and the in-page translation reading surface',asyn
   await captureOverlay(overlay,testInfo.outputPath('translation-card-compact-light.png'));
   await expect(overlay.locator('.correction-action')).toBeHidden();await openTranslationMore(overlay);await expect(overlay.locator('.correction-action')).toBeVisible();await captureOverlay(overlay,testInfo.outputPath('translation-card-more-light.png'));await page.keyboard.press('Escape');
   await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});await page.evaluate(()=>{document.body.style.backgroundColor='#191919';document.body.style.color='#ededed'});await expect(overlay).toHaveAttribute('data-pi-theme','dark');await captureOverlay(overlay,testInfo.outputPath('translation-card-compact-dark.png'));await openTranslationMore(overlay);await captureOverlay(overlay,testInfo.outputPath('translation-card-more-dark.png'));await page.keyboard.press('Escape');await page.setViewportSize({width:360,height:700});await captureOverlay(overlay,testInfo.outputPath('translation-card-mobile-dark.png'));await page.setViewportSize({width:1200,height:850});await page.emulateMedia({colorScheme:'light'});await page.evaluate(()=>{document.body.style.backgroundColor='#ffffff';document.body.style.color='#202020'});await expect(overlay).toHaveAttribute('data-pi-theme','light');
+  await openTranslationMore(overlay);await overlay.locator('.pi-action-guide-trigger').click();const guide=overlay.getByRole('dialog',{name:'常用操作',exact:true});await guide.getByRole('searchbox').fill('修正');await captureOverlay(overlay,testInfo.outputPath('translation-guide-dark.png'));await guide.getByRole('button',{name:'修正',exact:true}).click();await expect(overlay.locator('.correction-action')).toBeFocused();await expect(overlay.locator('.correction-editor')).toHaveCount(0);await overlay.locator('.correction-action').click();await expect(overlay.locator('.correction-editor')).toBeVisible();await captureOverlay(overlay,testInfo.outputPath('translation-correction-light.png'));await overlay.locator('.correction-cancel').click();
   await overlay.getByTitle('在页面侧栏中显示').click();await expect(overlay).toHaveAttribute('data-pi-view','sidebar');await overlay.locator('.surface').screenshot({path:testInfo.outputPath('floating-sidebar-light.png')});await openTranslationMore(overlay);await overlay.locator('.surface').screenshot({path:testInfo.outputPath('floating-sidebar-more-light.png')});await page.keyboard.press('Escape');
   await page.emulateMedia({colorScheme:'dark',reducedMotion:'reduce'});await page.evaluate(()=>{document.body.style.backgroundColor='#191919';document.body.style.color='#ededed'});await expect(overlay).toHaveAttribute('data-pi-theme','dark');await overlay.locator('.surface').screenshot({path:testInfo.outputPath('floating-sidebar-dark.png')});await openTranslationMore(overlay);await overlay.locator('.surface').screenshot({path:testInfo.outputPath('floating-sidebar-more-dark.png')});await page.keyboard.press('Escape');
   await page.setViewportSize({width:360,height:700});await expect.poll(()=>overlay.locator('.surface').evaluate(element=>element.scrollWidth-element.clientWidth)).toBeLessThanOrEqual(1);await overlay.locator('.surface').screenshot({path:testInfo.outputPath('floating-sidebar-mobile-dark.png')});await page.emulateMedia({colorScheme:'light'});
@@ -139,6 +157,7 @@ test('captures a readable native side panel with preserved math in both themes',
     await expect(sidePanel.locator('#correct')).toBeHidden();await expect(sidePanel.locator('#formula-view')).toBeHidden();await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-light.png')});
     await openTranslationMore(sidePanel);await expect(sidePanel.locator('#correct')).toBeVisible();await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-more-light.png')});await sidePanel.keyboard.press('Escape');await expect(sidePanel.locator('#panel-more > summary')).toBeFocused();
     await sidePanel.emulateMedia({colorScheme:'dark'});await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-dark.png')});await openTranslationMore(sidePanel);await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-more-dark.png')});await sidePanel.keyboard.press('Escape');
+    await openTranslationMore(sidePanel);await sidePanel.locator('.pi-action-guide-trigger').click();const guide=sidePanel.getByRole('dialog',{name:'常用操作',exact:true});await expect(guide.getByRole('searchbox')).toBeFocused();await guide.getByRole('searchbox').fill('修正');await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-guide-dark.png')});await guide.getByRole('button',{name:'修正',exact:true}).click();await expect(sidePanel.locator('#correct')).toBeFocused();await expect(sidePanel.locator('.correction-editor')).toHaveCount(0);
     await sidePanel.setViewportSize({width:360,height:900});await expect.poll(()=>sidePanel.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(1);
     await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-mobile-dark.png')});await openTranslationMore(sidePanel);await sidePanel.setViewportSize({width:300,height:420});await sidePanel.screenshot({path:testInfo.outputPath('sidepanel-short-more-dark.png')});await expect(sidePanel.locator('.panel-menu')).toBeInViewport();
   }finally{await sidePanel.close();await sender.close()}

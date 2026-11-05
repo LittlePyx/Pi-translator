@@ -1,3 +1,4 @@
+import {keyEventDialog} from './dialog-navigation';
 /** Keep disclosure menus reachable in short windows, including after scrolling. */
 export function bindAnchoredMenus(menuSelector: string, panelSelector: string): void {
   function place(menu: HTMLDetailsElement): void {
@@ -78,7 +79,8 @@ export function bindAnchoredMenus(menuSelector: string, panelSelector: string): 
   });
   document.addEventListener('keydown', event => {
     if (event.key !== 'Escape') return;
-    const menu = openMenus()[0];
+    const dialog=keyEventDialog(event);
+    const menu = openMenus().find(menu=>!dialog||dialog.contains(menu));
     if (!menu) return;
     event.preventDefault();
     menu.open = false;

@@ -6,7 +6,7 @@ import {pdfTranslationProseIssues} from './translation-completeness';
 import {PDF_CITATION,pdfFormulaProseIssues,pdfProseBindingIssues,pdfProseUnits} from './prose-bindings';
 const REF=/\{\{(m[1-9]\d{0,2})\}\}/gu;
 const protectedToken=(index:number)=>`⟦PDF_MATH_${String(index+1).padStart(4,'0')}⟧`;
-export interface RepairPdfFormulaProseRequest {requestId:string;document:FormulaDocument;targetLanguage:string;sourceLanguage:string;style:TranslationStyle;sourceTabId?:number}
+export interface RepairPdfFormulaProseRequest {requestId:string;document:FormulaDocument;targetLanguage:string;sourceLanguage:string;style:TranslationStyle;sourceTabId?:number;pageUrl?:string;documentId?:string;glossaryDocumentId?:string}
 interface LogicalUnit {id:string;text:string;after:string;parts:Array<{id:string;text:string;role?:'head'|'condition'|'conclusion'}>}
 function logicalUnits(document:FormulaDocument,targetLanguage:string):LogicalUnit[]{
   return pdfProseUnits(document.sourceTemplate).map(unit=>{

@@ -679,3 +679,10 @@ describe('runtime message guard', () => {
     })).toBe(true);
   });
 });
+it('accepts a PDF batch glossary identity without allowing missing origins or malformed identifiers',()=>{
+  const payload={requestId:'pdf-trial',items:[{id:'P1B1',text:'A local PDF paragraph.'}],pageUrl:'chrome-extension://extension/pdf.html',glossaryDocumentId:'doc-ab12',targetLanguage:'zh-CN',sourceLanguage:'auto',style:'academic',contentMode:'auto'};
+  expect(isRuntimeMessage({type:'TRANSLATE_DOCUMENT_BATCH',payload})).toBe(true);
+  for(const glossaryDocumentId of ['../../paper','doc-TOOLONGIDENTITY','',42])expect(isRuntimeMessage({type:'TRANSLATE_DOCUMENT_BATCH',payload:{...payload,glossaryDocumentId}})).toBe(false);
+  expect(isRuntimeMessage({type:'TRANSLATE_DOCUMENT_BATCH',payload:{...payload,pageUrl:undefined}})).toBe(false);
+  expect(isRuntimeMessage({type:'TRANSLATE_DOCUMENT_BATCH',payload:{...payload,unexpected:true}})).toBe(false);
+});

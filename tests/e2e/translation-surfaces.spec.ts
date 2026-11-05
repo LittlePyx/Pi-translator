@@ -61,6 +61,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#session')).toBeVisible();
   await expect(sidePanel.locator('#source-label')).toHaveText('native-reader.pdf');
   await expect(sidePanel.locator('#translation-state')).toContainText('正在请求模型');
+  await expect(sidePanel.locator('#translation-state')).toBeVisible();
   await expect(sidePanel.getByLabel('目标语言')).toHaveValue('zh-CN');
   await expect(sidePanel.getByLabel('目标语言')).toBeDisabled();
   await expect(sidePanel.locator('#translation-text')).toBeEmpty();
@@ -79,6 +80,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     });
   }, streamingSession);
   await expect(sidePanel.locator('#translation-state')).toContainText('正在接收译文');
+  await expect(sidePanel.locator('#translation-state')).toBeVisible();
   await expect(sidePanel.locator('#translation-text')).toHaveText('流式译文应当');
   await expect(sidePanel.locator('#stop-translation')).toBeVisible();
   const stopButtonHeight = await sidePanel.locator('#stop-translation').evaluate(
@@ -92,12 +94,14 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
   await expect(sidePanel.locator('#reader-hint-text')).toBeVisible();
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('未提供选区图像');
   await expect(sidePanel.locator('#reader-hint-text')).toContainText('第 6 页');
+  await expect(sidePanel.locator('#pdf-reader-guide-action')).toHaveText('用 Pi 打开 PDF');
+  await expect(sidePanel.locator('#web-sidebar-switch')).toBeHidden();
   const contextLayout = await sidePanel.locator('.session-context').evaluate((context) => ({
     height: context.getBoundingClientRect().height,
     buttonCount: context.querySelectorAll('button').length,
   }));
   expect(contextLayout.height).toBeLessThanOrEqual(51);
-  expect(contextLayout.buttonCount).toBe(0);
+  expect(contextLayout.buttonCount).toBe(2);
   await openTranslationMore(sidePanel);
   await expect(sidePanel.locator('#open-pi-reader')).toBeVisible();
   await sidePanel.keyboard.press('Escape');
@@ -670,8 +674,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     await sidePanel.emulateMedia({ colorScheme: 'light' });
   }
   const inheritedReaderPromise = context.waitForEvent('page');
-  await openTranslationMore(sidePanel);
-  await sidePanel.locator('#open-pi-reader').click();
+  await sidePanel.locator('#pdf-reader-guide-action').click();
   const inheritedReader = await inheritedReaderPromise;
   await inheritedReader.waitForURL((url) => url.pathname === '/pdf.html');
   await inheritedReader.waitForLoadState('domcontentloaded');
@@ -1225,6 +1228,8 @@ test('pins continuous translation to a collapsible sidebar', async ({}, testInfo
   const preflightFrame = await preflightFrameHandle?.contentFrame();
   expect(preflightFrame).toBeDefined();
   await expect(preflightFrame!.locator('#label')).toHaveText('允许截图并开始框选');
+  const permissionGuidance=await preflightFrame!.locator('#grant').evaluate(el=>({bottom:el.getBoundingClientRect().bottom,viewport:innerHeight,clipped:el.scrollHeight>el.clientHeight+1}));
+  expect(permissionGuidance.bottom).toBeLessThanOrEqual(permissionGuidance.viewport);expect(permissionGuidance.clipped).toBe(false);
   expect(new URL(preflightFrame!.url()).searchParams.get('intent')).toBe('start');
   await preflightFrame!.evaluate(() => {
     const extensionChrome = (globalThis as typeof globalThis & {

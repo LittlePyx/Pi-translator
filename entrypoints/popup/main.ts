@@ -1,3 +1,6 @@
+import { t, msg, initializeUiLanguage, localizeUiDocument } from '../../core/i18n/ui-language';
+import {bindActionHints} from '../../ui/action-feedback';
+import {bindActionGuide} from '../../ui/action-guide';
 import {
   activateApiProfile,
   getSettings,
@@ -31,11 +34,13 @@ import {
   type SupportedTargetLanguage,
 } from '../../core/language/supported-target-languages';
 import {
-  getPausedSiteHosts,
   isSiteHostPaused,
-  setSitePaused,
   siteHostFromUrl,
 } from '../../core/settings/site-pause';
+import {
+  getEffectivePausedSiteHosts, getSiteReadingPreferences, saveSiteReadingPreference,
+  setSiteReadingPaused, siteReadingPreferenceForUrl,
+} from '../../core/settings/site-reading-preferences';
 import {
   edgePdfSourceUrl,
   isEdgeNativePdfContext,
@@ -63,6 +68,19 @@ import {
   type FeatureDiscoveryScene,
 } from '../../core/settings/feature-discovery';
 
+async function startUi(): Promise<void> {
+  await initializeUiLanguage();
+  localizeUiDocument();
+  bindActionHints();
+  bindActionGuide(document,['#popup-more-body'],[
+    {label:t('打开 PDF 阅读器'),selector:'#open-pdf'},
+    {label:t('框选当前网页'),selector:'#open-web-region'},
+    {label:t('文档库'),selector:'#open-library'},
+    {label:t('设置'),selector:'#open-settings'},
+    {label:t('目标语言'),selector:'#target-language'},
+  ]);
+
+
 function element<T extends HTMLElement>(id: string): T {
   const value = document.getElementById(id);
   if (!value) throw new Error(`Missing popup element #${id}`);
@@ -79,8 +97,14 @@ const apiProfile = element<HTMLSelectElement>('api-profile');
 const siteControl = element<HTMLElement>('site-control');
 const siteName = element<HTMLElement>('site-name');
 const pauseSite = element<HTMLInputElement>('pause-site');
+const rememberSite = element<HTMLInputElement>('remember-site');
+const resetSite = element<HTMLButtonElement>('reset-site');
+const sitePreferenceHelp = element<HTMLParagraphElement>('site-preference-help');
+let rememberedSite = false;
+let globalTargetLanguage: SupportedTargetLanguage = 'zh-CN';
 const status = element<HTMLParagraphElement>('status');
 const quickActions = element<HTMLElement>('quick-actions');
+let apiSetupAction:HTMLButtonElement|undefined;
 const openSettings = element<HTMLButtonElement>('open-settings');
 const translatePage = element<HTMLButtonElement>('translate-page');
 const openSidebar = element<HTMLButtonElement>('open-sidebar');
@@ -128,6 +152,8 @@ let featureGuideScene: FeatureDiscoveryScene | undefined;
 let featureGuideRevealOverride = false;
 let statusTimer: number | undefined;
 let bilingualPageState: BilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+let bilingualPageStateRead: 'pending' | 'ready' | 'error' = 'pending';
+let bilingualPageStateReadVersion = 0;
 let configuredTargetLanguage: SupportedTargetLanguage = 'zh-CN';
 let pendingBilingualLanguageSwitch: SupportedTargetLanguage | undefined;
 let targetLanguageUpdatePending = false;
@@ -206,7 +232,7 @@ function renderReadinessStatus(
   control.title = `${readiness.label}：${readiness.detail}`;
   control.setAttribute(
     'aria-label',
-    `${readiness.label}：${readiness.value}。${readiness.detail}点击打开对应设置。`,
+    msg`${readiness.label}：${readiness.value}。${readiness.detail}点击打开对应设置。`,
   );
 }
 
@@ -243,18 +269,18 @@ function openSettingsPage(focus?: SettingsFocus): void {
   } satisfies RuntimeMessage)
     .then((response: RuntimeResponse<{ opened: true }>) => {
       if (!response.ok) {
-        setStatus('无法打开完整设置，请在扩展管理页重试。', 'error');
+        setStatus(t('无法打开完整设置，请在扩展管理页重试。'), 'error');
         return;
       }
       window.close();
     })
-    .catch(() => setStatus('无法打开完整设置，请在扩展管理页重试。', 'error'));
+    .catch(() => setStatus(t('无法打开完整设置，请在扩展管理页重试。'), 'error'));
 }
 
 function openShortcutSettings(): void {
   void browser.tabs.create({ url: 'edge://extensions/shortcuts', active: true })
     .then(() => window.close())
-    .catch(() => setStatus('请手动打开 edge://extensions/shortcuts 设置快捷键。', 'error'));
+    .catch(() => setStatus(t('请手动打开 edge://extensions/shortcuts 设置快捷键。'), 'error'));
 }
 
 function runReadinessAction(action: PopupReadinessAction): void {
@@ -276,13 +302,15 @@ function renderPopupReadiness(
   });
   const blocking = result.issues.filter(issue=>issue.id!=='shortcut');
   const issues = blocking.length ? blocking : result.issues;
+  apiSetupAction?.remove();
+  apiSetupAction=undefined;
   readinessPanel.dataset.state = issues.length ? 'issue' : 'ready';
   readinessPanel.removeAttribute('aria-busy');
   readinessTitle.textContent = issues.length
-    ? `还需处理 ${issues.length} 项`
+    ? msg`还需处理 ${issues.length} 项`
     : result.contextNote
-      ? '当前页面不可使用'
-      : 'Pi Translator 已就绪';
+      ? t('当前页面不可使用')
+      : t('Pi Translator 已就绪');
   readinessNote.textContent = result.contextNote ?? '';
   readinessIssues.replaceChildren(...issues.map((issue) => {
     const row = document.createElement('div');
@@ -296,15 +324,26 @@ function renderPopupReadiness(
     const action = document.createElement('button');
     action.type = 'button';
     action.textContent = issue.actionLabel;
+    if(issue.id==='text-api'){
+      action.id='popup-setup-primary';
+      action.className='primary-action';
+      if(issue.action.kind==='settings'&&issue.action.focus==='api')action.textContent=t('完成配置');
+      apiSetupAction=action;
+      detail.hidden=true;
+      detail.id='popup-api-setup-help';
+      action.title=issue.detail;
+      action.setAttribute('aria-describedby',detail.id);
+    }
     action.addEventListener('click', () => runReadinessAction(issue.action));
-    row.append(copy, action);
+    row.append(copy);
+    if(issue.id!=='text-api')row.append(action);
     return row;
   }));
   readinessIssues.hidden = result.issues.length === 0;
   readinessPanel.hidden = result.issues.length === 0 && !result.contextNote;
   const needsSetup = blocking.length>0;
   serviceDetails.dataset.blocking = String(needsSetup);
-  serviceState.textContent = needsSetup ? '需要配置' : result.contextNote ? '页面受限' : `文字${textApi.value}${shortcut==='missing'?' · 快捷键未设':shortcut==='unknown'?' · 快捷键待检查':''}`;
+  serviceState.textContent = needsSetup ? t('需要配置') : result.contextNote ? t('页面受限') : msg`文字${textApi.value}${shortcut==='missing'?t(' · 快捷键未设'):shortcut==='unknown'?t(' · 快捷键待检查'):''}`;
   serviceState.dataset.tone = needsSetup ? 'issue' : 'ready';
   // Missing shortcuts do not block translation. Only reveal blocking setup automatically.
   if (needsSetup) {
@@ -314,6 +353,7 @@ function renderPopupReadiness(
     moreBody.append(serviceDetails);
     if (result.contextNote) serviceDetails.open = true;
   }
+  updateQuickActions();
 }
 
 function hidePdfAccessAlert(): void {
@@ -341,19 +381,19 @@ function showPdfAccessAlert(
 function showUnavailablePdfSource(): void {
   if (activePdfContext === 'overleaf') {
     showPdfAccessAlert(
-      '无法直接继承当前 Overleaf 预览',
-      '检测到了 PDF 预览，但 Overleaf 没有暴露可由 Pi PDF 读取的地址。',
-      ['在 Overleaf 下载当前编译 PDF。', '再在 Pi PDF 中选择刚下载的文件。'],
+      t('无法直接继承当前 Overleaf 预览'),
+      t('检测到了 PDF 预览，但 Overleaf 没有暴露可由 Pi PDF 读取的地址。'),
+      [t('在 Overleaf 下载当前编译 PDF。'), t('再在 Pi PDF 中选择刚下载的文件。')],
       false,
     );
     return;
   }
   showPdfAccessAlert(
-    'Edge 没有提供原 PDF 地址',
-    '如果这是本地 PDF，通常是 Pi Translator 尚未获准访问文件 URL。',
+    t('Edge 没有提供原 PDF 地址'),
+    t('如果这是本地 PDF，通常是 Pi Translator 尚未获准访问文件 URL。'),
     [
-      '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
-      '开启“允许访问文件 URL”，返回 PDF 后再点“重新检测”。',
+      t('打开 Edge 扩展管理页并进入 Pi Translator 详情。'),
+      t('开启“允许访问文件 URL”，返回 PDF 后再点“重新检测”。'),
     ],
   );
 }
@@ -385,8 +425,8 @@ function renderFeatureGuide(): void {
   featureGuideToggle.hidden = featureGuideRevealOverride;
   featureGuideToggle.setAttribute('aria-expanded', String(featureGuideRevealOverride));
   featureGuideToggle.textContent = model.completedCount === model.steps.length
-    ? '查看用法'
-    : '使用提示';
+    ? t('查看用法')
+    : t('使用提示');
   if (!featureGuideRevealOverride) return;
   featureGuideEyebrow.textContent = model.eyebrow;
   featureGuideTitle.textContent = model.title;
@@ -408,18 +448,18 @@ function renderFeatureGuide(): void {
       assignedShortcutLabel &&
       (step.id === 'web-selection' || step.id === 'overleaf-selection')
     ) {
-      detail.textContent = `${step.detail} 也可按 ${assignedShortcutLabel}。`;
+      detail.textContent = msg`${step.detail} 也可按 ${assignedShortcutLabel}。`;
     }
     copy.append(label, detail);
     item.append(mark, copy);
     return item;
   }));
   featureGuideProgress.textContent = model.completedCount
-    ? `已熟悉 ${model.completedCount} / ${model.steps.length}`
-    : '完成后会自动记住，仅保存在本机';
+    ? msg`已熟悉 ${model.completedCount} / ${model.steps.length}`
+    : t('完成后会自动记住，仅保存在本机');
   featureGuideDismiss.setAttribute(
     'aria-label',
-    '关闭使用提示',
+    t('关闭使用提示'),
   );
 }
 
@@ -479,7 +519,8 @@ function renderBilingualPageAction(): void {
     ? bilingualPageState.targetLanguage
     : undefined;
   targetLanguage.value = activeTargetLanguage ?? configuredTargetLanguage;
-  targetLanguage.disabled = targetLanguageUpdatePending;
+  const stateUnavailable = bilingualPageAvailable() && bilingualPageStateRead !== 'ready';
+  targetLanguage.disabled = targetLanguageUpdatePending || stateUnavailable;
   const languageConfirmation = pendingBilingualLanguageSwitch
     ? bilingualPageLanguageSwitchConfirmation(
         bilingualPageState,
@@ -493,33 +534,40 @@ function renderBilingualPageAction(): void {
   if (!languageConfirmation) pendingBilingualLanguageSwitch = undefined;
   translatePage.dataset.phase = bilingualPageState.phase;
   translatePage.textContent = bilingualPageState.phase === 'running'
-    ? `暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+    ? msg`暂停正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
     : bilingualPageState.phase === 'preview'
-      ? `确认翻译 ${bilingualPageState.total} 段`
+      ? msg`确认翻译 ${bilingualPageState.total} 段`
       : bilingualPageState.phase === 'paused'
         ? bilingualPageState.pauseReason === 'interactive'
-          ? '划词翻译中 · 正文稍后继续'
-          : `继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+          ? t('划词翻译中 · 正文稍后继续')
+          : msg`继续正文翻译 · ${bilingualPageState.translated}/${bilingualPageState.total}`
         : bilingualPageState.phase === 'stopped'
-          ? `继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+          ? msg`继续双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
           : bilingualPageState.phase === 'error' && bilingualPageState.total > 0
-            ? `重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+            ? msg`重试双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
             : bilingualPageState.phase === 'complete' && bilingualPageState.failed > 0
-              ? `重试 ${bilingualPageState.failed} 段 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+              ? msg`重试 ${bilingualPageState.failed} 段 · ${bilingualPageState.translated}/${bilingualPageState.total}`
               : bilingualPageState.phase === 'complete'
-                ? `清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
-                : '翻译网页正文';
+                ? msg`清除双语正文 · ${bilingualPageState.translated}/${bilingualPageState.total}`
+                : t('翻译网页正文');
   const restoredHint = bilingualPageState.restored
     ? bilingualPageState.restoredFrom === 'local'
-      ? `已从本机恢复 ${bilingualPageState.restored} 段译文。`
-      : `已从当前浏览器会话恢复 ${bilingualPageState.restored} 段译文。`
+      ? msg`已从本机恢复 ${bilingualPageState.restored} 段译文。`
+      : msg`已从当前浏览器会话恢复 ${bilingualPageState.restored} 段译文。`
     : '';
   translatePage.title = restoredHint || bilingualPageState.message || (
     bilingualPageState.phase === 'idle'
-      ? '保留网页原文，在正文段落下方渐进显示译文'
-      : '正文译文只保留在当前标签页，可随时暂停、停止或清除'
+      ? t('保留网页原文，在正文段落下方渐进显示译文')
+      : t('正文译文只保留在当前标签页，可随时暂停、停止或清除')
   );
   translatePage.disabled = bilingualPageState.pauseReason === 'interactive';
+  if (stateUnavailable) {
+    translatePage.dataset.phase = bilingualPageStateRead;
+    translatePage.textContent = bilingualPageStateRead === 'pending'
+      ? t('正在读取…') : t('重新读取正文状态');
+    translatePage.title = t('正文状态暂未读到，可重试；已有译文不会被清除。');
+    translatePage.disabled = bilingualPageStateRead === 'pending';
+  }
 }
 
 async function applyPopupTargetLanguage(
@@ -531,21 +579,26 @@ async function applyPopupTargetLanguage(
   const tabId = activeTabId;
   let settingsUpdated = false;
   targetLanguageUpdatePending = true;
+  rememberSite.disabled = true;
+  resetSite.disabled = true;
+  pauseSite.disabled = true;
   renderBilingualPageAction();
   setStatus(
     restartBilingualPage
-      ? `正在清除并改译为${supportedTargetLanguageLabel(requestedLanguage)}…`
-      : '正在更新目标语言…',
+      ? msg`正在清除并改译为${supportedTargetLanguageLabel(requestedLanguage)}…`
+      : t('正在更新目标语言…'),
     'progress',
   );
   try {
-    await mutateSettings((settings) => ({
-      nextSettings: {
-        ...settings,
-        targetLanguage: requestedLanguage,
-      },
-      value: undefined,
-    }));
+    if (rememberedSite && activeUrl) {
+      await saveSiteReadingPreference(activeUrl, { targetLanguage: requestedLanguage, paused: pauseSite.checked });
+    } else {
+      await mutateSettings((settings) => ({
+        nextSettings: { ...settings, targetLanguage: requestedLanguage },
+        value: undefined,
+      }));
+      globalTargetLanguage = requestedLanguage;
+    }
     configuredTargetLanguage = requestedLanguage;
     settingsUpdated = true;
     if (restartBilingualPage && tabId !== undefined) {
@@ -554,53 +607,90 @@ async function applyPopupTargetLanguage(
         payload: { tabId, targetLanguage: requestedLanguage },
       } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
       if (!response?.ok) {
-        throw new Error(response?.error.message ?? '当前正文改译失败。');
+        throw new Error(response?.error.message ?? t('当前正文改译失败。'));
       }
       if (activeTabId !== tabId) return;
       bilingualPageState = response.data.state;
       pendingBilingualLanguageSwitch = undefined;
-      setStatus(`已开始改译为${supportedTargetLanguageLabel(requestedLanguage)}。`);
+      setStatus(msg`已开始改译为${supportedTargetLanguageLabel(requestedLanguage)}。`);
     } else {
-      setStatus('目标语言已更新。');
+      setStatus(t('目标语言已更新。'));
     }
   } catch (error) {
     if (!settingsUpdated) configuredTargetLanguage = previousConfiguredLanguage;
     setStatus(
       settingsUpdated && restartBilingualPage
-        ? `目标语言已保存，但当前正文没有改译：${error instanceof Error ? error.message : '请重试。'}`
-        : '目标语言更新失败，已保留原设置。',
+        ? msg`目标语言已保存，但当前正文没有改译：${error instanceof Error ? error.message : t('请重试。')}`
+        : t('目标语言更新失败，已保留原设置。'),
       'error',
     );
   } finally {
     targetLanguageUpdatePending = false;
+    rememberSite.disabled = false;
+    resetSite.disabled = false;
+    pauseSite.disabled = false;
     updateQuickActions();
   }
 }
 
 async function refreshBilingualPageState(): Promise<void> {
+  const version = ++bilingualPageStateReadVersion;
+  const readError = t('正文状态暂未读到，可重试；已有译文不会被清除。');
+  const render = () => {
+    updateQuickActions();
+    const unavailable = bilingualPageAvailable() && bilingualPageStateRead !== 'ready';
+    for (const control of [rememberSite, resetSite, pauseSite]) {
+      control.disabled = unavailable || targetLanguageUpdatePending || siteControl.hidden;
+    }
+  };
   if (!bilingualPageAvailable() || activeTabId === undefined) {
     bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
+    bilingualPageStateRead = 'ready';
+    render();
     return;
   }
-  const response = await browser.runtime.sendMessage({
-    type: 'GET_BILINGUAL_PAGE_STATE',
-    payload: { tabId: activeTabId },
-  } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
-  bilingualPageState = response?.ok
-    ? response.data.state
-    : { ...EMPTY_BILINGUAL_PAGE_STATE };
+  bilingualPageStateRead = 'pending';
+  if (status.textContent === readError) setStatus('');
+  render();
+  const failed = () => {
+    bilingualPageStateRead = 'error';
+    render();
+    if (!status.textContent || status.textContent === readError) setStatus(readError, 'error');
+  };
+  const timer = window.setTimeout(() => {
+    if (version !== bilingualPageStateReadVersion) return;
+    // The native message cannot be aborted; invalidate its late UI reply.
+    bilingualPageStateReadVersion += 1;
+    failed();
+  }, 3_000);
+  try {
+    const response = await browser.runtime.sendMessage({
+      type: 'GET_BILINGUAL_PAGE_STATE',
+      payload: { tabId: activeTabId },
+    } satisfies RuntimeMessage) as BilingualPageStateResponse | undefined;
+    if (version !== bilingualPageStateReadVersion) return;
+    if (!response?.ok) throw new Error('Page status unavailable');
+    bilingualPageState = response.data.state;
+    bilingualPageStateRead = 'ready';
+    render();
+    if (status.textContent === readError) setStatus('');
+  } catch {
+    if (version === bilingualPageStateReadVersion) failed();
+  } finally {
+    window.clearTimeout(timer);
+  }
 }
 
 function updateQuickActions(): void {
   openPdf.textContent = activePdfSourceUrl
     ? activePdfContext === 'overleaf'
-      ? '用 Pi 打开当前 Overleaf PDF'
-      : '用 Pi 打开当前 PDF'
+      ? t('用 Pi 打开当前 Overleaf PDF')
+      : t('用 Pi 打开当前 PDF')
     : activePdfContext === 'overleaf'
-      ? '查看 Overleaf PDF 打开指引'
+      ? t('查看 Overleaf PDF 打开指引')
       : activePdfContext === 'native'
-        ? '解决 PDF 读取权限'
-        : '打开 PDF 阅读器';
+        ? t('解决 PDF 读取权限')
+        : t('打开 PDF 阅读器');
   const sidebarAvailable = sidebarAvailableForActivePage();
   const pageTranslationAvailable = bilingualPageAvailable();
   const webRegionAvailable = Boolean(
@@ -628,24 +718,24 @@ function updateQuickActions(): void {
   openWebRegion.hidden = !webRegionAvailable;
   renderBilingualPageAction();
   openSidebar.textContent = pdfIsCurrent
-    ? '打开翻译侧栏'
+    ? t('打开翻译侧栏')
     : sidebarMode === 'browser'
-      ? '在浏览器侧栏中翻译'
-      : '打开翻译侧栏';
-  openWebRegion.textContent = '框选当前网页';
+      ? t('在浏览器侧栏中翻译')
+      : t('打开翻译侧栏');
+  openWebRegion.textContent = t('框选当前网页');
   if (pdfIsCurrent) {
-    pageContext.textContent = '当前是 PDF：用 Pi PDF 阅读，或直接打开翻译侧栏。';
+    pageContext.textContent = t('当前是 PDF：用 Pi PDF 阅读，或直接打开翻译侧栏。');
     pageContext.removeAttribute('data-tone');
   } else if (sidebarAvailable) {
     pageContext.textContent = isOverleafProjectUrl(activeUrl ?? '')
-      ? '在 Overleaf 选中文字即可翻译；预览、公式和图表可使用框选。'
-      : '长文章可直接开启双语正文；短内容划词，图表和不可选内容使用框选。';
+      ? t('在 Overleaf 选中文字即可翻译；预览、公式和图表可使用框选。')
+      : t('长文章可直接开启双语正文；短内容划词，图表和不可选内容使用框选。');
     pageContext.removeAttribute('data-tone');
   } else if (activeUrl && !isInjectableWebUrl(activeUrl)) {
-    pageContext.textContent = '当前页面受 Edge 限制，请切换到普通网页、Overleaf 或 PDF。';
+    pageContext.textContent = t('当前页面受 Edge 限制，请切换到普通网页、Overleaf 或 PDF。');
     pageContext.dataset.tone = 'restricted';
   } else {
-    pageContext.textContent = '打开 PDF 阅读器，或在普通网页中使用划词翻译。';
+    pageContext.textContent = t('打开 PDF 阅读器，或在普通网页中使用划词翻译。');
     pageContext.removeAttribute('data-tone');
   }
   quickActions.dataset.primary = pdfIsCurrent
@@ -655,8 +745,18 @@ function updateQuickActions(): void {
       : sidebarAvailable
         ? 'sidebar'
         : 'reader';
-  quickActions.prepend(primaryAction);
-  if (!pdfIsPrimary) moreBody.prepend(openPdf);
+  if(apiSetupAction){
+    for(const action of [translatePage,openSidebar,openPdf]){
+      action.classList.remove('primary-action','secondary-action');
+      moreBody.append(action);
+    }
+    quickActions.prepend(apiSetupAction);
+    quickActions.dataset.primary='setup';
+  }else{
+    quickActions.prepend(primaryAction);
+    if(sidebarAvailable&&primaryAction!==openSidebar)quickActions.append(openSidebar);
+    if(!pdfIsPrimary)moreBody.prepend(openPdf);
+  }
   quickActions.removeAttribute('aria-busy');
   renderFeatureGuide();
 }
@@ -669,11 +769,11 @@ async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
     !(await browser.extension.isAllowedFileSchemeAccess())
   ) {
     showPdfAccessAlert(
-      '还差一步：允许读取本地 PDF',
-      'Edge 默认不允许扩展读取 file:// 文件，这不是 API 或 PDF 损坏。',
+      t('还差一步：允许读取本地 PDF'),
+      t('Edge 默认不允许扩展读取 file:// 文件，这不是 API 或 PDF 损坏。'),
       [
-        '打开 Edge 扩展管理页并进入 Pi Translator 详情。',
-        '开启“允许访问文件 URL”，返回当前 PDF 后重新检测。',
+        t('打开 Edge 扩展管理页并进入 Pi Translator 详情。'),
+        t('开启“允许访问文件 URL”，返回当前 PDF 后重新检测。'),
       ],
     );
     return false;
@@ -691,11 +791,11 @@ async function requestPdfSourceAccess(sourceUrl: string): Promise<boolean> {
   }
   if (!granted) {
     showPdfAccessAlert(
-      '需要当前 PDF 所在站点的读取权限',
-      `Pi PDF 只会申请 ${source.protocol === 'file:' ? '本地文件' : source.origin}，不会因此读取其他网站。`,
+      t('需要当前 PDF 所在站点的读取权限'),
+      msg`Pi PDF 只会申请 ${source.protocol === 'file:' ? t('本地文件') : source.origin}，不会因此读取其他网站。`,
       [
-        '点击“重新检测”，并在 Edge 的权限提示中选择允许。',
-        '授权后再次点击“用 Pi 打开当前 PDF”。',
+        t('点击“重新检测”，并在 Edge 的权限提示中选择允许。'),
+        t('授权后再次点击“用 Pi 打开当前 PDF”。'),
       ],
     );
     return false;
@@ -737,17 +837,19 @@ async function resolveActivePdfContext(tab: {
 }
 
 async function load(): Promise<void> {
-  const [settings, tabs, pausedSiteHosts, commands, discoveryProgress] = await Promise.all([
+  const [settings, tabs, pausedSiteHosts, commands, discoveryProgress, sitePreferences] = await Promise.all([
     getSettings(),
     browser.tabs.query({ active: true, currentWindow: true }),
-    getPausedSiteHosts(),
+    getEffectivePausedSiteHosts(),
     browser.commands.getAll().catch(() => undefined),
     getFeatureDiscoveryProgress().catch(() => ({ completed: {}, dismissed: {} })),
+    getSiteReadingPreferences(),
   ]);
   featureGuideProgressState = discoveryProgress;
   configuredTargetLanguage = isSupportedTargetLanguage(settings.targetLanguage)
     ? settings.targetLanguage
     : 'zh-CN';
+  globalTargetLanguage = configuredTargetLanguage;
   targetLanguage.value = configuredTargetLanguage;
   apiProfile.replaceChildren(...settings.apiProfiles.map((profile) => {
     const option = document.createElement('option');
@@ -761,9 +863,10 @@ async function load(): Promise<void> {
   sidebarMode = settings.sidebarMode;
   activeTabId = tabs[0]?.id;
   await resolveActivePdfContext(tabs[0] ?? {});
-  await refreshBilingualPageState().catch(() => {
-    bilingualPageState = { ...EMPTY_BILINGUAL_PAGE_STATE };
-  });
+  const sitePreference = !activePdfContext ? siteReadingPreferenceForUrl(sitePreferences, activeUrl) : undefined;
+  rememberedSite = Boolean(sitePreference);
+  if (sitePreference) configuredTargetLanguage = sitePreference.targetLanguage;
+  renderSitePreference();
   updateQuickActions();
   if (activePdfContext && !activePdfSourceUrl) showUnavailablePdfSource();
   else hidePdfAccessAlert();
@@ -775,12 +878,16 @@ async function load(): Promise<void> {
     siteName.textContent = '';
     pauseSite.checked = false;
     pauseSite.disabled = true;
+    rememberSite.disabled = true;
   } else {
     siteName.textContent = hostname;
     pauseSite.checked = isSiteHostPaused(hostname, pausedSiteHosts);
     pauseSite.disabled = false;
+    rememberSite.disabled = false;
     siteControl.hidden = false;
   }
+  // Restoring the current webpage must not block the other popup actions.
+  void refreshBilingualPageState();
   const readiness = await refreshApiReadiness(settings);
   assignedShortcutLabel = commands ? assignedTranslationShortcut(commands) : undefined;
   popupShortcutState = commands
@@ -817,7 +924,7 @@ bilingualLanguageCancel.addEventListener('click', () => {
   const language = isSupportedTargetLanguage(bilingualPageState.targetLanguage)
     ? supportedTargetLanguageLabel(bilingualPageState.targetLanguage)
     : supportedTargetLanguageLabel(configuredTargetLanguage);
-  setStatus(`已保留当前${language}正文。`);
+  setStatus(msg`已保留当前${language}正文。`);
 });
 bilingualLanguageConfirm.addEventListener('click', () => {
   const requestedLanguage = pendingBilingualLanguageSwitch;
@@ -828,7 +935,7 @@ bilingualLanguageConfirm.addEventListener('click', () => {
 apiProfile.addEventListener('change', () => {
   const requestedProfileId = apiProfile.value;
   setControlPending(apiProfile, true);
-  setStatus('正在切换翻译接口…', 'progress');
+  setStatus(t('正在切换翻译接口…'), 'progress');
   void (async () => {
     const settings = await getSettings();
     const profile = settings.apiProfiles.find((candidate) => candidate.id === requestedProfileId);
@@ -840,36 +947,81 @@ apiProfile.addEventListener('change', () => {
     await activateApiProfile(requestedProfileId);
     const readiness = await refreshApiReadiness(await getSettings());
     renderPopupReadiness(readiness.text, popupShortcutState);
-    setStatus('翻译接口已切换。');
+    setStatus(t('翻译接口已切换。'));
   })().catch(async () => {
     const settings = await getSettings().catch(() => undefined);
     if (settings) apiProfile.value = settings.activeApiProfileId;
-    setStatus('未获得该接口的访问权限，仍使用原配置。', 'error');
+    setStatus(t('未获得该接口的访问权限，仍使用原配置。'), 'error');
   }).finally(() => setControlPending(apiProfile, false));
 });
+
+function renderSitePreference(): void {
+  rememberSite.checked = rememberedSite;
+  resetSite.hidden = !rememberedSite;
+  sitePreferenceHelp.textContent = rememberedSite
+    ? t('已记住：顶部语言与暂停状态仅用于此网站。页面内临时切换不保存。')
+    : t('未记住：语言使用全局设置，暂停仅在当前浏览器会话生效。');
+}
+
+async function changeSiteRemembered(remember: boolean): Promise<void> {
+  if (!activeUrl || targetLanguageUpdatePending) { renderSitePreference(); return; }
+  targetLanguageUpdatePending = true;
+  rememberSite.disabled = true;
+  resetSite.disabled = true;
+  pauseSite.disabled = true;
+  targetLanguage.disabled = true;
+  try {
+    const language = isSupportedTargetLanguage(targetLanguage.value) ? targetLanguage.value : configuredTargetLanguage;
+    await saveSiteReadingPreference(activeUrl, remember ? { targetLanguage: language, paused: pauseSite.checked } : null);
+    rememberedSite = remember;
+    configuredTargetLanguage = remember ? language : globalTargetLanguage;
+    if (!remember) pauseSite.checked = false;
+    setStatus(remember ? t('已记住此网站的语言与暂停状态。') : t('此网站已恢复全局设置，现有译文保留。'));
+  } catch {
+    setStatus(t('网站偏好保存失败，已保留原设置。'), 'error');
+  } finally {
+    targetLanguageUpdatePending = false;
+    rememberSite.disabled = false;
+    resetSite.disabled = false;
+    pauseSite.disabled = false;
+    renderSitePreference();
+    renderBilingualPageAction();
+  }
+}
+
+rememberSite.addEventListener('change', () => { void changeSiteRemembered(rememberSite.checked); });
+resetSite.addEventListener('click', () => { void changeSiteRemembered(false); });
 
 pauseSite.addEventListener('change', () => {
   if (!activeUrl) return;
   const requestedPaused = pauseSite.checked;
   setControlPending(pauseSite, true);
-  setStatus(requestedPaused ? '正在暂停当前网站…' : '正在恢复当前网站…', 'progress');
-  void setSitePaused(activeUrl, requestedPaused)
+  rememberSite.disabled = true;
+  resetSite.disabled = true;
+  targetLanguage.disabled = true;
+  setStatus(requestedPaused ? t('正在暂停当前网站…') : t('正在恢复当前网站…'), 'progress');
+  void setSiteReadingPaused(activeUrl, requestedPaused)
     .then((hostname) => {
       if (!hostname) pauseSite.checked = !requestedPaused;
       setStatus(
         hostname
           ? requestedPaused
-            ? `已暂停 ${hostname} 的自动划词。`
-            : `已恢复 ${hostname} 的自动划词。`
-          : '当前页面不支持此操作。',
+            ? msg`已暂停 ${hostname} 的自动划词。`
+            : msg`已恢复 ${hostname} 的自动划词。`
+          : t('当前页面不支持此操作。'),
         hostname ? 'success' : 'error',
       );
     })
     .catch(() => {
       pauseSite.checked = !requestedPaused;
-      setStatus('当前网站状态更新失败，已恢复原状态。', 'error');
+      setStatus(t('当前网站状态更新失败，已恢复原状态。'), 'error');
     })
-    .finally(() => setControlPending(pauseSite, false));
+    .finally(() => {
+      setControlPending(pauseSite, false);
+      rememberSite.disabled = false;
+      resetSite.disabled = false;
+      targetLanguage.disabled = false;
+    });
 });
 
 featureGuideToggle.addEventListener('click', () => {
@@ -895,7 +1047,7 @@ featureGuideDismiss.addEventListener('click', () => {
     renderFeatureGuide();
     featureGuideToggle.focus({ preventScroll: true });
   })().catch(() => {
-    setStatus('使用提示状态未能保存，请稍后再试。', 'error');
+    setStatus(t('使用提示状态未能保存，请稍后再试。'), 'error');
   }).finally(() => {
     featureGuideDismiss.disabled = false;
   });
@@ -911,18 +1063,22 @@ visionApiStatus.addEventListener('click', () => openSettingsPage(visionApiSettin
 
 translatePage.addEventListener('click', () => {
   if (activeTabId === undefined) return;
+  if (bilingualPageStateRead !== 'ready') {
+    if (bilingualPageStateRead === 'error') void refreshBilingualPageState();
+    return;
+  }
   if (!isSupportedTargetLanguage(targetLanguage.value)) {
-    setStatus('当前目标语言不支持网页正文翻译。', 'error');
+    setStatus(t('当前目标语言不支持网页正文翻译。'), 'error');
     return;
   }
   const action = bilingualPageAction();
   translatePage.disabled = true;
   setStatus(
     action === 'start'
-      ? '正在识别网页正文…'
+      ? t('正在识别网页正文…')
       : action === 'clear'
-        ? '正在清除双语正文…'
-        : '正在更新正文翻译状态…',
+        ? t('正在清除双语正文…')
+        : t('正在更新正文翻译状态…'),
     'progress',
   );
   const request = action === 'start'
@@ -939,17 +1095,17 @@ translatePage.addEventListener('click', () => {
       } satisfies RuntimeMessage);
   void (request as Promise<BilingualPageStateResponse | undefined>)
     .then((response) => {
-      if (!response?.ok) throw new Error(response?.error.message ?? '正文翻译操作失败。');
+      if (!response?.ok) throw new Error(response?.error.message ?? t('正文翻译操作失败。'));
       bilingualPageState = response.data.state;
       updateQuickActions();
       if (bilingualPageState.phase === 'error') {
-        setStatus(bilingualPageState.message ?? '当前页面没有识别到可翻译的正文。', 'error');
+        setStatus(bilingualPageState.message ?? t('当前页面没有识别到可翻译的正文。'), 'error');
         return;
       }
       window.close();
     })
     .catch((error: unknown) => {
-      setStatus(error instanceof Error ? error.message : '正文翻译操作失败。', 'error');
+      setStatus(error instanceof Error ? error.message : t('正文翻译操作失败。'), 'error');
     })
     .finally(() => {
       translatePage.disabled = false;
@@ -963,35 +1119,35 @@ openSidebar.addEventListener('click', () => {
         await markFeatureGuideComplete(sidebarDiscoveryFeature()).catch(() => undefined);
         window.close();
       })
-      .catch(() => setStatus('当前页面无法打开浏览器侧栏，请刷新后重试。', 'error'));
+      .catch(() => setStatus(t('当前页面无法打开浏览器侧栏，请刷新后重试。'), 'error'));
     return;
   }
   void browser.runtime.sendMessage({ type: 'OPEN_SIDEBAR' } satisfies RuntimeMessage)
     .then(async (response: RuntimeResponse<{ opened: true }> | undefined) => {
       if (!response?.ok) {
-        setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error');
+        setStatus(t('当前页面无法打开侧栏，请刷新后重试。'), 'error');
         return;
       }
       await markFeatureGuideComplete(sidebarDiscoveryFeature()).catch(() => undefined);
       window.close();
     })
-    .catch(() => setStatus('当前页面无法打开侧栏，请刷新后重试。', 'error'));
+    .catch(() => setStatus(t('当前页面无法打开侧栏，请刷新后重试。'), 'error'));
 });
 
 openWebRegion.addEventListener('click', () => {
-  setStatus('正在进入网页框选…', 'progress');
+  setStatus(t('正在进入网页框选…'), 'progress');
   openWebRegion.disabled = true;
   void browser.runtime.sendMessage({
     type: 'START_WEB_REGION_SELECTION',
   } satisfies RuntimeMessage).then(async (response: RuntimeResponse<{ started: true }> | undefined) => {
     if (!response?.ok) {
-      setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
+      setStatus(t('当前页面无法框选，请刷新页面后重试。'), 'error');
       return;
     }
     await markFeatureGuideComplete(regionDiscoveryFeature()).catch(() => undefined);
     window.close();
   }).catch(() => {
-    setStatus('当前页面无法框选，请刷新页面后重试。', 'error');
+    setStatus(t('当前页面无法框选，请刷新页面后重试。'), 'error');
   }).finally(() => {
     openWebRegion.disabled = false;
   });
@@ -1019,21 +1175,21 @@ openPdf.addEventListener('click', () => {
     if (!response?.ok) throw new Error(response?.error.message ?? 'PDF reader did not open.');
     await markFeatureGuideComplete(pdfDiscoveryFeature()).catch(() => undefined);
     window.close();
-  })().catch(() => setStatus('无法打开 PDF 阅读器，请重新加载扩展后再试。', 'error'));
+  })().catch(() => setStatus(t('无法打开 PDF 阅读器，请重新加载扩展后再试。'), 'error'));
 });
 
 openExtensionManagement.addEventListener('click', () => {
   void browser.tabs.create({
     url: `edge://extensions/?id=${browser.runtime.id}`,
     active: true,
-  }).catch(() => setStatus('请手动打开 edge://extensions 并进入 Pi Translator 详情。', 'error'));
+  }).catch(() => setStatus(t('请手动打开 edge://extensions 并进入 Pi Translator 详情。'), 'error'));
 });
 
 retryPdfAccess.addEventListener('click', () => {
   void (async () => {
     if (activePdfSourceUrl) {
       if (await requestPdfSourceAccess(activePdfSourceUrl)) {
-        setStatus('PDF 读取权限已就绪。');
+        setStatus(t('PDF 读取权限已就绪。'));
       }
       return;
     }
@@ -1042,7 +1198,7 @@ retryPdfAccess.addEventListener('click', () => {
     updateQuickActions();
     if (activePdfSourceUrl) {
       hidePdfAccessAlert();
-      setStatus('已重新识别当前 PDF。');
+      setStatus(t('已重新识别当前 PDF。'));
     } else if (activePdfContext) {
       showUnavailablePdfSource();
     }
@@ -1051,5 +1207,9 @@ retryPdfAccess.addEventListener('click', () => {
 
 void load().catch(() => {
   updateQuickActions();
-  setStatus('读取扩展状态失败，请重新打开面板。', 'error');
+  setStatus(t('读取扩展状态失败，请重新打开面板。'), 'error');
 });
+
+}
+
+void startUi();

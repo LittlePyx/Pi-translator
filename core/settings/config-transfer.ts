@@ -1,12 +1,35 @@
+import {validateGlossaryProfiles,validateGlossaryProfileSettings} from './glossary-profiles';
+import {normalizePurposePreferences} from './purpose-preferences';
 import { normalizeGlossaryEntries } from '../translation/glossary';
 import { normalizeModelPrices } from '../translation/cost-estimate';
 import { normalizeApiBaseUrl } from './api-access';
 import { normalizeSiteAllowlist } from './site-access';
 import { normalizePdfRegionShortcutKey } from '../pdf/region-shortcuts';
 import type { ApiProfile, ExtensionSettings } from './schema';
+import { normalizeSiteReadingPreferences, type SiteReadingPreferences } from './site-reading-preferences';
+import type { UiLanguagePreference } from '../i18n/ui-language';
 
 const CONFIG_FORMAT = 'pi-translator-settings';
-const CONFIG_VERSION = 1;
+const CONFIG_VERSION = 2;
+
+export interface ConfigurationReadingPreferences {
+  sites: SiteReadingPreferences;
+  uiLanguage: UiLanguagePreference;
+}
+
+/** Version 1 has no reading preferences: importing it must leave local choices alone. */
+export function importConfigurationReadingPreferences(input: string): ConfigurationReadingPreferences | undefined {
+  const envelope = record(JSON.parse(input));
+  if (envelope.version === 1 || envelope.readingPreferences === undefined) return undefined;
+  const source = record(envelope.readingPreferences);
+  const sites = record(source.sites);
+  const normalized = normalizeSiteReadingPreferences(sites);
+  if (Object.keys(sites).length !== Object.keys(normalized).length ||
+    !['auto', 'zh-CN', 'en'].includes(String(source.uiLanguage))) {
+    throw new Error('配置中的网站偏好或界面语言无效。');
+  }
+  return { sites: normalized, uiLanguage: source.uiLanguage as UiLanguagePreference };
+}
 
 function record(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
@@ -19,7 +42,7 @@ function oneOf<T extends string>(value: unknown, values: readonly T[], fallback:
   return typeof value === 'string' && values.includes(value as T) ? value as T : fallback;
 }
 
-export function exportSettingsConfiguration(settings: ExtensionSettings): string {
+export function exportSettingsConfiguration(settings: ExtensionSettings, readingPreferences?: ConfigurationReadingPreferences): string {
   const activeApiProfileIndex = Math.max(
     0,
     settings.apiProfiles.findIndex((profile) => profile.id === settings.activeApiProfileId),
@@ -32,6 +55,10 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
     version: CONFIG_VERSION,
     exportedAt: new Date().toISOString(),
     containsApiKeys: false,
+    ...(readingPreferences ? { readingPreferences: {
+      sites: normalizeSiteReadingPreferences(readingPreferences.sites),
+      uiLanguage: readingPreferences.uiLanguage,
+    } } : {}),
     settings: {
       modelPrices: normalizeModelPrices(settings.modelPrices),
       apiProfiles: settings.apiProfiles.map(({ name, apiBaseUrl, model }) => ({
@@ -52,6 +79,8 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
       siteAllowlist: settings.siteAllowlist,
       enableContextMenu: settings.enableContextMenu,
       academicGlossary: settings.academicGlossary,
+      ...validateGlossaryProfiles(settings),
+      ...(settings.purposePreferences!==undefined?{purposePreferences:normalizePurposePreferences(settings.purposePreferences)!}:{}),
       rememberRecentTranslations: settings.rememberRecentTranslations,
       enableSessionCache: settings.enableSessionCache,
       historyLimit: settings.historyLimit,
@@ -61,6 +90,7 @@ export function exportSettingsConfiguration(settings: ExtensionSettings): string
       sidebarSide: settings.sidebarSide,
       sidebarWidth: settings.sidebarWidth,
       contextMode: settings.contextMode,
+      ...(settings.paragraphShortcut&&settings.paragraphShortcut!=='off'?{paragraphShortcut:settings.paragraphShortcut}:{}),
       enableStreaming: settings.enableStreaming,
       protectSensitiveFields: settings.protectSensitiveFields,
       pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
@@ -80,9 +110,10 @@ export function importSettingsConfiguration(
     throw new Error('配置文件不是有效的 JSON。');
   }
   const envelope = record(parsed);
-  if (envelope.format !== CONFIG_FORMAT || envelope.version !== CONFIG_VERSION) {
+  if (envelope.format !== CONFIG_FORMAT || ![1, CONFIG_VERSION].includes(Number(envelope.version)) || typeof envelope.version !== 'number') {
     throw new Error('这不是受支持的 Pi Translator 配置文件。');
   }
+  importConfigurationReadingPreferences(input);
   const source = record(envelope.settings);
   if (!Array.isArray(source.apiProfiles) || !source.apiProfiles.length) {
     throw new Error('配置文件中没有翻译 API 配置。');
@@ -124,7 +155,8 @@ export function importSettingsConfiguration(
           : [];
       }))
     : [];
-  return {
+  const importedProfiles=validateGlossaryProfiles(source);
+  const result:ExtensionSettings={
     ...current,
     modelPrices: normalizeModelPrices(source.modelPrices),
     schemaVersion: 8,
@@ -151,6 +183,9 @@ export function importSettingsConfiguration(
       : [],
     enableContextMenu: source.enableContextMenu !== false,
     academicGlossary: glossary,
+    // Older files do not replace newer local schemes or document bindings.
+    ...importedProfiles,
+    ...(source.purposePreferences!==undefined?{purposePreferences:normalizePurposePreferences(source.purposePreferences)!}:{}),
     rememberRecentTranslations: source.rememberRecentTranslations !== false,
     enableSessionCache: source.enableSessionCache !== false,
     historyLimit,
@@ -162,8 +197,11 @@ export function importSettingsConfiguration(
     contextMode: oneOf(source.contextMode, ['off', 'sentence', 'paragraph'] as const, 'off'),
     enableStreaming: source.enableStreaming !== false,
     protectSensitiveFields: source.protectSensitiveFields !== false,
+    ...(source.paragraphShortcut==='alt'||source.paragraphShortcut==='shift'?{paragraphShortcut:source.paragraphShortcut}:{}),
     pdfKeyboardShortcutsEnabled: source.pdfKeyboardShortcutsEnabled !== false,
     pdfRegionShortcutKey: normalizePdfRegionShortcutKey(source.pdfRegionShortcutKey),
     onboardingCompleted: true,
   };
+  validateGlossaryProfileSettings(result);
+  return result;
 }

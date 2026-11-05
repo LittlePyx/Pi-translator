@@ -36,3 +36,7 @@ export function consumePdfRequest(usage: PdfRequestUsage, kind: 'text' | 'vision
   }
   usage[kind] += 1;
 }
+/** Release only a reservation whose caller has proved no request was sent. */
+export function releasePdfRequest(usage:PdfRequestUsage,kind:'text'|'vision'|'ocr'):void{
+  if(usage[kind]>0)usage[kind]-=1;
+}

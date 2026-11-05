@@ -860,9 +860,9 @@ main {
 }
 .correction-editor textarea, .correction-editor input, .correction-editor select,
 .correction-editor summary { scroll-margin-bottom: 70px; }
-.correction-actions span { margin-right: auto; color: #5f687a; font-size: 10px; overflow-wrap: anywhere; }
+.correction-actions span { flex: 1; min-width: 0; margin-right: auto; color: #5f687a; font-size: 10px; overflow-wrap: anywhere; }
 .correction-actions .correction-feedback.is-error { color: #a52b36; font-weight: 650; }
-.correction-actions button { min-height: var(--compact-hit); border: 1px solid #c9cdee; border-radius: 4px; padding: 4px 8px; color: #5f687a; background: transparent; cursor: pointer; font-size: 10px; }
+.correction-actions button { flex: 0 0 auto; white-space: nowrap; min-height: var(--compact-hit); border: 1px solid #c9cdee; border-radius: 4px; padding: 4px 8px; color: #5f687a; background: transparent; cursor: pointer; font-size: 10px; }
 .correction-actions .save { color: #fff; border-color: #5145cd; background: #5b4be0; }
 .correction-term-fields input[aria-invalid="true"] { border-bottom-color: #dc2626; box-shadow: 0 1px 0 rgba(220, 38, 38, .18); }
 .correction-term-disclosure.has-value > summary { color: #4f46e5; font-weight: 650; }

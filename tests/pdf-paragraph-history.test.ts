@@ -1,6 +1,6 @@
 import {describe,it,expect} from 'vitest';
 import {parseFormulaDocument} from '../core/translation/formula-document';
-import {withParagraphHistory,restoredParagraphRevision,paragraphRevision,validParagraphRevision} from '../core/pdf/paragraph-history';
+import {withParagraphHistory,restoredParagraphRevision,paragraphRevision,validParagraphRevision,MAX_PDF_PARAGRAPH_REVISIONS} from '../core/pdf/paragraph-history';
 describe('durable PDF paragraph revisions',()=>{
   it('keeps original formula registry and warnings through correction and restore',()=>{
     const formulaDocument=parseFormulaDocument({recognizedText:'{{m1}}',translation:'旧译文 {{m1}}',formulas:[{id:'m1',latex:'\\mathcal{P}',display:false}]});
@@ -12,9 +12,12 @@ describe('durable PDF paragraph revisions',()=>{
   });
   it('bounds history, avoids duplicate checkpoint versions and refuses unaccepted candidates',()=>{
     let value=withParagraphHistory(undefined,{translatedText:'第一版'});
-    for(let i=0;i<10;i++)value=withParagraphHistory(value,{translatedText:`版本${i}`});
-    expect(value.revisions).toHaveLength(5);
-    expect(withParagraphHistory(value,{...value,reviewConfirmation:'review-aa'}).revisions).toHaveLength(5);
+    for(let i=0;i<MAX_PDF_PARAGRAPH_REVISIONS;i++)value=withParagraphHistory(value,{translatedText:`版本${i}`});
+    expect(value.revisions).toHaveLength(MAX_PDF_PARAGRAPH_REVISIONS);
+    const before=structuredClone(value);expect(()=>withParagraphHistory(value,{translatedText:'新版本'})).toThrow('修订历史已满');expect(value).toEqual(before);
+    expect(withParagraphHistory(value,{...value,revisions:value.revisions!.slice(0,-1)}).revisions).toEqual(value.revisions);expect(value).toEqual(before);
+    expect(()=>withParagraphHistory(value,{...value,revisions:value.revisions!.map((revision,index)=>index?revision:{...revision,translatedText:'冲突'})})).toThrow('修订历史已变化');
+    expect(withParagraphHistory(value,{...value,reviewConfirmation:'review-aa'}).revisions).toHaveLength(MAX_PDF_PARAGRAPH_REVISIONS);
     const candidate=paragraphRevision({translatedText:'未验证的返回文字',formulaReviewMessage:'公式未对应'},'unaccepted');
     expect(()=>restoredParagraphRevision({...value,revisions:[candidate]},candidate.id)).toThrow('未通过校验');
     expect(validParagraphRevision({...candidate,apiKey:'not-allowed'})).toBe(false);

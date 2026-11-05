@@ -39,6 +39,7 @@ export interface PdfBackgroundTranslationSettings {
   requestLimit?: number;
   requestUsage?: PdfRequestUsage;
   documentId?: string;
+  glossaryDocumentId?:string;
   pageUrl: string;
   sourceLabel?: string;
   targetLanguage: string;
@@ -49,6 +50,8 @@ export interface PdfBackgroundTranslationSettings {
 
 export interface PdfBackgroundTranslationOutcome {
   formulaDocument?: FormulaDocument;
+  /** In-memory only; discarded after a single-region repair is no longer current. */
+  pendingFormulaRepair?: FormulaDocument;
   blockId: string;
   translatedText: string;
   visualProcessed: boolean;

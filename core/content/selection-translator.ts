@@ -1,3 +1,7 @@
+import {hasReadingDraft,readingPageUrl,type ReadingSummaryReturn} from './reading-navigation';
+import {openExistingNote} from '../../ui/existing-note';
+import {excerptSourceHref} from '../translation/library-search';
+import {isRuntimeMessage} from '../messaging/messages';
 import type {
   BilingualPageExportResponse,
   PublicSettings,
@@ -13,8 +17,9 @@ import type {
   TranslateRuntimeResponse,
   UpdateTranslationResultResponse,
 } from '../messaging/messages';
-import { normalizeExcerptCitation, type ExcerptCitation } from './excerpt-citation';
+import { citationUrl, normalizeExcerptCitation, type ExcerptCitation } from './excerpt-citation';
 import {webExcerptPageUrl,type WebExcerpt} from './web-excerpt-repository';
+import { applyPublicUiLanguage, t } from '../i18n/ui-language';
 import {
   runtimeConnectionErrorMessage,
   type SettingsFocus,
@@ -76,6 +81,7 @@ import {
   type WebRegionSelectionHandle,
   type WebRegionSelectionSeed,
 } from './web-region-selection';
+import {pageCitationMetadata,type CitationMetadata} from './citation-metadata';
 import { createBilingualPageTranslator } from './bilingual-page-translator';
 
 interface ContentScriptRuntimeContext {
@@ -87,7 +93,9 @@ type TranslationSurface = 'overleaf' | 'general' | 'pdf';
 interface SelectionTranslatorOptions {
   pageUrl?: () => string;
   sourceLabel?: () => string | undefined;
+  citationMetadata?: () => CitationMetadata;
   documentId?: () => string | undefined;
+  glossaryDocumentId?: () => string | undefined;
   allowSitePause?: boolean;
   viewportInsets?: ViewportInsetsProvider;
   onSidebarLayoutChange?: (layout: SelectionTranslatorSidebarLayout) => void;
@@ -95,6 +103,7 @@ interface SelectionTranslatorOptions {
   onPublicSettingsChange?: (settings: PublicSettings) => void;
   shouldIgnoreSelection?: (selection: Selection) => boolean;
   selectionPreview?: (snapshot: SelectionSnapshot) => SelectionTriggerPreview | undefined;
+  onAnnotateSelection?: () => void;
   onAdjustPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
   onNavigateToPdfRegion?: (sourceLocation: PdfSourceLocation) => void | Promise<void>;
   resolvePdfRegionRects?: (sourceLocation: PdfSourceLocation) => ViewportRect[];
@@ -187,6 +196,7 @@ export interface SelectionTranslatorController {
   translatePdfRegionText(capture: PdfRegionTextTranslationCapture): Promise<void>;
   openSidebar(): void;
   deactivateSidebar(): void;
+  setReadingAnnotationMode(enabled: boolean): void;
   cancelActiveTranslation(): void;
   refreshPersistentMarkers(): Promise<void>;
   reset(): void;
@@ -301,11 +311,29 @@ async function startSelectionTranslatorInstance(
   let dismissedPassiveSelectionHash: string | undefined;
   let browserSidebarActive = false;
   let continuousTranslationPaused = false;
+  let readingAnnotationMode = false;
+  let annotationModeRevision = 0;
   let pdfSelectionPointerId: number | undefined;
   let pdfSelectionInProgress = false;
   let temporaryTargetLanguage = settings.targetLanguage;
   let temporaryStyle = settings.style;
+  let hasTemporaryTargetLanguage = false;
+  let hasTemporaryStyle = false;
   let initializationPromise: Promise<void> = Promise.resolve();
+  let invalidated = false;
+  let webpageDocumentPort: ReturnType<typeof browser.runtime.connect> | undefined;
+  function ensureWebpageDocumentConnection(): void {
+    if (surface !== 'general' || window.top !== window || invalidated || webpageDocumentPort) return;
+    try {
+      const port = browser.runtime.connect({ name: 'pi-webpage-document' });
+      webpageDocumentPort = port;
+      port.onDisconnect.addListener(() => {
+        if (webpageDocumentPort === port) webpageDocumentPort = undefined;
+      });
+    } catch {
+      // Reconnect on the next selection after an extension worker restart.
+    }
+  }
   const bilingualPageTranslator = surface === 'general'
     ? createBilingualPageTranslator({
         pageUrl: () => options.pageUrl?.() ?? location.href,
@@ -328,10 +356,47 @@ async function startSelectionTranslatorInstance(
         },
       })
     : undefined;
+  const paragraphClick=(event:MouseEvent)=>{
+    const modifier=settings.paragraphShortcut;if(!bilingualPageTranslator||!modifier||modifier==='off'||event.ctrlKey||event.metaKey||event.button!==0||event.altKey!==(modifier==='alt')||event.shiftKey!==(modifier==='shift')||getSelection()?.toString())return;
+    const target=event.target instanceof Element?event.target:null;if(!target||target.closest('a,button,input,textarea,select,label,summary,audio,video,[contenteditable],pre,code,dialog,[role=button],[role=link],[role=textbox],[role=checkbox],[role=radio],[role=switch],[role=combobox],[role=slider]'))return;
+    const paragraph=target.closest<HTMLElement>('p,blockquote,li,figcaption');if(!paragraph)return;event.preventDefault();event.stopPropagation();
+    void bilingualPageTranslator.translateParagraph(paragraph,isSupportedTargetLanguage(temporaryTargetLanguage)?temporaryTargetLanguage:'zh-CN');
+  };
+  document.addEventListener('click',paragraphClick,true);
   const markerAnchors = new Map<string, TranslationMarkerAnchor>();
   const segmentMarkerAnchors = new Map<string, TranslationMarkerAnchor>();
   let pendingSelectionMarkerRequestId: string | undefined;
   let markerManager: SessionTranslationMarkerManager | undefined;
+  interface WebReadingReturn {url:string;x:number;y:number;scrollers:{element:Element;left:number;top:number}[];summaryReturn?:ReadingSummaryReturn;previous?:WebReadingReturn}
+  let webReadingReturn:WebReadingReturn|undefined;
+  function clearWebReadingReturn():void{webReadingReturn=undefined;overlay.clearReadingReturn()}
+  function showWebReadingReturn():void{
+    overlay.showReadingReturn(()=>{
+      const saved=webReadingReturn;
+      if(!saved||saved.url!==readingPageUrl(options.pageUrl?.()??location.href)||saved.scrollers.some(item=>!item.element.isConnected)){clearWebReadingReturn();return true}
+      if(hasReadingDraft())return false;
+      for(const item of saved.scrollers)item.element.scrollTo({left:item.left,top:item.top,behavior:'instant'});
+      window.scrollTo({left:saved.x,top:saved.y,behavior:'instant'});
+      webReadingReturn=saved.previous;
+      if(webReadingReturn)showWebReadingReturn();else overlay.clearReadingReturn();
+      saved.summaryReturn?.resume();return true;
+    },clearWebReadingReturn,webReadingReturn?.summaryReturn?.kind==='recap'?t('← 返回回顾'):webReadingReturn?.summaryReturn?t('← 返回小结'):t('← 返回阅读处'));
+  }
+  function rememberWebReadingPosition(target:Element,summaryReturn?:ReadingSummaryReturn):void{
+    const url=readingPageUrl(options.pageUrl?.()??location.href);if(!url)return;
+    if(webReadingReturn?.url===url&&!summaryReturn)return;
+    const scrollers:{element:Element;left:number;top:number}[]=[];
+    for(let element=target.parentElement;element&&element!==document.scrollingElement;element=element.parentElement){
+      if(element.scrollHeight>element.clientHeight||element.scrollWidth>element.clientWidth)scrollers.push({element,left:element.scrollLeft,top:element.scrollTop});
+    }
+    const saved:WebReadingReturn={url,x:scrollX,y:scrollY,scrollers,...(summaryReturn?{summaryReturn}:{}),...(webReadingReturn?.url===url?{previous:webReadingReturn}:{})};
+    webReadingReturn=saved;
+    let tail=saved;for(let index=1;tail.previous;index++){if(index>=20){delete tail.previous;break}tail=tail.previous}
+    summaryReturn?.onCancel(()=>{delete saved.summaryReturn;if(webReadingReturn===saved)showWebReadingReturn()});
+    showWebReadingReturn();
+  }
+  const webReadingRouteChanged=()=>{if(webReadingReturn?.url!==readingPageUrl(options.pageUrl?.()??location.href))clearWebReadingReturn()};
+  if(surface!=='pdf'){window.addEventListener('popstate',webReadingRouteChanged);window.addEventListener('hashchange',webReadingRouteChanged)}
   let overlayHistory: TranslationHistoryEntry[] = [];
   let persistedMarkerHistory: TranslationHistoryEntry[] = [];
   let persistentMarkersEnabled = false;
@@ -359,6 +424,7 @@ async function startSelectionTranslatorInstance(
     return {
       pageUrl: activeImageRegion?.pageUrl ?? options.pageUrl?.() ?? location.href,
       ...(documentId ? { documentId } : {}),
+      ...(options.glossaryDocumentId?.()?{glossaryDocumentId:options.glossaryDocumentId()!}:{}),
       ...(sourceLabel ? { sourceLabel } : {}),
       ...(sourceLocation ? { sourceLocation } : {}),
     };
@@ -490,9 +556,20 @@ async function startSelectionTranslatorInstance(
     return paused;
   }
 
+  let keyboardSelectionControl: HTMLInputElement | HTMLTextAreaElement | undefined;
   const overlay = new TranslationOverlay({
+    ...(options.onAnnotateSelection ? {onAnnotateSelection:options.onAnnotateSelection} : {}),
     onTranslate: () => {
-      if (latestSelection) void translateSelection(latestSelection);
+      if (overlay.ownsCurrentSelection()) return;
+      const selection = window.getSelection();
+      const snapshot = selection && options.shouldIgnoreSelection?.(selection)
+        ? undefined
+        : captureSelectionSnapshot(settings.contextMode,
+          overlay.ownsFocusTarget(document.activeElement) ? keyboardSelectionControl : undefined);
+      latestSelection = snapshot;
+      if (!snapshot) { overlay.hideTrigger(); return; }
+      rememberSelectionMarkerAnchor(snapshot);
+      void translateSelection(snapshot);
     },
     onRetry: (target) => {
       void retryTranslation(target);
@@ -632,7 +709,13 @@ async function startSelectionTranslatorInstance(
     onNavigateSourceMark: (markerId) => navigateSourceMark(markerId),
     onRemoveSourceMark: (markerId) => removeSourceMark(markerId),
     onUpdateSourceMarkCitation: (markerId, citation) => updateSourceMarkCitation(markerId, citation),
-    ...(surface!=='pdf'?{onSetSourceMarkSaved:(markerId:string,saved:boolean)=>setWebExcerptSaved(markerId,saved)}:{}),
+    ...(surface!=='pdf'?{
+      onSetSourceMarkSaved:(markerId:string,saved:boolean)=>setWebExcerptSaved(markerId,saved),
+      onNoteSummaryTarget:()=>({kind:'web' as const,pageUrl:readingPageUrl(options.pageUrl?.()??location.href)??location.href}),
+      onLocateNoteSummarySource:async(id:string,summaryReturn?:ReadingSummaryReturn)=>{const pageUrl=options.pageUrl?.()??location.href;await webExcerptRequest({type:'GET_WEB_EXCERPTS',payload:{pageUrl}});if(readingPageUrl(options.pageUrl?.()??location.href)!==readingPageUrl(pageUrl))return false;const item=storedWebExcerpts.find(item=>JSON.stringify(['web',item.pageUrl,item.markerId])===id);return item?(await navigateSourceMark(item.markerId,summaryReturn))==='ready':false},
+      onViewExistingSourceMark:(markerId:string,host:ShadowRoot)=>{const item=storedWebExcerpts.find(item=>item.markerId===markerId);if(item){const href=excerptSourceHref({kind:'web',id:JSON.stringify(['web',item.pageUrl,item.markerId]),markerId:item.markerId,updatedAt:item.updatedAt,content:item.content,item});if(href)openExistingNote(item.content,href,host,async()=>await navigateSourceMark(item.markerId)==='ready')}}
+    }:{}),
+    onDocumentGlossaryLocator:currentDocumentLocator,
     onGetDocumentMemory: () => documentMemoryRequest({
       type: 'GET_DOCUMENT_MEMORY',
       payload: currentDocumentLocator(),
@@ -759,8 +842,12 @@ async function startSelectionTranslatorInstance(
     },
     onSidebarLayoutChange: (expanded, side, width) => {
       options.onSidebarLayoutChange?.({ expanded, side, width });
+      bilingualPageTranslator?.refreshLayout();
     },
+    onSurfaceLayoutChange: () => bilingualPageTranslator?.refreshLayout(),
     onPreferencesChange: (preferences) => {
+      if (temporaryTargetLanguage !== preferences.targetLanguage) hasTemporaryTargetLanguage = true;
+      if (temporaryStyle !== preferences.style) hasTemporaryStyle = true;
       temporaryTargetLanguage = preferences.targetLanguage;
       temporaryStyle = preferences.style;
     },
@@ -779,6 +866,11 @@ async function startSelectionTranslatorInstance(
     ...(options.viewportInsets ? { viewportInsets: options.viewportInsets } : {}),
     ...(surface === 'pdf' ? { normalizeFormulaPresentation: true } : {}),
   });
+
+  const readingHints=surface!=='pdf'?overlay.bindReadingHints({
+    target:()=>{const pageUrl=readingPageUrl(options.pageUrl?.()??location.href);return pageUrl?{kind:'web',pageUrl}:undefined},
+    locate:async(source,summaryReturn)=>{const pageUrl=options.pageUrl?.()??location.href;await webExcerptRequest({type:'GET_WEB_EXCERPTS',payload:{pageUrl}});if(readingPageUrl(options.pageUrl?.()??location.href)!==readingPageUrl(pageUrl))return false;const item=storedWebExcerpts.find(item=>JSON.stringify(['web',item.pageUrl,item.markerId])===source.id);return Boolean(item&&(await navigateSourceMark(item.markerId,summaryReturn))==='ready')},
+  }):undefined;
 
   markerManager = new SessionTranslationMarkerManager({
     ...(options.resolvePdfRegionRects
@@ -804,22 +896,23 @@ async function startSelectionTranslatorInstance(
     const range=document.createRange();range.selectNodeContents(document.body);range.collapse(true);
     return {markerId:item.markerId,anchor:{kind:'dom-range',range,scope:document.body,...item.anchor},content:{...item.content},result:{requestId:item.markerId.replace(/::(?:full|segment:[^:]+)$/u,''),originalText:item.content.originalText,translatedText:item.content.translatedText,sourceHost:item.content.sourceTitle,completedAt:item.createdAt,warnings:[]}};
   }
-  async function webExcerptRequest(message:Extract<RuntimeMessage,{type:'GET_WEB_EXCERPTS'|'SAVE_WEB_EXCERPT'|'REMOVE_WEB_EXCERPT'}>):Promise<void>{
+  async function webExcerptRequest(message:Extract<RuntimeMessage,{type:'GET_WEB_EXCERPTS'|'SAVE_WEB_EXCERPT'|'REMOVE_WEB_EXCERPT'}>):Promise<{existingMarkerId?:string}>{
     const url=webExcerptPageUrl(message.payload.pageUrl);
-    const response=await browser.runtime.sendMessage(message) as RuntimeResponse<{excerpts:WebExcerpt[]}>;
-    if(!response.ok)throw new Error(response.error.message);
-    if(webExcerptPageUrl(options.pageUrl?.()??location.href)===url){storedWebExcerpts=response.data.excerpts;webExcerptUrl=url}
+    const response=await browser.runtime.sendMessage(message) as RuntimeResponse<{excerpts:WebExcerpt[];existingMarkerId?:string}>;
+    if(!response.ok)throw new Error(t(response.error.message));
+    if(webExcerptPageUrl(options.pageUrl?.()??location.href)===url){storedWebExcerpts=response.data.excerpts;webExcerptUrl=url;if(message.type!=='GET_WEB_EXCERPTS')void readingHints?.refresh(true)}
+    return response.data.existingMarkerId?{existingMarkerId:response.data.existingMarkerId}:{};
   }
-  async function storeWebExcerpt(entry:TranslationMarkerEntry):Promise<void>{
+  async function storeWebExcerpt(entry:TranslationMarkerEntry):Promise<{existingMarkerId?:string}>{
     if(entry.anchor.kind!=='dom-range')throw new Error('此标记缺少可保存的网页原文定位。');
     const pageUrl=webExcerptPageUrl(options.pageUrl?.()??location.href);
     const {sourceText,prefix,suffix}=entry.anchor;
-    await webExcerptRequest({type:'SAVE_WEB_EXCERPT',payload:{pageUrl,excerpt:{markerId:entry.markerId,pageUrl,anchor:{sourceText,prefix,suffix},content:entry.content,createdAt:entry.result.completedAt??Date.now(),updatedAt:Date.now()}}});
+    return webExcerptRequest({type:'SAVE_WEB_EXCERPT',payload:{pageUrl,excerpt:{markerId:entry.markerId,pageUrl,anchor:{sourceText,prefix,suffix},content:entry.content,createdAt:entry.result.completedAt??Date.now(),updatedAt:Date.now()}}});
   }
-  async function setWebExcerptSaved(markerId:string,saved:boolean):Promise<void>{
+  async function setWebExcerptSaved(markerId:string,saved:boolean):Promise<{existingMarkerId?:string}|void>{
     if(surface==='pdf')return;
     const entry=navigatorMarkerEntries().find(entry=>entry.markerId===markerId);if(!entry)throw new Error('这条标记已被移除。');
-    if(saved)await storeWebExcerpt(entry);else await webExcerptRequest({type:'REMOVE_WEB_EXCERPT',payload:{pageUrl:webExcerptPageUrl(options.pageUrl?.()??location.href),markerId}});
+    if(saved)return storeWebExcerpt(entry);else await webExcerptRequest({type:'REMOVE_WEB_EXCERPT',payload:{pageUrl:webExcerptPageUrl(options.pageUrl?.()??location.href),markerId}});
   }
   async function refreshWebExcerpts():Promise<void>{
     if(surface==='pdf'||webExcerptLoading)return;
@@ -833,6 +926,12 @@ async function startSelectionTranslatorInstance(
         // add() deliberately does not emit an edit event during restoration.
         // Rebuild the navigation history explicitly, as PDF restoration does.
         persistedMarkerHistory=markerHistoryFromEntries(navigatorMarkerEntries());
+        const sourceMarker=new URLSearchParams(location.hash.slice(1).split(':~:')[0]).get('pi-excerpt');
+        if(sourceMarker&&storedWebExcerpts.some(item=>item.markerId===sourceMarker)){
+          // The saved quote is validated against this page and uniquely resolved by the marker manager.
+          // Native text fragments can fail when old context includes partial words or block boundaries.
+          if(!hasReadingDraft())markerManager?.reveal(sourceMarker,rememberWebReadingPosition);
+        }
       }
     }finally{webExcerptLoading=false}
   }
@@ -945,11 +1044,14 @@ async function startSelectionTranslatorInstance(
       ? result.sourceHost ?? options.sourceLabel?.() ?? 'PDF 文档'
       : document.title.trim() || result.sourceHost || location.hostname || '网页';
     const pageNumber = result.sourceLocation?.pageNumber ?? markerPageNumber(anchor);
+    const metadata=surface==='pdf'?options.citationMetadata?.()??{}:pageCitationMetadata(document);
+    const pdfSourceUrl=surface==='pdf'?citationUrl(options.pageUrl?.())??metadata.url:undefined;
     return {
       originalText: segment?.originalText ?? result.originalText,
       translatedText: segment?.translatedText ?? result.translatedText,
-      sourceTitle,
-      ...(surface === 'pdf' ? {} : { sourceUrl: options.pageUrl?.() ?? location.href }),
+      sourceTitle:metadata.title??sourceTitle,
+      ...(surface==='pdf'?(pdfSourceUrl?{sourceUrl:pdfSourceUrl}:{}):{sourceUrl:options.pageUrl?.()??location.href}),
+      ...(metadata.authors?{authors:metadata.authors}:{}),...(metadata.year?{year:metadata.year}:{}),...(metadata.doi?{doi:metadata.doi}:{}),
       ...(pageNumber ? { pageNumber } : {}),
     };
   }
@@ -1040,6 +1142,7 @@ async function startSelectionTranslatorInstance(
 
   async function navigateSourceMark(
     markerId: string,
+    summaryReturn?:ReadingSummaryReturn,
   ): Promise<TranslationMarkerLocationState> {
     let entry = markerManager?.entries().find((candidate) => candidate.markerId === markerId);
     if(!entry&&surface!=='pdf'){const saved=storedWebExcerpts.find(item=>item.markerId===markerId);if(saved){entry=restoredWebExcerpt(saved);markerManager?.add(entry)}}
@@ -1052,6 +1155,10 @@ async function startSelectionTranslatorInstance(
       }
     }
     if (!entry) return 'missing';
+    if(surface!=='pdf'){
+      if(hasReadingDraft())return markerManager?.locationState(markerId)??'missing';
+      return markerManager?.reveal(markerId,target=>rememberWebReadingPosition(target,summaryReturn))??'missing';
+    }
     if (entry.anchor.kind === 'pdf-region') {
       await options.onNavigateToPdfRegion?.(entry.anchor.sourceLocation);
       const state = markerManager?.locationState(markerId) ?? 'missing';
@@ -1268,8 +1375,11 @@ async function startSelectionTranslatorInstance(
       } satisfies RuntimeMessage)) as PublicSettingsResponse;
       if (response.ok) {
         settings = response.data;
+        applyPublicUiLanguage(settings.uiLanguage);
         options.onPublicSettingsChange?.(settings);
-        temporaryTargetLanguage = settings.targetLanguage;
+        if (!hasTemporaryTargetLanguage) {
+          temporaryTargetLanguage = surface === 'pdf' ? settings.targetLanguage : settings.siteTargetLanguage ?? settings.targetLanguage;
+        }
         temporaryStyle = settings.style;
         overlay.setPreferences({
           targetLanguage: temporaryTargetLanguage,
@@ -1418,13 +1528,17 @@ async function startSelectionTranslatorInstance(
       : undefined;
   }
 
-  function refreshSelection(): void {
+  function refreshSelection(allowAutomaticTranslation = true, explicitSidebarOpen = false): void {
+    ensureWebpageDocumentConnection();
     if (surface === 'pdf' && pdfSelectionInProgress) {
       overlay.hideTrigger();
       if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
       return;
     }
-    if (overlay.ownsCurrentSelection()) return;
+    // Do not replace a keyboard-focused trigger during the pending refresh.
+    // Activation reads the remembered control's live range/value above.
+    if (overlay.ownsCurrentSelection() ||
+      (keyboardSelectionControl && overlay.ownsFocusTarget(document.activeElement))) return;
     const currentSelection = window.getSelection();
     if (currentSelection && options.shouldIgnoreSelection?.(currentSelection)) {
       latestSelection = undefined;
@@ -1435,7 +1549,25 @@ async function startSelectionTranslatorInstance(
     }
     const snapshot = captureSelectionSnapshot(settings.contextMode);
     latestSelection = snapshot;
+    if (surface === 'pdf' && readingAnnotationMode) {
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = undefined;
+      lastAutoSelectionHash = snapshot?.selectionHash;
+      if (snapshot?.rect) overlay.showTrigger(snapshot.rect, {text:'',annotationOnly:true});
+      else overlay.hideTrigger();
+      return;
+    }
     if (snapshot) rememberSelectionMarkerAnchor(snapshot);
+    if (!snapshot || snapshot.selectionHash !== dismissedPassiveSelectionHash) {
+      dismissedPassiveSelectionHash = undefined;
+    }
+    if (!allowAutomaticTranslation || (surface !== 'pdf' && !explicitSidebarOpen && settings.pausedSiteHosts.includes(location.hostname.toLowerCase()))) {
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = undefined;
+      lastAutoSelectionHash = snapshot?.selectionHash;
+      if (!shouldShowFloatingButton(settings, surface)) overlay.hideTrigger();
+      return;
+    }
     const suppressPassiveTranslation = Boolean(
       snapshot && shouldSuppressPassiveSelectionTranslation(snapshot, surface),
     );
@@ -1451,7 +1583,8 @@ async function startSelectionTranslatorInstance(
         (surface === 'general' &&
           settings.hideFloatingButtonForTargetLanguage &&
           isLikelyTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)) ||
-        snapshot.selectionHash === lastAutoSelectionHash
+        (snapshot.selectionHash === lastAutoSelectionHash &&
+          (!explicitSidebarOpen || snapshot.selectionHash === activeSelection?.selectionHash))
       ) {
         return;
       }
@@ -1465,16 +1598,21 @@ async function startSelectionTranslatorInstance(
         lastAutoSelectionHash = snapshot.selectionHash;
         return;
       }
+      if (explicitSidebarOpen) {
+        // Opening the sidebar is a user action for this selection only. Subsequent
+        // selection events still honor the site's automatic-translation pause.
+        lastAutoSelectionHash = snapshot.selectionHash;
+        void translateSelection(snapshot);
+        return;
+      }
       autoTranslateTimer = setTimeout(() => {
+        if (readingAnnotationMode) return;
         const current = captureSelectionSnapshot(settings.contextMode);
         if (!current || current.selectionHash !== snapshot.selectionHash) return;
         lastAutoSelectionHash = snapshot.selectionHash;
         void translateSelection(snapshot);
       }, 220);
       return;
-    }
-    if (!snapshot || snapshot.selectionHash !== dismissedPassiveSelectionHash) {
-      dismissedPassiveSelectionHash = undefined;
     }
     if (snapshot?.selectionHash === dismissedPassiveSelectionHash) {
       overlay.hideTrigger();
@@ -1692,6 +1830,7 @@ async function startSelectionTranslatorInstance(
       };
     }
 
+    hasTemporaryTargetLanguage = true;
     temporaryTargetLanguage = targetLanguage;
     overlay.setPreferences({
       targetLanguage: temporaryTargetLanguage,
@@ -2049,6 +2188,7 @@ async function startSelectionTranslatorInstance(
       const payload = {
           requestId: snapshot.requestId,
           ...(documentId ? { documentId } : {}),
+          ...(options.glossaryDocumentId?.()?{glossaryDocumentId:options.glossaryDocumentId()!}:{}),
           text: requestText,
           pageUrl: options.pageUrl?.() ?? snapshot.pageUrl,
           ...(sourceLabel ? { sourceLabel } : {}),
@@ -2153,6 +2293,8 @@ async function startSelectionTranslatorInstance(
   }
 
   async function translateSelection(snapshot: SelectionSnapshot): Promise<void> {
+    if (surface === 'pdf' && readingAnnotationMode) return;
+    const selectionRevision=annotationModeRevision;
     const requiresPdfVision = surface === 'pdf' && shouldUseVisionForPdfFormula(
       normalizePdfSelectionText(snapshot.normalizedText),
     );
@@ -2160,6 +2302,7 @@ async function startSelectionTranslatorInstance(
       try {
         const captureStartedAt = performance.now();
         const capture = await options.captureVisualSelection(snapshot);
+        if(surface==='pdf'&&selectionRevision!==annotationModeRevision)return;
         if (capture) {
           capture.clientPerformance = {
             ...capture.clientPerformance,
@@ -2173,6 +2316,7 @@ async function startSelectionTranslatorInstance(
         // selectable PDF text layer when visual capture is unavailable.
       }
     }
+    if(surface==='pdf'&&selectionRevision!==annotationModeRevision)return;
     if (requiresPdfVision) {
       activeSelection = snapshot;
       activeImageRegion = undefined;
@@ -2230,6 +2374,7 @@ async function startSelectionTranslatorInstance(
         payload: {
           requestId,
           ...(documentId ? { documentId } : {}),
+          ...(options.glossaryDocumentId?.()?{glossaryDocumentId:options.glossaryDocumentId()!}:{}),
           imageDataUrl: capture.imageDataUrl,
           imageWidth: capture.imageWidth,
           imageHeight: capture.imageHeight,
@@ -2345,6 +2490,7 @@ async function startSelectionTranslatorInstance(
   const handleMessage = (
     message: unknown,
   ): void | Promise<
+    RuntimeResponse<{matched:boolean;draft?:true}> |
     SettingsRecoveryAck |
     RuntimeResponse<{ started: true }> |
     BilingualPageExportResponse |
@@ -2352,6 +2498,24 @@ async function startSelectionTranslatorInstance(
   > => {
     if (!message || typeof message !== 'object' || !('type' in message)) return;
     const typed = message as RuntimeMessage;
+    if(typed.type==='REUSE_READING_SOURCE'){
+      if(!isRuntimeMessage(message))return;
+      return (async()=>{
+        const target=readingPageUrl(typed.payload.url);
+        const current=()=>readingPageUrl(options.pageUrl?.()??location.href);
+        if(surface==='pdf'||!target||target!==current())return {ok:true as const,data:{matched:false}};
+        if(hasReadingDraft())return {ok:true as const,data:{matched:true,draft:true as const}};
+        const marker=new URLSearchParams(new URL(typed.payload.url).hash.slice(1).split(':~:')[0]).get('pi-excerpt');
+        if(marker){
+          await refreshWebExcerpts();
+          if(target!==current())return {ok:true as const,data:{matched:false}};
+          if(hasReadingDraft())return {ok:true as const,data:{matched:true,draft:true as const}};
+          if(storedWebExcerpts.some(item=>item.markerId===marker))await navigateSourceMark(marker);
+        }
+        return {ok:true as const,data:{matched:true}};
+      })().catch(()=>({ok:true as const,data:{matched:false}}));
+    }
+
     if (typed.type === 'START_BILINGUAL_PAGE_IN_TAB') {
       if (!bilingualPageTranslator) {
         return Promise.resolve({
@@ -2445,6 +2609,8 @@ async function startSelectionTranslatorInstance(
       }
       pendingSettingsRecovery = undefined;
       activeRetryContext = pending.context;
+      hasTemporaryTargetLanguage = true;
+      hasTemporaryStyle = true;
       temporaryTargetLanguage = pending.targetLanguage;
       temporaryStyle = pending.style;
       overlay.setPreferences({
@@ -2516,11 +2682,15 @@ async function startSelectionTranslatorInstance(
       return;
     }
     if (typed.type === 'PUBLIC_SETTINGS_UPDATED') {
+      overlay.refreshDocumentGlossary();
       settings = typed.payload;
+      applyPublicUiLanguage(settings.uiLanguage);
       if (settings.sidebarMode === 'floating') browserSidebarActive = false;
       options.onPublicSettingsChange?.(settings);
-      temporaryTargetLanguage = settings.targetLanguage;
-      temporaryStyle = settings.style;
+      if (!hasTemporaryTargetLanguage) {
+        temporaryTargetLanguage = surface === 'pdf' ? settings.targetLanguage : settings.siteTargetLanguage ?? settings.targetLanguage;
+      }
+      if (!hasTemporaryStyle) temporaryStyle = settings.style;
       overlay.setPreferences({
         targetLanguage: temporaryTargetLanguage,
         style: temporaryStyle,
@@ -2530,7 +2700,7 @@ async function startSelectionTranslatorInstance(
         autoRenderLatex: settings.autoRenderLatex,
       });
       bilingualPageTranslator?.refreshDiscovery();
-      refreshSelection();
+      refreshSelection(false);
       return;
     }
     if (typed.type === 'BROWSER_SIDEBAR_ACTIVE' && surface !== 'pdf') {
@@ -2555,12 +2725,14 @@ async function startSelectionTranslatorInstance(
       return;
     }
     if (typed.type === 'OPEN_SIDEBAR') {
+      if (surface === 'pdf' && readingAnnotationMode) return;
       activeWebRegionSelection?.cancel();
       activeWebRegionSelection = undefined;
       overlay.openSidebar();
       const firstPersisted=persistedMarkerHistory[0];
-      if(!activeSelection&&firstPersisted)overlay.showResult(firstPersisted,undefined,combinedOverlayHistory(),false);
-      refreshSelection();
+      if(typed.payload?.result){overlayHistory=typed.payload.history;overlay.showResult(typed.payload.result,undefined,combinedOverlayHistory(),settings.sentenceAlignmentDefault)}
+      else if(!activeSelection&&firstPersisted)overlay.showResult(firstPersisted,undefined,combinedOverlayHistory(),false);
+      refreshSelection(true, surface !== 'pdf' && settings.pausedSiteHosts.includes(location.hostname.toLowerCase()));
       return;
     }
     if (typed.type === 'START_WEB_REGION_SELECTION') {
@@ -2607,6 +2779,7 @@ async function startSelectionTranslatorInstance(
   };
 
   const handledMessageTypes = new Set([
+    'REUSE_READING_SOURCE',
     'START_BILINGUAL_PAGE_IN_TAB',
     'GET_BILINGUAL_PAGE_STATE_IN_TAB',
     'GET_BILINGUAL_PAGE_EXPORT_IN_TAB',
@@ -2626,6 +2799,7 @@ async function startSelectionTranslatorInstance(
 
   const messageListener = (message: unknown) => {
     const type = (message as { type?: unknown } | undefined)?.type;
+    if(type==='REUSE_READING_SOURCE'&&surface==='pdf')return;
     if (typeof type !== 'string' || !handledMessageTypes.has(type)) {
       // Other extension messages belong to the background or another page.
       // Returning a Promise here would claim the one allowed response with
@@ -2633,7 +2807,6 @@ async function startSelectionTranslatorInstance(
       return;
     }
     if (
-      type === 'GET_BILINGUAL_PAGE_STATE_IN_TAB' ||
       type === 'SETTINGS_RECOVERY_READY'
     ) {
       // Recovery ownership must also be checked synchronously: non-owner
@@ -2650,14 +2823,22 @@ async function startSelectionTranslatorInstance(
   initializationPromise = initializeTranslator().then(()=>refreshWebExcerpts().catch(()=>undefined));
   // Runtime actions queue behind initialization, including an immediate open
   // after reloading a page with saved excerpts. Selection events still wait
-  // for restore on Pi PDF and Overleaf so a late reset cannot erase a user's
-  // first translation. General webpages also expose readiness during startup
-  // to avoid duplicate injection.
+  // for restore so an early idle snapshot cannot conceal saved translations.
+  // The registered listener also prevents duplicate injection while waiting.
   browser.runtime.onMessage.addListener(messageListener);
   if (surface !== 'general') {
     await initializationPromise;
   }
 
+  // Keyboard focus can leave a text control before activating its trigger.
+  // Keep the element, then read its current range/value at activation; never
+  // submit the earlier debounced snapshot or search unrelated input fields.
+  const rememberKeyboardSelectionControl = (event: FocusEvent): void => {
+    keyboardSelectionControl = overlay.ownsFocusTarget(event.relatedTarget) &&
+      (event.target instanceof HTMLInputElement || event.target instanceof HTMLTextAreaElement)
+      ? event.target : undefined;
+  };
+  document.addEventListener('focusout', rememberKeyboardSelectionControl, true);
   document.addEventListener('pointerdown', beginPdfSelection, true);
   document.addEventListener('pointerup', finishPdfSelection, true);
   document.addEventListener('pointercancel', finishPdfSelection, true);
@@ -2666,10 +2847,22 @@ async function startSelectionTranslatorInstance(
   document.addEventListener('keyup', scheduleRefresh, true);
   window.addEventListener('resize', scheduleRefresh);
   window.addEventListener('scroll', scheduleRefresh, true);
+  // A selectionchange can precede initialization/listener registration.
+  // Pick up that existing selection once settings and excerpts are ready.
+  if (surface !== 'pdf') void initializationPromise.then(() => {
+    if (!invalidated) refreshSelection();
+  });
 
   ctx.onInvalidated(() => {
+    invalidated = true;
+    readingHints?.dispose();
+    window.removeEventListener('popstate',webReadingRouteChanged);window.removeEventListener('hashchange',webReadingRouteChanged);clearWebReadingReturn();
+    webpageDocumentPort?.disconnect();
+    webpageDocumentPort = undefined;
     if (refreshTimer) clearTimeout(refreshTimer);
     if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+    document.removeEventListener('focusout', rememberKeyboardSelectionControl, true);
+    keyboardSelectionControl = undefined;
     document.removeEventListener('pointerdown', beginPdfSelection, true);
     document.removeEventListener('pointerup', finishPdfSelection, true);
     document.removeEventListener('pointercancel', finishPdfSelection, true);
@@ -2681,6 +2874,7 @@ async function startSelectionTranslatorInstance(
     browser.runtime.onMessage.removeListener(messageListener);
     activeWebRegionSelection?.cancel();
     activeWebRegionSelection = undefined;
+    document.removeEventListener('click',paragraphClick,true);
     bilingualPageTranslator?.dispose();
     overlay.destroy();
     markerManager?.destroy();
@@ -2710,6 +2904,21 @@ async function startSelectionTranslatorInstance(
       }
     },
     deactivateSidebar: () => overlay.deactivateSidebar(),
+    setReadingAnnotationMode: (enabled) => {
+      if (surface !== 'pdf') return;
+      readingAnnotationMode = enabled;
+      annotationModeRevision++;
+      if (refreshTimer) clearTimeout(refreshTimer);
+      if (autoTranslateTimer) clearTimeout(autoTranslateTimer);
+      autoTranslateTimer = undefined;
+      if (enabled) {
+        stopActiveTranslation();
+        overlay.deactivateSidebar();
+      }
+      lastAutoSelectionHash = captureSelectionSnapshot(settings.contextMode)?.selectionHash;
+      overlay.hideTrigger();
+      // Switching modes never submits the selection that was already on screen.
+    },
     cancelActiveTranslation: () => {
       activeWebRegionSelection?.cancel();
       activeWebRegionSelection = undefined;
@@ -2718,6 +2927,9 @@ async function startSelectionTranslatorInstance(
     },
     refreshPersistentMarkers,
     reset: () => {
+      clearWebReadingReturn();
+      readingAnnotationMode = false;
+      annotationModeRevision++;
       persistenceRevision += 1;
       persistentMarkersEnabled = false;
       persistentStoredMarkerCount = 0;

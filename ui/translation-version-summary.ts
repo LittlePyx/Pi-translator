@@ -1,3 +1,4 @@
+import { t } from '../core/i18n/ui-language';
 import type {
   TranslateResult,
   TranslationRevisionScope,
@@ -16,15 +17,15 @@ function normalizedVersionText(value: string): string {
 }
 
 export function translationVersionLabel(result: TranslateResult): string {
-  return result.revision?.label.trim() || '初始译文';
+  return result.revision?.label.trim() || t('初始译文');
 }
 
 export function translationVersionScopeLabel(
   scope: TranslationRevisionScope | undefined,
 ): string | undefined {
-  if (scope === 'current') return '仅当前选择';
-  if (scope === 'document') return '本文记忆';
-  if (scope === 'global') return '全局偏好';
+  if (scope === 'current') return t('仅当前选择');
+  if (scope === 'document') return t('本文记忆');
+  if (scope === 'global') return t('全局偏好');
   return undefined;
 }
 

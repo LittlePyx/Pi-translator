@@ -81,6 +81,16 @@ describe('settings upgrade and browser-restart storage policy', () => {
     vi.stubGlobal('navigator', { locks: createOriginLockManager() });
   });
 
+  it('only resolves a setup credential for its saved endpoint, including the path', async () => {
+    const base = DEFAULT_SETTINGS.apiProfiles[0]!.apiBaseUrl;
+    session.values[API_KEYS_STORAGE_KEY] = { default: 'original-provider-key' };
+    expect(await getApiKey('default', base + '/')).toBe('original-provider-key');
+    expect(await getApiKey('default', 'https://other-provider.example/v1')).toBeUndefined();
+    expect(await getApiKey('default', base + '/another-workspace')).toBeUndefined();
+    expect(await getApiKey('missing', base)).toBeUndefined();
+    expect(await getApiKey('default')).toBe('original-provider-key');
+  });
+
   it('upgrades a pre-profile configuration without losing user preferences', async () => {
     local.values.extensionSettings = {
       schemaVersion: 4,

@@ -1,31 +1,31 @@
 <!doctype html>
 <html lang="zh-CN">
   <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Pi Translator</title>
-    <link rel="stylesheet" href="./style.css" />
-    <link rel="stylesheet" href="../../ui/product-theme.css" />
-    <link rel="stylesheet" href="./design.css" />
+    <link rel="stylesheet" href="./style.css">
+    <link rel="stylesheet" href="../../ui/product-theme.css">
+    <link rel="stylesheet" href="./design.css">
   </head>
   <body>
     <main>
       <header>
-        <span class="logo"><img src="/brand/pi_logo.png" alt="" /></span>
+        <span class="logo"><img src="/brand/pi_logo.png" alt=""></span>
         <span>
           <strong>Pi Translator</strong>
         </span>
-        <button id="open-settings" class="settings-icon" type="button" aria-label="打开完整设置" title="设置">
-          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.7 2.4-2.2 1.3-2.4-.6-2.5 4.3L3.5 12l-.1 2.6-1.7 1.6 2.5 4.3 2.4-.6 2.2 1.3.7 2.4h5l.7-2.4 2.2-1.3 2.4.6 2.5-4.3-1.8-1.6.1-2.6 1.7-1.6-2.5-4.3-2.4.6-2.2-1.3L14.5 3z" transform="translate(0 -2) scale(1 .95)"/><circle cx="12" cy="12" r="3.2"/></svg>
+        <button data-i18n-aria-label="打开完整设置" data-i18n-title="设置" id="open-settings" class="settings-icon" type="button" aria-label="打开完整设置" title="设置">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.7 2.4-2.2 1.3-2.4-.6-2.5 4.3L3.5 12l-.1 2.6-1.7 1.6 2.5 4.3 2.4-.6 2.2 1.3.7 2.4h5l.7-2.4 2.2-1.3 2.4.6 2.5-4.3-1.8-1.6.1-2.6 1.7-1.6-2.5-4.3-2.4.6-2.2-1.3L14.5 3z" transform="translate(0 -2) scale(1 .95)" /><circle cx="12" cy="12" r="3.2" /></svg>
         </button>
       </header>
       <div class="translation-controls">
       <label>
-        <span>译为</span>
+        <span data-i18n-parts="[[0,&quot;译为&quot;]]">译为</span>
         <select id="target-language">
-          <option value="zh-CN">简体中文</option>
+          <option data-i18n-parts="[[0,&quot;简体中文&quot;]]" value="zh-CN">简体中文</option>
           <option value="en">English</option>
-          <option value="ja">日本語</option>
+          <option data-i18n-parts="[[0,&quot;日本語&quot;]]" value="ja">日本語</option>
           <option value="de">Deutsch</option>
           <option value="fr">Français</option>
         </select>
@@ -34,72 +34,78 @@
       <section id="bilingual-language-confirmation" class="bilingual-language-confirmation" role="alert" hidden>
         <p id="bilingual-language-message"></p>
         <div>
-          <button id="bilingual-language-cancel" type="button">取消</button>
-          <button id="bilingual-language-confirm" type="button">清除并改译</button>
+          <button data-i18n-parts="[[0,&quot;取消&quot;]]" id="bilingual-language-cancel" type="button">取消</button>
+          <button data-i18n-parts="[[0,&quot;清除并改译&quot;]]" id="bilingual-language-confirm" type="button">清除并改译</button>
         </div>
       </section>
       <p id="status" class="status" role="status" aria-live="polite" aria-atomic="true"></p>
       <section id="pdf-access-alert" class="access-alert" role="alert" hidden>
-        <strong id="pdf-access-title">需要 PDF 读取权限</strong>
+        <strong data-i18n-parts="[[0,&quot;需要 PDF 读取权限&quot;]]" id="pdf-access-title">需要 PDF 读取权限</strong>
         <p id="pdf-access-message"></p>
         <ol id="pdf-access-steps"></ol>
         <div class="access-actions">
-          <button id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
-          <button id="retry-pdf-access" type="button">重新检测</button>
+          <button data-i18n-parts="[[0,&quot;打开 Edge 扩展管理页&quot;]]" id="open-extension-management" type="button">打开 Edge 扩展管理页</button>
+          <button data-i18n-parts="[[0,&quot;重新检测&quot;]]" id="retry-pdf-access" type="button">重新检测</button>
         </div>
       </section>
-      <section id="quick-actions" class="quick-actions" data-primary="loading" aria-label="快捷操作" aria-busy="true">
-        <button id="translate-page" class="page-action" type="button" title="保留网页原文，在正文段落下方渐进显示译文" hidden>翻译网页正文</button>
-        <button id="open-sidebar" class="primary-action" type="button">打开连续翻译侧栏</button>
+      <section data-i18n-aria-label="快捷操作" id="quick-actions" class="quick-actions" data-primary="loading" aria-label="快捷操作" aria-busy="true">
+        <button data-i18n-title="保留网页原文，在正文段落下方渐进显示译文" data-i18n-parts="[[0,&quot;翻译网页正文&quot;]]" id="translate-page" class="page-action" type="button" title="保留网页原文，在正文段落下方渐进显示译文" hidden>翻译网页正文</button>
+        <button data-i18n-parts="[[0,&quot;打开连续翻译侧栏&quot;]]" id="open-sidebar" class="primary-action" type="button">打开连续翻译侧栏</button>
       </section>
       <div class="popup-footer">
-      <button id="open-library" class="library-link" type="button">文档库</button>
-      <details id="popup-more-actions" class="popup-more-actions"><summary>更多</summary><div id="popup-more-body" class="more-body">
-        <button id="open-web-region" class="region-action" type="button" title="适合网页图像、图表、渲染公式和复杂混排">框选当前网页</button>
-        <button id="open-pdf" class="secondary-action" type="button">打开 PDF 阅读器</button>
+      <button data-i18n-parts="[[0,&quot;文档库&quot;]]" id="open-library" class="library-link" type="button" aria-label="文档库" data-i18n-aria-label="文档库" title="文档库" data-i18n-title="文档库">文档库</button>
+      <details id="popup-more-actions" class="popup-more-actions"><summary data-i18n-aria-label="更多" data-i18n-title="更多" aria-label="更多" title="更多" data-i18n-parts="[[0,&quot;更多&quot;]]">更多</summary><div id="popup-more-body" class="more-body">
+        <button data-i18n-title="适合网页图像、图表、渲染公式和复杂混排" data-i18n-parts="[[0,&quot;框选当前网页&quot;]]" id="open-web-region" class="region-action" type="button" title="适合网页图像、图表、渲染公式和复杂混排">框选当前网页</button>
+        <button data-i18n-parts="[[0,&quot;打开 PDF 阅读器&quot;]]" id="open-pdf" class="secondary-action" type="button">打开 PDF 阅读器</button>
       <section id="site-control" class="site-control" hidden>
-        <strong id="site-name">正在读取…</strong>
-        <label class="switch-row" title="暂停本网站自动划词；右键菜单和快捷键仍可使用">
-          <span>暂停划词</span>
-          <input id="pause-site" type="checkbox" aria-label="暂停本网站自动划词" aria-describedby="site-pause-help" />
+        <strong data-i18n-parts="[[0,&quot;正在读取…&quot;]]" id="site-name">正在读取…</strong>
+        <label class="switch-row">
+          <span data-i18n-parts="[[0,&quot;记住此网站&quot;]]">记住此网站</span>
+          <input id="remember-site" type="checkbox" aria-describedby="site-preference-help" data-i18n-aria-label="记住此网站" aria-label="记住此网站">
         </label>
-        <p id="site-pause-help" class="visually-hidden">暂停后不再自动显示浮动按钮，右键菜单和快捷键仍可使用。</p>
+        <label data-i18n-title="暂停本网站自动划词；右键菜单和快捷键仍可使用" class="switch-row" title="暂停本网站自动划词；右键菜单和快捷键仍可使用">
+          <span data-i18n-parts="[[0,&quot;暂停划词&quot;]]">暂停划词</span>
+          <input data-i18n-aria-label="暂停本网站自动划词" id="pause-site" type="checkbox" aria-label="暂停本网站自动划词" aria-describedby="site-pause-help">
+        </label>
+        <p data-i18n-parts="[[0,&quot;暂停后不再自动显示浮动按钮，右键菜单和快捷键仍可使用。&quot;]]" id="site-pause-help" class="visually-hidden">暂停后不再自动显示浮动按钮，右键菜单和快捷键仍可使用。</p>
+        <p id="site-preference-help"></p>
+        <button id="reset-site" class="site-reset" type="button" hidden data-i18n-parts="[[0,&quot;恢复全局&quot;]]">恢复全局</button>
       </section>
-        <button id="feature-guide-toggle" class="feature-guide-toggle" type="button" aria-controls="feature-guide" aria-expanded="false" hidden>使用方法</button>
+        <button data-i18n-parts="[[0,&quot;使用方法&quot;]]" id="feature-guide-toggle" class="feature-guide-toggle" type="button" aria-controls="feature-guide" aria-expanded="false" hidden>使用方法</button>
       <details id="popup-service-details" class="service-details">
-        <summary>接口与快捷键 <span id="popup-service-state">检查中</span></summary>
+        <summary data-i18n-parts="[[0,&quot;接口与快捷键&quot;]]">接口与快捷键 <span data-i18n-parts="[[0,&quot;检查中&quot;]]" id="popup-service-state">检查中</span></summary>
         <label id="api-profile-field" hidden>
-          <span>翻译接口</span>
+          <span data-i18n-parts="[[0,&quot;翻译接口&quot;]]">翻译接口</span>
           <select id="api-profile"></select>
         </label>
-        <section class="capability-status" aria-label="API 能力状态">
+        <section data-i18n-aria-label="API 能力状态" class="capability-status" aria-label="API 能力状态">
           <button id="text-api-status" class="capability-item" type="button">
             <span class="capability-dot" aria-hidden="true"></span>
-            <span class="capability-label">文字翻译</span>
-            <span class="capability-value">读取中</span>
+            <span data-i18n-parts="[[0,&quot;文字翻译&quot;]]" class="capability-label">文字翻译</span>
+            <span data-i18n-parts="[[0,&quot;读取中&quot;]]" class="capability-value">读取中</span>
           </button>
           <button id="vision-api-status" class="capability-item" type="button">
             <span class="capability-dot" aria-hidden="true"></span>
-            <span class="capability-label">图像翻译</span>
-            <span class="capability-value">读取中</span>
+            <span data-i18n-parts="[[0,&quot;图像翻译&quot;]]" class="capability-label">图像翻译</span>
+            <span data-i18n-parts="[[0,&quot;读取中&quot;]]" class="capability-value">读取中</span>
           </button>
         </section>
-        <section id="readiness-panel" class="readiness-panel" data-state="loading" aria-label="使用状态" aria-busy="true">
+        <section data-i18n-aria-label="使用状态" id="readiness-panel" class="readiness-panel" data-state="loading" aria-label="使用状态" aria-busy="true">
           <div class="readiness-summary">
             <span class="readiness-mark" aria-hidden="true"></span>
-            <div><strong id="readiness-title">正在检查使用状态…</strong><p id="readiness-note"></p></div>
+            <div><strong data-i18n-parts="[[0,&quot;正在检查使用状态…&quot;]]" id="readiness-title">正在检查使用状态…</strong><p id="readiness-note"></p></div>
           </div>
           <div id="readiness-issues" class="readiness-issues" hidden></div>
         </section>
       </details>
-      <p id="page-context" class="page-context" aria-live="polite">正在识别当前页面…</p>
+      <p data-i18n-parts="[[0,&quot;正在识别当前页面…&quot;]]" id="page-context" class="page-context" aria-live="polite">正在识别当前页面…</p>
       <section id="feature-guide" class="feature-guide" aria-labelledby="feature-guide-title" hidden>
         <div class="feature-guide-heading">
           <div>
             <span id="feature-guide-eyebrow" class="feature-guide-eyebrow"></span>
             <strong id="feature-guide-title" tabindex="-1"></strong>
           </div>
-          <button id="feature-guide-dismiss" class="feature-guide-dismiss" type="button" aria-label="收起当前页面的使用提示">×</button>
+          <button data-i18n-aria-label="收起当前页面的使用提示" id="feature-guide-dismiss" class="feature-guide-dismiss" type="button" aria-label="收起当前页面的使用提示">×</button>
         </div>
         <p id="feature-guide-description" class="feature-guide-description"></p>
         <ol id="feature-guide-steps" class="feature-guide-steps"></ol>

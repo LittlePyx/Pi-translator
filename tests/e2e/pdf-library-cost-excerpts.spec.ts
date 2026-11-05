@@ -1,13 +1,25 @@
+import {openSettingsSection} from './support/settings-navigation';
 import {openPdfTranslationOptions,openPdfTranslationSettings} from './support/pdf-controls';
 import {createHash} from 'node:crypto';
 import {readFile} from 'node:fs/promises';
-import type {Route} from '@playwright/test';
+import type {Route,Page} from '@playwright/test';
 import {context,createTextPdf,createTwoPageTextPdf,expect,extensionId,installEdgeExtensionHooks,page,selectElementText,test,textRequests,visionRequests} from './support/edge-extension-fixture';
 import {pdfDocumentTranslationSessionDocumentKey,pdfDocumentTranslationSessionBlockSignature,pdfDocumentTranslationSessionBehaviorKey} from '../../core/pdf/document-translation-session';
 import {bilingualPageSessionPageKey,bilingualPageSessionBlockSignature,bilingualPageSessionBehaviorKey} from '../../core/translation/bilingual-page-session';
 import {fixedDocumentKey,retainedDocumentStorageCost} from '../../core/translation/fixed-document-storage';
 import {parseFormulaDocument} from '../../core/translation/formula-document';
 installEdgeExtensionHooks();
+const recentKeys=['piRecentPdfDocumentsV1','piPdfReadingStatesV1','piPdfReadingAnnotationsV1'];
+let recentBefore:Record<string,unknown>;
+test.beforeEach(async()=>{const worker=context.serviceWorkers()[0]!;recentBefore=await worker.evaluate(async keys=>(globalThis as any).chrome.storage.local.get(keys),recentKeys);await worker.evaluate(async keys=>(globalThis as any).chrome.storage.local.remove(keys),recentKeys)});
+test.afterEach(async()=>{await context.serviceWorkers()[0]!.evaluate(async({keys,before})=>{const storage=(globalThis as any).chrome.storage.local;await storage.remove(keys);await storage.set(before)},{keys:recentKeys,before:recentBefore})});
+async function openStableOptions(options:Page):Promise<void>{
+  const url=`chrome-extension://${extensionId}/options.html`;
+  try{await options.goto(url)}catch(error){
+    if(!(error instanceof Error&&error.message.includes('interrupted by another navigation')&&error.message.includes(`another navigation to "${url}"`)))throw error;
+    await options.waitForURL(url);await options.waitForLoadState('domcontentloaded');
+  }
+}
 
 test('filters the local library and reports formula/history capacity without changing saved work or requesting translation',async({},info)=>{
   const options=await context.newPage();const common={targetLanguage:'zh-CN',sourceLanguage:'auto',style:'academic',contentMode:'auto',updatedAt:Date.now()};
@@ -19,7 +31,7 @@ test('filters the local library and reports formula/history capacity without cha
   const seeded={pdfDocumentTranslationRetainedV1:[pdf],[fixedDocumentKey('pdf',pdf)]:pdf,bilingualPageRetainedV1:[web]};
   let storageBefore:Record<string,unknown>|undefined;
   try{
-    await options.goto(`chrome-extension://${extensionId}/options.html#storage`);
+    await openStableOptions(options);await options.locator('[data-settings-target="storage"]').click();
     storageBefore=await options.evaluate(async keys=>(globalThis as any).chrome.storage.local.get(keys),Object.keys(seeded));
     await options.evaluate(async seeded=>{await(globalThis as any).chrome.storage.local.set(seeded)},seeded);await options.reload();
     const rows=options.locator('#retained-document-library .library-entry'),filter=options.getByRole('combobox',{name:'筛选文档'});
@@ -27,7 +39,7 @@ test('filters the local library and reports formula/history capacity without cha
     const before=await options.evaluate(async keys=>(globalThis as any).chrome.storage.local.get(keys),Object.keys(seeded));
     const requests=textRequests.length+visionRequests.length;
     for(const [value,kind] of [['pdf','PDF'],['web','WEB'],['pinned','PDF'],['review','PDF'],['incomplete','WEB']]){
-      await filter.selectOption(value!);await expect(rows).toHaveCount(1);await expect(rows.locator('.library-kind')).toHaveText(kind!);await expect(options.locator('#retained-library-count')).toHaveText('1 / 2 份');
+      await filter.selectOption(value!);await expect(rows).toHaveCount(1);await expect(rows.locator('.library-kind')).toHaveText(kind!);await expect(options.locator('#retained-library-count')).toHaveText('1');await expect(options.locator('#retained-library-count')).toHaveAttribute('aria-label','1 项结果');
     }
     await options.locator('#retained-library-search').fill('不存在');await expect(rows).toHaveCount(0);
     await options.getByRole('button',{name:'清除筛选',exact:true}).click();await expect(filter).toHaveValue('all');await expect(rows).toHaveCount(2);await expect(options.locator('#retained-library-search')).toBeFocused();
@@ -42,7 +54,8 @@ test('filters the local library and reports formula/history capacity without cha
     for(const [width,scheme] of [[1100,'light'],[360,'dark'],[300,'light']] as const){
       await options.setViewportSize({width,height:900});await options.emulateMedia({colorScheme:scheme});
       await expect(filter).toHaveCSS('appearance','none');
-      if(scheme==='dark')await expect(filter).toHaveCSS('background-color','rgb(44, 44, 44)');
+      await expect(filter.locator('..')).toHaveCSS('width','36px');
+      if(scheme==='dark')await expect(filter.locator('option').first()).toHaveCSS('background-color','rgb(34, 34, 34)');
       await expect.poll(()=>options.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
       await options.screenshot({path:info.outputPath(`library-${width}-${scheme}.png`)});
       await options.locator('#library-storage-tools > summary').click();await expect(options.locator('#retained-pdf-storage-status')).toHaveCSS('white-space','normal');await expect.poll(()=>options.locator('#retained-pdf-storage-status').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);await options.screenshot({path:info.outputPath(`library-capacity-${width}-${scheme}.png`)});await options.keyboard.press('Escape');
@@ -64,13 +77,14 @@ test('saves model prices and estimates reported foreground and background PDF us
   };
   await context.route('https://www.overleaf.com/pi-translator-e2e-api/chat/completions',handle);
   try{
-    await options.emulateMedia({reducedMotion:'reduce'});await options.goto(`chrome-extension://${extensionId}/options.html`);
-    await options.locator('[data-settings-target="cost"]').click();
+    await options.emulateMedia({reducedMotion:'reduce'});await openStableOptions(options);
+    await openSettingsSection(options,'cost');
+    await expect(options.locator('#model-price-editor')).not.toHaveAttribute('open');await options.locator('#model-price-editor > summary').click();
     await options.locator('#price-profile').selectOption('default');await options.locator('#price-model').fill('e2e-model');
     await options.locator('#price-input').fill('2');await options.locator('#price-output').fill('8');
     await options.locator('#add-model-price').click();await expect(options.locator('#model-price-list')).toContainText('e2e-model');
     await options.locator('#save-button').click();await expect(options.locator('#save-state')).toHaveText('所有设置已保存');
-    await options.reload();await options.locator('[data-settings-target="cost"]').click();await expect(options.locator('#model-price-list')).toContainText('输入 2 · 输出 8');
+    await options.reload();await openSettingsSection(options,'cost');await expect(options.locator('#model-price-list')).toContainText('输入 2 · 输出 8');
     await expect(options.locator('#model-price-editor')).not.toHaveAttribute('open');
     await options.setViewportSize({width:1360,height:1000});await options.screenshot({path:testInfo.outputPath('cost-configured-light.png')});
     await reader.goto(`chrome-extension://${extensionId}/pdf.html`);
@@ -97,7 +111,7 @@ test('manages retained PDF and webpage entries independently and exports their t
   const pdfSignature=pdfDocumentTranslationSessionBlockSignature(1,'Private PDF source',0);
   const webSignature=bilingualPageSessionBlockSignature('P','Private web source',0);
   try{
-    await options.goto(`chrome-extension://${extensionId}/options.html`);
+    await openStableOptions(options);
     await options.evaluate(async(data)=>{
       const api=(globalThis as any).chrome;
       await api.storage.local.set(data);
@@ -119,7 +133,8 @@ test('manages retained PDF and webpage entries independently and exports their t
     await options.locator('#library-storage-tools > summary').click();await expect.poll(()=>options.evaluate(()=>document.documentElement.scrollWidth-document.documentElement.clientWidth)).toBeLessThanOrEqual(1);await options.screenshot({path:testInfo.outputPath('library-management-mobile-dark.png')});await options.keyboard.press('Escape');
     await options.emulateMedia({colorScheme:'light'});
     await options.locator('#retained-library-search').fill('网页');await expect(rows).toHaveCount(1);await expect(rows.locator('.library-kind')).toHaveText('WEB');
-    await expect(options.locator('#retained-library-count')).toHaveText('1 / 2 份');
+    await expect(options.locator('#retained-library-count')).toHaveText('1');
+    await expect(options.locator('#retained-library-count')).toHaveAttribute('aria-label','1 项结果');
     await options.locator('#retained-library-search').fill('中文');await expect(rows).toHaveCount(2);
     await options.locator('#retained-library-search').fill('不存在的文档');await expect(rows).toHaveCount(0);
     await options.getByRole('button',{name:'清除搜索',exact:true}).click();await expect(options.locator('#retained-library-search')).toBeFocused();await expect(rows).toHaveCount(2);

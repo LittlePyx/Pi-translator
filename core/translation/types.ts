@@ -28,6 +28,8 @@ export interface TranslateRequest {
   requestId: string;
   /** Stable local identity for document-scoped memory; never sent to the provider. */
   documentId?: string;
+  /** Local content identity for the selected glossary scheme; never sent to the API. */
+  glossaryDocumentId?: string;
   text: string;
   pageUrl: string;
   sourceLabel?: string;
@@ -151,6 +153,8 @@ export interface TranslateImageRegionRequest {
   requestId: string;
   /** Stable local identity for document-scoped memory; never sent to the provider. */
   documentId?: string;
+  /** Local content identity for the selected glossary scheme; never sent to the API. */
+  glossaryDocumentId?: string;
   imageDataUrl: string;
   imageWidth: number;
   imageHeight: number;
@@ -242,6 +246,7 @@ export interface ImageTranslationOptions {
   targetLanguage: string;
   style: TranslationStyle;
   glossary?: GlossaryEntry[];
+  researchField?: string;
 }
 
 export interface TranslationSegment {
@@ -287,6 +292,7 @@ export interface TranslationOptions {
   targetLanguage: string;
   style: TranslationStyle;
   glossary?: GlossaryEntry[];
+  researchField?: string;
 }
 
 export interface PreparedTranslationInput {

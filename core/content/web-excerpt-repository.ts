@@ -1,4 +1,5 @@
 import {withDocumentStorageLock} from '../translation/document-storage-lock';
+import {TranslationError} from '../messaging/errors';
 import {citationUrl,normalizeExcerptCitation,type ExcerptCitation} from './excerpt-citation';
 import {markerTextStillMatches,type TranslationMarkerContent} from './session-translation-markers';
 export const WEB_EXCERPTS_KEY='piWebExcerptsV1';
@@ -52,11 +53,22 @@ export function updateWebExcerptCitation(item:WebExcerpt,citation:ExcerptCitatio
 })}
 export function saveWebExcerpt(value:WebExcerpt):Promise<void>{return withDocumentStorageLock(async()=>{
   const item=normalizeWebExcerpt(value),id=await pageKey(item.pageUrl),map=normalizeWebExcerptMap((await browser.storage.local.get(WEB_EXCERPTS_KEY))[WEB_EXCERPTS_KEY]);
+  if((map[id]??[]).some(old=>old.markerId!==item.markerId&&webExcerptAnchorKey(old)===webExcerptAnchorKey(item)))throw new TranslationError('REQUEST_ABORTED','这段原文已有保存的摘录，旧译文和笔记已保留。请在文档库查看或编辑原记录。');
   map[id]=[item,...(map[id]??[]).filter(old=>old.markerId!==item.markerId&&webExcerptAnchorKey(old)!==webExcerptAnchorKey(item))];
   await browser.storage.local.set({[WEB_EXCERPTS_KEY]:normalizeWebExcerptMap(map)});
 })}
 export function removeWebExcerpt(pageUrl:string,markerId:string):Promise<void>{return withDocumentStorageLock(async()=>{
   const id=await pageKey(pageUrl),map=normalizeWebExcerptMap((await browser.storage.local.get(WEB_EXCERPTS_KEY))[WEB_EXCERPTS_KEY]);map[id]=(map[id]??[]).filter(item=>item.markerId!==markerId);if(!map[id].length)delete map[id];await browser.storage.local.set({[WEB_EXCERPTS_KEY]:map});
+})}
+export function removeUnchangedWebExcerpt(item:WebExcerpt):Promise<void>{return withDocumentStorageLock(async()=>{
+  const id=await pageKey(item.pageUrl),map=await validateWebExcerptMap((await browser.storage.local.get(WEB_EXCERPTS_KEY))[WEB_EXCERPTS_KEY]);
+  if(JSON.stringify(map[id]?.find(record=>record.markerId===item.markerId))!==JSON.stringify(normalizeWebExcerpt(item)))throw new Error('摘录已在其他窗口修改或删除，原有内容未改变。');
+  map[id]=map[id]!.filter(record=>record.markerId!==item.markerId);if(!map[id].length)delete map[id];await browser.storage.local.set({[WEB_EXCERPTS_KEY]:map});
+})}
+export function restoreDeletedWebExcerpt(value:WebExcerpt):Promise<void>{return withDocumentStorageLock(async()=>{
+  const item=normalizeWebExcerpt(value),id=await pageKey(item.pageUrl),map=await validateWebExcerptMap((await browser.storage.local.get(WEB_EXCERPTS_KEY))[WEB_EXCERPTS_KEY]);
+  if((map[id]??[]).some(record=>record.markerId===item.markerId||webExcerptAnchorKey(record)===webExcerptAnchorKey(item)))throw new Error('这段原文已有新记录，撤销不会覆盖现有译文或笔记。');
+  map[id]=[...(map[id]??[]),item];await browser.storage.local.set({[WEB_EXCERPTS_KEY]:normalizeWebExcerptMap(map)});
 })}
 export function mergeWebExcerptMaps(current:unknown,incoming:unknown):Record<string,WebExcerpt[]>{
   const merged=normalizeWebExcerptMap(current);

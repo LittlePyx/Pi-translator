@@ -6,6 +6,9 @@ describe('API provider presets', () => {
     expect(API_PRESETS.map((preset) => preset.id)).toEqual([
       'deepseek',
       'qwen',
+      'openai',
+      'anthropic',
+      'gemini',
       'openrouter',
       'ollama',
     ]);

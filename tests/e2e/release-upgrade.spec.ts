@@ -21,10 +21,10 @@ async function launchExtension(userDataDirectory: string): Promise<{
   context: BrowserContext;
   extensionId: string;
 }> {
-  const extensionPath = path.resolve('.output/edge-mv3');
+  const extensionPath = path.resolve(process.env.PI_E2E_EXTENSION_PATH??'.output/edge-mv3');
   const context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
-    headless: false,
+    headless: process.env.PI_E2E_HEADLESS === '1',
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -34,6 +34,9 @@ async function launchExtension(userDataDirectory: string): Promise<{
   });
   const serviceWorker = context.serviceWorkers()[0] ??
     await context.waitForEvent('serviceworker');
+  await serviceWorker.evaluate(async () => {
+    await (globalThis as any).chrome.storage.local.set({ uiLanguagePreference: 'zh-CN' });
+  });
   return {
     context,
     extensionId: new URL(serviceWorker.url()).host,
@@ -124,6 +127,7 @@ test('upgrades legacy settings and keeps a persistent key after a real Edge rest
     });
   } finally {
     await context?.close();
+    if(path.dirname(path.resolve(userDataDirectory))!==path.resolve(tmpdir())||!path.basename(userDataDirectory).startsWith('pi-translator-upgrade-'))throw new Error('Unexpected temporary upgrade path.');
     await rm(userDataDirectory, { recursive: true, force: true });
   }
 });

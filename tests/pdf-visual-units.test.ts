@@ -6,6 +6,12 @@ import { pdfBackgroundVisualOutcome } from '../core/pdf/background-document-tran
 import { readLocalPdfLayout } from './support/local-pdf-layout';
 
 describe('PDF visual request ownership', () => {
+  it('keeps a repair candidate only for a single visual region',()=>{
+    const document=parseFormulaDocument({recognizedText:'Energy {{m1}} is invariant.',translation:'能量 {{m1}} 不变。',formulas:[{id:'m1',latex:'E=mc^2',display:false}]});
+    const outcome={blockId:'a',translatedText:'能量 $E=mc^2$ 不变。',formulaDocument:document,pendingFormulaRepair:document,visualProcessed:false};
+    expect(combinePdfVisualOutcomes('a',[outcome]).pendingFormulaRepair).toEqual(document);
+    expect(combinePdfVisualOutcomes('a',[outcome,{...outcome,blockId:'b'}]).pendingFormulaRepair).toBeUndefined();
+  });
   const block = (pageNumber: number, text: string, topRatio: number): PdfDocumentTranslationBlock => ({
     id: `p${pageNumber}`, pageNumber, blockIndex: 0, text, kind: 'formula',
     sourceAnchor: { leftRatio: .5, topRatio, widthRatio: .4, heightRatio: .08 } });

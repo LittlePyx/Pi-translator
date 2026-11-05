@@ -56,6 +56,23 @@ describe('background runtime message router', () => {
 });
 
 describe('background utility message handlers', () => {
+  it('scopes site defaults to the sender tab and leaves extension pages unscoped', async () => {
+    const getPublicSettings = vi.fn(async (_url?: string) => publicSettings);
+    const handlers = createUtilityMessageHandlers({
+      getPublicSettings,
+      recordLocalPerformance: async () => undefined,
+      getLocalDiagnosticReport: async () => '',
+    });
+    await routeRuntimeMessage(handlers, { type: 'GET_PUBLIC_SETTINGS' }, {
+      tab: { url: 'https://paper.example/read' }, url: 'https://frame.example/embed',
+    } as RuntimeMessageSender);
+    expect(getPublicSettings).toHaveBeenLastCalledWith('https://paper.example/read');
+    await routeRuntimeMessage(handlers, { type: 'GET_PUBLIC_SETTINGS' }, {
+      url: 'chrome-extension://pi/pdf.html?source=https://paper.example/paper.pdf',
+    } as RuntimeMessageSender);
+    expect(getPublicSettings).toHaveBeenLastCalledWith('chrome-extension://pi/pdf.html?source=https://paper.example/paper.pdf');
+  });
+
   it('uses injected dependencies for public settings and performance records', async () => {
     const getPublicSettings = vi.fn(async () => publicSettings);
     const recordLocalPerformance = vi.fn(async () => undefined);

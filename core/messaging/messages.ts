@@ -1,3 +1,6 @@
+import { normalizePdfReadingState, type PdfReadingState } from '../pdf/reading-state';
+import {validNoteSummaryTarget} from '../content/note-summary';
+import {validPassageInput,type PassageInput} from '../content/passage-explanation';
 import { MAX_SELECTION_LENGTH, type SelectionSnapshot } from '../selection/types';
 import {preparePdfFormulaProseRepair,type RepairPdfFormulaProseRequest} from '../pdf/formula-prose-repair';
 import type {
@@ -53,6 +56,7 @@ import {
 import type { DocumentTranslationExport } from '../translation/document-export';
 
 export interface DocumentMemoryLocator {
+  glossaryDocumentId?:string;
   pageUrl: string;
   documentId?: string;
   sourceLabel?: string;
@@ -91,10 +95,14 @@ export interface SettingsRecoveryReadyPayload {
 }
 
 export interface PublicSettings {
+  /** Display only; independent of translation configuration and saved content. */
+  uiLanguage?: 'zh-CN' | 'en';
   modelPrices?: import('../translation/cost-estimate').ModelTokenPrice[];
   costTextSource?: import('../translation/cost-estimate').UsageSource;
   sourceLanguage: 'auto' | string;
   targetLanguage: string;
+  /** Exact current-site default; absent for PDF and unremembered sites. */
+  siteTargetLanguage?: SupportedTargetLanguage | undefined;
   style: TranslationStyle;
   contentMode: TranslationContentMode;
   showFloatingButtonOnOverleaf: boolean;
@@ -109,6 +117,7 @@ export interface PublicSettings {
   sidebarSide: SidebarSide;
   sidebarWidth: number;
   contextMode: ContextMode;
+  paragraphShortcut?: 'off'|'alt'|'shift';
   enableStreaming: boolean;
   protectSensitiveFields: boolean;
   pdfKeyboardShortcutsEnabled: boolean;
@@ -183,6 +192,13 @@ export interface PdfSidePanelSession {
 }
 
 export type RuntimeMessage =
+  | {type:'READING_HINT';payload:{target:import('../content/note-summary').NoteSummaryTarget;action:'snapshot'|'claim'|'dismiss'}}
+  | {type:'PREVIEW_NOTE_SUMMARY';payload:{target:import('../content/note-summary').NoteSummaryTarget}}
+  | {type:'PREVIEW_PASSAGE_EXPLANATION';payload:{input:PassageInput}}
+  | {type:'GENERATE_PASSAGE_EXPLANATION';payload:{input:PassageInput;requestId:string;configuration:string}}
+  | {type:'CANCEL_PASSAGE_EXPLANATION';payload:{requestId:string}}
+  | {type:'GENERATE_NOTE_SUMMARY';payload:{target:import('../content/note-summary').NoteSummaryTarget;requestId:string;configuration:string;selections:import('../content/note-summary').NoteSummarySelection[];purpose?:import('../settings/purpose-preferences').PurposeId}}
+  | {type:'CANCEL_NOTE_SUMMARY';payload:{requestId:string}}
   | {type:'GET_WEB_EXCERPTS';payload:{pageUrl:string}}
   | {type:'SAVE_WEB_EXCERPT';payload:{pageUrl:string;excerpt:import('../content/web-excerpt-repository').WebExcerpt}}
   | {type:'REMOVE_WEB_EXCERPT';payload:{pageUrl:string;markerId:string}}
@@ -297,7 +313,7 @@ export type RuntimeMessage =
       payload: { tabId: number; expectedRequestId: string };
     }
   | { type: 'PDF_SIDE_PANEL_SESSION_UPDATED'; payload: PdfSidePanelSession }
-  | { type: 'OPEN_SIDEBAR' }
+  | { type: 'OPEN_SIDEBAR'; payload?: { result: TranslateResult; history: TranslationHistoryEntry[] } }
   | {
       type: 'OPEN_BROWSER_SIDEBAR';
       payload?: {
@@ -307,7 +323,7 @@ export type RuntimeMessage =
         persistPreference?: boolean;
       };
     }
-  | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number } }
+  | { type: 'USE_FLOATING_SIDEBAR'; payload?: { tabId: number; requestId?: string } }
   | { type: 'BROWSER_SIDEBAR_ACTIVE' }
   | { type: 'BROWSER_SIDEBAR_CLOSED' }
   | { type: 'GET_CONTINUOUS_TRANSLATION_STATE'; payload?: { tabId: number } }
@@ -323,6 +339,8 @@ export type RuntimeMessage =
   | { type: 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' }
   | { type: 'SET_SIDEBAR_WIDTH'; payload: { width: number } }
   | { type: 'PAUSE_CURRENT_SITE'; payload: { pageUrl: string } }
+  | { type: 'GET_DOCUMENT_GLOSSARY'; payload: DocumentMemoryLocator & {evidenceText?:string} }
+  | { type: 'SET_DOCUMENT_GLOSSARY'; payload: DocumentMemoryLocator & {profileId:string;expectedId:string;expectedSuggestion?:{defaultId:string;evidenceText:string;profileSnapshot:string}} }
   | { type: 'GET_DOCUMENT_MEMORY'; payload: DocumentMemoryLocator }
   | { type: 'LIST_DOCUMENT_TERM_SOURCES'; payload: DocumentMemoryLocator & {targetLanguage:SupportedTargetLanguage} }
   | { type: 'REUSE_DOCUMENT_TERMS'; payload: DocumentMemoryLocator & {context:TermSource;targetLanguage:SupportedTargetLanguage;selections:DocumentTermSelection[]} }
@@ -400,7 +418,11 @@ export type RuntimeMessage =
     }
   | { type: 'CONTEXT_MENU_TRANSLATE'; payload: SelectionSnapshot }
   | { type: 'GET_PUBLIC_SETTINGS' }
+  | { type: 'OPEN_READING_SOURCE'; payload: {url:string} }
+  | { type: 'REUSE_READING_SOURCE'; payload: {url:string;tabId:number} }
+  | { type: 'SAVE_PDF_READING_STATE'; payload: { fingerprint: string; state: PdfReadingState; document?:{title:string;pageCount?:number};opened?:true } }
   | { type: 'PUBLIC_SETTINGS_UPDATED'; payload: PublicSettings }
+  | { type: 'DOCUMENT_MEMORY_UPDATED'; payload: {documentId:string} }
   | {
       type: 'TEST_API_CONNECTION';
       payload: { apiKey?: string; apiBaseUrl: string; model: string; profileId?: string };
@@ -772,11 +794,49 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
 
   const message = value as { type: unknown; payload?: unknown };
   const type = message.type;
+  if(type==='PREVIEW_PASSAGE_EXPLANATION'||type==='GENERATE_PASSAGE_EXPLANATION'||type==='CANCEL_PASSAGE_EXPLANATION'){
+    const p=record(message.payload);if(!p)return false;
+    if(type==='CANCEL_PASSAGE_EXPLANATION')return hasOnlyKeys(p,['requestId'])&&nonEmptyString(p.requestId,240);
+    if(!validPassageInput(p.input))return false;
+    return type==='PREVIEW_PASSAGE_EXPLANATION'?hasOnlyKeys(p,['input']):hasOnlyKeys(p,['input','requestId','configuration'])&&nonEmptyString(p.requestId,240)&&typeof p.configuration==='string'&&/^[a-f0-9]{64}$/u.test(p.configuration);
+  }
+  if(type==='READING_HINT'){
+    const payload=record(message.payload);return Boolean(payload&&hasOnlyKeys(payload,['target','action'])&&validNoteSummaryTarget(payload.target)&&['snapshot','claim','dismiss'].includes(String(payload.action)));
+  }
+  if(type==='PREVIEW_NOTE_SUMMARY'||type==='GENERATE_NOTE_SUMMARY'||type==='CANCEL_NOTE_SUMMARY'){
+    const payload=record(message.payload);
+    if(!payload)return false;
+    if(type==='CANCEL_NOTE_SUMMARY')return hasOnlyKeys(payload,['requestId'])&&nonEmptyString(payload.requestId,240);
+    if(!validNoteSummaryTarget(payload.target))return false;
+    if(type==='PREVIEW_NOTE_SUMMARY')return hasOnlyKeys(payload,['target']);
+    return hasOnlyKeys(payload,['target','requestId','configuration','selections','purpose'])&&(payload.purpose===undefined||['daily','research','learning'].includes(String(payload.purpose)))&&nonEmptyString(payload.requestId,240)&&typeof payload.configuration==='string'&&/^[a-f0-9]{64}$/u.test(payload.configuration)&&Array.isArray(payload.selections)&&payload.selections.length>0&&payload.selections.length<=30&&payload.selections.every(value=>{const item=record(value);return item&&hasOnlyKeys(item,['id','revision'])&&nonEmptyString(item.id,7000)&&typeof item.revision==='string'&&/^[a-f0-9]{64}$/u.test(item.revision)})&&new Set(payload.selections.map(value=>record(value)?.id)).size===payload.selections.length;
+  }
+  if(type==='OPEN_READING_SOURCE'||type==='REUSE_READING_SOURCE'){
+    const payload=record(message.payload);
+    return Boolean(payload&&typeof payload.url==='string'&&payload.url.length>0&&payload.url.length<=4000&&hasOnlyKeys(payload,type==='REUSE_READING_SOURCE'?['url','tabId']:['url'])&&(type!=='REUSE_READING_SOURCE'||Number.isSafeInteger(payload.tabId)&&Number(payload.tabId)>=0));
+  }
+  if (type === 'SAVE_PDF_READING_STATE') {
+    const payload = record(message.payload);
+      const document=payload?.document===undefined?undefined:record(payload.document);
+      const validDocument=payload?.document===undefined||Boolean(document&&hasOnlyKeys(document,['title','pageCount'])&&typeof document.title==='string'&&document.title.trim()&&document.title.length<=120&&(document.pageCount===undefined||typeof document.pageCount==='number'&&Number.isSafeInteger(document.pageCount)&&document.pageCount>0));
+      return Boolean(payload && validDocument && (payload.opened===undefined||payload.opened===true&&document!==undefined) && hasOnlyKeys(payload, ['fingerprint', 'state','document','opened']) &&
+      typeof payload.fingerprint === 'string' && /^[a-f0-9]{64}$/u.test(payload.fingerprint) &&
+      normalizePdfReadingState(payload.state));
+  }
   if(type==='REPAIR_PDF_FORMULA_PROSE'){
     const payload=record(message.payload);
     return Boolean(payload&&(payload.sourceTabId===undefined||Number.isSafeInteger(payload.sourceTabId)&&Number(payload.sourceTabId)>=0)&&typeof payload.requestId==='string'&&payload.requestId.length>0&&payload.requestId.length<=240&&
       isSupportedTargetLanguage(payload.targetLanguage)&&typeof payload.sourceLanguage==='string'&&payload.sourceLanguage.length<=80&&
       ['academic','literal','general'].includes(String(payload.style))&&preparePdfFormulaProseRepair(payload.document,payload.targetLanguage));
+  }
+  if(type==='GET_DOCUMENT_GLOSSARY'||type==='SET_DOCUMENT_GLOSSARY'){
+    const payload=record(message.payload);
+    return Boolean(payload&&typeof payload.pageUrl==='string'&&payload.pageUrl.length<=9000&&
+      (payload.documentId===undefined||typeof payload.documentId==='string'&&payload.documentId.length<=9000)&&
+      (payload.glossaryDocumentId===undefined||typeof payload.glossaryDocumentId==='string'&&/^doc-[a-z0-9]{1,8}$/u.test(payload.glossaryDocumentId))&&
+      (payload.evidenceText===undefined||type==='GET_DOCUMENT_GLOSSARY'&&typeof payload.evidenceText==='string'&&payload.evidenceText.length<=6000)&&
+      (type==='GET_DOCUMENT_GLOSSARY'||typeof payload.profileId==='string'&&payload.profileId.length<=64&&typeof payload.expectedId==='string'&&payload.expectedId.length<=64&&
+        (payload.expectedSuggestion===undefined||(()=>{const expected=record(payload.expectedSuggestion);return Boolean(expected&&typeof expected.defaultId==='string'&&expected.defaultId.length<=64&&typeof expected.evidenceText==='string'&&expected.evidenceText.length<=6000&&typeof expected.profileSnapshot==='string'&&expected.profileSnapshot.length<=160000)})())));
   }
   if(type==='GET_WEB_EXCERPTS'||type==='SAVE_WEB_EXCERPT'||type==='REMOVE_WEB_EXCERPT'){
     const payload=record(message.payload);
@@ -959,6 +1019,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
         'requestId',
         'items',
         'documentId',
+        'glossaryDocumentId',
         'pageUrl',
         'sourceLabel',
         'targetLanguage',
@@ -976,6 +1037,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       ['academic', 'general', 'literal'].includes(String(payload.style)) &&
       ['auto', 'plain', 'latex'].includes(String(payload.contentMode)) &&
       (payload.documentId === undefined || nonEmptyString(payload.documentId, 512)) &&
+      (payload.glossaryDocumentId===undefined||typeof payload.glossaryDocumentId==='string'&&/^doc-[a-z0-9]{1,8}$/u.test(payload.glossaryDocumentId)) &&
       (payload.sourceLabel === undefined || nonEmptyString(payload.sourceLabel, 512)) &&
       (payload.contextText === undefined || (
         typeof payload.contextText === 'string' && payload.contextText.length <= 4_000
@@ -983,6 +1045,7 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
       (payload.bypassCache === undefined || typeof payload.bypassCache === 'boolean')
     );
   }
+  if(type==='DOCUMENT_MEMORY_UPDATED'){const payload=record(message.payload);return Boolean(payload&&typeof payload.documentId==='string'&&/^doc-[a-z0-9]{1,8}$/u.test(payload.documentId)&&Object.keys(payload).length===1)}
   return (
     type === 'TRANSLATE_SELECTION' ||
     type === 'TRANSLATE_SELECTION_IN_BROWSER_SIDEBAR' ||
@@ -1023,6 +1086,8 @@ export function isRuntimeMessage(value: unknown): value is RuntimeMessage {
     type === 'DISMISS_SIDEBAR_OBSTRUCTION_HINT' ||
     type === 'SET_SIDEBAR_WIDTH' ||
     type === 'PAUSE_CURRENT_SITE' ||
+    type === 'GET_DOCUMENT_GLOSSARY' ||
+    type === 'SET_DOCUMENT_GLOSSARY' ||
     type === 'GET_DOCUMENT_MEMORY' ||
     type === 'LIST_DOCUMENT_TERM_SOURCES' ||
     type === 'REUSE_DOCUMENT_TERMS' ||

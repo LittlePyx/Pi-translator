@@ -1,5 +1,6 @@
 import {openPdfTranslationOptions,openPdfTranslationSettings} from './support/pdf-controls';
 import type {Route} from '@playwright/test';
+import {writeFile} from 'node:fs/promises';
 import {context,createTwoPageTextPdf,createRasterPdf,expect,extensionId,installEdgeExtensionHooks,test,textRequests,visionRequests} from './support/edge-extension-fixture';
 import {createNumberedPdf} from '../support/numbered-pdf';
 import {pdfReviewConfirmation} from '../../core/pdf/review-queue';
@@ -57,6 +58,19 @@ test('includes scanned-page OCR in the request limit and preserves its selectabl
 for (const width of [360, 1300]) {
 test(`tries one PDF paragraph, pauses at the request limit and reuses it when continuing, width=${width}`,async ({},testInfo)=>{
   const reader=await context.newPage();
+  await reader.addInitScript(()=>{
+    const scope=globalThis as any;scope.piPdfMenuEvents=[];
+    const record=(value:object)=>scope.piPdfMenuEvents.push({time:performance.now(),open:(document.getElementById('pdf-document-translation-copy-menu') as HTMLDetailsElement|null)?.open,active:document.activeElement?.id||document.activeElement?.tagName,...value});
+    const property=Object.getOwnPropertyDescriptor(HTMLDetailsElement.prototype,'open')!;
+    Object.defineProperty(HTMLDetailsElement.prototype,'open',{...property,set(value){if((this as HTMLDetailsElement).id==='pdf-document-translation-copy-menu')record({kind:'write',value,stack:Error().stack});property.set!.call(this,value)}});
+    for(const name of ['click','keydown','keyup','focusin','focusout','beforetoggle','toggle'])document.addEventListener(name,event=>{const target=event.target as HTMLElement;if(target?.closest?.('#pdf-document-translation-copy-menu'))record({kind:name,target:target.id||target.tagName,key:(event as KeyboardEvent).key,trusted:event.isTrusted})},true);
+    document.addEventListener('DOMContentLoaded',()=>{
+      const menu=document.getElementById('pdf-document-translation-copy-menu')!;
+      new MutationObserver(changes=>changes.forEach(change=>record({kind:'attribute',old:change.oldValue}))).observe(menu,{attributes:true,attributeFilter:['open'],attributeOldValue:true});
+      matchMedia('(prefers-color-scheme: dark)').addEventListener('change',event=>record({kind:'theme',dark:event.matches}));
+      window.addEventListener('focus',()=>record({kind:'window-focus'}));window.addEventListener('blur',()=>record({kind:'window-blur'}));
+    });
+  });
   const captureState=async(state:string)=>{
     if(state==='complete')await expect(reader.locator('#pdf-document-translation-copy-feedback')).toBeEmpty();
     await reader.locator('.pdf-document-translation-title').click();
@@ -159,9 +173,11 @@ test(`tries one PDF paragraph, pauses at the request limit and reuses it when co
     await reader.mouse.move(0,0);
     await expect(reader.locator('#pdf-document-translation-primary')).toBeEnabled();
     await reader.screenshot({path:testInfo.outputPath('translation-running-light.png')});
+    await expect(menu).not.toHaveAttribute('open');
     await reader.emulateMedia({colorScheme:'dark'});
     await expect(reader.locator('#pdf-document-translation-primary')).toBeEnabled();
     await reader.screenshot({path:testInfo.outputPath('translation-running-dark.png')});
+    await expect(menu).not.toHaveAttribute('open');
     await reader.emulateMedia({colorScheme:'light'});
     await reader.evaluate(()=>Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(value:string)=>{(globalThis as any).__piCopiedText=value}}}));
     await more.click();await reader.locator('#pdf-document-translation-copy-translation').click();
@@ -198,7 +214,10 @@ test(`tries one PDF paragraph, pauses at the request limit and reuses it when co
     await expect(reader.locator('.pdf-document-translation-actions > button:visible')).toHaveCount(0);
     await captureState('complete');
     await reader.screenshot({path:testInfo.outputPath('trial-budget-complete.png')});
-  } finally {releaseResponse();await reader.close();await context.unroute('https://www.overleaf.com/pi-translator-e2e-api/chat/completions',handle);}
+  } finally {
+    if(!reader.isClosed())await writeFile(testInfo.outputPath('menu-events.json'),JSON.stringify(await reader.evaluate(()=>(globalThis as any).piPdfMenuEvents),null,2)).catch(()=>{});
+    releaseResponse();await reader.close();await context.unroute('https://www.overleaf.com/pi-translator-e2e-api/chat/completions',handle);
+  }
 });
 }
 

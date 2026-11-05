@@ -1,3 +1,4 @@
+import {openSettingsSection} from './support/settings-navigation';
 import {openTranslationMore} from './support/translation-controls';
 import {
   context,
@@ -12,6 +13,28 @@ import {
 } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
+test('keeps old cost links and all price controls within API settings without writes',async()=>{
+  const options=await context.newPage();
+  try{
+    await options.goto(`chrome-extension://${extensionId}/options.html#cost`);
+    await expect(options.locator('#api-profile')).toHaveValue('default');
+    const before=await options.evaluate(()=>(globalThis as any).chrome.storage.local.get(null));
+    await expect(options.locator('#settings-connection')).toBeVisible();
+    await expect(options.locator('#settings-cost')).toHaveAttribute('open');
+    await expect(options.locator('#settings-cost > summary')).toBeFocused();
+    await expect(options.locator('#settings-section-select')).toHaveValue('connection');
+    await expect(options.locator('[data-settings-target="cost"]')).toHaveCount(0);
+    await expect(options.locator('#settings-connection #settings-cost #model-price-editor')).toHaveCount(1);
+    await options.setViewportSize({width:360,height:800});
+    await expect(options.locator('#settings-section-select option')).toHaveCount(6);
+    await options.locator('#settings-cost > summary').click();
+    await expect(options.locator('#settings-cost')).not.toHaveAttribute('open');
+    await options.reload();
+    await expect(options.locator('#settings-cost')).toHaveAttribute('open');
+    await expect(options.locator('#settings-cost > summary')).toBeFocused();
+    expect(await options.evaluate(()=>(globalThis as any).chrome.storage.local.get(null))).toEqual(before);
+  }finally{await options.close()}
+});
 test('keeps advanced options collapsed until requested', async ({}, testInfo) => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
@@ -51,13 +74,14 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
     'tabindex',
     '0',
   );
+  await options.locator('#context-mode').locator('xpath=ancestor::details').locator(':scope > summary').click();
+  await expect(options.locator('#context-mode')).toBeVisible();
   await options.locator('[data-settings-target="results"]').click();
   await expect(options.locator('[data-settings-section="results"]')).toBeVisible();
   await expect(options.locator('#auto-render-latex')).toBeChecked();
   const advanced = options.locator('details.advanced-panel');
   await expect(advanced).not.toHaveAttribute('open', '');
   await advanced.locator('summary').click();
-  await expect(options.locator('#context-mode')).toBeVisible();
   await expect(options.locator('#enable-streaming')).toBeVisible();
   await expect(options.locator('#protect-sensitive-fields')).toBeVisible();
   await expect(options.locator('#pdf-keyboard-shortcuts')).toBeChecked();
@@ -74,7 +98,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.setViewportSize({ width: 360, height: 620 });
   await reopened.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
-  await reopened.locator('[data-settings-target="support"]').click();
+  await openSettingsSection(reopened,'support');
   const support = reopened.locator('details.support-disclosure').filter({has:reopened.locator('#copy-diagnostic-report')});
   await expect(reopened.locator('details.support-disclosure').filter({has:reopened.locator('#extension-version')})).not.toHaveAttribute('open','');
   await expect(support).not.toHaveAttribute('open', '');
@@ -83,12 +107,17 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
   const onboardingPreset = reopened.locator('#onboarding-preset');
   await expect(onboardingPreset).toBeFocused();
-  await expect(onboardingPreset.locator('option')).toHaveCount(5);
+  await expect(onboardingPreset.locator('option')).toHaveCount(8);
+  for (const id of ['openai', 'anthropic', 'gemini']) {
+    await expect(onboardingPreset.locator(`option[value="${id}"]`)).toHaveCount(1);
+  }
   await expect(onboardingPreset.locator('option').first()).toHaveAttribute('value', 'deepseek');
   await expect(onboardingPreset.locator('option').last()).toHaveAttribute('value', 'custom');
   await expect(onboardingPreset.locator('option[value="custom"]')).toHaveText(
     '自定义 OpenAI 兼容 API',
   );
+  const initialOnboardingBase=await reopened.locator('#onboarding-base-url').inputValue();
+  const initialOnboardingModel=await reopened.locator('#onboarding-model').inputValue();
   await onboardingPreset.selectOption('deepseek');
   await expect(reopened.locator('#onboarding-base-url')).toHaveValue(
     'https://api.deepseek.com',
@@ -155,8 +184,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.locator('#onboarding-next').click();
   await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
   await expect(reopened.locator('#onboarding-base-url-field')).toBeVisible();
-  await expect(reopened.locator('#onboarding-base-url')).toHaveValue('');
-  await expect(reopened.locator('#onboarding-model')).toHaveValue('');
+  await expect(reopened.locator('#onboarding-base-url')).toHaveValue(initialOnboardingBase);
+  await expect(reopened.locator('#onboarding-model')).toHaveValue(initialOnboardingModel);
   await reopened.locator('#onboarding-api-key').fill('e2e-onboarding-key');
   await reopened.locator('#onboarding-base-url').fill(
     'https://www.overleaf.com/pi-translator-e2e-api',
@@ -224,7 +253,20 @@ test('automatically binds a visual-capable active API when settings are saved', 
   await options.close();
 });
 
-test('keeps the text API active while a second profile is configured for PDF images', async () => {
+test('explains when ordinary webpage selection shows the floating button', async () => {
+  const options=await context.newPage();
+  try{
+    await options.goto(`chrome-extension://${extensionId}/options.html`);
+    await options.locator('[data-settings-target="pages"]').click();
+    await options.locator('#general-page-mode').selectOption('on-demand');
+    await expect(options.locator('#page-mode-help')).toContainText('不自动显示划词按钮');
+    await options.locator('#general-page-mode').selectOption('allowlist');
+    await expect(options.locator('#site-allowlist-field')).toBeVisible();
+    await expect(options.locator('#page-mode-help')).toContainText('指定网站');
+  }finally{await options.close()}
+});
+
+test('keeps the text API active while a second profile is configured for PDF images', async ({}, info) => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   const profileIds = await options.evaluate(async () => {
@@ -254,6 +296,13 @@ test('keeps the text API active while a second profile is configured for PDF ima
   });
   await options.reload();
   await expect(options.locator('#profile-role-status')).toContainText('文字翻译');
+  const textSummary=await options.locator('#text-profile-summary').textContent();
+  expect(textSummary).toBeTruthy();
+  await expect(options.locator('#vision-profile-summary')).toHaveText('尚未配置');
+  await options.setViewportSize({width:390,height:800});
+  await options.screenshot({path:info.outputPath('connection-roles-390.png')});
+  expect(await options.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
+  await options.setViewportSize({width:1200,height:900});
 
   await options.locator('#api-profile').selectOption(profileIds.vision);
   await expect(options.locator('#profile-role-status')).toContainText('尚未分配');
@@ -263,6 +312,8 @@ test('keeps the text API active while a second profile is configured for PDF ima
   await expect(options.locator('#status')).toContainText('文字继续使用');
   await expect(options.locator('#profile-role-status')).toContainText('图像翻译');
   await expect(options.locator('#profile-role-status')).not.toContainText('文字翻译');
+  await expect(options.locator('#text-profile-summary')).toHaveText(textSummary!);
+  await expect(options.locator('#vision-profile-summary')).toContainText('Qwen 视觉测试');
 
   await expect(options.locator('#save-button')).toBeDisabled();
   await expect.poll(() => options.evaluate(async () => {
@@ -594,4 +645,55 @@ test('persists and undoes a native PDF correction through the real background se
     await sidePanel.close().catch(() => undefined);
     await context.unroute(sourceUrl).catch(() => undefined);
   }
+});
+
+test('switches narrow settings without saving or losing drafts and preserves sidebar placement', async () => {
+  const options=await context.newPage();
+  const beforeRequests=textRequests.length;
+  try {
+    await options.goto(`chrome-extension://${extensionId}/options.html#translation`);
+    await expect(options.locator('#api-profile')).toHaveValue('default');
+    const before=await options.evaluate(()=> (globalThis as any).chrome.storage.local.get(null));
+    await options.locator('#target-language').selectOption('de');
+    const active=options.locator('[data-settings-target="translation"]');
+    await active.focus();
+    await options.setViewportSize({width:360,height:800});
+    const navigation=options.locator('#settings-section-select');
+    await expect(navigation).toBeFocused();
+    await expect(navigation).toHaveValue('translation');
+    await expect(options.locator('.settings-nav-list')).toBeHidden();
+    await expect(navigation.locator('option')).toHaveCount(6);
+    await navigation.selectOption('results');
+    await expect(options.locator('#settings-results')).toBeVisible();
+    await options.locator('#sidebar-mode').selectOption('floating');
+    await options.locator('#sidebar-side').selectOption('left');
+    await options.locator('#sidebar-mode').selectOption('browser');
+    await expect(options.locator('#sidebar-side')).toBeHidden();
+    await openSettingsSection(options,'cost');
+    await expect(options.locator('#model-price-editor')).not.toHaveAttribute('open');
+    await navigation.selectOption('translation');
+    await expect(options.locator('#target-language')).toHaveValue('de');
+    await expect(options.locator('#save-button')).toBeEnabled();
+    expect(await options.evaluate(()=> (globalThis as any).chrome.storage.local.get(null))).toEqual(before);
+    await navigation.focus();
+    await options.setViewportSize({width:1100,height:900});
+    await expect(active).toBeFocused();
+    await options.locator('[data-settings-target="results"]').click();
+    await options.locator('#sidebar-mode').selectOption('floating');
+    await expect(options.locator('#sidebar-side')).toHaveValue('left');
+    await options.locator('#sidebar-mode').selectOption('browser');
+    await options.locator('#save-button').click();
+    await expect(options.locator('#save-state')).toHaveText('所有设置已保存');
+    await options.reload();
+    await expect(options.locator('#sidebar-mode')).toHaveValue('browser');
+    await expect(options.locator('#sidebar-side')).toBeHidden();
+    await options.locator('#sidebar-mode').selectOption('floating');
+    await expect(options.locator('#sidebar-side')).toHaveValue('left');
+    await options.locator('#sidebar-side').focus();
+    await options.setViewportSize({width:360,height:800});
+    await expect(options.locator('#sidebar-side')).toBeFocused();
+    await options.setViewportSize({width:1100,height:900});
+    await expect(options.locator('#sidebar-side')).toBeFocused();
+    expect(textRequests.length).toBe(beforeRequests);
+  } finally {await options.close()}
 });

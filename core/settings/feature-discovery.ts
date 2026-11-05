@@ -1,3 +1,4 @@
+import { t } from '../i18n/ui-language';
 import {
   isEdgeNativePdfContext,
   isExtensionPdfReaderUrl,
@@ -164,12 +165,17 @@ export function featureDiscoveryModel(
 ): FeatureDiscoveryModel {
   const steps = SCENE_STEPS[scene].map((step) => ({
     ...step,
+    label: t(step.label),
+    detail: t(step.detail),
     completed: progress.completed[step.id] === true,
   }));
   const completedCount = steps.filter((step) => step.completed).length;
   return {
     scene,
     ...SCENE_COPY[scene],
+    eyebrow: t(SCENE_COPY[scene].eyebrow),
+    title: t(SCENE_COPY[scene].title),
+    description: t(SCENE_COPY[scene].description),
     steps,
     completedCount,
     shouldShow: reveal || (

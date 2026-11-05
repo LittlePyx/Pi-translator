@@ -53,6 +53,7 @@ export interface TranslationMarkerContent extends ExcerptCitation {
   sourceTitle: string;
   sourceUrl?: string;
   pageNumber?: number;
+  endPageNumber?: number;
 }
 
 export type PersistedPdfTranslationMarkerAnchor =
@@ -200,7 +201,7 @@ export function findUniqueTextQuoteRange(
     : { start: rawStart, end: rawEnd };
 }
 
-function rangeFromTextQuote(
+export function rangeFromTextQuote(
   scope: Element,
   sourceText: string,
   prefix: string,
@@ -221,7 +222,7 @@ function rangeFromTextQuote(
   while (node) {
     const textNode = node as Text;
     const nextPosition = position + textNode.data.length;
-    if (!startNode && quoteOffset >= position && quoteOffset <= nextPosition) {
+    if (!startNode && quoteOffset >= position && quoteOffset < nextPosition) {
       startNode = textNode;
       startOffset = quoteOffset - position;
     }
@@ -379,11 +380,11 @@ export function findUniqueNormalizedSegmentRange(
 }
 
 export function buildTranslationMarkerMarkdown(
-  contents: TranslationMarkerContent[],
+  contents: (Omit<TranslationMarkerContent, 'translatedText'> & {translatedText?: string})[],
 ): string {
   if (!contents.length) return '';
   const sections = contents.map((content) => {
-    const title = escapeCitationText(content.sourceTitle) + (content.pageNumber ? ` · 第 ${content.pageNumber} 页` : '');
+    const title = escapeCitationText(content.sourceTitle) + (content.pageNumber ? ` · 第 ${content.pageNumber}${content.endPageNumber?`–${content.endPageNumber}`:''} 页` : '');
     const quote = content.originalText
       .trim()
       .split(/\r?\n/u)
@@ -396,7 +397,8 @@ export function buildTranslationMarkerMarkdown(
     const doi = citationDoi(content.doi);
     const doiLine = doi ? `\n\nDOI: [${escapeCitationText(doi)}](https://doi.org/${citationMarkdownUrl(doi)})` : '';
     const note = content.note?.trim() ? `\n\n个人笔记：\n\n${content.note.trim().split(/\r?\n/u).map(line=>`> ${line}`).join('\n')}` : '';
-    return `## ${title}\n\n${quote}\n\n${content.translatedText.trim()}${source}${doiLine}${note}`;
+    const translation = content.translatedText?.trim();
+    return `## ${title}\n\n${quote}${translation ? `\n\n${translation}` : ''}${source}${doiLine}${note}`;
   });
   return `# Pi Translator 标记笔记\n\n${sections.join('\n\n---\n\n')}\n`;
 }
@@ -529,8 +531,17 @@ export function captureDomTranslationMarkerAnchor(
 ): TranslationMarkerAnchor | undefined {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return undefined;
-  const range = selection.getRangeAt(0);
-  if (!markerTextStillMatches(range.toString(), sourceText)) return undefined;
+  let range = selection.getRangeAt(0);
+  if (!markerTextStillMatches(range.toString(), sourceText)) {
+    // Selection.toString() omits hidden SVG titles which Range.toString() includes.
+    // Keep only an exact, unique quote contained in the original selection.
+    const scope = range.commonAncestorContainer instanceof Element
+      ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    const quote = scope && rangeFromTextQuote(scope, sourceText, '', '');
+    if (!quote || range.compareBoundaryPoints(Range.START_TO_START, quote) > 0 ||
+      range.compareBoundaryPoints(Range.END_TO_END, quote) < 0) return undefined;
+    range = quote;
+  }
   return domAnchorFromRange(range);
 }
 
@@ -751,7 +762,7 @@ export class SessionTranslationMarkerManager {
     }, 1_150);
   }
 
-  reveal(markerId: string): TranslationMarkerLocationState {
+  reveal(markerId: string, beforeReveal?: (target: Element) => void): TranslationMarkerLocationState {
     const record = this.records.get(markerId);
     if (!record) return 'missing';
     if (record.anchor.kind === 'pdf-region') return this.locationState(markerId);
@@ -777,7 +788,7 @@ export class SessionTranslationMarkerManager {
     const target = range.startContainer instanceof Element
       ? range.startContainer
       : range.startContainer.parentElement;
-    target?.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' });
+    if(target){beforeReveal?.(target);target.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'smooth' })}
     this.focus(markerId);
     return 'ready';
   }
@@ -1048,6 +1059,10 @@ export class SessionTranslationMarkerManager {
   }
 
   private readonly onPointerMove = (event: PointerEvent): void => {
+    if (event.buttons !== 0) {
+      this.hideTooltip();
+      return;
+    }
     if (event.composedPath().includes(this.tooltip)) {
       this.cancelTooltipHide();
       return;
@@ -1100,15 +1115,18 @@ export class SessionTranslationMarkerManager {
       this.isMarkerUiEvent(event) ||
       !this.markerAt(event.clientX, event.clientY)
     ) return;
-    event.preventDefault();
-    event.stopPropagation();
+    // Keep native selection (including drag and double-click) available on marks.
+    this.hideTooltip();
   };
 
   private readonly onDocumentClick = (event: MouseEvent): void => {
     if (
       event.button !== 0 ||
       this.isTranslationOverlayEvent(event) ||
-      this.isMarkerUiEvent(event)
+      this.isMarkerUiEvent(event) ||
+      window.getSelection()?.isCollapsed === false ||
+      event.composedPath().some(target => target instanceof Element &&
+        target.matches('a[href],button,input,textarea,select,[role="button"],[role="link"],[contenteditable]:not([contenteditable="false"])'))
     ) return;
     const hit = this.markerAt(event.clientX, event.clientY);
     if (!hit) return;

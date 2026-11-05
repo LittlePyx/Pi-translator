@@ -1,0 +1,170 @@
+{
+  "offline": [
+    "tests/e2e/settings-draft-safety.spec.ts",
+    "tests/e2e/settings-task-organization.spec.ts",
+    "tests/e2e/purpose-field-setup.spec.ts",
+    "tests/e2e/web-git-prose.spec.ts",
+    "tests/e2e/onboarding-web-access.spec.ts",
+    "tests/e2e/pdf-term-followthrough.spec.ts",
+    "tests/e2e/passage-assistance.spec.ts",
+    "tests/e2e/native-pdf-reader-tip.spec.ts",
+    "tests/e2e/pdf-formula-glossary.spec.ts",
+    "tests/e2e/reading-usability.spec.ts",
+    "tests/e2e/pdf-original-restart.spec.ts",
+    "tests/e2e/web-excerpt-save-safety.spec.ts",
+    "tests/e2e/recent-reading.spec.ts",
+    "tests/e2e/library-search.spec.ts",
+    "tests/e2e/pdf-reader-controls.spec.ts",
+    "tests/e2e/pdf-reading-annotations.spec.ts",
+    "tests/e2e/selection-identity.spec.ts",
+    "tests/e2e/backup-recovery.spec.ts",
+    "tests/e2e/web-core-real-response-replay.spec.ts",
+    "tests/e2e/pdf-reader-real-papers.spec.ts",
+    "tests/e2e/pdf-reader-retained-papers.spec.ts",
+    "tests/e2e/site-reading-preferences.spec.ts",
+    "tests/e2e/site-reading-restart.spec.ts",
+    "tests/e2e/ui-language.spec.ts",
+    "tests/e2e/api-first-use.spec.ts",
+    "tests/e2e/model-catalog.spec.ts",
+    "tests/e2e/web-selection-lifecycle.spec.ts",
+    "tests/e2e/web-reading.spec.ts",
+    "tests/e2e/web-selection.spec.ts",
+    "tests/e2e/pdf-document.spec.ts",
+    "tests/e2e/pdf-math-regression.spec.ts",
+    "tests/e2e/pdf-translation-reliability.spec.ts",
+    "tests/e2e/pdf-paragraph-flow.spec.ts",
+    "tests/e2e/pdf-paper-metadata.spec.ts",
+    "tests/e2e/pdf-equation-numbering.spec.ts",
+    "tests/e2e/pdf-product-workflow.spec.ts",
+    "tests/e2e/pdf-library-cost-excerpts.spec.ts",
+    "tests/e2e/pdf-reading-workflow.spec.ts",
+    "tests/e2e/term-excerpts.spec.ts",
+    "tests/e2e/term-reuse.spec.ts",
+    "tests/e2e/research-reading.spec.ts",
+    "tests/e2e/pdf-region-ocr.spec.ts",
+    "tests/e2e/translation-surfaces.spec.ts",
+    "tests/e2e/browser-sidebar.spec.ts",
+    "tests/e2e/settings-integration.spec.ts",
+    "tests/e2e/release-upgrade.spec.ts",
+    "tests/e2e/options-api-setup.spec.ts",
+    "tests/e2e/pdf-wheel-zoom.spec.ts",
+    "tests/e2e/pdf-original-backup.spec.ts",
+    "tests/e2e/citation-export.spec.ts",
+    "tests/e2e/marked-source-selection.spec.ts",
+    "tests/e2e/settings-hash-navigation.spec.ts",
+    "tests/e2e/web-complex-replay.spec.ts",
+    "tests/e2e/product-integration.spec.ts",
+    "tests/e2e/frontend-hierarchy.spec.ts",
+    "tests/e2e/reading-assistance.spec.ts",
+    "tests/e2e/reading-assistance-followup.spec.ts",
+    "tests/e2e/reading-navigation.spec.ts",
+    "tests/e2e/note-workflow-ai.spec.ts",
+    "tests/e2e/reading-hints.spec.ts"
+  ],
+  "optIn": [
+    {
+      "file": "tests/e2e/library-scale.spec.ts",
+      "reason": "Dedicated large-library acceptance with fixed size and measurements."
+    },
+    {
+      "file": "tests/e2e/marketing-screenshots.spec.ts",
+      "reason": "Advertising screenshots; separate from functional regressions."
+    },
+    {
+      "file": "tests/e2e/pdf-actual-export-review.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/pdf-brace-recovery.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/pdf-cross-page-scope.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/pdf-formula-reliability.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/pdf-live-formula-diagnosis.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-live-number-fonts.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-live-product-acceptance.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-live-reading-acceptance.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-live-scanned-paper.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-live-whole-paper.spec.ts",
+      "reason": "Real model or provider acceptance; explicit opt-in and fixed request budget only."
+    },
+    {
+      "file": "tests/e2e/pdf-menu-lifecycle.spec.ts",
+      "reason": "Dedicated diagnosis; preserve the current observation scope and evidence."
+    },
+    {
+      "file": "tests/e2e/pdf-number-fonts-restored.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/pdf-reader-position-diagnosis.spec.ts",
+      "reason": "Dedicated diagnosis; preserve the current observation scope and evidence."
+    },
+    {
+      "file": "tests/e2e/pdf-reading-storage-faults.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/pdf-scope-retention.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/pdf-segmentation-compatibility.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/pdf-source-toolbar.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/pdf-whole-paper-restored.spec.ts",
+      "reason": "Historical PDF fixture or diagnostic acceptance, run separately with its declared source inputs."
+    },
+    {
+      "file": "tests/e2e/product-bilingual-capture.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/product-design.spec.ts",
+      "reason": "Covered by the separate test:layout:built command."
+    },
+    {
+      "file": "tests/e2e/product-layout-audit.spec.ts",
+      "reason": "Covered by the separate test:layout:built command."
+    },
+    {
+      "file": "tests/e2e/release-package-acceptance.spec.ts",
+      "reason": "Immutable ZIP installation and baseline upgrade acceptance; requires declared archives and fixture."
+    },
+    {
+      "file": "tests/e2e/web-quote-navigation.spec.ts",
+      "reason": "Existing independent acceptance suite; explicit command retained, not silently added to default CI."
+    },
+    {
+      "file": "tests/e2e/web-saved-response-workflow.spec.ts",
+      "reason": "Explicit sealed response archive required; offline source identity workflow."
+    }
+  ]
+}

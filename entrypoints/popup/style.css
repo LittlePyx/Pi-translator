@@ -239,6 +239,7 @@ select {
 .switch-row input:checked::before { transform: translateX(14px); }
 .switch-row input:disabled { opacity: .48; cursor: not-allowed; }
 .switch-row:has(input:disabled) { color: #7c889e; cursor: default; }
+.site-control .site-reset { width: auto; min-height: 28px; margin-top: 8px; padding: 4px 0; border: 0; background: transparent; color: inherit; font-size: 11px; }
 .site-control p { margin: 9px 0 0; color: #7a879a; font-size: 11px; line-height: 1.5; }
 
 button {

@@ -4,8 +4,9 @@ import {parseFormulaDocument,formulaDocumentText} from '../core/translation/form
 import {saveRetainedPdfDocumentTranslationSession,setRetainedPdfDocumentPinned,listRetainedPdfDocumentTranslations,PDF_DOCUMENT_TRANSLATION_RETAINED_STORAGE_KEY,pdfDocumentTranslationSessionDocumentKey,pdfDocumentTranslationSessionBlockSignature,pdfDocumentTranslationSessionBehaviorKey} from '../core/pdf/document-translation-session';
 import {saveRetainedBilingualPageSession,setRetainedBilingualPagePinned,listRetainedBilingualPageTranslations,BILINGUAL_PAGE_RETAINED_STORAGE_KEY,bilingualPageSessionPageKey,bilingualPageSessionBlockSignature,bilingualPageSessionBehaviorKey} from '../core/translation/bilingual-page-session';
 import {listRetainedDocuments,renameRetainedDocument,deleteRetainedDocument} from '../core/translation/retained-document-library';
-import {exportDocumentLibraryBackup,importDocumentLibraryBackup} from '../core/translation/document-library-backup';
+import {exportDocumentLibraryBackup,importDocumentLibraryBackup,previewDocumentLibraryBackup} from '../core/translation/document-library-backup';
 import {fixedDocumentKey,retainDocumentSessions} from '../core/translation/fixed-document-storage';
+import {MAX_PDF_PARAGRAPH_REVISIONS} from '../core/pdf/paragraph-history';
 
 const local:Record<string,unknown>={};
 const shared={targetLanguage:'zh-CN' as const,sourceLanguage:'auto',style:'academic' as const,contentMode:'auto' as const};
@@ -27,6 +28,84 @@ beforeEach(()=>{
 afterEach(()=>vi.unstubAllGlobals());
 
 describe('fixed document library and portable backup',()=>{
+  it('backs up more than five revisions in version 10 and rejects mislabeled older backups',async()=>{
+    await savePdf(0,'当前译文');const record=(local.pdfDocumentTranslationRetainedV1 as any[])[0];record.blocks[0].revisions=Array.from({length:6},(_,i)=>({id:`revision-${i}`,createdAt:i+1,reason:'correction',translatedText:`人工历史 ${i}`,manualCorrection:true}));
+    const text=await exportDocumentLibraryBackup(),data=JSON.parse(text);expect(data.version).toBe(10);expect(data.documents[0].record.blocks[0].revisions).toHaveLength(6);
+    data.version=9;const before=structuredClone(local);await expect(previewDocumentLibraryBackup(JSON.stringify(data))).rejects.toThrow('版本 10');expect(local).toEqual(before);
+    for(const key of Object.keys(local))delete local[key];await importDocumentLibraryBackup(text);expect((await listRetainedPdfDocumentTranslations())[0]!.blocks[0]!.revisions).toHaveLength(6);
+  });
+  it('round trips repair archives without merging or replacing their divergent versions',async()=>{
+    await savePdf(0,'原译文');const archive={id:'archive-test',fingerprint:'a'.repeat(64),descriptor:descriptor(0),behaviorKey:behavior,signature,createdAt:1,session:{signature,translatedText:'会话人工稿',manualCorrection:true},local:{signature,translatedText:'本机人工稿',manualCorrection:true},visible:{signature,translatedText:'原译文'}};
+    local.pdfFormulaRepairArchivesV1=[archive];const text=await exportDocumentLibraryBackup(),data=JSON.parse(text);expect(data.version).toBe(10);expect(data.pdfRepairArchives).toEqual([archive]);data.version=9;await expect(previewDocumentLibraryBackup(JSON.stringify(data))).rejects.toThrow('版本 10');
+    for(const key of Object.keys(local))delete local[key];await importDocumentLibraryBackup(text);expect(local.pdfFormulaRepairArchivesV1).toEqual([archive]);
+    const changed=structuredClone(data);changed.version=10;changed.pdfRepairArchives[0].local.translatedText='冲突的存档';const before=structuredClone(local);await expect(previewDocumentLibraryBackup(JSON.stringify(changed))).rejects.toThrow('存档冲突');expect(local).toEqual(before);
+  });
+  it('refuses a backup merge that would discard a unique manual revision',async()=>{
+    await savePdf(0,'当前译文');const backup=JSON.parse(await exportDocumentLibraryBackup());
+    const localRecord=(local.pdfDocumentTranslationRetainedV1 as any[])[0];
+    localRecord.blocks[0].revisions=Array.from({length:MAX_PDF_PARAGRAPH_REVISIONS},(_,i)=>({id:`revision-local-${i}`,createdAt:i+1,reason:'correction',translatedText:`本机人工历史 ${i}`,manualCorrection:true}));
+    backup.version=10;
+    backup.documents[0].record.updatedAt=localRecord.updatedAt+1000;
+    backup.documents[0].record.blocks[0].revisions=[{id:'revision-backup',createdAt:99,reason:'correction',translatedText:'备份人工历史',manualCorrection:true}];
+    const text=JSON.stringify(backup),before=structuredClone(local);
+    await expect(previewDocumentLibraryBackup(text)).rejects.toThrow('修订历史');
+    await expect(importDocumentLibraryBackup(text)).rejects.toThrow('修订历史');expect(local).toEqual(before);
+  });
+  it('refuses backup revisions with the same identity but different content',async()=>{
+    await savePdf(0,'当前译文');const backup=JSON.parse(await exportDocumentLibraryBackup());const localRecord=(local.pdfDocumentTranslationRetainedV1 as any[])[0];
+    localRecord.blocks[0].revisions=[{id:'revision-shared',createdAt:1,reason:'correction',translatedText:'本机历史',manualCorrection:true}];
+    backup.documents[0].record.blocks[0].revisions=[{id:'revision-shared',createdAt:1,reason:'correction',translatedText:'备份历史',manualCorrection:true}];
+    const before=structuredClone(local);await expect(previewDocumentLibraryBackup(JSON.stringify(backup))).rejects.toThrow('修订历史');expect(local).toEqual(before);
+  });
+  it('rejects a conflicting document identity rather than replacing an unmergeable manual correction',async()=>{
+    await saveRetainedPdfDocumentTranslationSession({descriptor:descriptor(0),documentSignatures:[signature],sourceFingerprint:'a'.repeat(64),activity:'complete',blocks:[{signature,translatedText:'人工校订',manualCorrection:true}]},behavior);
+    const data=JSON.parse(await exportDocumentLibraryBackup());
+    data.documents[0].record.updatedAt=Date.now()+1000;
+    data.documents[0].record.sourceFingerprint='b'.repeat(64);
+    data.documents[0].record.blocks[0]={signature,translatedText:'另一原文件的自动译文'};
+    const before=structuredClone(local);
+    await expect(previewDocumentLibraryBackup(JSON.stringify(data))).rejects.toThrow('人工修正');
+    await expect(importDocumentLibraryBackup(JSON.stringify(data))).rejects.toThrow('人工修正');
+    expect(local).toEqual(before);
+  });
+  it('previews the actual manual-conflict merge without writing, then protects corrections on confirmed import',async()=>{
+    await savePdf(0,'自动译文');
+    const backup=JSON.parse(await exportDocumentLibraryBackup());
+    await saveRetainedPdfDocumentTranslationSession({descriptor:descriptor(0),documentSignatures:[signature],sourceFingerprint:'a'.repeat(64),activity:'complete',blocks:[{signature,translatedText:'人工校订',manualCorrection:true}]},behavior);
+    backup.documents[0].record.updatedAt=Date.now()+1000;
+    backup.documents[0].record.blocks[0].translatedText='备份的新自动译文';
+    const text=JSON.stringify(backup),before=structuredClone(local);
+    const preview=await previewDocumentLibraryBackup(text);
+    expect(local).toEqual(before);
+    expect(preview).toMatchObject({addedDocuments:0,mergedDocuments:1,unchangedDocuments:0,manualCorrectionsKept:1});
+    await importDocumentLibraryBackup(text,preview.token);
+    const saved=(await listRetainedPdfDocumentTranslations())[0]!.blocks[0]!;
+    expect(saved).toMatchObject({translatedText:'人工校订',manualCorrection:true});
+    expect(saved.revisions?.map(revision=>revision.translatedText)).toContain('备份的新自动译文');
+  });
+  it('rejects a stale preview or different file without changing newly saved work',async()=>{
+    await savePdf(0);const backup=await exportDocumentLibraryBackup();
+    const preview=await previewDocumentLibraryBackup(backup);
+    await savePdf(0,'预览后的新修正');const before=structuredClone(local);
+    await expect(importDocumentLibraryBackup(backup,preview.token)).rejects.toThrow('重新预览');expect(local).toEqual(before);
+    const next=await previewDocumentLibraryBackup(backup);
+    await expect(importDocumentLibraryBackup(backup+' ',next.token)).rejects.toThrow('重新预览');expect(local).toEqual(before);
+    await importDocumentLibraryBackup(backup,next.token);
+    expect((await listRetainedPdfDocumentTranslations())[0]!.blocks[0]!.translatedText).toBe('预览后的新修正');
+  });
+  it.each([1,2,3])('previews and restores legacy library version %i while preserving formulas',async version=>{
+    const formulaDocument=parseFormulaDocument({recognizedText:'Source {{m1}}',translation:'人工译文 {{m1}}',formulas:[{id:'m1',latex:'x=y',display:false}]});
+    await saveRetainedPdfDocumentTranslationSession({descriptor:descriptor(0),documentSignatures:[signature],sourceFingerprint:'a'.repeat(64),activity:'complete',blocks:[{signature,translatedText:formulaDocumentText(formulaDocument),formulaDocument,manualCorrection:true}]},behavior);
+    const original=(await listRetainedPdfDocumentTranslations())[0]!;
+    const data=JSON.parse(await exportDocumentLibraryBackup());data.version=version;
+    if(version<3)delete data.webExcerpts;
+    if(version<2)for(const key of ['readingStates','bookmarks','documentTerms'])delete data[key];
+    for(const key of Object.keys(local))delete local[key];
+    const text=JSON.stringify(data),preview=await previewDocumentLibraryBackup(text);
+    expect(preview.addedDocuments).toBe(1);expect(local).toEqual({});
+    await importDocumentLibraryBackup(text,preview.token);
+    expect((await listRetainedPdfDocumentTranslations())[0]!.blocks).toEqual(original.blocks);
+  });
   it('round-trips source-derived paper roles with manual corrections and formula structures in library backups',async()=>{
     const formulaDocument=parseFormulaDocument({recognizedText:'Title {{m1}}',translation:'演示题名 {{m1}}',formulas:[{id:'m1',latex:'\\mathbb{R}',display:false}]});
     const blocks=[{signature,translatedText:'演示题名',paperRole:'title' as const,manualCorrection:true as const,formulaDocument},

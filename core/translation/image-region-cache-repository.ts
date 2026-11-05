@@ -32,7 +32,7 @@ async function sha256(value: string): Promise<string> {
 
 export async function imageRegionCacheKey(
   request: TranslateImageRegionRequest,
-  provider: { apiBaseUrl: string; model: string; glossary?: GlossaryEntry[] },
+  provider: { apiBaseUrl: string; model: string; glossary?: GlossaryEntry[]; researchField?:string },
 ): Promise<string> {
   const imageDigest = await sha256(request.imageDataUrl);
   return sha256(JSON.stringify({
@@ -51,6 +51,7 @@ export async function imageRegionCacheKey(
     apiBaseUrl: provider.apiBaseUrl,
     model: provider.model,
     glossary: provider.glossary,
+    ...(provider.researchField?{researchField:provider.researchField}:{}),
   }));
 }
 

@@ -60,4 +60,10 @@ describe('formula-locked complete-sentence repair',()=>{
     expect(isRuntimeMessage({type:'REPAIR_PDF_FORMULA_PROSE',payload:{requestId:'bad',document:source,targetLanguage:'unknown',sourceLanguage:'auto',style:'academic'}})).toBe(false);
     const message='正文修复未通过语义单元校验（PDF_SENTENCE_2）：变量关系的主语与对象可能颠倒';expect(translationErrorMessage('LATEX_VALIDATION_FAILED',message)).toBe(message);expect(translationErrorMessage('LATEX_VALIDATION_FAILED','internal provider secret')).not.toContain('internal provider secret');
   });
+  it('shows only the known local term read failure as an actionable repair message',()=>{
+    const reason='暂时无法读取本文术语，未发送正文修复；本段请对照原文核对。重试本段会重新发送图像。';
+    expect(translationErrorMessage('UNKNOWN_ERROR',reason)).toBe(reason);
+    expect(translationErrorMessage('DOCUMENT_TERMS_READ_FAILED','internal secret')).toBe(reason);
+    expect(translationErrorMessage('UNKNOWN_ERROR',reason+' internal secret')).not.toContain('internal secret');
+  });
 });

@@ -18,6 +18,120 @@ import {
 } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
+
+test('keeps complete supplementary meanings available below the primary browser-sidebar translation', async ({}, info) => {
+  const panel = await context.newPage();
+  try {
+    await setStoredSidebarMode('floating');
+    await page.goto(OVERLEAF_FIXTURE_URL);
+    await selectElementText('#lookup-source');
+    const overlay = page.locator('#tex-selection-translator-root');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+    const before = textRequests.length;
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button', {name: '在浏览器侧栏中显示', exact: true}).click();
+    await panel.setViewportSize({width: 360, height: 780});
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await expect(panel.locator('#translation-text')).toHaveText('连续性');
+    await expect(panel.locator('#lexical-summary')).toHaveText('补充释义（1）');
+    await expect(panel.locator('#lexical-senses')).toBeHidden();
+    const complete = await panel.locator('.lexical-sense').allTextContents();
+    expect(complete.join('')).toContain('连贯性');
+    await panel.screenshot({path: info.outputPath('browser-lookup-collapsed.png')});
+    await panel.locator('#lexical-summary').focus();
+    await panel.keyboard.press('Enter');
+    await expect(panel.locator('#lexical-senses')).toBeVisible();
+    expect(await panel.locator('.lexical-sense').allTextContents()).toEqual(complete);
+    const primary = await panel.locator('#translation-text').boundingBox();
+    const details = await panel.locator('#lexical-details').boundingBox();
+    expect(details!.y).toBeGreaterThanOrEqual(primary!.y + primary!.height);
+    const lineHeight = await panel.locator('#translation-text').evaluate(node => parseFloat(getComputedStyle(node).lineHeight));
+    expect(primary!.height).toBeLessThanOrEqual(lineHeight * 2);
+    expect(await panel.evaluate(() => document.documentElement.scrollWidth - innerWidth)).toBeLessThanOrEqual(1);
+    await panel.screenshot({path: info.outputPath('browser-lookup-expanded.png')});
+    await panel.keyboard.press('Enter');
+    await expect(panel.locator('#lexical-senses')).toBeHidden();
+    expect(textRequests).toHaveLength(before);
+  } finally {
+    await panel.close();
+    await setStoredSidebarMode('floating');
+    await page.bringToFront();
+    await closeVisibleTranslationSurfaceForCleanup();
+    await clearBrowserSelection();
+  }
+});
+test('carries the currently displayed translation when switching back to the page sidebar', async ({}, info) => {
+  const panel = await context.newPage();
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await setStoredSidebarMode('floating');
+    await page.goto(OVERLEAF_FIXTURE_URL);
+    await selectElementText('#lookup-source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button', {name:'在浏览器侧栏中显示',exact:true}).click();
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await selectElementText('#source');
+    await expect(panel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await panel.setViewportSize({width:360,height:760});
+    await panel.screenshot({path:info.outputPath('browser-sidebar-light.png')});
+    await panel.emulateMedia({colorScheme:'dark'});
+    await expect.poll(() => panel.locator('#web-sidebar-switch').evaluate(el => getComputedStyle(el).color)).toBe('rgb(237, 237, 237)');
+    await panel.screenshot({path:info.outputPath('browser-sidebar-dark.png')});
+    const calls = textRequests.length;
+    await panel.locator('#web-sidebar-switch').click();
+    await expect(overlay).toHaveAttribute('data-pi-view','sidebar');
+    await expect(overlay.locator('.body')).toContainText('一致的学术翻译');
+    await overlay.screenshot({path:info.outputPath('page-sidebar.png')});
+    expect(textRequests).toHaveLength(calls);
+    await overlay.locator('details.more > summary').click();
+    await overlay.locator('.correction-action').click();
+    const draft=overlay.locator('.correction-text-part').first();
+    await draft.fill('页面侧栏未保存的修正');
+    await overlay.locator('.sidebar-switch-action').click();
+    await expect(draft).toHaveValue('页面侧栏未保存的修正');
+    await expect(overlay).toHaveAttribute('data-pi-view','sidebar');
+  } finally {
+    await panel.close();
+    await setStoredSidebarMode('floating');
+    await page.bringToFront();
+    await closeVisibleTranslationSurfaceForCleanup();
+    await clearBrowserSelection();
+  }
+});
+test('carries the selected recent translation when switching sidebars', async () => {
+  const panel = await context.newPage();
+  const overlay = page.locator('#tex-selection-translator-root');
+  try {
+    await setStoredSidebarMode('floating');
+    await page.goto(OVERLEAF_FIXTURE_URL);
+    await selectElementText('#lookup-source');
+    await overlay.locator('.trigger').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+    await overlay.locator('details.more > summary').click();
+    await overlay.getByRole('button',{name:'在浏览器侧栏中显示',exact:true}).click();
+    await panel.goto(`chrome-extension://${extensionId}/sidepanel.html`);
+    await page.bringToFront();
+    await selectElementText('#source');
+    await expect(panel.locator('#translation-text')).toContainText('一致的学术翻译');
+    await panel.locator('#web-history-older').click();
+    await expect(panel.locator('#translation-text')).toContainText('连续性');
+    const calls=textRequests.length;
+    await panel.locator('#web-sidebar-switch').click();
+    await expect(overlay.locator('.lexical-meaning')).toHaveText('连续性');
+    expect(textRequests).toHaveLength(calls);
+  } finally {
+    await panel.close();
+    await setStoredSidebarMode('floating');
+    await page.bringToFront();
+    await closeVisibleTranslationSurfaceForCleanup();
+    await clearBrowserSelection();
+  }
+});
 test('moves webpage continuous translation into browser-owned side-panel space', async ({}, testInfo) => {
   const sidePanel = await context.newPage();
   const overlay = page.locator('#tex-selection-translator-root');
@@ -264,10 +378,18 @@ test('moves webpage continuous translation into browser-owned side-panel space',
       });
       return previous;
     });
-    await sidePanel.locator('#open-pi-reader').evaluate((button: HTMLButtonElement) => button.click());
+    await openTranslationMore(sidePanel);
+    await sidePanel.locator('#correct').click();
+    const switchDraft = sidePanel.locator('.correction-text-part').first();
+    await switchDraft.fill('尚未保存的切换测试草稿');
+    await sidePanel.locator('#web-sidebar-switch').click();
+    await expect(sidePanel.locator('#status')).toContainText('请先完成或取消当前编辑');
+    await expect(switchDraft).toHaveValue('尚未保存的切换测试草稿');
+    await sidePanel.getByRole('button', { name: '取消', exact: true }).click();
+    await sidePanel.locator('#web-sidebar-switch').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
-    await overlay.locator('details.more > summary').click();
-    await overlay.getByRole('button', { name: '在浏览器侧栏中显示' }).click();
+    await expect(overlay.locator('.header-tools .sidebar-switch-action')).toBeVisible();
+    await overlay.locator('.sidebar-switch-action').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'hidden');
     await sidePanel.evaluate(() => window.scrollTo({ top: 0, behavior: 'auto' }));
     const requestsBeforeLongResult = textRequests.length;
@@ -329,7 +451,13 @@ test('moves webpage continuous translation into browser-owned side-panel space',
         : Number.POSITIVE_INFINITY;
     })).toBeLessThanOrEqual(2);
 
-    await fullView.evaluate((button: HTMLButtonElement) => button.click());
+    const viewChangeGeometry = await sidePanel.evaluate(async () => {
+      const samples:unknown[]=[];const sample=()=>{const root=document.scrollingElement!;samples.push({top:root.scrollTop,height:root.scrollHeight,viewport:root.clientHeight,progress:document.querySelector('#reading-progress')?.textContent,fonts:document.fonts.status})};
+      sample();(document.querySelector('#translation-view-full') as HTMLButtonElement).click();
+      for(let index=0;index<8;index++){await new Promise<void>(resolve=>requestAnimationFrame(()=>resolve()));sample()}
+      return samples;
+    });
+    await testInfo.attach('view-change-reading-geometry',{body:JSON.stringify(viewChangeGeometry,null,2),contentType:'application/json'});
     await expect(readingProgress).toHaveText('底部');
     const formulaView = sidePanel.locator('#formula-view');
     await expect(formulaView).toHaveText('源码');
@@ -340,6 +468,10 @@ test('moves webpage continuous translation into browser-owned side-panel space',
     await alignedView.evaluate((button: HTMLButtonElement) => button.click());
     await expect(readingProgress).toHaveText('底部');
     expect(textRequests).toHaveLength(requestsBeforeReadingNavigation);
+
+    await test.step('preserve the actual bottom across delayed math and source disclosure', async () => delayedReadingBottom(sidePanel, testInfo));
+    await test.step('restore top and middle while yielding to manual reading', async () => delayedReadingInteraction(sidePanel));
+    await test.step('ignore stale formula replies and retain an unsaved draft', async () => delayedReadingDraft(sidePanel));
 
     await readingTop.focus();
     await readingTop.press('Home');
@@ -688,6 +820,12 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     expect(denseLayout.headerHeight).toBeLessThanOrEqual(70);
     expect(denseLayout.titleVisible).toBe(true);
     expect(denseLayout.versionTop).toBeGreaterThanOrEqual(denseLayout.historyTop ?? 0);
+    const historyAfterContent=await overlay.locator('.surface').evaluate(surface=>{
+      const result=surface.querySelector<HTMLElement>('.result-scroll')!.getBoundingClientRect();
+      const navigation=surface.querySelector<HTMLElement>('.result-navigation')!;
+      return Boolean(navigation.closest('.result-footer'))&&navigation.getBoundingClientRect().top>=result.bottom;
+    });
+    expect(historyAfterContent).toBe(true);
     const footer = overlay.locator('.footer');
     const undo = overlay.getByRole('button', { name: '撤销上次译文修正' });
     const mark = overlay.locator('.mark-action');
@@ -1118,3 +1256,144 @@ test('skips sensitive form fields during continuous translation', async () => {
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.locator('.notice')).toContainText('已跳过敏感输入区域');
 });
+
+// Hold only the next local MathML reply. No translation or OCR request is added.
+async function holdNextPanelMath(panel: Page): Promise<void> {
+  await panel.evaluate(() => {
+    const scope = globalThis as any;
+    const runtime = scope.chrome.runtime;
+    const send = runtime.sendMessage.bind(runtime);
+    scope.panelMathReady = false;
+    runtime.sendMessage = async (message: any, ...args: any[]) => {
+      if (message.type !== 'RENDER_LATEX_MATHML_BATCH') return send(message, ...args);
+      runtime.sendMessage = send;
+      const response = await send(message, ...args);
+      scope.panelMathReady = true;
+      await new Promise<void>(resolve => scope.releasePanelMath = resolve);
+      return response;
+    };
+  });
+}
+
+async function panelLayoutFrames(panel: Page): Promise<void> {
+  // Allow intermediate layout scroll events to run before releasing the reply.
+  await panel.evaluate(async () => {
+    for (let i = 0; i < 8; i++) await new Promise<void>(resolve => requestAnimationFrame(() => resolve()));
+  });
+}
+
+async function releasePanelMath(panel: Page): Promise<void> {
+  await expect.poll(() => panel.evaluate(() => (globalThis as any).panelMathReady)).toBe(true);
+  await panelLayoutFrames(panel);
+  await panel.evaluate(() => (globalThis as any).releasePanelMath());
+  await panelLayoutFrames(panel);
+}
+
+async function panelReadingGeometry(panel: Page) {
+  return panel.evaluate(() => {
+    const root = document.scrollingElement!;
+    const result = document.querySelector('#result-section')!;
+    const header = document.querySelector('.app-header')!;
+    const history = document.querySelector<HTMLElement>('#web-history-navigation')!;
+    const top = Math.min(root.scrollHeight - root.clientHeight,
+      Math.max(0, root.scrollTop + result.getBoundingClientRect().top - header.getBoundingClientRect().bottom
+        - (history.hidden ? 0 : history.getBoundingClientRect().height) - 8));
+    const bottom = root.scrollHeight - root.clientHeight;
+    return {top: root.scrollTop, bottom, start: top, gap: bottom - root.scrollTop,
+      progress: (root.scrollTop - top) / Math.max(1, bottom - top)};
+  });
+}
+
+async function setPanelReadingFraction(panel: Page, fraction: number): Promise<void> {
+  const geometry = await panelReadingGeometry(panel);
+  await panel.evaluate(top => {
+    window.dispatchEvent(new WheelEvent('wheel', {deltaY: -120}));
+    document.scrollingElement!.scrollTop = top;
+  }, geometry.start + (geometry.bottom - geometry.start) * fraction);
+  await panelLayoutFrames(panel);
+}
+
+
+async function delayedReadingBottom(panel: Page, info: import('@playwright/test').TestInfo) {
+    if (await panel.locator('#formula-view').textContent() === '公式') {
+      await openTranslationMore(panel);
+      await panel.locator('#formula-view').click();
+    }
+    await expect(panel.locator('#translation-text .pi-math math')).not.toHaveCount(0);
+    await panel.locator('#reading-bottom').evaluate((button: HTMLButtonElement) => button.click());
+    await expect(panel.locator('#reading-progress')).toHaveText('底部');
+    const requests = textRequests.length;
+    const samples: unknown[] = [];
+    for (const mode of ['full', 'aligned', 'full', 'aligned']) {
+      await holdNextPanelMath(panel);
+      await panel.locator(`#translation-view-${mode}`).evaluate((button: HTMLButtonElement) => button.click());
+      await releasePanelMath(panel);
+      samples.push({mode, ...await panelReadingGeometry(panel)});
+      await expect(panel.locator('#reading-progress')).toHaveText('底部');
+      expect((await panelReadingGeometry(panel)).gap).toBeLessThanOrEqual(1);
+      if (samples.length <= 2) await panel.screenshot({path: info.outputPath(`delayed-bottom-${mode}-300.png`)});
+    }
+    await info.attach('delayed-view-reading-geometry', {body: JSON.stringify(samples, null, 2), contentType: 'application/json'});
+    expect(textRequests).toHaveLength(requests);
+}
+
+async function delayedReadingInteraction(panel: Page) {
+    await setPanelReadingFraction(panel, .45);
+    const before = await panelReadingGeometry(panel);
+    await holdNextPanelMath(panel);
+    await panel.locator('#translation-view-full').evaluate((button: HTMLButtonElement) => button.click());
+    await releasePanelMath(panel);
+    expect(Math.abs((await panelReadingGeometry(panel)).progress - before.progress)).toBeLessThan(.015);
+
+    await panel.locator('#reading-top').evaluate((button: HTMLButtonElement) => button.click());
+    await holdNextPanelMath(panel);
+    await panel.locator('#translation-view-aligned').evaluate((button: HTMLButtonElement) => button.click());
+    await releasePanelMath(panel);
+    await expect(panel.locator('#reading-progress')).toHaveText('顶部');
+    expect(Math.abs((await panelReadingGeometry(panel)).top - (await panelReadingGeometry(panel)).start)).toBeLessThanOrEqual(1);
+
+    await panel.locator('#reading-bottom').evaluate((button: HTMLButtonElement) => button.click());
+    await holdNextPanelMath(panel);
+    await panel.locator('#translation-view-full').evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => panel.evaluate(() => (globalThis as any).panelMathReady)).toBe(true);
+    await panelLayoutFrames(panel);
+    await setPanelReadingFraction(panel, .35);
+    const manual = await panelReadingGeometry(panel);
+    await releasePanelMath(panel);
+    expect(Math.abs((await panelReadingGeometry(panel)).top - manual.top)).toBeLessThanOrEqual(1);
+    await expect(panel.locator('#reading-progress')).not.toHaveText('底部');
+}
+
+async function delayedReadingDraft(panel: Page) {
+    await panel.locator('#reading-bottom').evaluate((button: HTMLButtonElement) => button.click());
+    await holdNextPanelMath(panel);
+    await panel.locator('#translation-view-full').evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => panel.evaluate(() => (globalThis as any).panelMathReady)).toBe(true);
+    await panelLayoutFrames(panel);
+    await panel.locator('#translation-view-aligned').evaluate((button: HTMLButtonElement) => button.click());
+    await panelLayoutFrames(panel);
+    await releasePanelMath(panel);
+    await expect(panel.locator('#translation-view-aligned')).toHaveAttribute('aria-pressed', 'true');
+    await expect(panel.locator('#reading-progress')).toHaveText('底部');
+
+    await holdNextPanelMath(panel);
+    await panel.locator('#translation-view-full').evaluate((button: HTMLButtonElement) => button.click());
+    await expect.poll(() => panel.evaluate(() => (globalThis as any).panelMathReady)).toBe(true);
+    await panelLayoutFrames(panel);
+    const requests = textRequests.length;
+    await openTranslationMore(panel);
+    await panel.locator('#correct').click();
+    const draft = panel.locator('.correction-text-part').first();
+    await draft.fill('尚未保存的人工修正草稿，保留公式。');
+    await draft.focus();
+    const top = await panel.evaluate(() => document.scrollingElement!.scrollTop);
+    await releasePanelMath(panel);
+    await expect(draft).toHaveValue('尚未保存的人工修正草稿，保留公式。');
+    await expect(draft).toBeFocused();
+    expect(await panel.evaluate(() => document.scrollingElement!.scrollTop)).toBe(top);
+    await expect(panel.locator('#reading-navigation')).toBeHidden();
+    await panel.getByRole('button', {name: '取消', exact: true}).click();
+    await expect(panel.locator('#translation-text')).toContainText('只有确实超出一屏的结果');
+    await expect(panel.locator('#reading-progress')).toHaveText('底部');
+    expect(textRequests).toHaveLength(requests);
+}

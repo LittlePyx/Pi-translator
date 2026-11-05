@@ -1,3 +1,5 @@
+import {openReadingSource} from '../core/background/reading-source-navigation';
+import { currentUiLanguage, initializeUiLanguage, t, UI_LANGUAGE_STORAGE_KEY } from '../core/i18n/ui-language';
 import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/protector';
 import {listWebExcerpts,saveWebExcerpt,removeWebExcerpt,webExcerptPageUrl} from '../core/content/web-excerpt-repository';
 import {listDocumentTermSources,reuseDocumentTerms} from '../core/document/document-memory-repository';
@@ -13,6 +15,8 @@ import {
 } from '../core/diagnostics/event-log';
 import { buildLocalDiagnosticReport } from '../core/diagnostics/local-report';
 import { reportedProviderUsage } from '../core/translation/provider-usage';
+import {createNoteSummaryHandlers} from '../core/background/note-summary-handlers';
+import {createPassageExplanationHandlers} from '../core/background/passage-explanation-handlers';
 import {preparePdfFormulaProseRepair,finishPdfFormulaProseRepair,type RepairPdfFormulaProseRequest} from '../core/pdf/formula-prose-repair';
 import {formulaDocumentText} from '../core/translation/formula-document';
 import { bilingualSessionMessageHandlers } from '../core/background/bilingual-session-message-handlers';
@@ -24,6 +28,7 @@ import {
 } from '../core/background/runtime-message-router';
 import { errorResponse } from '../core/background/runtime-response';
 import { createUtilityMessageHandlers } from '../core/background/utility-message-handlers';
+import { createPdfReadingMessageHandlers } from '../core/background/pdf-reading-message-handlers';
 import { toTranslationError, TranslationError } from '../core/messaging/errors';
 import {
   isRuntimeMessage,
@@ -65,6 +70,7 @@ import {
   ConfigurationRevisionMismatchError,
   configurationRevisionFromStorageChange,
 } from '../core/settings/configuration-revision';
+import {effectiveSettingsGlossary,documentGlossarySelection,glossaryDocumentId,GENERAL_GLOSSARY_ID} from '../core/settings/glossary-profiles';
 import { apiOriginPattern } from '../core/settings/api-access';
 import {
   getAutoInjectionPatterns,
@@ -73,6 +79,7 @@ import {
   VISIBLE_TAB_CAPTURE_PERMISSION,
 } from '../core/settings/site-access';
 import { getPausedSiteHosts, siteHostFromUrl } from '../core/settings/site-pause';
+import { SITE_READING_PREFERENCES_KEY, getSiteReadingPreferences, effectivePausedSiteHosts, siteReadingPreferenceForUrl, type SiteReadingPreferences } from '../core/settings/site-reading-preferences';
 import {
   isContinuousTranslationPaused,
   setContinuousTranslationPaused,
@@ -88,6 +95,7 @@ import {
 } from '../core/settings/feature-discovery';
 import { shouldProtectLatex } from '../core/translation/content-mode';
 import { translateWithLatexRetry } from '../core/translation/latex-safe-translation';
+import { translationResearchField } from '../core/settings/purpose-preferences';
 import {
   CONNECTION_SAMPLE_SOURCE,
   OpenAiCompatibleTranslator,
@@ -95,6 +103,7 @@ import {
 import {
   addTranslationHistory,
   clearTranslationHistory,
+  getTranslationHistory,
 } from '../core/translation/history-repository';
 import {
   cacheTranslation,
@@ -246,6 +255,7 @@ function withGlossaryTermEvidence(
 }
 const translator = new OpenAiCompatibleTranslator();
 const activeRequests = new Map<number, { requestId: string; controller: AbortController }>();
+const webpageDocumentPorts = new Map<number, ReturnType<typeof browser.runtime.connect>>();
 const pendingTranslationRequests = new Map<number, string>();
 const runTranslationCommit = createPerTabAsyncLane();
 let pdfBackgroundDocumentCreation: Promise<void> | undefined;
@@ -406,10 +416,14 @@ function revisionDraftChunk(
 function toPublicSettings(
   settings: Awaited<ReturnType<typeof getSettings>>,
   pausedSiteHosts: string[],
+  preferences: SiteReadingPreferences,
+  pageUrl?: string,
 ): PublicSettings {
   return {
+    uiLanguage: currentUiLanguage(),
     sourceLanguage: settings.sourceLanguage,
     targetLanguage: settings.targetLanguage,
+    siteTargetLanguage: siteReadingPreferenceForUrl(preferences, pageUrl)?.targetLanguage,
     style: settings.style,
     contentMode: settings.contentMode,
     showFloatingButtonOnOverleaf: settings.showFloatingButtonOnOverleaf,
@@ -417,7 +431,7 @@ function toPublicSettings(
       settings.hideFloatingButtonForTargetLanguage,
     generalPageMode: settings.generalPageMode,
     siteAllowlist: settings.siteAllowlist,
-    pausedSiteHosts,
+    pausedSiteHosts: effectivePausedSiteHosts(pausedSiteHosts, preferences),
     sentenceAlignmentDefault: settings.sentenceAlignmentDefault,
     autoRenderLatex: settings.autoRenderLatex,
     historyLimit: settings.historyLimit,
@@ -425,6 +439,7 @@ function toPublicSettings(
     sidebarSide: settings.sidebarSide,
     sidebarWidth: settings.sidebarWidth,
     contextMode: settings.contextMode,
+    ...(settings.paragraphShortcut?{paragraphShortcut:settings.paragraphShortcut}:{}),
     enableStreaming: settings.enableStreaming,
     protectSensitiveFields: settings.protectSensitiveFields,
     pdfKeyboardShortcutsEnabled: settings.pdfKeyboardShortcutsEnabled,
@@ -1104,6 +1119,7 @@ function openWebCapturePermissionSidePanel(
 
 async function useFloatingSidebar(
   requestedTabId?: number,
+  requestId?: string,
 ): Promise<RuntimeResponse<{ opened: true }>> {
   try {
     const tab = requestedTabId === undefined
@@ -1112,11 +1128,26 @@ async function useFloatingSidebar(
     if (tab?.id === undefined || !tab.url || !isInjectableWebUrl(tab.url)) {
       throw new TranslationError('UNSUPPORTED_PAGE', '当前页面无法打开网页浮动侧栏。');
     }
+    let handoff: Extract<RuntimeMessage, {type: 'OPEN_SIDEBAR'}> = {type: 'OPEN_SIDEBAR'};
+    if (requestId) {
+      const session = pdfSidePanelSessions.get(tab.id);
+      const identity = (value: string) => { const url = new URL(value); url.hash = ''; return url.href; };
+      if (!session || session.sourceKind !== 'web' || session.status !== 'complete' || identity(session.pageUrl) !== identity(tab.url)) {
+        throw new TranslationError('UNSUPPORTED_PAGE', '当前译文已变化，请在当前页面重新切换侧栏。');
+      }
+      const history = await getTranslationHistory(tab.id);
+      const result = session.result?.requestId === requestId ? session.result : history.find(item => item.requestId === requestId);
+      const latestTab = await browser.tabs.get(tab.id);
+      if (!result || !latestTab.url || identity(latestTab.url) !== identity(tab.url) || pdfSidePanelSessions.get(tab.id) !== session) {
+        throw new TranslationError('UNSUPPORTED_PAGE', '当前译文已变化，请在当前页面重新切换侧栏。');
+      }
+      handoff = {type: 'OPEN_SIDEBAR', payload: {result, history}};
+    }
     await mutateSettings((settings) => ({
       nextSettings: { ...settings, sidebarMode: 'floating' },
       value: undefined,
     }));
-    await sendToSelectionContentScript(tab, { type: 'OPEN_SIDEBAR' });
+    await sendToSelectionContentScript(tab, handoff);
     if (!isOverleafProjectUrl(tab.url)) {
       await completeFeatureDiscovery('web-sidebar').catch(() => undefined);
     }
@@ -1672,6 +1703,7 @@ async function localDiagnosticReport(): Promise<string> {
 }
 
 async function synchronizeContextMenu(): Promise<void> {
+  await initializeUiLanguage();
   for (const menuId of [CONTEXT_MENU_ID, LEGACY_CONTEXT_MENU_ID]) {
     try {
       await browser.contextMenus.remove(menuId);
@@ -1684,7 +1716,7 @@ async function synchronizeContextMenu(): Promise<void> {
   if (!settings.enableContextMenu) return;
   browser.contextMenus.create({
     id: CONTEXT_MENU_ID,
-    title: '使用 Pi Translator 翻译选中文本',
+    title: t('使用 Pi Translator 翻译选中文本'),
     contexts: ['selection'],
   });
 }
@@ -1731,12 +1763,20 @@ function scheduleGeneralPageAccessSync(): void {
   });
 }
 
+/** Content scripts cannot observe TRUSTED_CONTEXTS storage. Notify only the
+ * changed identity; they read the authorized snapshot through the existing API. */
+async function broadcastDocumentMemory(documentIds:string[]):Promise<void>{
+  const tabs=await browser.tabs.query({});
+  await Promise.allSettled(tabs.filter(tab=>tab.id!==undefined).flatMap(tab=>documentIds.map(documentId=>browser.tabs.sendMessage(tab.id!,{type:'DOCUMENT_MEMORY_UPDATED',payload:{documentId}} satisfies RuntimeMessage))));
+}
+
 async function broadcastPublicSettings(): Promise<void> {
-  const [settings, pausedSiteHosts] = await Promise.all([
+  await initializeUiLanguage();
+  const [settings, pausedSiteHosts, preferences] = await Promise.all([
     getSettings(),
     getPausedSiteHosts(),
+    getSiteReadingPreferences(),
   ]);
-  const publicSettings = toPublicSettings(settings, pausedSiteHosts);
   const tabs = await browser.tabs.query({});
   await Promise.allSettled(
     tabs
@@ -1744,7 +1784,7 @@ async function broadcastPublicSettings(): Promise<void> {
       .map((tab) =>
         browser.tabs.sendMessage(tab.id, {
           type: 'PUBLIC_SETTINGS_UPDATED',
-          payload: publicSettings,
+          payload: toPublicSettings(settings, pausedSiteHosts, preferences, tab.url),
         } satisfies RuntimeMessage),
       ),
   );
@@ -1862,7 +1902,7 @@ async function translate(
     const documentMemory = await getDocumentMemory(identity);
     assertActiveRequest(tabId, request.requestId, controller);
     const scopedGlossary = mergeDocumentGlossaryWithScope(
-      settings.academicGlossary,
+      effectiveSettingsGlossary(settings,glossaryDocumentId(request,identity.documentId)),
       documentMemory,
       request.targetLanguage,
     );
@@ -1876,10 +1916,12 @@ async function translate(
     const effectiveRequest: TranslateRequest = contextText
       ? { ...request, contextText }
       : request;
+    const researchField = translationResearchField(settings.purposePreferences);
     const cacheKey = translationCacheKey(effectiveRequest, {
       apiBaseUrl: provider.apiBaseUrl,
       model: provider.model,
       glossary,
+      ...(researchField ? { researchField } : {}),
     });
     const chunks = splitLongTranslationText(text);
     const checkpoint = await getTranslationCheckpoint(tabId, cacheKey, chunks);
@@ -2097,6 +2139,7 @@ async function translate(
           targetLanguage: request.targetLanguage,
           style: request.style,
           glossary,
+          ...(researchField ? { researchField } : {}),
         },
         { apiKey, apiBaseUrl: provider.apiBaseUrl },
         controller.signal,
@@ -2703,7 +2746,7 @@ async function updateTranslationResultCommitted(
     const memoryForGlossary = await getDocumentMemory(documentIdentity(payload));
     options?.assertCurrent?.();
     const effectiveGlossary = effectiveGlossaryForTranslationMutation(
-      mergeDocumentGlossaryWithScope(settings.academicGlossary, memoryForGlossary, result.targetLanguage),
+      mergeDocumentGlossaryWithScope(effectiveSettingsGlossary(settings,glossaryDocumentId(payload,memoryForGlossary.documentId)), memoryForGlossary, result.targetLanguage),
       termScope,
       correctionTerm,
       options?.glossaryUndo,
@@ -3356,7 +3399,13 @@ async function repairPdfFormulaProse(request:RepairPdfFormulaProseRequest,tabId:
     if(!profile||!model)throw new TranslationError('VISION_NOT_CONFIGURED','请先配置本文使用的视觉模型。');
     const apiKey=await getApiKey(profile.id);current();if(!apiKey)throw new TranslationError('NO_API_KEY','当前模型未配置 API Key。');
     if(!await browser.permissions.contains({origins:[apiOriginPattern(profile.apiBaseUrl)]}))throw new TranslationError('API_PERMISSION_REQUIRED','当前 API 尚未授权。');
-    current();const translated=await translator.translate(prepared.input,{model,targetLanguage:request.targetLanguage,sourceLanguage:request.sourceLanguage,style:request.style,glossary:settings.academicGlossary},{apiBaseUrl:profile.apiBaseUrl,apiKey},controller.signal,{onPartialText:()=>undefined});current();
+    const identity=request.pageUrl?documentIdentity({...request,pageUrl:request.pageUrl}):undefined;
+    let memory:Awaited<ReturnType<typeof getDocumentMemory>>|undefined;
+    if(identity){try{memory=await getDocumentMemory(identity)}catch{current();throw new TranslationError('DOCUMENT_TERMS_READ_FAILED','暂时无法读取本文术语，未发送正文修复；本段请对照原文核对。重试本段会重新发送图像。')}}current();
+    const scheme=effectiveSettingsGlossary(settings,identity?glossaryDocumentId(request,identity.documentId):undefined);
+    const glossary=memory?mergeDocumentGlossaryWithScope(scheme,memory,request.targetLanguage).map(({source,target})=>({source,target})):scheme;
+    const researchField=translationResearchField(settings.purposePreferences);
+    current();const translated=await translator.translate(prepared.input,{model,targetLanguage:request.targetLanguage,sourceLanguage:request.sourceLanguage,style:request.style,glossary,...(researchField?{researchField}:{})},{apiBaseUrl:profile.apiBaseUrl,apiKey},controller.signal,{onPartialText:()=>undefined});current();
     const document=finishPdfFormulaProseRepair(prepared.document,translated.alignedSegments,translated.warnings,request.targetLanguage);
     return{ok:true,data:{history:[],result:{requestId:request.requestId,originalText:formulaDocumentText(document,true),translatedText:formulaDocumentText(document),formulaDocument:document,formulaLatex:document.formulas.map(entry=>entry.latex),warnings:[],sourceKind:'image-region',targetLanguage:request.targetLanguage,style:request.style,completedAt:Date.now(),cached:false,latencyMs:Math.round(performance.now()-started),contextUsed:false,chunkCount:1,usageSource:{apiBaseUrl:profile.apiBaseUrl,model},...(reportedProviderUsage(controller.signal)?{usage:reportedProviderUsage(controller.signal)!}:{})}}};
   }catch(error){return errorResponse(toTranslationError(error))}
@@ -3425,7 +3474,7 @@ async function translateImageRegion(
     const documentMemory = await getDocumentMemory(identity);
     assertActiveRequest(tabId, request.requestId, controller);
     const scopedGlossary = mergeDocumentGlossaryWithScope(
-      settings.academicGlossary,
+      effectiveSettingsGlossary(settings,glossaryDocumentId(request,identity.documentId)),
       documentMemory,
       request.targetLanguage,
     );
@@ -3447,10 +3496,12 @@ async function translateImageRegion(
       );
     }
     const sourceHost = sourceHostForRequest(request);
+    const researchField = translationResearchField(settings.purposePreferences);
     const cacheKey = await imageRegionCacheKey(request, {
       apiBaseUrl: profile.apiBaseUrl,
       model: visionModel,
       glossary,
+      ...(researchField ? { researchField } : {}),
     });
     assertActiveRequest(tabId, request.requestId, controller);
     if (
@@ -3559,6 +3610,7 @@ async function translateImageRegion(
             targetLanguage: request.targetLanguage,
             style: request.style,
             glossary,
+            ...(researchField ? { researchField } : {}),
           },
           { apiKey, apiBaseUrl: profile.apiBaseUrl },
           controller.signal,
@@ -3728,7 +3780,7 @@ async function testConnection(
   model: string,
   profileId?: string,
 ): Promise<ConnectionTestResponse> {
-  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
+  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId, apiBaseUrl));
   if (!apiKey) {
     return errorResponse<{
       connected: true;
@@ -3769,7 +3821,7 @@ async function testVisionCapability(
   model: string,
   profileId?: string,
 ): Promise<VisionCapabilityTestResponse> {
-  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
+  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId, apiBaseUrl));
   if (!apiKey) {
     return errorResponse(
       new TranslationError('NO_API_KEY', 'Configure an API Key first.'),
@@ -3811,7 +3863,7 @@ async function listModels(
   apiBaseUrl: string,
   profileId?: string,
 ): Promise<ModelListResponse> {
-  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
+  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId, apiBaseUrl));
   if (!apiKey) {
     return errorResponse<{ models: string[] }>(
       new TranslationError('NO_API_KEY', 'Configure an API Key first.'),
@@ -3837,7 +3889,7 @@ async function diagnoseApi(
 ): Promise<ApiDiagnosticResponse> {
   const originPattern = apiOriginPattern(apiBaseUrl);
   const permissionGranted = await browser.permissions.contains({ origins: [originPattern] });
-  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId));
+  const apiKey = apiKeyOverride?.trim() || (await getApiKey(profileId, apiBaseUrl));
   if (!apiKey) {
     return errorResponse(new TranslationError('NO_API_KEY', 'Configure an API Key first.'));
   }
@@ -4187,6 +4239,14 @@ export default defineBackground(() => {
   });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
+    if(areaName==='local'&&changes.documentTranslationMemoryV1){
+      const change=changes.documentTranslationMemoryV1,before=(change.oldValue??{}) as Record<string,unknown>,after=(change.newValue??{}) as Record<string,unknown>;
+      const changed=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(id=>/^doc-[a-z0-9]{1,8}$/u.test(id)&&JSON.stringify(before[id])!==JSON.stringify(after[id])).slice(0,80);
+      if(changed.length)void broadcastDocumentMemory(changed).catch(()=>undefined);
+    }
+    if(areaName === 'local' && UI_LANGUAGE_STORAGE_KEY in changes) {
+      void synchronizeContextMenu();
+    }
     const revision = configurationRevisionFromStorageChange(areaName, changes);
     if (revision) {
       void configurationRevisionBarrier.observe(revision).catch(() => undefined);
@@ -4207,7 +4267,8 @@ export default defineBackground(() => {
         void clearImageRegionTranslationCache();
       }
     }
-    if (areaName === 'session' && 'pausedSiteHosts' in changes) {
+    if ((areaName === 'local' && SITE_READING_PREFERENCES_KEY in changes) ||
+      (areaName === 'session' && 'pausedSiteHosts' in changes)) {
       void broadcastPublicSettings();
     }
   });
@@ -4499,6 +4560,29 @@ export default defineBackground(() => {
     void queuePdfSidePanelOptionsSync().catch(() => undefined);
   });
 
+  browser.runtime.onConnect.addListener(port => {
+    const tabId = port.sender?.tab?.id;
+    if (port.name !== 'pi-webpage-document' || tabId === undefined || port.sender?.frameId !== 0) return;
+    webpageDocumentPorts.set(tabId, port);
+    port.onDisconnect.addListener(() => {
+      if (webpageDocumentPorts.get(tabId) !== port) return;
+      webpageDocumentPorts.delete(tabId);
+      // A top-level document disconnect distinguishes navigation/reload from
+      // iframe loading, which Edge also reports as tabs.onUpdated(loading).
+      tabLifecycles.invalidate(tabId);
+      activeRequests.get(tabId)?.controller.abort();
+      activeRequests.delete(tabId);
+      void runTranslationCommit(tabId, async () => {
+        await Promise.allSettled([
+          clearTranslationHead(tabId),
+          clearTranslationCheckpoint(tabId),
+        ]);
+      }).finally(() => {
+        void queuePdfSidePanelOptionsSync().catch(() => undefined);
+      });
+    });
+  });
+
   browser.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
     if (tab.active) rememberActiveBrowserTab(tabId, tab.windowId);
     if (changeInfo.status === 'loading' || changeInfo.url) {
@@ -4506,6 +4590,7 @@ export default defineBackground(() => {
       pendingWebCapturePermissionTabs.delete(tabId);
     }
     if (changeInfo.status === 'loading' && !changeInfo.url) {
+      if (webpageDocumentPorts.has(tabId)) return;
       const currentSession = pdfSidePanelSessions.get(tabId);
       if (currentSession && isSamePdfDocumentLocationChange(
         currentSession.pageUrl,
@@ -4592,14 +4677,19 @@ export default defineBackground(() => {
   });
 
   const lowRiskMessageHandlers = {
+    ...createNoteSummaryHandlers(translator),
+    ...createPassageExplanationHandlers(translator),
+    ...createPdfReadingMessageHandlers(PI_PDF_READER_URL),
     ...bilingualSessionMessageHandlers,
     ...createUtilityMessageHandlers({
-      getPublicSettings: async () => {
-        const [settings, pausedSiteHosts] = await Promise.all([
+      getPublicSettings: async (pageUrl) => {
+        await initializeUiLanguage();
+        const [settings, pausedSiteHosts, preferences] = await Promise.all([
           getSettings(),
           getPausedSiteHosts(),
+          getSiteReadingPreferences(),
         ]);
-        return toPublicSettings(settings, pausedSiteHosts);
+        return toPublicSettings(settings, pausedSiteHosts, preferences, pageUrl);
       },
       recordLocalPerformance: recordLocalPerformanceSample,
       getLocalDiagnosticReport: localDiagnosticReport,
@@ -4828,6 +4918,11 @@ export default defineBackground(() => {
         })().catch((error: unknown) => errorResponse(error));
       }
 
+      if(message.type==='OPEN_READING_SOURCE'){
+        if(!sender.url?.startsWith(browser.runtime.getURL('/')))return Promise.resolve(errorResponse(new Error('来源操作仅限扩展资料入口。')));
+        return openReadingSource(message.payload.url,browser).then(data=>({ok:true as const,data})).catch(error=>errorResponse(error));
+      }
+
       if (message.type === 'OPEN_PDF_VIEWER') {
         const source = parsePdfSourceUrl(message.payload?.url)?.href;
         const requestedPage = message.payload?.page;
@@ -5028,7 +5123,7 @@ export default defineBackground(() => {
       }
 
       if (message.type === 'USE_FLOATING_SIDEBAR') {
-        return useFloatingSidebar(message.payload?.tabId);
+        return useFloatingSidebar(message.payload?.tabId, message.payload?.requestId);
       }
 
       if (
@@ -5137,6 +5232,29 @@ export default defineBackground(() => {
           .catch((error: unknown) => errorResponse(error));
       }
 
+      if(message.type==='GET_DOCUMENT_GLOSSARY'||message.type==='SET_DOCUMENT_GLOSSARY'){
+        return (async()=>{
+          const locator=message.payload;
+          if(!locator||typeof locator.pageUrl!=='string'||locator.pageUrl.length>9000||locator.documentId!==undefined&&typeof locator.documentId!=='string')throw new Error('文档地址无效。');
+          if(sender.url&&!sender.url.startsWith(browser.runtime.getURL(''))&&documentIdentity({pageUrl:sender.url}).documentId!==documentIdentity({pageUrl:locator.pageUrl}).documentId)throw new Error('术语方案与当前页面不匹配。');
+          const identity={...documentIdentity(locator),documentId:glossaryDocumentId(locator,documentIdentity(locator).documentId)};
+          if(message.type==='GET_DOCUMENT_GLOSSARY')return {ok:true as const,data:documentGlossarySelection(await getSettings(),identity.documentId,message.payload.evidenceText??'')};
+          const {profileId,expectedId,expectedSuggestion}=message.payload;
+          const result=await mutateSettings(settings=>{
+            const current=settings.documentGlossaryProfiles?.[identity.documentId]??'';
+            if(current!==expectedId)throw new TranslationError('INVALID_RESPONSE','另一窗口已更改本文方案，请重新打开后再选择。');
+            if(expectedSuggestion){const latest=documentGlossarySelection(settings,identity.documentId,expectedSuggestion.evidenceText);if(latest.defaultId!==expectedSuggestion.defaultId||latest.suggestion?.profileId!==profileId||latest.suggestion.profileSnapshot!==expectedSuggestion.profileSnapshot)throw new TranslationError('INVALID_RESPONSE','本文推荐已变化，请核对最新建议；草稿仍保留。')}
+            if(typeof profileId!=='string'||profileId!==''&&profileId!==GENERAL_GLOSSARY_ID&&!settings.glossaryProfiles?.some(p=>p.id===profileId))throw new Error('该术语方案已不存在，请重新打开后选择。');
+            const bindings={...settings.documentGlossaryProfiles};
+            if(profileId)bindings[identity.documentId]=profileId;else delete bindings[identity.documentId];
+            if(Object.keys(bindings).length>400)throw new Error('本文术语方案记录已达 400 份，请先将不用的文档改为跟随默认方案。');
+            const next={...settings,documentGlossaryProfiles:bindings};
+            return {nextSettings:current===profileId?null:next,value:documentGlossarySelection(next,identity.documentId)};
+          });
+          return {ok:true as const,data:result.value};
+        })().catch((error:unknown)=>errorResponse(error));
+      }
+
       if (message.type === 'GET_DOCUMENT_MEMORY') {
         return getDocumentMemory(documentIdentity(message.payload))
           .then((memory) => ({ ok: true as const, data: { memory } }))
@@ -5160,7 +5278,13 @@ export default defineBackground(() => {
           if(sender.url&&!sender.url.startsWith(browser.runtime.getURL(''))&&webExcerptPageUrl(sender.url)!==url)throw new Error('网页摘录与当前页面不匹配。');
           if(request.type==='SAVE_WEB_EXCERPT'){
             if(!request.payload.excerpt||webExcerptPageUrl(request.payload.excerpt.pageUrl)!==url)throw new Error('网页摘录来源不匹配。');
-            await saveWebExcerpt(request.payload.excerpt);
+            try{await saveWebExcerpt(request.payload.excerpt)}catch(error){
+              if(error instanceof TranslationError&&error.code==='REQUEST_ABORTED'){
+                const excerpts=await listWebExcerpts(url),anchor=JSON.stringify(request.payload.excerpt.anchor),existing=excerpts.find(item=>item.markerId!==request.payload.excerpt.markerId&&JSON.stringify(item.anchor)===anchor);
+                if(existing)return {ok:true as const,data:{excerpts,existingMarkerId:existing.markerId}};
+              }
+              throw error;
+            }
           }else if(request.type==='REMOVE_WEB_EXCERPT'){
             if(typeof request.payload.markerId!=='string')throw new Error('摘录标识无效。');
             await removeWebExcerpt(url,request.payload.markerId);

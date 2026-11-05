@@ -12,7 +12,7 @@ type LocalPerformancePayload = Extract<
 >['payload'];
 
 export interface UtilityMessageHandlerContext {
-  getPublicSettings(): Promise<PublicSettings>;
+  getPublicSettings(pageUrl?: string): Promise<PublicSettings>;
   recordLocalPerformance(payload: LocalPerformancePayload): Promise<void>;
   getLocalDiagnosticReport(): Promise<string>;
 }
@@ -28,9 +28,9 @@ export function createUtilityMessageHandlers(
   context: UtilityMessageHandlerContext,
 ): Required<Pick<RuntimeMessageHandlers, UtilityMessageType>> {
   return {
-    GET_PUBLIC_SETTINGS: async (): Promise<PublicSettingsResponse> => ({
+    GET_PUBLIC_SETTINGS: async (_message, sender): Promise<PublicSettingsResponse> => ({
       ok: true,
-      data: await context.getPublicSettings(),
+      data: await context.getPublicSettings(sender.tab?.url ?? sender.url),
     }),
     RENDER_LATEX_MATHML: async (message) => {
       const tex = message.payload.tex.trim();

@@ -1,3 +1,4 @@
+import {mergeGlossaryProfiles,validateGlossaryProfileSettings} from './glossary-profiles';
 import { mergeGlossaryDraft } from '../translation/glossary';
 import type { ApiProfile, ExtensionSettings } from './schema';
 
@@ -61,6 +62,7 @@ export function mergeSettingsDraft(
   draft: ExtensionSettings,
   latest: ExtensionSettings,
 ): SettingsDraftMergeResult {
+  if(!sameValue(draft.purposePreferences,baseline.purposePreferences)&&!sameValue(latest.purposePreferences,baseline.purposePreferences)&&!sameValue(draft.purposePreferences,latest.purposePreferences))throw new SettingsDraftConflictError('另一窗口已修改用途偏好，请保留草稿并重新加载后整理。');
   const merged = { ...latest } as ExtensionSettings;
   const record = merged as unknown as Record<string, unknown>;
   const baselineRecord = baseline as unknown as Record<string, unknown>;
@@ -68,6 +70,9 @@ export function mergeSettingsDraft(
   const special = new Set([
     'apiProfiles',
     'academicGlossary',
+    'glossaryProfiles',
+    'activeGlossaryProfileId',
+    'documentGlossaryProfiles',
     'activeApiProfileId',
     'visionApiProfileId',
     'apiBaseUrl',
@@ -91,6 +96,9 @@ export function mergeSettingsDraft(
     draft.academicGlossary,
     latest.academicGlossary,
   );
+
+  Object.assign(merged,mergeGlossaryProfiles(baseline,draft,latest));
+  validateGlossaryProfileSettings(merged);
 
   const requestedActiveId = draft.activeApiProfileId !== baseline.activeApiProfileId
     ? draft.activeApiProfileId

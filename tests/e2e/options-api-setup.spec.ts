@@ -37,10 +37,10 @@ async function openExtensionPage(page: Page, url: string): Promise<void> {
 
 test.beforeAll(async () => {
   userDataDirectory = await mkdtemp(path.join(tmpdir(), 'pi-translator-options-e2e-'));
-  const extensionPath = path.resolve('.output/edge-mv3');
+  const extensionPath = path.resolve(process.env.PI_E2E_EXTENSION_PATH??'.output/edge-mv3');
   context = await chromium.launchPersistentContext(userDataDirectory, {
     executablePath: EDGE_EXECUTABLE,
-    headless: false,
+    headless: process.env.PI_E2E_HEADLESS === '1',
     args: [
       `--disable-extensions-except=${extensionPath}`,
       `--load-extension=${extensionPath}`,
@@ -50,6 +50,9 @@ test.beforeAll(async () => {
   });
   let serviceWorker = context.serviceWorkers()[0];
   if (!serviceWorker) serviceWorker = await context.waitForEvent('serviceworker');
+  await serviceWorker.evaluate(async () => {
+    await (globalThis as any).chrome.storage.local.set({ uiLanguagePreference: 'zh-CN' });
+  });
   extensionId = new URL(serviceWorker.url()).host;
   options = context.pages()[0] ?? await context.newPage();
   await openExtensionPage(options, `chrome-extension://${extensionId}/options.html`);
@@ -93,6 +96,31 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   await context?.close();
   if (userDataDirectory) await rm(userDataDirectory, { recursive: true, force: true });
+});
+
+test('makes API setup the only primary popup action without changing saved work',async()=>{
+  const worker=context.serviceWorkers()[0]!;
+  const before=await worker.evaluate(async()=>({local:await (globalThis as any).chrome.storage.local.get(null),keys:await (globalThis as any).chrome.storage.session.get('apiKeysByProfile')}));
+  const popup=await context.newPage();let settings:Page|undefined;
+  try{
+    await worker.evaluate(()=>(globalThis as any).chrome.storage.session.remove('apiKeysByProfile'));
+    await popup.goto(`chrome-extension://${extensionId}/popup.html`);
+    await expect(popup.locator('#quick-actions')).toHaveAttribute('data-primary','setup');
+    const setup=popup.locator('#popup-setup-primary');
+    await expect(setup).toHaveText('完成配置');
+    await expect(popup.locator('.primary-action')).toHaveCount(1);
+    await expect(popup.locator('#quick-actions > button')).toHaveCount(1);
+    await expect(popup.locator('#readiness-issues')).not.toContainText('完成配置');
+    await popup.locator('#popup-more-actions > summary').click();
+    await expect(popup.locator('#open-pdf')).toBeVisible();
+    await expect(popup.locator('#open-settings')).toBeVisible();
+    const opened=context.waitForEvent('page');await setup.click();settings=await opened;
+    await expect(settings.locator('#api-key')).toBeFocused();
+    expect(await worker.evaluate(()=>(globalThis as any).chrome.storage.local.get(null))).toEqual(before.local);
+  }finally{
+    await worker.evaluate(keys=>(globalThis as any).chrome.storage.session.set(keys),before.keys);
+    await popup.close().catch(()=>{});await settings?.close();
+  }
 });
 
 test('offers a focused Qwen setup without replacing the text API', async () => {
@@ -158,17 +186,19 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     await expect(popup.locator('#readiness-title')).toContainText('还需处理');
     await expect(popup.locator('#readiness-issues'))
       .toContainText('还需允许 Pi Translator 访问当前 API 域名');
-    const authorizeApi = readinessPanel.getByRole('button', { name: '授权接口' });
+    const authorizeApi = popup.locator('#popup-setup-primary');
+    await expect(authorizeApi).toHaveText('授权接口');
     await expect(authorizeApi).toBeVisible();
     expect(await authorizeApi.evaluate((element) => getComputedStyle(element).borderRadius))
-      .toBe('0px');
+      .not.toBe('0px');
 
     const quickActions = popup.locator('#quick-actions');
-    await expect(quickActions).toHaveAttribute('data-primary', 'reader');
+    await expect(quickActions).toHaveAttribute('data-primary', 'setup');
     await expect(quickActions).not.toHaveAttribute('aria-busy', 'true');
-    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'open-pdf');
+    await expect(quickActions.locator('button').first()).toHaveAttribute('id', 'popup-setup-primary');
     await expect(popup.locator('#open-sidebar')).toBeHidden();
-    await expect(popup.locator('#open-pdf')).toHaveClass(/primary-action/);
+    await expect(popup.locator('#open-pdf')).not.toHaveClass(/primary-action/);
+    await expect(authorizeApi).toHaveClass(/primary-action/);
     await expect(popup.locator('#open-settings')).toHaveClass(/settings-icon/);
     await expect(popup.locator('#page-context')).toContainText('普通网页');
     const actionLayout = await quickActions.evaluate((actions) => {
@@ -211,6 +241,7 @@ test('keeps API readiness compact and deep-links the exact setting', async () =>
     expect(loadingLayout.buttonVisibility).toBe('hidden');
     expect(loadingLayout.animationName).toBe('none');
 
+    await quickActions.evaluate(actions=>{actions.dataset.primary='setup';actions.removeAttribute('aria-busy')});
     const optionsPromise = context.waitForEvent('page');
     await authorizeApi.click();
     focusedOptions = await optionsPromise;
@@ -332,7 +363,7 @@ test('keeps neutral dark surfaces and distinct primary actions on hover and keyb
   await expect.poll(() => backgroundAfter(
     '.settings-nav-item[data-settings-target="translation"]',
     'hover',
-  )).toBe('rgba(0, 0, 0, 0)');
+  )).toBe('rgb(44, 44, 44)');
   await expect.poll(() => backgroundAfter('#connection-advanced > summary', 'hover'))
     .toBe('rgb(44, 44, 44)');
 
@@ -347,7 +378,7 @@ test('opens the PDF reader from an empty document library without starting trans
   });
   await options.reload();
   await options.locator('[data-settings-target="storage"]').click();
-  await expect(options.locator('#retained-document-library .library-empty')).toContainText('还没有保留的译文');
+  await expect(options.locator('#retained-document-library .library-empty')).toContainText('打开 PDF 后可在这里继续阅读');
   await options.screenshot({path: testInfo.outputPath('first-use-library.png')});
   const opening = context.waitForEvent('page');
   await options.getByRole('button', {name: '打开 PDF', exact: true}).click();

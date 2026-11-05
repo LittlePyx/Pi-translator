@@ -1,3 +1,4 @@
+import { msg, t } from '../i18n/ui-language';
 import {
   isSupportedTargetLanguage,
   supportedTargetLanguageLabel,
@@ -86,7 +87,7 @@ export function bilingualPageLanguageSwitchConfirmation(
     state.targetLanguage === targetLanguage ||
     state.translated === 0
   ) return undefined;
-  return `切换为${supportedTargetLanguageLabel(targetLanguage)}将清除已译 ${state.translated} 段，并重新调用翻译接口。`;
+  return msg`切换为${t(supportedTargetLanguageLabel(targetLanguage))}将清除已译 ${state.translated} 段，并重新调用翻译接口。`;
 }
 
 export interface BilingualPageReferenceContextInput {

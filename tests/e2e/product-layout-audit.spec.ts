@@ -1,3 +1,4 @@
+import {openSettingsSection} from './support/settings-navigation';
 import {clickPdfReaderAction} from './support/translation-controls';
 import {writeFile} from 'node:fs/promises';
 import type {Locator,Page,TestInfo} from '@playwright/test';
@@ -44,7 +45,7 @@ test('keeps PDF reader menu actions reachable above an expanded translation side
     await target.close();
   }
 });
-type Evidence={state:string;overflow:number;clipped:string[];occluded:string[];menu?:{x:number;y:number;width:number;height:number}};
+type Evidence={state:string;overflow:number;clipped:string[];occluded:string[];menuChecks?:unknown[];menu?:{x:number;y:number;width:number;height:number}};
 async function inspect(target:Page,state:string,evidence:Evidence[],menu?:Locator):Promise<void>{
   await target.evaluate(async () => {
     await document.fonts.ready;
@@ -59,18 +60,30 @@ async function inspect(target:Page,state:string,evidence:Evidence[],menu?:Locato
     }).map(element=>`${element.id||element.className}: ${element.textContent?.trim().slice(0,70)}`),
   }));
   const bounds=menu?await menu.boundingBox():null;
-  const occluded=menu?await menu.evaluate(panel=>{
-    const area=panel.getBoundingClientRect();
-    return [...panel.querySelectorAll<HTMLElement>('button,summary,input,select')].filter(element=>{
-      if(!element.checkVisibility({checkVisibilityCSS:true,checkOpacity:true}))return false;
-      const rect=element.getBoundingClientRect();const x=rect.x+rect.width/2;const y=rect.y+rect.height/2;
-      if(x<area.left||x>area.right||y<area.top||y>area.bottom||x<0||x>innerWidth||y<0||y>innerHeight)return false;
-      let hit=document.elementFromPoint(x,y);
-      while(hit?.shadowRoot){const inner=hit.shadowRoot.elementFromPoint(x,y);if(!inner||inner===hit)break;hit=inner;}
-      return !hit||!element.contains(hit);
-    }).map(element=>element.id||element.textContent?.trim()||element.tagName);
-  }):[];
-  evidence.push({state,...layout,occluded,...(bounds?{menu:bounds}:{})});
+  const occluded:string[]=[];
+  const menuChecks:unknown[]=[];
+  if(menu){
+    const originalScroll=await menu.evaluate(panel=>panel.scrollTop);
+    // Scroll menus are allowed in short windows. Check every visible control
+    // after bringing the full control into view, including items initially
+    // below the fold or partially behind the scrollport's rounded edge.
+    const controls=menu.locator('button,summary,input,select');
+    for(let index=0;index<await controls.count();index++){
+      const control=controls.nth(index);if(!await control.isVisible())continue;
+      const before=await control.evaluate(element=>{const r=element.getBoundingClientRect(),hit=document.elementFromPoint(r.x+r.width/2,r.y+r.height/2);return {top:r.top,bottom:r.bottom,hit:hit?.id||hit?.tagName,centerHit:Boolean(hit&&element.contains(hit))}});
+      await control.scrollIntoViewIfNeeded();
+      const result=await control.evaluate(element=>{
+        const rect=element.getBoundingClientRect(),x=rect.x+rect.width/2,y=rect.y+rect.height/2;
+        let hit=document.elementFromPoint(x,y);
+        while(hit?.shadowRoot){const inner=hit.shadowRoot.elementFromPoint(x,y);if(!inner||inner===hit)break;hit=inner;}
+        return {id:element.id||element.textContent?.trim()||element.tagName,reachable:x>=0&&x<=innerWidth&&y>=0&&y<=innerHeight&&Boolean(hit&&element.contains(hit))};
+      });
+      if(!result.reachable)occluded.push(result.id);
+      menuChecks.push({before,...result});
+    }
+    await menu.evaluate((panel,top)=>{panel.scrollTop=top},originalScroll);
+  }
+  evidence.push({state,...layout,occluded,...(bounds?{menu:bounds,menuChecks}:{})});
   expect.soft(layout.overflow,`${state}: page overflow`).toBeLessThanOrEqual(1);
   expect.soft(layout.clipped,`${state}: clipped button labels`).toEqual([]);
   expect.soft(occluded,`${state}: occluded menu controls`).toEqual([]);
@@ -86,16 +99,16 @@ test('audits all settings pages and management menus at desktop, narrow and shor
     await target.evaluate(async(data)=>{await (globalThis as any).chrome.storage.local.set(data)},{pdfDocumentTranslationRetainedV1:[{targetLanguage:'zh-CN',sourceLanguage:'auto',style:'academic',contentMode:'auto',updatedAt:Date.now(),documentKey:pdfDocumentTranslationSessionDocumentKey('demonstration.pdf'),documentSignatures:[signature],blocks:[{signature,translatedText:'演示文本：用于检查文档库预览和菜单。'}],activity:'complete',behaviorKey:pdfDocumentTranslationSessionBehaviorKey('model')}]});
     for(const size of sizes){await target.setViewportSize(size);await target.emulateMedia({colorScheme:size.width===1360?'light':'dark'});
       for(const section of ['connection','translation','results','pages','cost','storage','support']){
-        await target.locator(`[data-settings-target="${section}"]`).click();await inspect(target,`${size.width}-${size.height}-${section}`,evidence);await target.screenshot({path:info.outputPath(`${section}-${size.width}.png`)});
+        await openSettingsSection(target,section);await inspect(target,`${size.width}-${size.height}-${section}`,evidence);await target.screenshot({path:info.outputPath(`${section}-${size.width}.png`)});
       }
       for(const [section,id,panel] of [['connection','profile-menu','.profile-menu-actions'],['storage','library-storage-tools',':scope > .disclosure-content']] as const){
-        await target.locator(`[data-settings-target="${section}"]`).click();const details=target.locator(`#${id}`);await details.locator(':scope > summary').click();await inspect(target,`${size.width}-${size.height}-${id}`,evidence,details.locator(panel));await target.screenshot({path:info.outputPath(`${id}-${size.width}.png`)});await target.setViewportSize({width:300,height:300});
+        await openSettingsSection(target,section);const details=target.locator(`#${id}`);await details.locator(':scope > summary').click();await inspect(target,`${size.width}-${size.height}-${id}`,evidence,details.locator(panel));await target.screenshot({path:info.outputPath(`${id}-${size.width}.png`)});await target.setViewportSize({width:300,height:300});
         await expect.poll(async()=>{if(await details.getAttribute('open')===null)return true;const box=await details.locator(panel).boundingBox();return Boolean(box&&box.x>=0&&box.y>=0&&box.x+box.width<=301&&box.y+box.height<=301)}).toBe(true);
         if(await details.getAttribute('open')===null){await expect(details.locator(panel)).toBeHidden();await inspect(target,`${id}-resized-closed`,evidence)}else await inspect(target,`${id}-resized`,evidence,details.locator(panel));await target.keyboard.press('Escape');await expect(details.locator(':scope > summary')).toBeFocused();await target.setViewportSize(size);
       }
       const row=target.locator('.library-entry').first();await row.locator('.library-menu > summary').click();await inspect(target,`${size.width}-${size.height}-document-menu`,evidence,row.locator('.library-actions'));await target.keyboard.press('Escape');
     }
-    await target.locator('[data-settings-target="support"]').click();await target.locator('.support-disclosure > summary').first().click();await target.locator('#restart-onboarding').click();await inspect(target,'onboarding-short',evidence);await target.screenshot({path:info.outputPath('onboarding-short.png')});await target.locator('#onboarding-skip').click();
+    await openSettingsSection(target,'support');await target.locator('.support-disclosure > summary').first().click();await target.locator('#restart-onboarding').click();await inspect(target,'onboarding-short',evidence);await target.screenshot({path:info.outputPath('onboarding-short.png')});await target.locator('#onboarding-skip').click();
   }finally{await save(info,evidence);await target.close()}
 });
 
@@ -104,8 +117,10 @@ test('audits popup expansion and capture permission UI without clipping controls
   try{
     const source=await context.serviceWorkers()[0]!.evaluate(async()=>((await (globalThis as any).chrome.tabs.query({url:'https://www.overleaf.com/project/pi-translator-e2e'}))[0]));
     await target.addInitScript(tab=>{(globalThis as any).chrome.tabs.query=async()=>[tab]},source);await target.emulateMedia({reducedMotion:'reduce'});await target.goto(`chrome-extension://${extensionId}/popup.html`);await expect(target.locator('#quick-actions')).not.toHaveAttribute('data-primary','loading');
-    for(const size of [{width:320,height:600},{width:300,height:420}]){await target.setViewportSize(size);await inspect(target,`popup-${size.width}`,evidence);await target.screenshot({path:info.outputPath(`popup-${size.width}.png`)});await target.locator('#popup-more-actions > summary').click();await target.locator('#popup-service-details > summary').click();await inspect(target,`popup-expanded-${size.width}`,evidence);await target.screenshot({path:info.outputPath(`popup-expanded-${size.width}.png`),fullPage:true});await target.locator('#popup-more-actions > summary').click()}
+    for(const size of [{width:320,height:600},{width:300,height:420},{width:220,height:600}]){await target.setViewportSize(size);await inspect(target,`popup-${size.width}`,evidence);expect((await target.locator('.translation-controls label > span').boundingBox())!.height).toBeLessThan(22);await target.screenshot({path:info.outputPath(`popup-${size.width}.png`)});await target.locator('#popup-more-actions > summary').click();await target.locator('#popup-service-details > summary').click();await inspect(target,`popup-expanded-${size.width}`,evidence);await target.screenshot({path:info.outputPath(`popup-expanded-${size.width}.png`),fullPage:true});await target.locator('#popup-more-actions > summary').click()}
     await permission.setViewportSize({width:260,height:120});await permission.goto(`chrome-extension://${extensionId}/web-capture-permission.html`);await inspect(permission,'capture-permission',evidence);await permission.screenshot({path:info.outputPath('capture-permission.png')});
+    const guidance=await permission.locator('#grant').evaluate(el=>({height:el.clientHeight,content:el.scrollHeight,clipped:[...el.querySelectorAll<HTMLElement>('strong,small')].filter(node=>node.scrollWidth>node.clientWidth+1).map(node=>node.textContent)}));
+    expect(guidance.content).toBeLessThanOrEqual(guidance.height+1);expect(guidance.clipped).toEqual([]);
   }finally{await save(info,evidence);await target.close();await permission.close()}
 });
 
@@ -189,7 +204,7 @@ test('audits webpage reading controls and their coexistence with selected text',
     await target.evaluate(async(tabId)=>{await (globalThis as any).chrome.runtime.sendMessage({type:'START_BILINGUAL_PAGE',payload:{tabId,targetLanguage:'zh-CN'}})},tab.id);await expect(page.locator('#pi-translator-bilingual-page-control output')).toContainText('已完成');
     await selectElementText('#article-intro');await context.serviceWorkers()[0]!.evaluate(async(tabId)=>{await (globalThis as any).chrome.tabs.sendMessage(tabId,{type:'TRIGGER_TRANSLATE'})},tab.id);await expect(target.locator('#session')).toBeVisible();
     await inspect(target,'web-sidebar-complete-short',evidence);await target.screenshot({path:info.outputPath('web-sidebar-complete-short.png')});
-    const readingMore=target.locator('#bilingual-page-copy-menu');await readingMore.locator(':scope > summary').click();await inspect(target,'web-sidebar-more-short',evidence,readingMore.locator(':scope > div'));await target.screenshot({path:info.outputPath('web-sidebar-more-short.png')});await target.keyboard.press('Escape');
+    const readingMore=target.locator('#bilingual-page-copy-menu');await readingMore.locator(':scope > summary').click();await expect(readingMore).toHaveAttribute('open');await target.waitForTimeout(250);await expect(readingMore).toHaveAttribute('open');await inspect(target,'web-sidebar-more-short',evidence,readingMore.locator(':scope > div'));await target.screenshot({path:info.outputPath('web-sidebar-more-short.png')});await target.keyboard.press('Escape');
     const control=page.locator('#pi-translator-bilingual-page-control');await control.locator('button[data-action="compact"]').click();await page.setViewportSize({width:300,height:420});await inspect(page,'web-control-short',evidence,control.locator('.bar'));await page.screenshot({path:info.outputPath('web-control-short.png')});
   }finally{await save(info,evidence);await target.close()}
 });

@@ -1,4 +1,4 @@
-export interface ExcerptCitation { sourceTitle: string; sourceUrl?: string; doi?: string; note?: string }
+export interface ExcerptCitation { sourceTitle: string; sourceUrl?: string; doi?: string; note?: string; authors?:string; year?:string }
 export function citationUrl(value: unknown): string | undefined {
   if (typeof value !== 'string' || !value.trim() || value.length > 4000) return undefined;
   try {
@@ -20,7 +20,10 @@ export function normalizeExcerptCitation(value: ExcerptCitation): ExcerptCitatio
   if (value.doi?.trim() && !doi) throw new Error('DOI 应以 10. 开头，也可粘贴 doi.org 链接。');
   const note = value.note?.trim();
   if (note && note.length > 2000) throw new Error('个人笔记最多 2000 字符。');
-  return {sourceTitle, ...(sourceUrl ? {sourceUrl} : {}), ...(doi ? {doi} : {}), ...(note ? {note} : {})};
+  const authors=value.authors?.trim(),year=value.year?.trim();
+  if(authors&&(authors.split(/\r?\n/u).length>30||authors.split(/\r?\n/u).some(name=>!name.trim()||name.length>200||/[\u0000-\u0009\u000b-\u001f]/u.test(name))))throw new Error('作者格式无效。');
+  if(year&&!/^\d{4}$/u.test(year))throw new Error('年份请填写四位数字，未知可留空。');
+  return {sourceTitle,...(authors?{authors}:{}),...(year?{year}:{}), ...(sourceUrl ? {sourceUrl} : {}), ...(doi ? {doi} : {}), ...(note ? {note} : {})};
 }
 export function escapeCitationText(value: string): string {
   return value.replace(/[\r\n]/gu, ' ').replace(/([\\`*_\[\]<>#])/gu, '\\$1');

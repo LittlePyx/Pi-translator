@@ -39,7 +39,11 @@ export interface DocumentConfirmedTerm extends GlossaryEntry {
   updatedAt: number;
   provenance?:TermProvenance;
 }
-export interface DocumentTermInput {id?:string;source:string;target:string;provenance?:TermProvenance}
+export interface DocumentTermInput {id?:string;source:string;target:string;provenance?:TermProvenance;expectedVersion?:string}
+export function documentTermVersion(term:DocumentConfirmedTerm|undefined):string{
+  const ordered=(value:unknown):unknown=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,ordered(item)])):value;
+  return JSON.stringify(ordered(term??null));
+}
 export interface DocumentTermSource {documentId:string;label:string;terms:DocumentConfirmedTerm[]}
 export interface DocumentTermSelection {documentId:string;term:DocumentConfirmedTerm}
 export function validConfirmedDocumentTerm(value:unknown):value is DocumentConfirmedTerm{
@@ -491,6 +495,16 @@ export async function getDocumentMemory(
 }
 
 /** Read-only suggestions; candidates and recent translations never enter this catalog. */
+export async function listSavedDocumentTermSources():Promise<DocumentTermSource[]>{
+  await writeQueue;
+  const all=await readAll();
+  return Object.entries(all).filter(([id])=>/^doc-[a-z0-9]{1,8}$/u.test(id)).flatMap(([id,raw])=>{
+    const memory=sanitizeMemory(raw,{documentId:id,label:'未记录标题的文档'});
+    const terms=memory.confirmedTerms.filter(validConfirmedDocumentTerm).filter(term=>!term.provenance||term.provenance.confirmed.documentId===id);
+    return terms.length?[{documentId:id,label:memory.label,terms}]:[];
+  });
+}
+
 export async function listDocumentTermSources(identity:DocumentIdentity,targetLanguage:SupportedTargetLanguage):Promise<DocumentTermSource[]>{
   if(!isSupportedTargetLanguage(targetLanguage))throw new DocumentTermReuseError('目标语言无效。');
   await writeQueue;
@@ -798,6 +812,7 @@ export async function upsertDocumentTermWithReceipt(
 }> {
   if(input.provenance&&(input.provenance.confirmed.documentId!==identity.documentId||input.provenance.origin.documentId!==identity.documentId||input.provenance.via))throw new DocumentTermReuseError('直接保存词条时，来源必须是本文。');
   const update = await mutateWithValue(identity, (memory,all) => {
+    if(input.expectedVersion!==undefined&&(typeof input.expectedVersion!=='string'||input.expectedVersion.length>20000||documentTermVersion(memory.confirmedTerms.find(term=>normalizedTerm(term.source)===normalizedTerm(input.source)))!==input.expectedVersion))throw new DocumentTermReuseError('本文词条已在其他窗口变化，请保留草稿并重新核对。');
     if(input.provenance&&!all[identity.documentId]&&Object.keys(all).length>=MAX_DOCUMENTS)throw new DocumentTermReuseError('本文术语已达 40 份文档，请先备份并清理；现有记录未改变。');
     const next = withUpsertedDocumentTerm(memory, input);
     return { memory: next.memory, value: next.receipt };

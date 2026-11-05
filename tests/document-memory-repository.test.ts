@@ -17,6 +17,7 @@ import {
   restoreDocumentCorrectionIfCurrent,
   upsertDocumentTerm,
   upsertDocumentTermWithReceipt,
+  documentTermVersion,
 } from '../core/document/document-memory-repository';
 import type { TranslateResult } from '../core/translation/types';
 
@@ -38,6 +39,22 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe('document translation memory', () => {
+  it('updates only the exact term version confirmed by the user and preserves unrelated newer terms',async()=>{
+    const memory=await upsertDocumentTerm(identity,{source:'policy',target:'旧译法'}),term=memory.confirmedTerms[0]!;
+    await upsertDocumentTerm(identity,{source:'sample',target:'样本'});
+    const next=await upsertDocumentTerm(identity,{source:'policy',target:'策略',expectedVersion:documentTermVersion(term)});
+    expect(next.confirmedTerms.find(t=>t.source==='policy')?.target).toBe('策略');expect(next.confirmedTerms.find(t=>t.source==='sample')?.target).toBe('样本');expect(next.confirmedTerms.every(t=>!('expectedVersion' in t))).toBe(true);
+    expect(mergeDocumentGlossary([{source:'policy',target:'全局旧译法'}],next)).toContainEqual({source:'policy',target:'策略'});
+  });
+  it('refuses a stale replacement without changing the latest term or other materials',async()=>{
+    const memory=await upsertDocumentTerm(identity,{source:'policy',target:'旧译法'}),expectedVersion=documentTermVersion(memory.confirmedTerms[0]);
+    await upsertDocumentTerm(identity,{source:'policy',target:'另一窗口约定'});const before=structuredClone(storage);
+    await expect(upsertDocumentTerm(identity,{source:'policy',target:'策略',expectedVersion})).rejects.toThrow('其他窗口变化');expect(storage).toEqual(before);
+  });
+  it('does not overwrite a newly created term after previewing its absence',async()=>{
+    const expectedVersion=documentTermVersion(undefined);await upsertDocumentTerm(identity,{source:'policy',target:'另一窗口新增'});const before=structuredClone(storage);
+    await expect(upsertDocumentTerm(identity,{source:'policy',target:'策略',expectedVersion})).rejects.toThrow('其他窗口变化');expect(storage).toEqual(before);
+  });
   it('stores bounded translations and promotes confirmed terminology', async () => {
     await rememberDocumentTranslation(identity, {
       requestId: 'request-1',

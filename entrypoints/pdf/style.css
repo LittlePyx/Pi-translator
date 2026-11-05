@@ -808,8 +808,9 @@ html:has(.region-confirm) #tex-selection-translator-root { visibility: hidden; }
 .pdf-formula-review-details summary:focus-visible { outline: 2px solid #8178de; outline-offset: 3px; }
 .pdf-formula-review-details p { margin: 8px 0; overflow-wrap: anywhere; }
 .pdf-formula-review-details img { display: block; width: 100%; height: auto; margin-top: 8px; background: white; }
-.pdf-document-translation-block .pdf-formula-review-retry { margin: 10px 0 0; padding: 4px 0; font-size: 12px; cursor: pointer; }
-.pdf-document-translation-block .pdf-formula-review-retry:disabled { opacity: .5; cursor: default; }
+.pdf-document-translation-block .pdf-formula-review-retry, .pdf-document-translation-block .pdf-formula-continue { margin: 10px 0 0; padding: 4px 0; font-size: 12px; cursor: pointer; }
+.pdf-document-translation-block .pdf-formula-continue { margin-right: 12px; }
+.pdf-document-translation-block .pdf-formula-review-retry:disabled, .pdf-document-translation-block .pdf-formula-continue:disabled { opacity: .5; cursor: default; }
 .pdf-document-translation-block button { margin-left: 6px; border: 0; padding: 2px 4px; color: inherit; background: transparent; font-size: 9px; text-decoration: underline; }
 .pdf-document-translation-empty { margin: 26px 20px; color: var(--muted); font-size: 10px; line-height: 1.7; text-align: center; }
 .pdf-document-translation-empty[hidden] { display: none; }
@@ -1338,7 +1339,7 @@ body:has(#pdf-document-translation:not([hidden])) #notice[data-source-only="true
 
 .pdf-link-return {
   position: fixed;
-  z-index: 8;
+  z-index: 12;
   bottom: 16px;
   left: calc(var(--pdf-sidebar-left) + (100vw - var(--pdf-sidebar-left) - var(--pdf-sidebar-right)) / 2);
   min-height: 32px;
@@ -1777,3 +1778,71 @@ button:focus-visible, input:focus-visible { outline: 2px solid #5659df; outline-
 .pdf-document-trial small, .pdf-document-request-budget small, .pdf-document-request-budget output { flex-basis: 100%; }
 .pdf-document-request-budget input { width: 90px; }
 .pdf-document-cost-estimate{display:block;margin-top:8px;color:var(--muted);font-size:12px;line-height:1.5;overflow-wrap:anywhere}
+
+html[lang="en"] .pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="figure"]::before { content: "Figure"; }
+html[lang="en"] .pdf-document-translation-block[data-translation-mode="vision"][data-visual-role="table"]::before { content: "Table"; }
+@media (max-width: 720px) {
+  html[lang="en"] .toolbar #recognize-page::before { content: "OCR"; font-size: 9px; }
+  html[lang="en"] .toolbar #region-translate::before { content: "▧"; }
+  html[lang="en"] .toolbar .outline-open::before { content: "≡"; }
+  html[lang="en"] .toolbar .search-open::before { content: "⌕"; font-size: 17px; }
+  html[lang="en"] .toolbar .document-translate::before { content: "Aa"; }
+  html[lang="en"] .toolbar .queue-action::before { content: "Q"; }
+}
+.pdf-reading-highlight-layer{position:absolute;inset:0;z-index:2;pointer-events:none;overflow:hidden}
+.pdf-reading-highlight-layer span{position:absolute;background:rgba(255,208,70,.32);border-radius:2px;pointer-events:none}
+.pdf-annotations-dialog{width:min(560px,calc(100vw - 32px));max-height:calc(100dvh - 48px);padding:0;border:1px solid var(--pi-line);border-radius:16px;background:var(--pi-surface);color:var(--pi-text);box-shadow:0 24px 80px #00000026;box-sizing:border-box;overflow:hidden;font-family:var(--pi-font);font-size:14px}
+.pdf-annotations-dialog[open]{display:flex;flex-direction:column}
+.pdf-annotations-dialog::backdrop{background:#15182040}
+.pdf-annotations-dialog header{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;padding:24px 24px 16px;flex-shrink:0}
+.pdf-annotations-dialog header>div{min-width:0}
+#pdf-annotations-title{display:block;font-size:19px;line-height:1.4;font-weight:650;letter-spacing:-.3px}
+.pdf-annotation-document{margin:5px 0 0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--pi-muted);font-size:12px}
+.pdf-annotations-dialog button{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:34px;padding:7px 10px;border:0;border-radius:7px;background:transparent;color:var(--pi-text);font:500 12px/1.4 var(--pi-font);cursor:pointer;transition:none}
+.pdf-annotations-dialog button:hover:not(:disabled){background:var(--pi-hover)}
+.pdf-annotations-dialog button:disabled{opacity:.55;cursor:wait}
+.pdf-annotations-dialog svg{flex-shrink:0}
+.pdf-annotations-dialog .pdf-annotation-close{width:30px;min-height:30px;padding:6px;color:var(--pi-muted);margin:-3px -4px 0 0}
+.pdf-annotations-body{min-height:0;padding:0 24px 8px;overflow-y:auto;overscroll-behavior:contain}
+.pdf-annotation-toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px;min-height:40px;margin-bottom:8px;color:var(--pi-muted);font-size:12px}
+.pdf-annotations-dialog .pdf-annotation-copy{color:var(--pi-muted);padding-inline:7px;margin-right:-7px}
+.pdf-annotation-help{flex-shrink:0;margin:8px 0 0;padding:14px 24px;border-top:1px solid var(--pi-line);color:var(--pi-faint);font-size:11px;line-height:1.5}
+.pdf-reading-annotation{border:1px solid var(--pi-line);border-radius:10px;padding:14px 16px;margin-bottom:12px}
+.pdf-annotation-meta{display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:12px;min-height:24px}
+.pdf-annotation-page{display:inline-block;color:var(--pi-muted);font-size:11px;line-height:1.5}
+.pdf-annotation-menu{position:relative;margin:-6px -7px -6px 0}
+.pdf-annotation-menu>summary{display:grid;place-items:center;list-style:none;width:30px;height:30px;border-radius:6px;color:var(--pi-muted);cursor:pointer}
+.pdf-annotation-menu>summary::-webkit-details-marker{display:none}
+.pdf-annotation-menu>summary:hover,.pdf-annotation-menu[open]>summary{background:var(--pi-subtle);color:var(--pi-text)}
+.pdf-annotation-menu>div{width:140px;padding:5px;border:1px solid var(--pi-line);border-radius:8px;background:var(--pi-surface);box-shadow:var(--pi-shadow)}
+.pdf-annotations-dialog .pdf-annotation-delete{width:100%;justify-content:flex-start;color:var(--pi-danger)}
+.pdf-annotations-dialog blockquote{margin:0 0 16px;padding:0 0 0 12px;border-left:1px solid var(--pi-line);color:var(--pi-muted);white-space:pre-wrap;overflow-wrap:anywhere;max-height:160px;overflow:auto;font-size:13px;line-height:1.7}
+.pdf-annotation-note-label{display:block;margin:0 0 5px;color:var(--pi-muted);font-size:11px}
+.pdf-reading-annotation-note{margin:0 0 16px;color:var(--pi-text);white-space:pre-wrap;overflow-wrap:anywhere;max-height:200px;overflow:auto;font-size:15px;line-height:1.75}
+.pdf-annotation-actions{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;margin-top:4px}
+.pdf-annotation-page-select{max-width:100%;min-height:34px;padding:5px 8px;border:1px solid var(--pi-line);border-radius:7px;background:var(--pi-surface);color:var(--pi-text);font:inherit;font-size:12px}
+.pdf-annotations-dialog .pdf-annotation-locate{background:var(--pi-subtle)}
+.pdf-annotations-dialog .pdf-annotation-edit{color:var(--pi-muted)}
+.pdf-annotation-editor>.pdf-annotation-page{margin:4px 0 12px}
+.pdf-annotation-editor label{display:grid;gap:8px;margin-top:20px;color:var(--pi-muted);font-size:12px}
+.pdf-annotation-editor textarea{width:100%;box-sizing:border-box;resize:vertical;font:400 14px/1.7 var(--pi-font);padding:12px;min-height:120px;max-height:32dvh;border:1px solid var(--pi-line);border-radius:8px;background:var(--pi-surface);color:var(--pi-text)}
+.pdf-annotation-editor .pdf-annotation-actions{justify-content:flex-end;gap:8px;margin:20px 0 8px}
+.pdf-annotations-dialog button[type="submit"]{padding-inline:16px;background:var(--pi-primary);color:var(--pi-primary-text)}
+.pdf-annotations-dialog button[type="submit"]:hover:not(:disabled){background:var(--pi-primary-hover)}
+.pdf-annotations-dialog :is(button,textarea,summary):focus-visible{outline:2px solid var(--pi-focus);outline-offset:2px}
+.pdf-annotations-dialog [hidden]{display:none}
+.pdf-annotation-empty{padding:32px 16px 44px;text-align:center;color:var(--pi-muted)}
+.pdf-annotation-empty strong{color:var(--pi-text);font-size:15px;font-weight:550}
+.pdf-annotation-empty p{max-width:290px;margin:10px auto 0;font-size:13px;line-height:1.7}
+.pdf-annotation-error{color:var(--pi-danger);font-size:12px;line-height:1.6;overflow-wrap:anywhere}
+@media(max-width:480px){.pdf-annotations-dialog{width:calc(100vw - 24px);max-height:calc(100dvh - 32px);border-radius:14px}.pdf-annotations-dialog header{padding:20px 20px 12px}.pdf-annotations-body{padding-inline:20px}.pdf-annotation-help{padding-inline:20px}.pdf-reading-annotation{padding:12px}.pdf-annotations-dialog blockquote{font-size:15px}}
+
+.pdf-reference-preview{width:min(700px,calc(100vw - 24px));max-height:90vh;overflow:auto;border:1px solid var(--pi-line,#cbd1d8);border-radius:12px;padding:18px;background:var(--pi-surface,#fff);color:var(--pi-text,#20252c)}
+.pdf-reference-preview-content{max-height:56vh;overflow:auto}.pdf-reference-preview h2{font-size:17px}.pdf-reference-preview canvas{display:block;margin:auto}.pdf-reference-preview::backdrop{background:rgba(0,0,0,.3)}
+
+.pdf-reference-preview button{font-family:inherit;font-size:13px;font-weight:500;line-height:1.4;padding:8px 12px;border:1px solid var(--pi-line);border-radius:8px;color:var(--pi-text);background:var(--pi-surface)}.pdf-reference-preview button:hover{background:var(--pi-hover)}.pdf-reference-preview button:focus-visible{outline:2px solid var(--pi-focus,#315be5);outline-offset:2px}
+
+.glossary-profile-controls,.document-glossary{display:grid;gap:8px;min-width:0;margin-block:10px}.document-glossary label{display:grid;gap:5px;min-width:0}.document-glossary select{width:100%;min-width:0;max-width:100%;font:inherit;color:inherit;background:var(--surface);border:1px solid var(--line);border-radius:5px;padding:7px}.document-glossary p{margin:0;font-size:12px;line-height:1.5;color:var(--muted)}
+
+.pdf-annotation-toolbar { flex-wrap:wrap; gap:8px; }
+.pdf-annotation-toolbar .note-summary-action { margin-left:auto; min-height:32px; padding:4px 8px; border:1px solid var(--pi-line,#ddd); border-radius:5px; background:var(--pi-surface,#fff); color:var(--pi-text,#333); font:inherit; cursor:pointer; }

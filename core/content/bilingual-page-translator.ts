@@ -1,3 +1,4 @@
+import { t, msg, uiHtml } from '../i18n/ui-language';
 import type {
   BilingualPageSessionResponse,
   RuntimeMessage,
@@ -182,11 +183,13 @@ interface BilingualPageTranslatorOptions {
 
 export interface BilingualPageTranslator {
   start(targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState>;
+  translateParagraph(element:HTMLElement,targetLanguage:SupportedTargetLanguage):Promise<BilingualPageState>;
   restoreSession(): Promise<BilingualPageState | undefined>;
   control(action: BilingualPageAction): Promise<BilingualPageState>;
   suspendForInteractiveTranslation(): string | undefined;
   resumeAfterInteractiveTranslation(token: string | undefined): void;
   refreshDiscovery(): void;
+  refreshLayout(): void;
   state(): BilingualPageState;
   exportResult(): DocumentTranslationExport;
   dispose(): void;
@@ -436,12 +439,12 @@ function formulaRecognitionNotice(listener: () => void): HTMLElement {
   const notice = document.createElement('span');
   notice.setAttribute(TRANSLATION_FORMULA_NOTICE_ATTRIBUTE, '');
   const message = document.createElement('span');
-  message.textContent = '本段公式无法读取，已保留原文';
+  message.textContent = t('本段公式无法读取，已保留原文');
   const recognize = document.createElement('button');
   recognize.type = 'button';
   recognize.dataset.action = 'recognize-formula';
-  recognize.textContent = '框选识别';
-  recognize.title = '预先框选本段，确认后使用多模态模型识别公式';
+  recognize.textContent = t('框选识别');
+  recognize.title = t('预先框选本段，确认后使用多模态模型识别公式');
   recognize.addEventListener('click', listener);
   notice.append(message, recognize);
   return notice;
@@ -456,28 +459,28 @@ function translationElement(
   const translation = document.createElement('pi-translator-bilingual');
   translation.setAttribute(TRANSLATION_ATTRIBUTE, '');
   translation.setAttribute('lang', targetLanguageHtmlCode(targetLanguage));
-  translation.setAttribute('aria-label', 'Pi Translator 双语译文');
+  translation.setAttribute('aria-label', t('Pi Translator 双语译文'));
   const text = document.createElement('span');
   text.setAttribute(TRANSLATION_TEXT_ATTRIBUTE, '');
   text.textContent = translatedText.trim();
   const toolbar = document.createElement('span');
   toolbar.setAttribute(TRANSLATION_ACTIONS_ATTRIBUTE, '');
   toolbar.setAttribute('role', 'toolbar');
-  toolbar.setAttribute('aria-label', '本段译文操作');
+  toolbar.setAttribute('aria-label', t('本段译文操作'));
   const feedback = document.createElement('span');
   feedback.setAttribute(TRANSLATION_FEEDBACK_ATTRIBUTE, '');
   feedback.setAttribute('role', 'status');
   feedback.setAttribute('aria-live', 'polite');
   toolbar.append(
-    translationActionButton('copy', '复制', actions.copy),
-    translationActionButton('retranslate', '重译本段', actions.retranslate),
-    translationActionButton('visibility', '隐藏', actions.toggleHidden),
+    translationActionButton('copy', t('复制'), actions.copy),
+    translationActionButton('retranslate', t('重译本段'), actions.retranslate),
+    translationActionButton('visibility', t('隐藏'), actions.toggleHidden),
     translationActionButton('more', '•••', actions.toggleMore),
   );
   const more = toolbar.querySelector<HTMLButtonElement>('button[data-action="more"]');
   more?.setAttribute('aria-expanded', 'false');
-  more?.setAttribute('aria-label', '展开本段操作');
-  more?.setAttribute('title', '本段操作');
+  more?.setAttribute('aria-label', t('展开本段操作'));
+  more?.setAttribute('title', t('本段操作'));
   translation.append(text);
   if (actions.recognizeFormula) translation.append(formulaRecognitionNotice(actions.recognizeFormula));
   translation.append(feedback, toolbar);
@@ -534,9 +537,44 @@ function cssColorAlpha(value: string): number {
   return modern[2] ? alpha / 100 : alpha;
 }
 
+const sidenoteLayouts = new WeakMap<HTMLElement, () => void>();
+function maintainSidenoteLayout(element: HTMLElement): void {
+  const note = element.closest<HTMLElement>('.sidenote-margin');
+  const column = note?.parentElement;
+  if (!note || !column?.classList.contains('sidenote-column') || sidenoteLayouts.has(column)) return;
+  const notes = [...column.querySelectorAll<HTMLElement>(':scope > .sidenote-margin')];
+  if (!notes.length || !notes.every(item => Number.isFinite(Number.parseFloat(item.style.top)))) return;
+  const original = notes.map(item => ({item, top:item.style.getPropertyValue('top'), priority:item.style.getPropertyPriority('top'), base:Number.parseFloat(item.style.top)}));
+  let frame = 0;
+  const update = () => {
+    frame = 0;
+    if (!column.isConnected || !column.querySelector(`[${TRANSLATION_ATTRIBUTE}],[${TRANSLATION_PENDING_ATTRIBUTE}],[${ERROR_ATTRIBUTE}]`)) {
+      resize.disconnect(); mutations.disconnect();
+      for (const entry of original) entry.item.style.setProperty('top', entry.top, entry.priority);
+      sidenoteLayouts.delete(column);
+      return;
+    }
+    if (getComputedStyle(note).position !== 'absolute' || !note.offsetWidth) return;
+    let bottom = -10;
+    for (const entry of original) {
+      const top = Math.max(entry.base, bottom + 10);
+      if (entry.item.style.top !== `${top}px`) entry.item.style.top = `${top}px`;
+      bottom = top + entry.item.offsetHeight;
+    }
+  };
+  const schedule = () => { if (!frame) frame = requestAnimationFrame(update); };
+  const resize = new ResizeObserver(schedule);
+  const mutations = new MutationObserver(schedule);
+  notes.forEach(item => resize.observe(item));
+  mutations.observe(column, {childList:true, subtree:true, characterData:true});
+  sidenoteLayouts.set(column, schedule);
+  schedule();
+}
+
 function insertAfterSource(block: BilingualBlock, element: HTMLElement): void {
   if (block.element.tagName === 'LI') block.element.append(element);
   else block.element.insertAdjacentElement('afterend', element);
+  maintainSidenoteLayout(element);
 }
 
 function visibleElementRegion(element: HTMLElement, padding = 6): ViewportRect | undefined {
@@ -581,12 +619,13 @@ function renderBilingualTranslation(
   void renderTranslationContent(content, translatedText.trim(), true);
 }
 
-function blockPendingElement(block: BilingualBlock): HTMLElement {
+function blockPendingElement(block: BilingualBlock,cancel?:()=>void): HTMLElement {
   const pending = document.createElement('pi-translator-bilingual-pending');
   pending.setAttribute(TRANSLATION_PENDING_ATTRIBUTE, '');
   pending.setAttribute('role', 'status');
-  pending.setAttribute('aria-label', 'Pi Translator 正在翻译本段');
-  pending.textContent = '正在翻译此段…';
+  pending.setAttribute('aria-label', t('Pi Translator 正在翻译本段'));
+  pending.textContent = t('正在翻译此段…');
+  if(cancel){const button=document.createElement('button');button.type='button';button.textContent=t('取消');button.ariaLabel=t('取消本段翻译');button.addEventListener('click',cancel);pending.append(button);pending.style.setProperty('opacity','1','important')}
   applySourceTypography(pending, block, 14);
   return pending;
 }
@@ -599,12 +638,12 @@ function blockErrorElement(
   const error = document.createElement('pi-translator-bilingual-error');
   error.setAttribute(ERROR_ATTRIBUTE, '');
   error.setAttribute('role', 'status');
-  error.setAttribute('aria-label', 'Pi Translator 本段翻译失败');
+  error.setAttribute('aria-label', t('Pi Translator 本段翻译失败'));
   const copy = document.createElement('span');
-  copy.textContent = `本段未译：${message.split('\n')[0] ?? message}`;
+  copy.textContent = msg`本段未译：${message.split('\n')[0] ?? message}`;
   const button = document.createElement('button');
   button.type = 'button';
-  button.textContent = '重试本段';
+  button.textContent = t('重试本段');
   button.addEventListener('click', retry);
   error.append(copy, button);
   applySourceTypography(error, block, 14);
@@ -677,6 +716,18 @@ function installTranslationStyle(): void {
       text-transform: none !important;
       white-space: nowrap !important;
     }
+    [${TRANSLATION_PENDING_ATTRIBUTE}] > button {
+      all: initial !important;
+      display: inline-block !important;
+      margin-left: .65em !important;
+      padding: 4px !important;
+      min-height: 28px !important;
+      color: inherit !important;
+      font: inherit !important;
+      text-decoration: underline !important;
+      cursor: pointer !important;
+    }
+    [${TRANSLATION_PENDING_ATTRIBUTE}] > button:focus-visible { outline: 2px solid currentColor !important; outline-offset: 2px !important; }
     [${TRANSLATION_TEXT_ATTRIBUTE}] {
       all: initial !important;
       display: block !important;
@@ -1036,6 +1087,7 @@ export function createBilingualPageTranslator(
   let emptyCandidateScans = 0;
   let navigationTimer: number | undefined;
   let disposed = false;
+  let singleParagraphMode=false;
   let controlHost: HTMLElement | undefined;
   let controlCollapsed = false;
   let controlCollapseUserSet = false;
@@ -1092,10 +1144,10 @@ export function createBilingualPageTranslator(
     try {
       await navigator.clipboard.writeText(text);
       resultCopyFeedback = mode === 'translation'
-        ? `已复制 ${result.blockCount} 段译文`
-        : `已复制双语 Markdown · ${result.blockCount} 段`;
+        ? msg`已复制 ${result.blockCount} 段译文`
+        : msg`已复制双语 Markdown · ${result.blockCount} 段`;
     } catch {
-      resultCopyFeedback = '复制失败，请检查剪贴板权限';
+      resultCopyFeedback = t('复制失败，请检查剪贴板权限');
     }
     if (resultCopyFeedbackTimer !== undefined) window.clearTimeout(resultCopyFeedbackTimer);
     renderControl();
@@ -1116,15 +1168,15 @@ export function createBilingualPageTranslator(
       const partialLabel = result.complete
         ? ''
         : result.contentTruncated
-          ? ' · 部分结果 · 页面仍有后续正文'
-          : ` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
+          ? t(' · 部分结果 · 页面仍有后续正文')
+          : msg` · 部分结果 ${result.blockCount}/${result.totalBlockCount} 段`;
       resultCopyFeedback = (format === 'translation-markdown'
-        ? '已下载纯译文 Markdown'
+        ? t('已下载纯译文 Markdown')
         : format === 'bilingual-markdown'
-          ? '已下载双语 Markdown'
-          : '已下载可打印 HTML') + partialLabel;
+          ? t('已下载双语 Markdown')
+          : t('已下载可打印 HTML')) + partialLabel;
     } catch (error) {
-      resultCopyFeedback = error instanceof Error ? error.message : '导出失败，请重试';
+      resultCopyFeedback = error instanceof Error ? error.message : t('导出失败，请重试');
     }
     if (resultCopyFeedbackTimer !== undefined) window.clearTimeout(resultCopyFeedbackTimer);
     renderControl();
@@ -1227,7 +1279,7 @@ export function createBilingualPageTranslator(
             ...currentState,
             retentionMessage: error instanceof Error
               ? error.message
-              : '无法更新本机保留的网页译文。',
+              : t('无法更新本机保留的网页译文。'),
             retentionError: true,
           };
           publishState();
@@ -1360,8 +1412,8 @@ export function createBilingualPageTranslator(
         retentionMessage: error instanceof Error
           ? error.message
           : enabled
-            ? '无法在本机保留当前网页译文。'
-            : '无法清除本机保留的网页译文。',
+            ? t('无法在本机保留当前网页译文。')
+            : t('无法清除本机保留的网页译文。'),
         retentionError: true,
       };
       publishState();
@@ -1434,6 +1486,8 @@ export function createBilingualPageTranslator(
   };
 
   const destroyControl = (): void => {
+    window.removeEventListener('resize', placeControl);
+    window.visualViewport?.removeEventListener('resize', placeControl);
     controlHost?.remove();
     controlHost = undefined;
   };
@@ -1502,6 +1556,20 @@ export function createBilingualPageTranslator(
       .filter((rect) => rect.width >= 20 && rect.height >= 20);
   };
 
+  function placeControl(): void {
+    if (!controlHost?.isConnected) return;
+    const rect = controlHost.getBoundingClientRect();
+    const obstacles = piOverlayObstacles();
+    // Prefer free space beside the selection card/sidebar. On narrow screens
+    // the control remains above it so confirmation and cancel stay reachable.
+    const right = new DOMRect(innerWidth - 16 - rect.width, rect.top, rect.width, rect.height);
+    const left = new DOMRect(16, rect.top, rect.width, rect.height);
+    const useLeft = obstacles.some(obstacle => rectanglesOverlap(right, obstacle)) &&
+      !obstacles.some(obstacle => rectanglesOverlap(left, obstacle));
+    controlHost.style.left = useLeft ? '16px' : 'auto';
+    controlHost.style.right = useLeft ? 'auto' : '16px';
+  }
+
   const fixedPageObstaclesAt = (rect: DOMRect): DOMRect[] => {
     const margin = 8;
     const left = Math.max(1, rect.left - margin);
@@ -1562,7 +1630,7 @@ export function createBilingualPageTranslator(
     ));
     const preferredSide: 'left' | 'right' = rightSideOccupied ? 'left' : 'right';
     const alternateSide: 'left' | 'right' = preferredSide === 'right' ? 'left' : 'right';
-    const placements: Array<{ side: 'left' | 'right'; level: number }> = [
+    const placements: Array<{ side: 'left' | 'right'; level: number; bottom?: number }> = [
       { side: preferredSide, level: 0 },
       { side: preferredSide, level: 1 },
       { side: alternateSide, level: 0 },
@@ -1572,10 +1640,16 @@ export function createBilingualPageTranslator(
       { side: alternateSide, level: 2 },
       { side: alternateSide, level: 3 },
     ];
+    // A tall card can occupy every fixed lift. Try its actual upper edge too.
+    for (const obstacle of piObstacles) {
+      const bottom = innerHeight - obstacle.top + 8;
+      placements.push({ side: preferredSide, level: 4, bottom }, { side: alternateSide, level: 4, bottom });
+    }
     let selected = placements[0]!;
     let selectedBottom = baseBottom;
+    let found = false;
     for (const placement of placements) {
-      const bottomOffset = baseBottom + placement.level * lift;
+      const bottomOffset = placement.bottom ?? baseBottom + placement.level * lift;
       const left = placement.side === 'left' ? edge : innerWidth - edge - width;
       const top = innerHeight - bottomOffset - height;
       if (left < 0 || top < 4) continue;
@@ -1584,13 +1658,22 @@ export function createBilingualPageTranslator(
       if (obstacles.some((obstacle) => rectanglesOverlap(candidateRect, obstacle))) continue;
       selected = placement;
       selectedBottom = bottomOffset;
+      found = true;
       break;
+    }
+    if (!found && piObstacles.length && document.getElementById('tex-selection-translator-root')?.dataset.piView === 'card') {
+      // An idle launcher yields to the active card when no viewport space fits.
+      launcherHost.style.visibility = 'hidden';
+      launcherHost.dataset.piPlacement = 'suppressed-by-card';
+      return;
     }
     launcherHost.style.left = selected.side === 'left' ? `${edge}px` : 'auto';
     launcherHost.style.right = selected.side === 'right' ? `${edge}px` : 'auto';
     launcherHost.style.bottom = `${selectedBottom}px`;
     launcherHost.style.visibility = 'visible';
-    launcherHost.dataset.piPlacement = selected.level === 0
+    launcherHost.dataset.piPlacement = selected.bottom !== undefined
+      ? `above-${selected.side}`
+      : selected.level === 0
       ? `bottom-${selected.side}`
       : `raised-${selected.side}-${selected.level}`;
   }
@@ -1608,9 +1691,9 @@ export function createBilingualPageTranslator(
     if (!launcherHost?.isConnected) {
       launcherHost = document.createElement('div');
       launcherHost.id = LAUNCHER_HOST_ID;
-      launcherHost.style.cssText = 'all:initial;position:fixed;z-index:2147483644;right:14px;bottom:18px;visibility:hidden;';
+      launcherHost.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:14px;bottom:18px;visibility:hidden;';
       const shadow = launcherHost.attachShadow({ mode: 'open' });
-      shadow.innerHTML = `
+      shadow.innerHTML = uiHtml`
         <style>
           :host { color-scheme: light dark; }
           .launcher { position:relative;display:flex;align-items:center;gap:0;box-sizing:border-box;border:1px solid rgba(148,163,184,.3);border-radius:11px;padding:3px 4px;color:#30394c;background:rgba(255,255,255,.97);box-shadow:0 3px 12px rgba(15,23,42,.08);font:11px/1.2 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px); }
@@ -1671,12 +1754,12 @@ export function createBilingualPageTranslator(
     const shadow = launcherHost.shadowRoot;
     const count = shadow?.querySelector<HTMLElement>('.count');
     const startButton = shadow?.querySelector<HTMLButtonElement>('button[data-action="start"]');
-    if (count) count.textContent = `· ${launcherCandidateCount}${launcherCandidateTruncated ? '+' : ''} 段`;
+    if (count) count.textContent = msg`· ${launcherCandidateCount}${launcherCandidateTruncated ? '+' : ''} 段`;
     startButton?.setAttribute(
       'aria-label',
       launcherCandidateTruncated
-        ? `翻译网页正文，已快速识别至少 ${launcherCandidateCount} 段`
-        : `翻译网页正文，已识别 ${launcherCandidateCount} 段`,
+        ? msg`翻译网页正文，已快速识别至少 ${launcherCandidateCount} 段`
+        : msg`翻译网页正文，已识别 ${launcherCandidateCount} 段`,
     );
     scheduleLauncherPlacement();
   };
@@ -1872,7 +1955,7 @@ export function createBilingualPageTranslator(
         ...currentState,
         phase: 'paused',
         pauseReason: 'user',
-        message: '正在调整正文范围。',
+        message: t('正在调整正文范围。'),
       };
     }
     destroyLauncher();
@@ -2102,8 +2185,8 @@ export function createBilingualPageTranslator(
       `[${TRANSLATION_FEEDBACK_ATTRIBUTE}]`,
     );
     if (
-      feedback?.textContent === ACTIONS_HINT_MOUSE_MESSAGE ||
-      feedback?.textContent === ACTIONS_HINT_TOUCH_MESSAGE
+      feedback?.textContent === t(ACTIONS_HINT_MOUSE_MESSAGE) ||
+      feedback?.textContent === t(ACTIONS_HINT_TOUCH_MESSAGE)
     ) feedback.textContent = '';
   };
 
@@ -2120,7 +2203,7 @@ export function createBilingualPageTranslator(
         );
         if (!candidateMore) continue;
         candidateMore.setAttribute('aria-expanded', 'false');
-        candidateMore.setAttribute('aria-label', '展开本段操作');
+        candidateMore.setAttribute('aria-label', t('展开本段操作'));
         candidateMore.textContent = '•••';
       }
     }
@@ -2128,7 +2211,7 @@ export function createBilingualPageTranslator(
     const more = translation.querySelector<HTMLButtonElement>('button[data-action="more"]');
     if (more) {
       more.setAttribute('aria-expanded', String(expanded));
-      more.setAttribute('aria-label', expanded ? '收起本段操作' : '展开本段操作');
+      more.setAttribute('aria-label', expanded ? t('收起本段操作') : t('展开本段操作'));
       more.textContent = expanded ? '×' : '•••';
     }
   };
@@ -2151,7 +2234,7 @@ export function createBilingualPageTranslator(
     }
     if (!translation.isConnected || block.translation !== translation) return;
     const touchOnly = window.matchMedia('(any-hover: none)').matches;
-    const message = touchOnly ? ACTIONS_HINT_TOUCH_MESSAGE : ACTIONS_HINT_MOUSE_MESSAGE;
+    const message = t(touchOnly ? ACTIONS_HINT_TOUCH_MESSAGE : ACTIONS_HINT_MOUSE_MESSAGE);
     const feedback = translation.querySelector<HTMLElement>(
       `[${TRANSLATION_FEEDBACK_ATTRIBUTE}]`,
     );
@@ -2172,9 +2255,9 @@ export function createBilingualPageTranslator(
     );
     if (button) {
       button.disabled = busy;
-      button.textContent = busy ? '重译中…' : '重译本段';
+      button.textContent = busy ? t('重译中…') : t('重译本段');
     }
-    if (busy) setTranslationFeedback(block, '正在重新翻译本段…', 0);
+    if (busy) setTranslationFeedback(block, t('正在重新翻译本段…'), 0);
   };
 
   const setTranslationHidden = (block: BilingualBlock, hidden: boolean): void => {
@@ -2191,9 +2274,9 @@ export function createBilingualPageTranslator(
     );
     if (copy) copy.hidden = hidden;
     if (retranslate) retranslate.hidden = hidden;
-    if (visibility) visibility.textContent = hidden ? '显示译文' : '隐藏';
+    if (visibility) visibility.textContent = hidden ? t('显示译文') : t('隐藏');
     applyBlockDisplayMode(block);
-    setTranslationFeedback(block, hidden ? '本段译文已隐藏' : '', 0);
+    setTranslationFeedback(block, hidden ? t('本段译文已隐藏') : '', 0);
     void persistSessionBlock(block);
   };
 
@@ -2213,7 +2296,10 @@ export function createBilingualPageTranslator(
       currentState.translationsHidden
     ) return;
     clearBlockPending(block);
-    const pending = blockPendingElement(block);
+    const pending = blockPendingElement(block,singleParagraphMode?()=>{
+      if(activeRequestId!==requestId||revision!==taskRevision)return;
+      void control('stop').then(()=>controlHost?.shadowRoot?.querySelector<HTMLButtonElement>('button[data-action="pause"]')?.focus({preventScroll:true}));
+    }:undefined);
     insertAfterSource(block, pending);
     block.pendingElement = pending;
   };
@@ -2300,13 +2386,13 @@ export function createBilingualPageTranslator(
       const button = block.translation?.querySelector<HTMLButtonElement>(
         'button[data-action="copy"]',
       );
-      if (button) button.textContent = '已复制';
-      setTranslationFeedback(block, '译文已复制');
+      if (button) button.textContent = t('已复制');
+      setTranslationFeedback(block, t('译文已复制'));
       window.setTimeout(() => {
-        if (button?.isConnected && button.textContent === '已复制') button.textContent = '复制';
+        if (button?.isConnected && button.textContent === t('已复制')) button.textContent = t('复制');
       }, 1_600);
     } catch {
-      setTranslationFeedback(block, '复制失败，请重试');
+      setTranslationFeedback(block, t('复制失败，请重试'));
     }
   };
 
@@ -2323,7 +2409,7 @@ export function createBilingualPageTranslator(
       window.removeEventListener('scroll', schedule, true);
       if (settleTimer !== undefined) window.clearTimeout(settleTimer);
       settleTimer = undefined;
-      if (!start()) setTranslationFeedback(block, '当前段落不在可见区域，请滚动后重试');
+      if (!start()) setTranslationFeedback(block, t('当前段落不在可见区域，请滚动后重试'));
     };
     const schedule = (): void => {
       if (settleTimer !== undefined) window.clearTimeout(settleTimer);
@@ -2362,9 +2448,9 @@ export function createBilingualPageTranslator(
     if (!controlHost?.isConnected) {
       controlHost = document.createElement('div');
       controlHost.id = CONTROL_HOST_ID;
-      controlHost.style.cssText = 'all:initial;position:fixed;z-index:2147483645;right:16px;bottom:16px;';
+      controlHost.style.cssText = 'all:initial;position:fixed;z-index:2147483647;right:16px;bottom:16px;';
       const shadow = controlHost.attachShadow({ mode: 'open' });
-      shadow.innerHTML = `
+      shadow.innerHTML = uiHtml`
         <style>
           :host { color-scheme: light dark; }
           .bar { position:relative;display:flex;width:min(520px,calc(100vw - 32px));flex-wrap:wrap;align-items:center;gap:6px;max-width:min(560px,calc(100vw - 32px));min-height:40px;box-sizing:border-box;overflow:visible;border:1px solid rgba(148,163,184,.3);border-radius:11px;padding:6px 70px 8px 9px;color:#253047;background:rgba(255,255,255,.97);box-shadow:0 4px 16px rgba(15,23,42,.09);font:12px/1.3 Inter,"Segoe UI","Microsoft YaHei",sans-serif;backdrop-filter:blur(10px);transition:max-width 140ms ease,border-radius 140ms ease,padding 140ms ease;}
@@ -2563,7 +2649,10 @@ export function createBilingualPageTranslator(
           void control(`display-${select.value}` as BilingualPageAction);
         });
       document.documentElement.append(controlHost);
+      window.addEventListener('resize', placeControl);
+      window.visualViewport?.addEventListener('resize', placeControl);
     }
+    queueMicrotask(placeControl);
     const shadow = controlHost.shadowRoot;
     const bar = shadow?.querySelector<HTMLElement>('.bar');
     const controlTitle = shadow?.querySelector<HTMLElement>('.control-title');
@@ -2611,11 +2700,11 @@ export function createBilingualPageTranslator(
       progress?.setAttribute(
         'aria-valuetext',
         scopePreviewActive
-          ? `已选择 ${scopeSelectedCount()}/${scopePreviewBlocks.length} 段`
-          : `已翻译 ${currentState.translated} 段，待处理 ${Math.max(
+          ? msg`已选择 ${scopeSelectedCount()}/${scopePreviewBlocks.length} 段`
+          : msg`已翻译 ${currentState.translated} 段，待处理 ${Math.max(
             0,
             currentState.total - currentState.translated - currentState.failed,
-          )} 段，共发现 ${currentState.total} 段${currentState.contentTruncated ? '，页面仍有后续正文' : ''}`,
+          )} 段，共发现 ${currentState.total} 段${currentState.contentTruncated ? t('，页面仍有后续正文') : ''}`,
       );
     }
     if (scopePreviewActive) {
@@ -2628,10 +2717,10 @@ export function createBilingualPageTranslator(
       );
       if (output) {
         output.textContent = currentState.phase === 'preview'
-          ? `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 预计约 ${estimatedBatchCount} 次批量请求`
-          : `正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
+          ? msg`正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 预计约 ${estimatedBatchCount} 次批量请求`
+          : msg`正文范围 ${selected}/${scopePreviewBlocks.length} 段 · 点击正文排除或恢复`;
       }
-      if (controlTitle) controlTitle.textContent = '选择翻译范围';
+      if (controlTitle) controlTitle.textContent = t('选择翻译范围');
       if (languageControl) languageControl.hidden = true;
       if (displayControl) displayControl.hidden = true;
       if (pause) pause.hidden = true;
@@ -2650,14 +2739,14 @@ export function createBilingualPageTranslator(
         const message = scopePanel.querySelector('.scope-message');
         if (message) {
           message.textContent = translatedRemoval
-            ? `将清除已译 ${translatedRemoval} 段；不会重译其余内容。`
+            ? msg`将清除已译 ${translatedRemoval} 段；不会重译其余内容。`
             : scopeActivePreset === 'chapter'
-              ? '已选择当前章节；仍可点击正文微调。'
+              ? t('已选择当前章节；仍可点击正文微调。')
               : scopeActivePreset === 'from-here'
-                ? '已选择当前位置以下正文；仍可点击正文微调。'
+                ? t('已选择当前位置以下正文；仍可点击正文微调。')
                 : scopeActivePreset === 'all'
-                  ? '已选择全部正文；仍可点击正文排除。'
-                  : '紫色为保留，灰色虚线为排除；预览不会调用接口。';
+                  ? t('已选择全部正文；仍可点击正文排除。')
+                  : t('紫色为保留，灰色虚线为排除；预览不会调用接口。');
         }
         const hasChapterHeading = scopePreviewBlocks.some((block) => (
           /^H[1-4]$/u.test(block.element.tagName)
@@ -2668,26 +2757,26 @@ export function createBilingualPageTranslator(
             button.setAttribute('aria-pressed', String(scopeActivePreset === preset));
             button.disabled = preset === 'chapter' && !hasChapterHeading;
             button.title = button.disabled
-              ? '当前正文没有可识别的章节标题'
-              : '只修改本地预览，应用前不会调用接口';
+              ? t('当前正文没有可识别的章节标题')
+              : t('只修改本地预览，应用前不会调用接口');
           });
         const apply = scopePanel.querySelector<HTMLButtonElement>('[data-action="apply-scope"]');
         if (apply) {
           apply.disabled = selected === 0;
           apply.textContent = currentState.phase === 'idle' || currentState.phase === 'preview'
-            ? '按此范围翻译'
+            ? t('按此范围翻译')
             : translatedRemoval
-              ? `清除 ${translatedRemoval} 段并应用`
-              : '应用范围';
+              ? msg`清除 ${translatedRemoval} 段并应用`
+              : t('应用范围');
         }
       }
       if (startConfirmation) startConfirmation.hidden = true;
       return;
     }
     if (currentState.phase === 'preview') {
-      if (controlTitle) controlTitle.textContent = '确认全文翻译';
+      if (controlTitle) controlTitle.textContent = t('确认全文翻译');
       if (output) {
-        output.textContent = `已识别 ${currentState.total} 段 · 预计约 ${currentState.estimatedBatchCount ?? 0} 次批量请求`;
+        output.textContent = msg`已识别 ${currentState.total} 段 · 预计约 ${currentState.estimatedBatchCount ?? 0} 次批量请求`;
       }
       if (progress) progress.hidden = true;
       if (languageControl) languageControl.hidden = false;
@@ -2707,7 +2796,7 @@ export function createBilingualPageTranslator(
       if (startConfirmation) {
         startConfirmation.hidden = false;
         const message = startConfirmation.querySelector('span');
-        if (message) message.textContent = '确认前不会调用翻译接口。';
+        if (message) message.textContent = t('确认前不会调用翻译接口。');
       }
       if (language && isSupportedTargetLanguage(currentState.targetLanguage)) {
         language.value = currentState.targetLanguage;
@@ -2715,14 +2804,14 @@ export function createBilingualPageTranslator(
       }
       return;
     }
-    if (controlTitle) controlTitle.textContent = '网页全文翻译';
+    if (controlTitle) controlTitle.textContent = singleParagraphMode?t('单段翻译'):t('网页全文翻译');
     if (progress) progress.hidden = false;
     if (languageControl) languageControl.hidden = false;
     if (displayControl) displayControl.hidden = currentState.translated === 0;
     if (compact) {
       compact.hidden = false;
       compact.textContent = controlCollapsed ? '⌃' : '⌄';
-      compact.title = controlCollapsed ? '展开正文翻译控制' : '收起正文翻译控制';
+      compact.title = controlCollapsed ? t('展开正文翻译控制') : t('收起正文翻译控制');
       compact.setAttribute('aria-label', compact.title);
       compact.setAttribute('aria-expanded', String(!controlCollapsed));
     }
@@ -2733,20 +2822,20 @@ export function createBilingualPageTranslator(
       scope.hidden = currentState.total === 0;
       scope.disabled = currentState.pauseReason === 'interactive';
       scope.textContent = currentState.total
-        ? `范围 ${currentState.total}${currentState.contentTruncated ? '+' : ''}`
-        : '范围';
-      scope.title = '查看并调整当前正文范围';
+        ? msg`范围 ${currentState.total}${currentState.contentTruncated ? '+' : ''}`
+        : t('范围');
+      scope.title = t('查看并调整当前正文范围');
     }
     if (retention) {
       retention.hidden = false;
       retention.textContent = currentState.retainedLocally
-        ? '不再本机保留'
-        : '关闭后保留译文';
+        ? t('不再本机保留')
+        : t('关闭后保留译文');
       retention.title = currentState.retentionError && currentState.retentionMessage
         ? currentState.retentionMessage
         : currentState.retainedLocally
-          ? '已保存匿名页面指纹和译文；点击后清除本机副本'
-          : '只保存匿名页面指纹和译文，不保存网页原文或网址';
+          ? t('已保存匿名页面指纹和译文；点击后清除本机副本')
+          : t('只保存匿名页面指纹和译文，不保存网页原文或网址');
     }
     if (clearButton) clearButton.hidden = false;
     if (copyTranslation) copyTranslation.hidden = currentState.translated === 0;
@@ -2758,26 +2847,26 @@ export function createBilingualPageTranslator(
       output.textContent = resultCopyFeedback;
     } else if (output) {
       const restoredPrefix = currentState.restored
-        ? `${currentState.restoredFrom === 'local' ? '已从本机恢复' : '已恢复'} ${currentState.restored} 段 · `
+        ? msg`${currentState.restoredFrom === 'local' ? t('已从本机恢复') : t('已恢复')} ${currentState.restored} 段 · `
         : '';
       output.textContent = restoredPrefix + (currentState.phase === 'error'
-        ? currentState.message ?? '正文翻译暂时中断'
+        ? currentState.message ?? t('正文翻译暂时中断')
         : currentState.phase === 'complete'
           ? currentState.failed
-            ? `双语正文 ${currentState.translated}/${currentState.total} · ${currentState.failed} 段待重试`
+            ? msg`双语正文 ${currentState.translated}/${currentState.total} · ${currentState.failed} 段待重试`
             : currentState.contentTruncated
-              ? `已完成已识别的 ${currentState.translated} 段 · 页面仍有后续正文`
-              : `双语正文已完成 ${currentState.translated}/${currentState.total}`
+              ? msg`已完成已识别的 ${currentState.translated} 段 · 页面仍有后续正文`
+              : msg`双语正文已完成 ${currentState.translated}/${currentState.total}`
           : currentState.phase === 'paused'
             ? currentState.pauseReason === 'interactive'
-              ? `正在处理划词，正文稍后继续 · ${currentState.translated}/${currentState.total}`
-              : `双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
+              ? msg`正在处理划词，正文稍后继续 · ${currentState.translated}/${currentState.total}`
+              : msg`双语正文已暂停 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? t(' · 页面仍有后续正文') : ''}${currentState.failed ? msg` · ${currentState.failed} 段待重试` : ''}`
             : currentState.phase === 'stopped'
-              ? `双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''}`
-              : `双语正文已翻译 ${currentState.translated} · 待处理 ${Math.max(
+              ? msg`双语正文已停止 ${currentState.translated}/${currentState.total}${currentState.contentTruncated ? t(' · 页面仍有后续正文') : ''}${currentState.failed ? msg` · ${currentState.failed} 段待重试` : ''}`
+              : msg`双语正文已翻译 ${currentState.translated} · 待处理 ${Math.max(
                 0,
                 currentState.total - currentState.translated - currentState.failed,
-              )} · 共发现 ${currentState.total}${currentState.contentTruncated ? ' · 页面仍有后续正文' : ''}${currentState.failed ? ` · ${currentState.failed} 段待重试` : ''} · 全文翻译中`);
+              )} · 共发现 ${currentState.total}${currentState.contentTruncated ? t(' · 页面仍有后续正文') : ''}${currentState.failed ? msg` · ${currentState.failed} 段待重试` : ''} · 全文翻译中`);
     }
     if (display) {
       display.value = bilingualPageDisplayMode(currentState);
@@ -2786,12 +2875,12 @@ export function createBilingualPageTranslator(
     if (pause) {
       const retryCompleted = currentState.phase === 'complete' && currentState.failed > 0;
       pause.textContent = currentState.pauseReason === 'interactive'
-        ? '稍后继续'
+        ? t('稍后继续')
         : retryCompleted
-        ? `重试 ${currentState.failed} 段`
+        ? msg`重试 ${currentState.failed} 段`
         : currentState.phase === 'paused' || currentState.phase === 'error' || currentState.phase === 'stopped'
-          ? '继续'
-          : '暂停';
+          ? t('继续')
+          : t('暂停');
       pause.hidden = (currentState.phase === 'complete' && !currentState.failed) || currentState.total === 0;
       pause.disabled = currentState.pauseReason === 'interactive';
     }
@@ -3041,7 +3130,7 @@ export function createBilingualPageTranslator(
     syncCounts();
     if (currentState.translated + currentState.failed < currentState.total) return false;
     if (currentState.contentTruncated) {
-      currentState.message = `已完成已识别的 ${currentState.total} 段；页面仍有后续正文超出安全上限。`;
+      currentState.message = msg`已完成已识别的 ${currentState.total} 段；页面仍有后续正文超出安全上限。`;
     } else delete currentState.message;
     delete currentState.pauseReason;
     resumeAfterInteractive = false;
@@ -3077,7 +3166,7 @@ export function createBilingualPageTranslator(
     if (consecutiveIsolatedFailures >= 3) {
       setState({
         phase: 'error',
-        message: '连续多个段落翻译失败，已暂停后续请求；可稍后重试失败段。',
+        message: t('连续多个段落翻译失败，已暂停后续请求；可稍后重试失败段。'),
       });
       return;
     }
@@ -3108,14 +3197,14 @@ export function createBilingualPageTranslator(
     setTranslationBusy(block, false);
     setTranslationFeedback(
       block,
-      `重译失败：${message.split('\n')[0]?.slice(0, 100) || '请重试'}`,
+      msg`重译失败：${message.split('\n')[0]?.slice(0, 100) || t('请重试')}`,
       3_000,
     );
     if (restorePageStateAfterRetranslation(block)) return;
     syncCounts();
     if (globalFailure) {
       delete currentState.pauseReason;
-      setState({ phase: 'error', message: `本段重译失败：${message}` });
+      setState({ phase: 'error', message: msg`本段重译失败：${message}` });
       return;
     }
     if (!settleCompletedState()) publish();
@@ -3125,7 +3214,7 @@ export function createBilingualPageTranslator(
     if (block.status !== 'done' || !block.translation?.isConnected) return;
     setTouchActionsExpanded(block, false);
     if (interactiveSuspensions.size) {
-      setTranslationFeedback(block, '当前选区翻译完成后再重试本段');
+      setTranslationFeedback(block, t('当前选区翻译完成后再重试本段'));
       return;
     }
     if (['paused', 'stopped', 'error'].includes(currentState.phase)) {
@@ -3288,13 +3377,13 @@ export function createBilingualPageTranslator(
       }
       if (!block.element.isConnected) {
         if (replacingTranslation) {
-          finishRetranslationFailure(block, '网页正文已经变化，请重新开始正文翻译。', true);
+          finishRetranslationFailure(block, t('网页正文已经变化，请重新开始正文翻译。'), true);
           return;
         }
         block.status = 'error';
         clearBlockPending(block);
         syncCounts();
-        setState({ phase: 'error', message: '网页正文已经变化，请清除后重新开始。' });
+        setState({ phase: 'error', message: t('网页正文已经变化，请清除后重新开始。') });
         return;
       }
       interactionPreemptedRequestIds.delete(requestId);
@@ -3321,7 +3410,7 @@ export function createBilingualPageTranslator(
       if (replacingTranslation) {
         finishRetranslationFailure(
           block,
-          error instanceof Error ? error.message : '无法重新翻译本段。',
+          error instanceof Error ? error.message : t('无法重新翻译本段。'),
           true,
         );
         return;
@@ -3331,7 +3420,7 @@ export function createBilingualPageTranslator(
       syncCounts();
       setState({
         phase: 'error',
-        message: error instanceof Error ? error.message : '无法继续翻译网页正文。',
+        message: error instanceof Error ? error.message : t('无法继续翻译网页正文。'),
       });
     }
   };
@@ -3446,7 +3535,7 @@ export function createBilingualPageTranslator(
       syncCounts();
       setState({
         phase: 'error',
-        message: error instanceof Error ? error.message : '无法继续翻译网页正文。',
+        message: error instanceof Error ? error.message : t('无法继续翻译网页正文。'),
       });
     }
   };
@@ -3546,7 +3635,7 @@ export function createBilingualPageTranslator(
       setState({
         phase: 'paused',
         pauseReason: 'interactive',
-        message: '正在处理划词，正文稍后继续。',
+        message: t('正在处理划词，正文稍后继续。'),
       });
     }
     return token;
@@ -3567,6 +3656,7 @@ export function createBilingualPageTranslator(
     targetLanguage: SupportedTargetLanguage,
     requireStoredSession: boolean,
     skipLongPageConfirmation = false,
+    singleElement?:HTMLElement,
   ): Promise<BilingualPageState | undefined> => {
     if (disposed) return snapshot();
     destroyLauncher();
@@ -3592,7 +3682,7 @@ export function createBilingualPageTranslator(
       undefined,
       BILINGUAL_DISCOVERY_PREVIEW_LIMIT,
     );
-    const discovery = await candidateElementsProgressively(
+    const discovery = singleElement?{blocks:[candidateBlock(singleElement,targetLanguage)].filter((block):block is BilingualBlock=>Boolean(block)),truncated:false}:await candidateElementsProgressively(
       quickSelection.root,
       targetLanguage,
     );
@@ -3603,7 +3693,7 @@ export function createBilingualPageTranslator(
     };
     assignSessionSignatures(selection.blocks);
     const descriptor = sessionDescriptor(targetLanguage);
-    let [stored, retained] = await Promise.all([
+    let [stored, retained] = singleElement?[undefined,undefined]:await Promise.all([
       readSession(descriptor),
       readRetainedSession(descriptor),
     ]);
@@ -3657,14 +3747,14 @@ export function createBilingualPageTranslator(
         displayMode: 'bilingual',
         translationsHidden: false,
         targetLanguage,
-        message: `已识别 ${selectedBlocks.length} 段，预计约 ${estimatedBatchCount} 次批量请求；确认前不会调用翻译接口。`,
+        message: msg`已识别 ${selectedBlocks.length} 段，预计约 ${estimatedBatchCount} 次批量请求；确认前不会调用翻译接口。`,
       };
       controlCollapsed = false;
       controlCollapseUserSet = false;
       publishState();
       return snapshot();
     }
-    activeSessionDescriptor = descriptor;
+    activeSessionDescriptor = singleElement?undefined:descriptor;
     sessionDocumentSignatures = documentSignatures;
     sessionExcludedSignatures = new Set(
       presentation?.excludedSignatures ?? selectedScopeSignatures,
@@ -3689,7 +3779,7 @@ export function createBilingualPageTranslator(
       translationsHidden: presentation?.displayMode === 'source',
       targetLanguage,
       retainedLocally: Boolean(retained),
-      ...(!blocks.length ? { message: '当前页面没有识别到适合双语阅读的正文。' } : {}),
+      ...(!blocks.length ? { message: t('当前页面没有识别到适合双语阅读的正文。') } : {}),
     };
     controlCollapsed = presentation?.controlCollapsed ?? false;
     controlCollapseUserSet = Boolean(presentation);
@@ -3747,13 +3837,13 @@ export function createBilingualPageTranslator(
         currentState.phase = 'paused';
         currentState.pauseReason = 'user';
         currentState.message = retainedForRestore && !stored
-          ? '已从本机恢复上次暂停的正文翻译。'
-          : '已恢复上次暂停的正文翻译。';
+          ? t('已从本机恢复上次暂停的正文翻译。')
+          : t('已恢复上次暂停的正文翻译。');
       } else if (presentation?.activity === 'stopped') {
         currentState.phase = 'stopped';
         currentState.message = retainedForRestore && !stored
-          ? '已从本机恢复上次停止时的正文译文。'
-          : '已恢复上次停止时的正文译文。';
+          ? t('已从本机恢复上次停止时的正文译文。')
+          : t('已恢复上次停止时的正文译文。');
       } else if (currentState.translated === currentState.total) {
         currentState.phase = 'complete';
       }
@@ -3763,7 +3853,7 @@ export function createBilingualPageTranslator(
     installTranslationStyle();
     taskRevision += 1;
     observeBlocks();
-    observeArticleMutations();
+    if(!singleParagraphMode)observeArticleMutations();
     if (currentState.phase === 'running') {
       blocks.filter((block) => block.status === 'idle').forEach((block) => enqueue(block));
       const firstPendingBlock = blocks.find((block) => block.status === 'idle');
@@ -3771,7 +3861,7 @@ export function createBilingualPageTranslator(
     }
     navigationTimer = window.setInterval(() => {
       if (pageIdentity(options.pageUrl()) !== sourcePageIdentity) {
-        resetForArticleChange('页面已切换，请重新开始正文翻译。');
+        resetForArticleChange(t('页面已切换，请重新开始正文翻译。'));
         return;
       }
       if (!articleContainer?.isConnected) scheduleDynamicScan(0);
@@ -3781,8 +3871,34 @@ export function createBilingualPageTranslator(
     return snapshot();
   };
 
-  const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> =>
-    await begin(targetLanguage, false) ?? snapshot();
+  const start = async (targetLanguage: SupportedTargetLanguage): Promise<BilingualPageState> => {
+    if(singleParagraphMode){singleParagraphMode=false;clear(false)}
+    return await begin(targetLanguage,false)??snapshot();
+  };
+  const translateParagraph=async(element:HTMLElement,targetLanguage:SupportedTargetLanguage):Promise<BilingualPageState>=>{
+    if(disposed||!element.isConnected||!candidateBlock(element,targetLanguage))return snapshot();
+    if(currentState.targetLanguage===targetLanguage){
+      const existing=blocks.find(block=>block.element===element);
+      if(existing){
+        if(existing.status==='done'){existing.translation?.removeAttribute(TRANSLATION_HIDDEN_ATTRIBUTE);return snapshot()}
+        if(existing.status==='error'&&singleParagraphMode)retryBlock(existing);
+        if(singleParagraphMode&&existing.status==='idle'&&currentState.phase==='running')await control('stop');
+        if(singleParagraphMode&&existing.status==='idle'&&['stopped','complete'].includes(currentState.phase)){
+          blocks=blocks.filter(block=>block.status!=='idle'||block===existing);
+          enqueue(existing,'front');syncCounts();delete currentState.message;delete currentState.pauseReason;
+          setState({phase:'running'});void processQueue();
+        }
+        return snapshot();
+      }
+    }
+    if(currentState.phase!=='idle'&&(!singleParagraphMode||currentState.targetLanguage!==targetLanguage))return snapshot();
+    if(currentState.phase==='idle'){singleParagraphMode=true;return await begin(targetLanguage,false,true,element)??snapshot()}
+    if(singleParagraphMode&&currentState.phase==='running')await control('stop');
+    if(!['complete','stopped'].includes(currentState.phase))return snapshot();
+    blocks=blocks.filter(block=>block.status!=='idle');
+    const block=candidateBlock(element,targetLanguage);if(!block)return snapshot();blocks.push(block);assignSessionSignatures(blocks);sessionDocumentSignatures=blocks.map(item=>item.sessionSignature!).filter(Boolean);
+    enqueue(block);syncCounts();setState({phase:'running'});void processQueue();return snapshot();
+  };
 
   const restoreSession = async (): Promise<BilingualPageState | undefined> => {
     if (disposed || currentState.phase !== 'idle') return undefined;
@@ -3876,9 +3992,11 @@ export function createBilingualPageTranslator(
 
   return {
     start,
+    translateParagraph,
     restoreSession,
     control,
     refreshDiscovery,
+    refreshLayout: () => { queueMicrotask(placeControl); scheduleLauncherPlacement(); },
     suspendForInteractiveTranslation,
     resumeAfterInteractiveTranslation,
     state: snapshot,

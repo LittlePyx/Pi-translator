@@ -505,6 +505,13 @@ label {
   margin: 0;
 }
 
+.field-heading .model-family-select {
+  width: auto;
+  max-width: 60%;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
 .text-button {
   border: 0;
   padding: 2px 0;
@@ -2069,3 +2076,13 @@ button:focus-visible {
 .price-editor{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:0 16px}
 @media(max-width:860px){.settings-workspace{grid-template-columns:minmax(0,1fr)}.settings-nav,.settings-content{min-width:0}}
 @media(max-width:620px){.price-editor{grid-template-columns:minmax(0,1fr)}.library-entry{padding:12px}}
+
+html[lang="en"] .hero::after { content: "π"; }
+
+#library-import-dialog { overflow-wrap: anywhere; }
+#library-import-dialog h2 { margin-top: 0; }
+#library-import-summary p { line-height: 1.7; }
+#library-import-dialog .support-task-actions { justify-content: flex-end; flex-wrap: wrap; }
+
+.research-export-dialog textarea,.glossary-import-dialog textarea,.citation-metadata-preview textarea{width:100%;box-sizing:border-box;resize:vertical;font:13px/1.5 ui-monospace,monospace}.library-toolbar{flex-wrap:wrap}#library-project-filter,#library-tag-filter,#library-saved-view{min-width:0;max-width:180px}.pdf-annotations-dialog textarea{width:100%;box-sizing:border-box}
+.library-tag-edit{padding:0;border:0;background:transparent;color:var(--pi-muted);font:inherit;font-size:12px}.library-tag-edit:hover{color:var(--pi-text);text-decoration:underline}.library-tag-edit:focus-visible{outline:2px solid var(--pi-focus,#315be5);outline-offset:3px}

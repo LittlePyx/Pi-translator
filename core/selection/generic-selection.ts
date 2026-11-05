@@ -127,8 +127,8 @@ function createSnapshot(
   };
 }
 
-function captureTextControl(): SelectionSnapshot | undefined {
-  const active = document.activeElement;
+function captureTextControl(active: Element | null = document.activeElement): SelectionSnapshot | undefined {
+  if (!active?.isConnected) return undefined;
   const isTextArea = active instanceof HTMLTextAreaElement;
   const isTextInput =
     active instanceof HTMLInputElement &&
@@ -186,8 +186,11 @@ function captureWindowSelection(contextMode: ContextMode): SelectionSnapshot | u
   });
 }
 
-export function captureSelectionSnapshot(contextMode: ContextMode = 'off'): SelectionSnapshot | undefined {
-  return captureTextControl() ?? captureWindowSelection(contextMode);
+export function captureSelectionSnapshot(
+  contextMode: ContextMode = 'off',
+  keyboardTextControl?: HTMLInputElement | HTMLTextAreaElement,
+): SelectionSnapshot | undefined {
+  return captureTextControl(keyboardTextControl ?? document.activeElement) ?? captureWindowSelection(contextMode);
 }
 
 export function createContextMenuSnapshot(

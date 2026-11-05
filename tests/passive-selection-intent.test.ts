@@ -20,6 +20,10 @@ describe('passive selection translation intent', () => {
   });
 
   it('keeps natural prose and short ambiguous selections available', () => {
+    expect(isLikelySourceCode('Git models the history of a collection of files and folders within some top-level directory as a series of snapshots. In Git terminology, a file is called a “blob”, and it is just a bunch of bytes.')).toBe(false);
+    expect(isLikelySourceCode('Python is a language that is widely used for data analysis and scientific research.')).toBe(false);
+    expect(isLikelySourceCode('git commit -m "Update the code while keeping the existing tests passing"')).toBe(true);
+    expect(isLikelySourceCode('$ git log --format=oneline --all --decorate --graph --abbrev-commit')).toBe(true);
     expect(isLikelySourceCode('The function returns a list containing all matching elements.'))
       .toBe(false);
     expect(isLikelySourceCode('Private performance fixture 1724227200000.')).toBe(false);

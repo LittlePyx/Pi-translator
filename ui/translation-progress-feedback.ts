@@ -1,3 +1,4 @@
+import { t } from '../core/i18n/ui-language';
 import type { TranslationProgressStage as RemoteTranslationProgressStage } from '../core/messaging/messages';
 
 export type TranslationProgressStage = RemoteTranslationProgressStage | 'rendering';
@@ -228,7 +229,7 @@ export class TranslationProgressFeedbackController {
         revisionKey: active.identity.revisionKey,
         stage: active.stage,
         kind,
-        message,
+        message: t(message),
       });
     } catch {
       // Presentation callbacks must never interrupt translation or later timers.

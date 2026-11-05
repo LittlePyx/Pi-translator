@@ -8,7 +8,8 @@ export interface PdfParagraphRevision extends PdfParagraphValue {
   id:string; createdAt:number; reason:'correction'|'translation'|'restore'|'unaccepted'|'import';
 }
 export interface PdfParagraphHistory extends PdfParagraphValue {revisions?:PdfParagraphRevision[]; retranslation?:true}
-export const MAX_PDF_PARAGRAPH_REVISIONS=5;
+export const LEGACY_PDF_PARAGRAPH_REVISIONS=5;
+export const MAX_PDF_PARAGRAPH_REVISIONS=50;
 const valueKeys=['translatedText','formulaDocument','reviewConfirmation','formulaReviewMessage','formulaReviewDraft','visualFallbackMessage','manualCorrection'];
 export function paragraphValue(value:PdfParagraphValue):PdfParagraphValue {
   return {translatedText:value.formulaDocument?.translationTemplate??value.translatedText.trim(),
@@ -50,10 +51,19 @@ function paragraphContent(value:PdfParagraphValue):string{
 }
 export function withParagraphHistory<T extends PdfParagraphHistory>(previous:PdfParagraphHistory|undefined,next:T,reason:PdfParagraphRevision['reason']='translation'):T & PdfParagraphHistory {
   if(previous?.revisions&&!next.revisions)next={...next,revisions:previous.revisions};
+  if(previous?.revisions&&next.revisions){
+    const ordered=(value:unknown):unknown=>Array.isArray(value)?value.map(ordered):value&&typeof value==='object'?Object.fromEntries(Object.entries(value).sort(([a],[b])=>a.localeCompare(b)).map(([key,item])=>[key,ordered(item)])):value;
+    const combined=[...next.revisions];
+    for(const old of previous.revisions){const found=combined.find(item=>item.id===old.id);if(found&&JSON.stringify(ordered(found))!==JSON.stringify(ordered(old)))throw new Error('本段修订历史已变化，未保存新版本；请重新核对。');if(!found)combined.push(old)}
+    if(combined.length>MAX_PDF_PARAGRAPH_REVISIONS)throw new Error('本段修订历史已满，暂不能保存新版本；已有记录和草稿保留。');
+    next={...next,revisions:combined};
+  }
   if(!previous||paragraphContent(previous)===paragraphContent(next))return next;
   const history=next.revisions??previous.revisions??[];
   const before=paragraphValue(previous);
-  return {...next,revisions:[...(history[0]&&JSON.stringify(paragraphValue(history[0]))===JSON.stringify(before)?[]:[paragraphRevision(before,reason)]),...history].slice(0,MAX_PDF_PARAGRAPH_REVISIONS)};
+  const revisions=[...(history[0]&&JSON.stringify(paragraphValue(history[0]))===JSON.stringify(before)?[]:[paragraphRevision(before,reason)]),...history];
+  if(revisions.length>MAX_PDF_PARAGRAPH_REVISIONS)throw new Error('本段修订历史已满，暂不能保存新版本；已有记录和草稿保留。');
+  return {...next,revisions};
 }
 export function restoredParagraphRevision(current:PdfParagraphHistory,id:string):PdfParagraphHistory {
   const revision=current.revisions?.find(item=>item.id===id);

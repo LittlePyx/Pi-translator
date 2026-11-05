@@ -40,10 +40,12 @@ select:hover { background: var(--pi-subtle); }
 .more-body > button + button { margin-top: -10px; }
 .service-details[data-blocking="true"] .capability-status { display: none; }
 .service-details[data-blocking="true"] { margin-top: 12px; }
-.site-control { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 0; padding: 8px 0; border: 0; border-radius: 0; background: none; }
+.site-control { display: grid; gap: 8px; margin: 0; padding: 8px 0; border: 0; border-radius: 0; background: none; }
 .site-control[hidden] { display: none; }
 .site-control strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--pi-muted); font-size: 11px; font-weight: 400; }
-.site-control .switch-row { flex: 0 0 auto; gap: 7px; margin: 0; }
+.site-control .switch-row { justify-content: space-between; gap: 7px; margin: 0; }
+.site-control #site-preference-help { margin: 0; }
+.site-control .site-reset { justify-self: start; margin-top: 0; }
 .switch-row span { color: var(--pi-muted); font-size: 12px; }
 .switch-row input:checked { border-color: var(--pi-primary); background: var(--pi-primary); }
 .service-details { border: 0; }
@@ -59,6 +61,11 @@ select:hover { background: var(--pi-subtle); }
 .readiness-summary strong, .readiness-issue strong { color: var(--pi-text); font-size: 12px; font-weight: 500; }
 .readiness-summary p, .readiness-issue p { color: var(--pi-muted); font-size: 11px; line-height: 1.6; }
 .readiness-issue button { color: var(--pi-text); background: none; border-radius: 0; }
+.readiness-summary:has(#readiness-note:empty) { display: none; }
+.readiness-issues { margin: 0; }
+.readiness-issue { grid-template-columns: minmax(0,1fr); gap: 6px; }
+.readiness-issue button { justify-self: start; min-height: 32px; padding: 4px 0; }
+.readiness-issue p[hidden] { display: none; }
 .page-context { margin: 0; padding: 0; color: var(--pi-muted); font-size: 12px; line-height: 1.7; }
 .page-context[data-tone="restricted"] { color: var(--pi-warning); }
 .feature-guide, .access-alert { margin-top: 14px; padding: 12px; border-color: var(--pi-line); border-radius: var(--pi-radius); color: var(--pi-text); background: var(--pi-subtle); box-shadow: none; }
@@ -67,3 +74,50 @@ select:hover { background: var(--pi-subtle); }
 .feature-guide-toggle { color: var(--pi-muted); font-size: 12px; font-weight: 400; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
 @media(prefers-color-scheme:dark) { .logo img { filter: grayscale(1) invert(.85); } }
+
+
+/* Compact entry: one clear primary action, quieter secondary destinations. */
+main{padding:20px}header{margin-bottom:18px}header strong{font-size:15px;letter-spacing:-.025em}
+.translation-controls{padding:10px 12px;border:1px solid var(--pi-line);border-radius:var(--pi-radius);background:var(--pi-surface)}
+.quick-actions .primary-action{min-height:42px;border-radius:var(--pi-radius);font-weight:550}
+.popup-footer{margin-top:16px;padding-top:8px;border-top:1px solid var(--pi-line)}
+.readiness-panel,.feature-guide,.access-alert{border:1px solid var(--pi-line);border-radius:var(--pi-radius-panel)}
+.more-body > .pi-action-guide-trigger{font-size:12px;color:var(--pi-muted)}
+
+/* An icon summary must stay a block flex box so its auto margin aligns right. */
+.popup-more-actions > summary[data-pi-icon]{display:flex!important}
+.more-body > button { display:flex; align-items:center; min-width:0; white-space:normal; overflow-wrap:anywhere; }
+.service-details > summary { gap:8px; flex-wrap:wrap; }
+.service-details > summary span { min-width:0; overflow-wrap:anywhere; }
+.readiness-issue { padding-block:8px; }
+.readiness-issue + .readiness-issue { border-top:1px solid var(--pi-line); }
+
+/* Give the browser popup an intrinsic width; percentages can shrink-wrap it. */
+body { width:320px; max-width:100%; }
+main { padding:16px; }
+header { gap:8px; margin-bottom:16px; }
+header > span:nth-child(2) { min-width:0; flex:1; }
+header strong { white-space:nowrap; }
+.translation-controls { padding:5px 10px; }
+.translation-controls label { gap:8px; }
+.translation-controls label > span { flex:none; white-space:nowrap; }
+.translation-controls select { flex:1; min-width:0; max-width:none; text-align:right; }
+.quick-actions { margin-top:12px; gap:3px; }
+.quick-actions .primary-action { margin:0; }
+.popup-footer { margin-top:12px; padding-top:8px; }
+.library-link, .popup-more-actions > summary { min-height:34px; padding:7px 8px; border-radius:var(--pi-radius); color:var(--pi-muted); font-size:12px; }
+.library-link:hover, .popup-more-actions > summary:hover { color:var(--pi-text); background:var(--pi-subtle); }
+.more-body { gap:4px; margin-top:6px; padding-top:8px; }
+.more-body > button { min-height:34px; padding:6px 8px; }
+.more-body > button + button { margin-top:0; }
+.more-body > .site-control { margin-top:4px; padding-top:10px; }
+.site-control { gap:6px; }
+.site-control .switch-row { min-height:32px; }
+#site-preference-help { font-size:11px; line-height:1.5; }
+@media(max-width:260px) { .capability-status { flex-direction:column; align-items:stretch; gap:6px; } .capability-item { justify-content:flex-start; white-space:nowrap; } }
+
+/* Draw the disclosure marker so it stays aligned across fonts and zoom levels. */
+.popup-more-actions > summary { display:flex; align-items:center; justify-content:center; gap:8px; min-height:34px; padding:7px 10px; border:1px solid var(--pi-line); border-radius:var(--pi-radius); color:var(--pi-text); background:var(--pi-surface); font-weight:500; line-height:1; white-space:nowrap; }
+.popup-more-actions > summary::after { content:""; flex:none; width:6px; height:6px; margin-top:-3px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
+.popup-more-actions[open] > summary { color:var(--pi-text); background:var(--pi-subtle); }
+.popup-more-actions[open] > summary::after { margin-top:3px; transform:rotate(225deg); }
