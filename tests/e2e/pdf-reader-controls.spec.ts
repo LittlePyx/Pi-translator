@@ -142,6 +142,7 @@ test('fits mixed pages, rotates native text, preserves highlights and restores t
     const text=reader.locator('.pdf-page[data-page-number="1"] .textLayer');
     await text.evaluate(node=>{const text=node.querySelector('span')!.firstChild!,range=document.createRange();range.setStart(text,0);range.setEnd(text,5);getSelection()!.removeAllRanges();getSelection()!.addRange(range);document.dispatchEvent(new Event('selectionchange'))});
     await reader.locator('#tex-selection-translator-root .selection-annotate').click();await reader.locator('.pdf-annotation-editor textarea').fill('Protected source note');await reader.locator('.pdf-annotation-editor button[type="submit"]').click();
+    await expect.poll(async()=>context.serviceWorkers()[0]!.evaluate(async()=>Boolean((await(globalThis as any).chrome.storage.local.get('piPdfReadingAnnotationsV1')).piPdfReadingAnnotationsV1))).toBe(true);
     const notes=await context.serviceWorkers()[0]!.evaluate(async()=>(await(globalThis as any).chrome.storage.local.get('piPdfReadingAnnotationsV1')).piPdfReadingAnnotationsV1);
     await clickPdfReaderAction(reader,'fit-page');
     const fits=()=>reader.locator('.pdf-page[data-page-number="1"]').evaluate(node=>{const r=node.getBoundingClientRect(),stage=document.querySelector<HTMLElement>('#document-stage')!;return r.width<=stage.clientWidth&&r.height<=stage.clientHeight});

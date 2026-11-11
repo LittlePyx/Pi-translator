@@ -86,8 +86,8 @@ test('renders English setup, popup, sidebar and PDF reader at narrow widths with
         await surface.locator('details.support-disclosure').filter({has:surface.locator('#restart-onboarding')}).locator('summary').click();
         await surface.locator('#restart-onboarding').click();
         await expect(surface.locator('#onboarding-title')).toHaveText('Get started in three steps');
-        await surface.locator('#onboarding-preset').selectOption('openai');
         await surface.locator('#onboarding-next').click();
+        await surface.locator('#onboarding-preset').selectOption('openai');
         await expect(surface.locator('#onboarding-api-key')).toBeVisible();
       }
       expect(await surface.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);

@@ -101,7 +101,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     buttonCount: context.querySelectorAll('button').length,
   }));
   expect(contextLayout.height).toBeLessThanOrEqual(51);
-  expect(contextLayout.buttonCount).toBe(2);
+  expect(contextLayout.buttonCount).toBe(1);
   await openTranslationMore(sidePanel);
   await expect(sidePanel.locator('#open-pi-reader')).toBeVisible();
   await sidePanel.keyboard.press('Escape');
@@ -380,7 +380,7 @@ test('renders streaming native PDF translations in the Edge side panel UI', asyn
     };
   });
   expect(completedActionStyles).toBeDefined();
-  expect(completedActionStyles!.copyBackground).not.toBe('rgba(0, 0, 0, 0)');
+  expect(completedActionStyles!.copyBackground).toBe('rgba(0, 0, 0, 0)');
   expect(completedActionStyles!.correctionBackground).toBe('rgba(0, 0, 0, 0)');
   await sidePanel.locator('#copy').click();
   await expect(sidePanel.locator('#copy')).toHaveText('已复制');

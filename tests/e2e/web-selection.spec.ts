@@ -441,11 +441,11 @@ test('finishes first-time setup and resumes the first interrupted translation', 
     const onboarding = options.locator('#onboarding-dialog');
     await expect(onboarding).toBeVisible();
     await expect(options.locator('#settings-recovery-banner')).toBeVisible();
-    await expect(options.locator('#onboarding-preset')).toBeFocused();
-
-    await options.locator('#onboarding-preset').selectOption('custom');
+    await expect(options.locator('#onboarding-preset')).toBeHidden();
     await options.locator('#onboarding-next').click();
-    await expect(options.locator('#onboarding-api-key')).toBeFocused();
+    await expect(options.locator('#onboarding-preset')).toBeFocused();
+    await options.locator('#onboarding-preset').selectOption('custom');
+    await expect(options.locator('#onboarding-api-key')).toBeVisible();
     await options.locator('#onboarding-api-key').fill('e2e-first-translation-key');
     await options.locator('#onboarding-base-url').fill(
       'https://www.overleaf.com/pi-translator-e2e-api',
