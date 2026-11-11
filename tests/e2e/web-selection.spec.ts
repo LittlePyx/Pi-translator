@@ -814,6 +814,8 @@ test('dismisses one passive trigger and can pause the current site in place', as
     await triggerShell.screenshot({ path: testInfo.outputPath('selection-trigger-dismiss-detail.png') });
   }
   const selectedText = await page.evaluate(() => window.getSelection()?.toString() ?? '');
+  // The stabilized selection may replace the hovered trigger before this action.
+  await trigger.hover();
   await dismiss.click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'notice');
   await expect(overlay.locator('.selection-dismiss-notice')).toContainText('本次已隐藏');
