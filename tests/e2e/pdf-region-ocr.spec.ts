@@ -1626,6 +1626,14 @@ test('keeps narrow PDF translation states readable and touch-safe', async ({}, t
     await expect.poll(() => firstPage.evaluate((element) =>
       element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
 
+    // The shared synthetic PDF can restore an expanded sidebar from earlier
+    // reading tests. This case starts in card mode and exercises pinning below.
+    const overlay = pdfPage.locator('#tex-selection-translator-root');
+    if (await overlay.getAttribute('data-pi-view') === 'sidebar') {
+      await overlay.locator('.surface-close').click();
+      await expect(overlay).not.toHaveAttribute('data-pi-view', 'sidebar');
+    }
+
     const drawAndSend = async (left: number, top: number): Promise<void> => {
       if (await pdfPage.locator('#region-translate').getAttribute('aria-pressed') !== 'true') {
         await pdfPage.locator('#region-translate').click();
@@ -1642,7 +1650,6 @@ test('keeps narrow PDF translation states readable and touch-safe', async ({}, t
     };
 
     await drawAndSend(55, 110);
-    const overlay = pdfPage.locator('#tex-selection-translator-root');
     await expect(overlay).toHaveAttribute('data-pi-view', 'card');
     await expect(overlay.locator('.loading-status')).toBeVisible();
     await expect.poll(() => requestIndex).toBe(1);
