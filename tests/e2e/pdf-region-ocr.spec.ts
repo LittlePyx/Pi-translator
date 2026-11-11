@@ -1622,7 +1622,7 @@ test('keeps narrow PDF translation states readable and touch-safe', async ({}, t
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await clickPdfReaderAction(pdfPage,'fit-width');
+    await fitPdfBeforeRegionCapture(pdfPage);
     await expect.poll(() => firstPage.evaluate((element) =>
       element.getBoundingClientRect().width)).toBeLessThanOrEqual(332);
 

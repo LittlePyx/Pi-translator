@@ -90,7 +90,7 @@ test('returns to the webpage region and asks before resending', async () => {
     await expect(region).toBeVisible();
     const box=await page.locator('#math-source').boundingBox();
     if(!box)throw new Error('Fixture text missing');
-    await page.mouse.move(box.x,box.y);await page.mouse.down();await page.mouse.move(box.x+box.width,box.y+box.height,{steps:6});await page.mouse.up();
+    await page.mouse.move(box.x,box.y);await page.mouse.down();await page.mouse.move(box.x+box.width,box.y+Math.max(box.height,32),{steps:6});await page.mouse.up();
     await region.locator('.confirm').click();
     const overlay=page.locator('#tex-selection-translator-root');
     await expect(overlay.locator('.error')).toContainText('公式与图像增强');
