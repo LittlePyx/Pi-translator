@@ -1,5 +1,10 @@
 {
   "offline": [
+    "tests/e2e/api-clarity.spec.ts",
+    "tests/e2e/api-interruption.spec.ts",
+    "tests/e2e/enhancement-recovery.spec.ts",
+    "tests/e2e/settings-assistance.spec.ts",
+    "tests/e2e/quick-start.spec.ts",
     "tests/e2e/settings-draft-safety.spec.ts",
     "tests/e2e/settings-task-organization.spec.ts",
     "tests/e2e/purpose-field-setup.spec.ts",

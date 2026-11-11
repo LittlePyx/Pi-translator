@@ -28,9 +28,8 @@ import {
   translationErrorMessage,
 } from '../messaging/user-facing-error';
 import { captureSelectionSnapshot } from '../selection/generic-selection';
-import { shouldSuppressPassiveSelectionTranslation } from '../selection/passive-selection-intent';
+import { isPassiveSelectionInTargetLanguage, shouldSuppressPassiveSelectionTranslation } from '../selection/passive-selection-intent';
 import type { SelectionSnapshot, ViewportRect } from '../selection/types';
-import { isLikelyTargetLanguage } from '../language/target-language';
 import { isSupportedTargetLanguage } from '../language/supported-target-languages';
 import { normalizePdfSelectionText } from '../pdf/text-normalizer';
 import { shouldUseVisionForPdfFormula } from '../translation/formula-detection';
@@ -1581,8 +1580,8 @@ async function startSelectionTranslatorInstance(
       if (
         !snapshot ||
         (surface === 'general' &&
-          settings.hideFloatingButtonForTargetLanguage &&
-          isLikelyTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)) ||
+          !explicitSidebarOpen && settings.hideFloatingButtonForTargetLanguage &&
+          isPassiveSelectionInTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)) ||
         (snapshot.selectionHash === lastAutoSelectionHash &&
           (!explicitSidebarOpen || snapshot.selectionHash === activeSelection?.selectionHash))
       ) {
@@ -1630,7 +1629,7 @@ async function startSelectionTranslatorInstance(
       surface === 'general' &&
       settings.hideFloatingButtonForTargetLanguage &&
       snapshot &&
-      isLikelyTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)
+      isPassiveSelectionInTargetLanguage(snapshot.normalizedText, temporaryTargetLanguage)
     ) {
       overlay.hideTrigger();
       return;
@@ -2439,7 +2438,7 @@ async function startSelectionTranslatorInstance(
                   errorCode: response.error.code,
                   failedRequestId: requestId,
                   hadPartialOutput: hasActivePartialOutput(),
-                  autoResume: Boolean(recovery.autoResumeAfterSettings),
+                  autoResume: false,
                   clientId: recoveryClientId,
                 },
               }
@@ -2621,7 +2620,7 @@ async function startSelectionTranslatorInstance(
         sidebarWidth: settings.sidebarWidth,
         autoRenderLatex: settings.autoRenderLatex,
       });
-      const requiresConfirmation = payload.hadPartialOutput ||
+      const requiresConfirmation = pending.context.kind === 'image' || payload.hadPartialOutput ||
         !payload.autoResume ||
         Boolean(pending.partialText?.trim());
       if (requiresConfirmation) {

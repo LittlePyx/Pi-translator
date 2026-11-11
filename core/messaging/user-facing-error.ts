@@ -25,10 +25,10 @@ export interface TranslationErrorRecovery {
 const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   EMPTY_SELECTION: '请先选中需要翻译的文本。',
   SELECTION_TOO_LONG: '选中的文本过长，请缩小选择范围。',
-  NO_API_KEY: '请先在扩展设置页填写 API Key。',
+  NO_API_KEY: '请先填写 API Key；如果此前仅保存到浏览器会话，关闭浏览器后需要重新填写。',
   API_PERMISSION_REQUIRED: '尚未授权访问当前 API 域名，请打开扩展设置并重新保存或测试连接。',
   API_ENDPOINT_INVALID: '接口地址或兼容路径不可用，请检查 API Base URL。',
-  AUTH_FAILED: 'API Key 无效，或当前账号没有访问权限。',
+  AUTH_FAILED: 'API Key 无效，或当前账号没有访问权限。请检查 Key 和它所属的服务商。',
   PAYMENT_REQUIRED: 'API 账户余额或额度不足，请在服务商后台检查用量。',
   MODEL_NOT_FOUND: '当前模型不存在，或 API Key 没有使用该模型的权限。',
   RATE_LIMITED: 'API 请求过于频繁，请稍后再试。',
@@ -38,7 +38,7 @@ const ERROR_MESSAGES: Record<TranslationErrorCode, string> = {
   EMPTY_RESPONSE: 'API 返回了空结果，请重试。',
   INVALID_RESPONSE: 'API 返回格式异常，请重试或切换模型。',
   LATEX_VALIDATION_FAILED: '模型没有完整保留 LaTeX 结构，结果已被拦截。',
-  VISION_NOT_CONFIGURED: '尚未配置图像翻译能力。普通文字翻译仍可使用；网页截图或扫描件需要支持图片的模型，“识别本页”需要在设置中配置官方 Qwen / 阿里云百炼。',
+  VISION_NOT_CONFIGURED: '需要先配置公式与图像增强，才能处理截图或扫描区域。普通文字翻译仍可使用；扫描页“识别本页”需要官方 Qwen / 阿里云百炼。',
   VISION_MODEL_UNSUPPORTED: '当前视觉模型不支持图片输入，请在设置中选择支持图像理解的模型。',
   OCR_NOT_SUPPORTED: '当前接口不能生成可靠的扫描 PDF 文字层；仍可使用框选翻译。坐标 OCR 目前支持官方 Qwen / 阿里云百炼接口。',
   OCR_INVALID_RESPONSE: 'OCR 没有返回可靠的文字坐标，未生成文字层；请调整识别区域或继续使用框选翻译。',
@@ -168,7 +168,7 @@ function untranslatedErrorRecovery(
     return {
       showRetry: false,
       settingsFocus: 'vision',
-      settingsLabel: '配置图像翻译',
+      settingsLabel: '设置公式与图像增强',
       autoResumeAfterSettings: true,
     };
   }

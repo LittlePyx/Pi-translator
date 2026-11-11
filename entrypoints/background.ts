@@ -52,6 +52,7 @@ import {
   clearSettingsRecoveryTicketsForTab,
   createSettingsRecoveryTicket,
   discardSettingsRecoveryTicket,
+  findSettingsRecoveryTicketsForSource,
   finishSettingsRecoveryDelivery,
   type SettingsRecoveryTicket,
 } from '../core/messaging/settings-recovery';
@@ -1584,13 +1585,13 @@ async function activateSettingsRecoverySource(ticket: SettingsRecoveryTicket): P
 async function deliverSettingsRecovery(
   ticket: SettingsRecoveryTicket,
 ): Promise<SettingsRecoveryAck> {
-  const requiresConfirmation = ticket.hadPartialOutput || !ticket.autoResume;
+  const requiresConfirmation = ticket.role === 'vision' || ticket.hadPartialOutput || !ticket.autoResume;
   const payload = {
     token: ticket.token,
     role: ticket.role,
     failedRequestId: ticket.failedRequestId,
     hadPartialOutput: ticket.hadPartialOutput,
-    autoResume: ticket.autoResume,
+    autoResume: ticket.role === 'vision' ? false : ticket.autoResume,
     targetKind: ticket.targetKind,
     sourceTabId: ticket.sourceTabId,
     ...(ticket.clientId ? { clientId: ticket.clientId } : {}),
@@ -4790,7 +4791,7 @@ export default defineBackground(() => {
                 ? 'extension-page'
                 : 'content-script';
             }
-            ticket = await createSettingsRecoveryTicket({
+            const source = {
               targetKind,
               sourceTabId,
               ...(sourceWindowId !== undefined ? { sourceWindowId } : {}),
@@ -4803,8 +4804,25 @@ export default defineBackground(() => {
               focus,
               errorCode: recovery.errorCode,
               hadPartialOutput: recovery.hadPartialOutput,
-              autoResume: recovery.autoResume,
-            });
+              autoResume: recovery.role === 'vision' ? false : recovery.autoResume,
+            };
+            const existingTickets = await findSettingsRecoveryTicketsForSource(source);
+            for (const existing of existingTickets) {
+              if (existing.optionsTabId === undefined) continue;
+              const tab = await browser.tabs.get(existing.optionsTabId).catch(() => undefined);
+              const optionsPage = browser.runtime.getURL('/options.html');
+              const tabUrl = tab?.pendingUrl ?? tab?.url ?? '';
+              if (tab?.id !== undefined && (tabUrl === optionsPage || tabUrl.startsWith(`${optionsPage}?`) || tabUrl.startsWith(`${optionsPage}#`))) {
+                try {
+                  await browser.tabs.update(tab.id, { active: true });
+                  if (tab.windowId !== undefined) await browser.windows.update(tab.windowId, { focused: true }).catch(() => undefined);
+                  return { ok: true as const, data: { opened: true as const, recoveryToken: existing.token } };
+                } catch {
+                  // The tab can close between lookup and activation. Open a fresh one below.
+                }
+              }
+            }
+            ticket = await createSettingsRecoveryTicket(source);
           }
           const optionsUrl = new URL(browser.runtime.getURL('/options.html'));
           if (focus) optionsUrl.searchParams.set('focus', focus);
@@ -4817,7 +4835,8 @@ export default defineBackground(() => {
                 ? 'connection'
                 : '';
           try {
-            await browser.tabs.create({ url: optionsUrl.href, active: true });
+            const opened = await browser.tabs.create({ url: optionsUrl.href, active: true });
+            if (ticket && opened.id !== undefined) await claimSettingsRecoveryTicket(ticket.token, opened.id);
           } catch (error) {
             if (ticket) await discardSettingsRecoveryTicket(ticket.token);
             throw error;
@@ -4857,7 +4876,7 @@ export default defineBackground(() => {
                 focus: ticket.focus,
                 errorCode: ticket.errorCode,
                 hadPartialOutput: ticket.hadPartialOutput,
-                autoResume: ticket.autoResume,
+                autoResume: ticket.role === 'vision' ? false : ticket.autoResume,
                 expiresAt: ticket.expiresAt,
               },
             },

@@ -191,3 +191,8 @@ body:has(#session:not([hidden])) .source-section { margin-top:10px; }
   background: linear-gradient(to bottom, transparent, var(--pi-surface));
   pointer-events: none;
 }
+
+/* A secondary surface switch stays available without framing the reading area. */
+.header-actions .surface-switch { border-color:transparent; background:transparent; color:var(--pi-text); }
+.header-actions .surface-switch:hover { color:var(--pi-text); background:var(--pi-subtle); }
+.header-actions .surface-switch:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }

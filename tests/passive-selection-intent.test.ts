@@ -2,10 +2,21 @@ import { describe, expect, it } from 'vitest';
 import {
   isLikelyLatexStructure,
   isLikelySourceCode,
+  isPassiveSelectionInTargetLanguage,
   shouldSuppressPassiveSelectionTranslation,
 } from '../core/selection/passive-selection-intent';
 
 describe('passive selection translation intent', () => {
+  it('hides confident short Chinese and Chinese with acronyms only for Chinese targets', () => {
+    for (const text of ['中文', '设置', '查看 PDF 文件', '这是 API 的使用说明']) {
+      expect(isPassiveSelectionInTargetLanguage(text, 'zh-CN'), text).toBe(true);
+    }
+    for (const text of ['中', '中文 translation example', '日本語の説明', '研究 AI translation']) {
+      expect(isPassiveSelectionInTargetLanguage(text, 'zh-CN'), text).toBe(false);
+    }
+    expect(isPassiveSelectionInTargetLanguage('中文', 'en')).toBe(false);
+    expect(isPassiveSelectionInTargetLanguage('English phrase', 'zh-CN')).toBe(false);
+  });
   it('recognizes high-confidence programming, data, shell, and stack-trace selections', () => {
     expect(isLikelySourceCode('const total = items.reduce((sum, item) => sum + item.value, 0);'))
       .toBe(true);

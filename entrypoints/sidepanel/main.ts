@@ -671,7 +671,7 @@ function settingsRecoveryRequest(
     errorCode: session.error.code,
     failedRequestId: session.requestId,
     hadPartialOutput: Boolean(session.partialText?.trim()),
-    autoResume: recovery.autoResumeAfterSettings === true,
+    autoResume: recoveryRole(session) === 'vision' ? false : recovery.autoResumeAfterSettings === true,
     ...(session.sourceKind === 'web' ? {} : { nativePdfTabId: session.tabId }),
   };
 }
@@ -2660,8 +2660,8 @@ function undoCurrentCorrection(): void {
 function openFullSettings(
   focus?: SettingsFocus,
   recovery?: SettingsRecoveryRequest,
-): void {
-  void (async () => {
+): Promise<void> {
+  return (async () => {
     const response = await browser.runtime.sendMessage({
       type: 'OPEN_OPTIONS_PAGE',
       ...(focus || recovery
@@ -2814,10 +2814,13 @@ emptyAction.addEventListener('click', () => {
   });
 });
 errorSettings.addEventListener('click', () => {
+  if (errorSettings.disabled) return;
   const session = activeSession();
   if (!session) return;
   const focus = errorSettings.dataset.settingsFocus as SettingsFocus | undefined;
-  openFullSettings(focus || undefined, settingsRecoveryRequest(session));
+  errorSettings.disabled = true;
+  void openFullSettings(focus || undefined, settingsRecoveryRequest(session))
+    .finally(() => { errorSettings.disabled = false; });
 });
 formulaView.addEventListener('click', () => {
   if (!currentSession?.result?.translatedText) return;
@@ -2993,11 +2996,18 @@ nativePdfReaderTipDismiss.addEventListener('click', () => {
     setStatus(t('本次已隐藏提示，但未能保存该选择。'));
   });
 });
-webSidebarSwitch.addEventListener('click', () => {
+function protectSidebarDraftBeforeSwitch(): boolean {
   if (translationText.classList.contains('correction-mode') || document.querySelector('dialog[open]')) {
-    setStatus(t('请先完成或取消当前编辑，再切换侧栏。'));
-    return;
+    setStatus(t('请先完成或取消当前编辑，再切换侧栏。草稿仍在这里。'));
+    const editor = translationText.querySelector<HTMLElement>('textarea, input, select')
+      ?? document.querySelector<HTMLElement>('dialog[open] textarea, dialog[open] input, dialog[open] button');
+    editor?.focus({preventScroll:true});
+    return true;
   }
+  return false;
+}
+webSidebarSwitch.addEventListener('click', () => {
+  if (protectSidebarDraftBeforeSwitch()) return;
   openPiReader.click();
 });
 openPiReader.addEventListener('click', () => {
@@ -3005,10 +3015,7 @@ openPiReader.addEventListener('click', () => {
     const session = activeSession();
     if (!session) return;
     if (session.sourceKind === 'web') {
-      if (translationText.classList.contains('correction-mode') || document.querySelector('dialog[open]')) {
-        setStatus(t('请先完成或取消当前编辑，再切换侧栏。'));
-        return;
-      }
+      if (protectSidebarDraftBeforeSwitch()) return;
       const response = await browser.runtime.sendMessage({
         type: 'USE_FLOATING_SIDEBAR',
         payload: { tabId: session.tabId, requestId: session.requestId },

@@ -30,6 +30,43 @@ test.beforeEach(async () => {
   await page.goto(OVERLEAF_FIXTURE_URL);
 });
 
+test('explains a paused selection button and resumes it without translation', async () => {
+  const calls = textRequests.length + visionRequests.length;
+  const panel = await popup();
+  await panel.locator('#pause-site').check();
+  await expect(panel.locator('#status')).toContainText('已暂停');
+  await panel.locator('#selection-help > summary').click();
+  await expect(panel.locator('#selection-help-status')).toContainText('已暂停');
+  await panel.locator('#selection-help-action').click();
+  await expect(panel.locator('#pause-site')).not.toBeChecked();
+  await expect(panel.locator('#selection-help-status')).toContainText('重新选择文字');
+  expect(textRequests.length + visionRequests.length).toBe(calls);
+  await panel.close();
+});
+
+test('explains on-demand selection on ordinary webpages without requesting access', async () => {
+  const worker = context.serviceWorkers()[0]!;
+  const original = await worker.evaluate(async () => (await (globalThis as any).chrome.storage.local.get('extensionSettings')).extensionSettings);
+  const calls = textRequests.length + visionRequests.length;
+  let panel: typeof page | undefined;
+  try {
+    await worker.evaluate(async settings => (globalThis as any).chrome.storage.local.set({extensionSettings:{...settings,generalPageMode:'on-demand'}}), original);
+    await page.goto(ARTICLE_FIXTURE_URL);
+    panel = await context.newPage();
+    await panel.goto(`chrome-extension://${extensionId}/popup.html`);
+    await page.bringToFront();
+    await panel.reload();
+    await panel.locator('#popup-more-actions > summary').click();
+    await panel.locator('#selection-help > summary').click();
+    await expect(panel.locator('#selection-help-status')).toContainText('按需模式');
+    await expect(panel.locator('#selection-help-action')).toHaveText('打开网页设置');
+    expect(textRequests.length + visionRequests.length).toBe(calls);
+  } finally {
+    await panel?.close();
+    await worker.evaluate(async settings => (globalThis as any).chrome.storage.local.set({extensionSettings:settings}), original);
+  }
+});
+
 test('opts in explicitly, scopes language to the site, persists pause and restores global without requests', async ({}, info) => {
   const before = await storage();
   const requests = textRequests.length + visionRequests.length;

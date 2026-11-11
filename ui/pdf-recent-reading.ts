@@ -26,7 +26,9 @@ export function bindPdfRecentReading(options:{empty:HTMLElement;notice:(text:str
         if(item.hasLocalCopy&&options.openCopy&&await options.openCopy(item.id))return;
         if(item.originalCopyUnavailable)options.notice(t('原 PDF 副本暂时无法读取，请回到资料库刷新后重试。'));
         options.empty.querySelector('h1')!.textContent=t('选择原 PDF 继续阅读');
-        options.empty.querySelector('p')!.textContent=t('原文件由你保留；选择后核验内容，恢复阅读位置和笔记，不重新翻译。');
+        options.empty.querySelector('p')!.textContent=item.originalCopyUnavailable
+          ? t('原 PDF 副本暂时无法读取。可选择原文件核验后继续；已有资料不会改变。')
+          : t('本机没有可用的原 PDF 副本。选择原文件后核验内容，恢复阅读位置和笔记，不重新翻译。');
         const preview=document.createElement('p');preview.className='pdf-excerpt-source-preview';preview.textContent=`${item.name}${item.state?msg` · 上次第 ${item.state.pageNumber} 页`:''}`;options.empty.querySelector('button')!.before(preview);
       }catch(error){options.notice(error instanceof Error?error.message:String(error))}
     },

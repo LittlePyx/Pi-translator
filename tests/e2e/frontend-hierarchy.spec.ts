@@ -63,7 +63,7 @@ for(const language of ['zh-CN','en'] as const)test(`aligns nested diagnostics, p
   const stored=await worker.evaluate(async()=>await(globalThis as any).chrome.storage.local.get(null)),calls=textRequests.length+visionRequests.length;
   for(const [width,scheme] of [[1360,'light'],[360,'dark']] as const){
    await target.setViewportSize({width,height:800});await target.emulateMedia({colorScheme:scheme,reducedMotion:'reduce'});await target.goto('about:blank');await target.goto(`chrome-extension://${extensionId}/options.html`);await expect(target.locator('#api-profile')).toHaveValue('default');
-   await target.locator('#connection-advanced > summary').click();await target.locator('#diagnose-api').click();await expect(target.locator('.diagnostic-item')).toHaveCount(7);
+   await target.locator('#connection-more > summary').click();await target.locator('#connection-advanced > summary').click();await target.locator('#diagnose-api').click();await expect(target.locator('.diagnostic-item')).toHaveCount(7);
    await target.locator('#diagnostic-report').screenshot({path:info.outputPath(`diagnostic-${width}.png`)});
    expect(await target.locator('#diagnostic-report').evaluate(el=>getComputedStyle(el).backgroundImage)).toBe('none');
    await openSettingsSection(target,'cost');await target.locator('#model-price-editor > summary').click();await target.screenshot({path:info.outputPath(`prices-${width}.png`),fullPage:true});

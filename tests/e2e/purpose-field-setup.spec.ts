@@ -7,7 +7,7 @@ test('first-use purpose stays in the guide and saves only an explicitly enabled 
  const saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome;const s=(await c.storage.local.get('extensionSettings')).extensionSettings;await c.storage.local.set({extensionSettings:{...s,onboardingCompleted:false,purposePreferences:{purposes:['daily'],researchField:'existing'}}});return s});
  try{
   await options.setViewportSize({width:360,height:700});await options.goto(`chrome-extension://${extensionId}/options.html`);
-  const dialog=options.locator('#onboarding-dialog');await expect(dialog).toBeVisible();await options.locator('#onboarding-purpose > summary').click();
+  const dialog=options.locator('#onboarding-dialog');await expect(dialog).toBeVisible();if (!await options.locator('#onboarding-purpose').evaluate(el => (el as HTMLDetailsElement).open)) await options.locator('#onboarding-purpose > summary').click();
   await expect(dialog).toBeVisible();await expect(options.locator('[name="onboarding-purpose-choice"][value="daily"]')).toBeChecked();
   await options.locator('[name="onboarding-purpose-choice"][value="research"]').check();await options.locator('#onboarding-research-field').fill('统计学');
   await expect(options.locator('#onboarding-field-translation')).not.toBeChecked();await options.locator('#onboarding-field-translation').check();
@@ -35,7 +35,7 @@ test('field opt-in changes mocked translation requests and cache identity',async
 test('first-use concurrent preference change preserves both the other window and the local draft',async()=>{
  const worker=context.serviceWorkers()[0]!,options=await context.newPage(),saved=await worker.evaluate(async()=>{const c=(globalThis as any).chrome,s=(await c.storage.local.get('extensionSettings')).extensionSettings;await c.storage.local.set({extensionSettings:{...s,onboardingCompleted:false,purposePreferences:{purposes:['research'],researchField:'原有领域'}}});return s});
  try{
-  await options.goto(`chrome-extension://${extensionId}/options.html`);await options.locator('#onboarding-purpose > summary').click();await options.locator('#onboarding-research-field').fill('本地未保存领域');await options.locator('#onboarding-field-translation').check();
+  await options.goto(`chrome-extension://${extensionId}/options.html`);if (!await options.locator('#onboarding-purpose').evaluate(el => (el as HTMLDetailsElement).open)) await options.locator('#onboarding-purpose > summary').click();await options.locator('#onboarding-research-field').fill('本地未保存领域');await options.locator('#onboarding-field-translation').check();
   await worker.evaluate(async()=>{const c=(globalThis as any).chrome,s=(await c.storage.local.get('extensionSettings')).extensionSettings;await c.storage.local.set({extensionSettings:{...s,purposePreferences:{purposes:['research'],researchField:'另一窗口领域'}}})});
   await options.locator('#onboarding-skip').click();await expect(options.locator('#onboarding-status')).toContainText('另一窗口');await expect(options.locator('#onboarding-research-field')).toHaveValue('本地未保存领域');await expect(options.locator('#onboarding-field-translation')).toBeChecked();
   const after=await worker.evaluate(async()=>(await (globalThis as any).chrome.storage.local.get('extensionSettings')).extensionSettings);expect(after.purposePreferences.researchField).toBe('另一窗口领域');expect(after.onboardingCompleted).toBe(false);

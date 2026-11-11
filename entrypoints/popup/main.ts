@@ -48,7 +48,7 @@ import {
   pdfInitialPage,
   pdfPermissionPattern,
 } from '../../core/pdf/source';
-import { isInjectableWebUrl, isOverleafProjectUrl } from '../../core/settings/site-access';
+import { getAutoInjectionPatterns, isGeneralPageAllowed, isInjectableWebUrl, isOverleafProjectUrl } from '../../core/settings/site-access';
 import {
   popupPageState,
   popupReadiness,
@@ -126,6 +126,9 @@ const serviceDetails = element<HTMLDetailsElement>('popup-service-details');
 const serviceState = element<HTMLElement>('popup-service-state');
 const moreActions = element<HTMLDetailsElement>('popup-more-actions');
 const moreBody = element<HTMLElement>('popup-more-body');
+const selectionHelp = element<HTMLDetailsElement>('selection-help');
+const selectionHelpStatus = element<HTMLParagraphElement>('selection-help-status');
+const selectionHelpAction = element<HTMLButtonElement>('selection-help-action');
 const pageContext = element<HTMLParagraphElement>('page-context');
 const featureGuideToggle = element<HTMLButtonElement>('feature-guide-toggle');
 const featureGuide = element<HTMLElement>('feature-guide');
@@ -157,6 +160,67 @@ let bilingualPageStateReadVersion = 0;
 let configuredTargetLanguage: SupportedTargetLanguage = 'zh-CN';
 let pendingBilingualLanguageSwitch: SupportedTargetLanguage | undefined;
 let targetLanguageUpdatePending = false;
+let selectionHelpRevision = 0;
+
+async function refreshSelectionHelp(): Promise<void> {
+  const revision = ++selectionHelpRevision;
+  selectionHelpStatus.textContent = t('正在检查当前网站…');
+  selectionHelpAction.hidden = true;
+  try {
+    const [settings, paused] = await Promise.all([getSettings(), getEffectivePausedSiteHosts()]);
+    if (revision !== selectionHelpRevision || !selectionHelp.open) return;
+    const url = activeUrl;
+    let message: string;
+    let action: 'resume' | 'settings' | undefined;
+    if (!url || activePdfContext || !isInjectableWebUrl(url)) {
+      message = t('当前页面不支持普通网页划词；请在普通网页中使用，或打开 PDF 阅读器。');
+    } else if (isSiteHostPaused(siteHostFromUrl(url) ?? '', paused)) {
+      message = t('此网站已暂停自动划词。恢复后可重新选择文字。');
+      action = 'resume';
+    } else if (isOverleafProjectUrl(url)) {
+      message = settings.showFloatingButtonOnOverleaf
+        ? t('请重新选择文字；若仍未出现，请刷新页面后重试。')
+        : t('Overleaf 浮动按钮已关闭，可在网页设置中开启。');
+      if (!settings.showFloatingButtonOnOverleaf) action = 'settings';
+    } else if (!isGeneralPageAllowed(url, settings)) {
+      message = t('当前网站不在自动划词范围内，可在网页设置中调整范围。');
+      action = 'settings';
+    } else if (settings.generalPageMode === 'on-demand') {
+      message = t('当前为按需模式，默认不显示自动划词按钮；可在网页设置中启用并授权。');
+      action = 'settings';
+    } else {
+      const patterns = getAutoInjectionPatterns(settings.generalPageMode, settings.siteAllowlist);
+      const granted = patterns.length > 0 && await browser.permissions.contains({ origins: patterns });
+      if (revision !== selectionHelpRevision || !selectionHelp.open) return;
+      message = granted
+        ? settings.hideFloatingButtonForTargetLanguage
+          ? t('已开启智能隐藏：选区可能被识别为目标语言。也可刷新页面或使用右键翻译。')
+          : t('请重新选择文字；若仍未出现，请刷新页面后重试，或使用右键翻译。')
+        : t('网站访问权限可能尚未开启；请在网页设置中检查并授权。');
+      if (!granted) action = 'settings';
+    }
+    selectionHelpStatus.textContent = message;
+    selectionHelpAction.dataset.action = action ?? '';
+    selectionHelpAction.textContent = action === 'resume' ? t('恢复划词') : t('打开网页设置');
+    selectionHelpAction.hidden = !action;
+  } catch {
+    if (revision !== selectionHelpRevision || !selectionHelp.open) return;
+    selectionHelpStatus.textContent = t('暂时无法检查，请打开网页设置查看。');
+    selectionHelpAction.dataset.action = 'settings';
+    selectionHelpAction.textContent = t('打开网页设置');
+    selectionHelpAction.hidden = false;
+  }
+}
+
+selectionHelp.addEventListener('toggle', () => {
+  if (selectionHelp.open) void refreshSelectionHelp();
+  else selectionHelpRevision++;
+});
+selectionHelpAction.addEventListener('click', () => {
+  if (selectionHelpAction.dataset.action === 'resume' && pauseSite.checked && !pauseSite.disabled) {
+    pauseSite.click();
+  } else if (selectionHelpAction.dataset.action === 'settings') openSettingsPage('pages');
+});
 
 type PopupStatusTone = 'progress' | 'success' | 'error';
 
@@ -1021,6 +1085,7 @@ pauseSite.addEventListener('change', () => {
       rememberSite.disabled = false;
       resetSite.disabled = false;
       targetLanguage.disabled = false;
+      if (selectionHelp.open) void refreshSelectionHelp();
     });
 });
 

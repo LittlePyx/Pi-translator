@@ -7,6 +7,7 @@ import {
   createSettingsRecoveryTicket,
   discardSettingsRecoveryTicket,
   finishSettingsRecoveryDelivery,
+  findSettingsRecoveryTicketsForSource,
   type SettingsRecoveryTicket,
 } from '../core/messaging/settings-recovery';
 
@@ -79,6 +80,20 @@ describe('settings recovery session repository', () => {
       .resolves.toMatchObject({ optionsTabId: 91 });
     await expect(claimSettingsRecoveryTicket(ticket.token, 92, 20_003))
       .resolves.toBeUndefined();
+  });
+
+  it('finds only an unexpired claimed ticket for the exact source task', async () => {
+    const source = recoveryTicket();
+    const ticket = await createSettingsRecoveryTicket(source, 21_000);
+    await expect(findSettingsRecoveryTicketsForSource(source, 21_001)).resolves.toEqual([]);
+    await claimSettingsRecoveryTicket(ticket.token, 91, 21_002);
+    await expect(findSettingsRecoveryTicketsForSource(source, 21_003)).resolves.toMatchObject([{token:ticket.token,optionsTabId:91}]);
+    await expect(findSettingsRecoveryTicketsForSource({...source,sourceWindowId:4},21_003)).resolves.toMatchObject([{token:ticket.token,optionsTabId:91}]);
+    for(const patch of [
+      {sourceTabId:8},{sourceFrameId:1},{clientId:'other'},{failedRequestId:'other'},
+      {role:'vision' as const},{focus:'vision' as const},{hadPartialOutput:true},
+    ]) await expect(findSettingsRecoveryTicketsForSource({...source,...patch},21_004)).resolves.toEqual([]);
+    await expect(findSettingsRecoveryTicketsForSource(source,ticket.expiresAt)).resolves.toEqual([]);
   });
 
   it('atomically gives a concurrently claimed ticket to only one options tab', async () => {

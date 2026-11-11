@@ -47,20 +47,15 @@
           <span data-onboarding-dot="3">3</span>
         </div>
         <section class="onboarding-step" data-onboarding-step="1">
-          <h3 data-i18n-parts="[[0,&quot;选择文字翻译接口（必需）&quot;]]">选择文字翻译接口（必需）</h3>
-          <p data-i18n-parts="[[0,&quot;先选择签发 API Key 的平台，再选择模型。例如：阿里云的 Key 调用 DeepSeek，仍选择阿里云。网页划词只需文字 API。&quot;]]">先选择签发 API Key 的平台，再选择模型。例如：阿里云的 Key 调用 DeepSeek，仍选择阿里云。网页划词只需文字 API。</p>
-          <label>
-            <span data-i18n-parts="[[0,&quot;服务商&quot;]]">服务商</span>
-            <select id="onboarding-preset"></select>
-          </label>
-          <div id="onboarding-web-access" class="onboarding-web-access" hidden>
-            <strong data-i18n-parts="[[0,&quot;网页划词按钮&quot;]]">网页划词按钮</strong>
-            <p data-i18n-parts="[[0,&quot;授权后，在普通网页选中文字即可显示 Pi 按钮；点击后才翻译。&quot;]]">授权后，在普通网页选中文字即可显示 Pi 按钮；点击后才翻译。</p>
-            <button id="onboarding-enable-web" type="button" data-i18n-parts="[[0,&quot;启用网页划词按钮&quot;]]">启用网页划词按钮</button>
-            <small id="onboarding-web-status" role="status" aria-live="polite"></small>
+          <h3 data-i18n-parts='[[0,"你想怎样使用？"]]'>你想怎样使用？</h3>
+          <p data-i18n-parts='[[0,"可多选，也可跳过；之后随时可以调整。"]]'>可多选，也可跳过；之后随时可以调整。</p>
+          <div id="onboarding-resume" class="onboarding-resume" hidden>
+            <label><span data-i18n-parts='[[0,"上次保存的设置进度"]]'>上次保存的设置进度</span><select id="onboarding-resume-list"></select></label>
+            <button id="onboarding-resume-button" type="button" data-i18n-parts='[[0,"继续填写"]]'>继续填写</button>
+            <button id="onboarding-resume-remove" type="button" data-i18n-parts='[[0,"删除此进度"]]'>删除此进度</button>
           </div>
-          <details id="onboarding-purpose" class="onboarding-purpose">
-            <summary data-i18n-parts='[[0,"用途与领域（可选）"]]'>用途与领域（可选）</summary>
+          <details id="onboarding-purpose" class="onboarding-purpose" open>
+            <summary hidden data-i18n-parts='[[0,"用途与领域（可选）"]]'>用途与领域（可选）</summary>
             <div class="onboarding-purpose-body">
               <div class="purpose-choices">
                 <label><input type="checkbox" name="onboarding-purpose-choice" value="daily"><span data-i18n-parts='[[0,"日常页面翻译"]]'>日常页面翻译</span></label>
@@ -70,18 +65,20 @@
               <div id="onboarding-research" hidden>
                 <label><span data-i18n-parts='[[0,"研究领域（可选）"]]'>研究领域（可选）</span><input id="onboarding-research-field" maxlength="80" autocomplete="off"></label>
                 <label class="check-row compact-check"><input id="onboarding-field-translation" type="checkbox"><span data-i18n-parts='[[0,"后续翻译参考此领域"]]'>后续翻译参考此领域</span></label>
-                <small data-i18n-parts='[[0,"启用后，领域名称会随翻译请求发送给所配置的 API，辅助理解和选择术语；本文确认术语优先，旧译文不变。"]]'>启用后，领域名称会随翻译请求发送给所配置的 API，辅助理解和选择术语；本文确认术语优先，旧译文不变。</small>
+                <small data-i18n-parts='[[0,"启用后，领域名称会随翻译发送给你的服务商；本文确认术语优先。"]]'>启用后，领域名称会随翻译发送给你的服务商；本文确认术语优先。</small>
               </div>
-              <small data-i18n-parts='[[0,"用途可多选，用于推荐设置；可稍后在翻译偏好中预览并应用。"]]'>用途可多选，用于推荐设置；可稍后在翻译偏好中预览并应用。</small>
             </div>
           </details>
         </section>
         <section class="onboarding-step" data-onboarding-step="2" hidden>
-          <h3 data-i18n-parts="[[0,&quot;连接你的 API&quot;]]">连接你的 API</h3>
+          <h3 data-i18n-parts='[[0,"连接翻译服务"]]'>连接翻译服务</h3>
+          <p data-i18n-parts='[[0,"已有 Key？选择签发它的服务商并填入。还没有？选择服务商后可前往官方页面获取；费用由服务商收取。"]]'>已有 Key？选择签发它的服务商并填入。还没有？选择服务商后可前往官方页面获取；费用由服务商收取。</p>
+          <label><span data-i18n-parts="[[0,&quot;服务商&quot;]]">服务商</span><select id="onboarding-preset"></select></label>
           <label>
             <span>API Key</span>
-            <input data-i18n-placeholder="只保存在浏览器扩展存储中" id="onboarding-api-key" type="password" autocomplete="off" placeholder="只保存在浏览器扩展存储中">
+            <input data-i18n-placeholder="只保存在浏览器扩展存储中" id="onboarding-api-key" type="password" autocomplete="off" aria-describedby="onboarding-key-error" placeholder="只保存在浏览器扩展存储中">
           </label>
+          <p id="onboarding-key-error" class="inline-setup-error" role="alert" hidden></p>
           <button id="onboarding-confirm-key-origin" class="text-button" type="button" hidden data-i18n-parts='[[0,"确认此 Key 用于当前地址"]]'>确认此 Key 用于当前地址</button>
           <button data-i18n-parts="[[0,&quot;前往官方页面获取 API Key ↗&quot;]]" id="onboarding-open-key-page" class="provider-key-link text-button" type="button" hidden>前往官方页面获取 API Key ↗</button>
           <label id="onboarding-base-url-field" hidden>
@@ -97,36 +94,49 @@
         </section>
         <section class="onboarding-step" data-onboarding-step="3" hidden>
           <h3 data-i18n-parts="[[0,&quot;确认模型&quot;]]">确认模型</h3>
-          <p data-i18n-parts="[[0,&quot;已经尝试读取当前 Key 可用的模型；也可以直接填写接口支持的模型名称。&quot;]]">已经尝试读取当前 Key 可用的模型；也可以直接填写接口支持的模型名称。</p>
           <div class="field-heading">
             <label data-i18n-parts="[[0,&quot;模型名称&quot;]]" for="onboarding-model">模型名称</label>
             <select data-i18n-aria-label="筛选首次设置模型系列" id="onboarding-model-family" class="model-family-select" aria-label="筛选首次设置模型系列" hidden></select>
           </div>
-          <input data-i18n-placeholder="选择接口返回的模型，或输入模型 ID" id="onboarding-model" type="text" list="onboarding-model-list" spellcheck="false" placeholder="选择接口返回的模型，或输入模型 ID">
+          <input data-i18n-placeholder="选择接口返回的模型，或输入模型 ID" id="onboarding-model" type="text" list="onboarding-model-list" spellcheck="false" aria-describedby="onboarding-model-error onboarding-model-catalog-status" placeholder="选择接口返回的模型，或输入模型 ID">
+          <p id="onboarding-model-error" class="inline-setup-error" role="alert" hidden></p>
           <datalist id="onboarding-model-list"></datalist>
           <small data-i18n-parts="[[0,&quot;可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；模型由所选服务商提供。&quot;]]" id="onboarding-model-catalog-status">可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；模型由所选服务商提供。</small>
-          <p data-i18n-parts="[[0,&quot;下一步只调用一次文字示例翻译。网页框选与扫描 PDF 的图像接口可稍后按需配置，不在首次设置中自动检测。&quot;]]" class="onboarding-vision-note">下一步只调用一次文字示例翻译。网页框选与扫描 PDF 的图像接口可稍后按需配置，不在首次设置中自动检测。</p>
+          <p data-i18n-parts='[[0,"测试会发送示例文字并可能产生费用；图像翻译可稍后配置。"]]' class="onboarding-vision-note">测试会发送示例文字并可能产生费用；图像翻译可稍后配置。</p>
+          <button id="onboarding-test" type="button" data-i18n-parts='[[0,"测试翻译并保存"]]'>测试翻译并保存</button>
         </section>
         <section id="onboarding-success" class="onboarding-step onboarding-success" hidden>
           <div class="onboarding-success-heading">
             <span aria-hidden="true">✓</span>
-            <div><h3 data-i18n-parts="[[0,&quot;连接成功，已经完成一次真实翻译&quot;]]">连接成功，已经完成一次真实翻译</h3><p data-i18n-parts="[[0,&quot;API Key、模型和翻译接口均可正常工作。&quot;]]">API Key、模型和翻译接口均可正常工作。</p></div>
+            <div><h3 id="onboarding-success-title" data-i18n-parts="[[0,&quot;设置已保存&quot;]]">设置已保存</h3><p id="onboarding-success-detail" data-i18n-parts="[[0,&quot;尚未测试翻译，可在设置中随时检查。&quot;]]">尚未测试翻译，可在设置中随时检查。</p></div>
+          </div>
+          <div id="onboarding-web-access" class="onboarding-web-access" hidden>
+            <strong data-i18n-parts="[[0,&quot;网页划词按钮&quot;]]">网页划词按钮</strong>
+            <p data-i18n-parts="[[0,&quot;授权后，在普通网页选中文字即可显示 Pi 按钮；点击后才翻译。&quot;]]">授权后，在普通网页选中文字即可显示 Pi 按钮；点击后才翻译。</p>
+            <button id="onboarding-enable-web" type="button" data-i18n-parts="[[0,&quot;启用网页划词按钮&quot;]]">启用网页划词按钮</button>
+            <small id="onboarding-web-status" role="status" aria-live="polite"></small>
           </div>
           <div data-i18n-aria-label="示例翻译结果" class="onboarding-sample" aria-label="示例翻译结果">
             <span data-i18n-parts="[[0,&quot;示例翻译&quot;]]">示例翻译</span>
             <p id="onboarding-sample-source" lang="en"></p>
             <strong id="onboarding-sample-translation"></strong>
           </div>
-          <h3 data-i18n-parts="[[0,&quot;接下来可以从这里开始&quot;]]" class="onboarding-paths-title">接下来可以从这里开始</h3>
-          <div class="onboarding-paths">
-            <div><span>01</span><strong data-i18n-parts="[[0,&quot;网页划词&quot;]]">网页划词</strong><small data-i18n-parts="[[0,&quot;选中文字后点击 Pi；打开侧栏可连续翻译。&quot;]]">选中文字后点击 Pi；打开侧栏可连续翻译。</small></div>
-            <div><span>02</span><strong data-i18n-parts="[[0,&quot;网页双语&quot;]]">网页双语</strong><small data-i18n-parts="[[0,&quot;在扩展面板中启动“翻译网页正文”，原位对照阅读。&quot;]]">在扩展面板中启动“翻译网页正文”，原位对照阅读。</small></div>
-            <div><span>03</span><strong data-i18n-parts="[[0,&quot;科研 PDF&quot;]]">科研 PDF</strong><small data-i18n-parts="[[0,&quot;从扩展面板打开 Pi PDF，也支持扫描页框选。&quot;]]">从扩展面板打开 Pi PDF，也支持扫描页框选。</small></div>
+          <div id="onboarding-enhancement" class="onboarding-enhancement">
+            <strong data-i18n-parts='[[0,"公式与图像增强"]]'>公式与图像增强</strong>
+            <p data-i18n-parts='[[0,"辅助处理复杂公式、网页截图和扫描文档；可随时设置。"]]'>辅助处理复杂公式、网页截图和扫描文档；可随时设置。</p>
+            <button id="onboarding-enhancement-setup" class="text-button" type="button" data-i18n-parts='[[0,"设置增强功能"]]'>设置增强功能</button>
           </div>
+          <button id="onboarding-open-pdf" class="text-button onboarding-pdf-link" type="button" data-i18n-parts='[[0,"打开 Pi 阅读器"]]'>打开 Pi 阅读器</button>
         </section>
         <p id="onboarding-status" class="status" role="status" aria-live="polite"></p>
+        <div id="onboarding-later-panel" class="onboarding-later-panel" hidden>
+          <p data-i18n-parts='[[0,"只在本机保存用途、领域和服务商；Key、接口地址与模型不会保存。留在此页面时输入仍在，关闭后需要重新填写。"]]'>只在本机保存用途、领域和服务商；Key、接口地址与模型不会保存。留在此页面时输入仍在，关闭后需要重新填写。</p>
+          <button id="onboarding-later-confirm" type="button" data-i18n-parts='[[0,"保存进度并退出"]]'>保存进度并退出</button>
+          <button id="onboarding-later-cancel" type="button" data-i18n-parts='[[0,"继续填写"]]'>继续填写</button>
+        </div>
         <footer class="onboarding-actions">
-          <button data-i18n-parts="[[0,&quot;稍后手动设置&quot;]]" id="onboarding-skip" class="text-button" type="button">稍后手动设置</button>
+          <button data-i18n-parts='[[0,"进入完整设置"]]' id="onboarding-skip" class="text-button" type="button">进入完整设置</button>
+          <button id="onboarding-later" class="text-button" type="button" data-i18n-parts='[[0,"稍后继续"]]'>稍后继续</button>
           <span></span>
           <button data-i18n-parts="[[0,&quot;上一步&quot;]]" id="onboarding-back" type="button" hidden>上一步</button>
           <button data-i18n-parts="[[0,&quot;下一步&quot;]]" id="onboarding-next" class="primary" type="button">下一步</button>
@@ -147,8 +157,11 @@
           <button data-i18n-parts="[[0,&quot;已保存&quot;]]" id="save-button" class="primary save-button" type="submit" form="settings-form" disabled>已保存</button>
         </div>
         <div class="hero-bottom">
-          <p data-i18n-parts="[[0,&quot;从普通网页到科研 PDF，选中文字或框选内容即可翻译；Overleaf 中自动保护 LaTeX 结构。&quot;]]" class="intro">从普通网页到科研 PDF，选中文字或框选内容即可翻译；Overleaf 中自动保护 LaTeX 结构。</p>
           <span data-i18n-parts="[[0,&quot;正在读取快捷键…&quot;]]" id="translation-shortcut-chip" class="shortcut-chip" aria-live="polite">正在读取快捷键…</span>
+        </div>
+        <div class="settings-quickbar">
+          <div class="setup-overview"><span id="setup-readiness" role="status" aria-live="polite" data-i18n-parts='[[0,"正在检查文字翻译配置…"]]'>正在检查文字翻译配置…</span><button id="setup-readiness-action" class="text-button" type="button" data-i18n-parts='[[0,"查看连接"]]'>查看连接</button><button id="resume-paused-setup" class="text-button" type="button" hidden data-i18n-parts='[[0,"继续首次设置"]]'>继续首次设置</button></div>
+          <details class="common-tasks" id="common-tasks"><summary data-i18n-parts='[[0,"常用操作"]]'>常用操作</summary><div><button type="button" data-settings-task="connection" data-i18n-parts='[[0,"更换翻译服务"]]'>更换翻译服务</button><button type="button" data-settings-task="translation" data-i18n-parts='[[0,"调整目标语言"]]'>调整目标语言</button><button type="button" data-settings-task="pages" data-i18n-parts='[[0,"设置网页划词"]]'>设置网页划词</button></div></details>
         </div>
       </header>
 
@@ -187,19 +200,14 @@
               <p id="settings-recovery-status" class="settings-recovery-status" role="status" aria-live="polite"></p>
             </aside>
             <div class="section-heading">
-              <div><span data-i18n-parts="[[0,&quot;连接&quot;]]" class="section-kicker">连接</span><h2 data-i18n-parts="[[0,&quot;翻译接口&quot;]]">翻译接口</h2></div>
-              <span data-i18n-parts="[[0,&quot;OpenAI 兼容协议&quot;]]" class="protocol-badge">OpenAI 兼容协议</span>
+              <div><span data-i18n-parts="[[0,&quot;连接&quot;]]" class="section-kicker">连接</span><h2 data-i18n-parts="[[0,&quot;翻译服务&quot;]]">翻译服务</h2></div>
             </div>
-            <p data-i18n-parts="[[0,&quot;先选择已有 Key 的服务商，连接后推荐可用文字模型。图片和扫描件可稍后配置。&quot;]]" class="section-intro">先选择已有 Key 的服务商，连接后推荐可用文字模型。图片和扫描件可稍后配置。</p>
-            <div class="connection-roles" aria-label="翻译接口用途" data-i18n-aria-label="翻译接口用途">
-              <span class="connection-roles-caption" data-i18n-parts="[[0,&quot;当前选择 · 修改后需保存&quot;]]">当前选择 · 修改后需保存</span>
-              <div><span data-i18n-parts="[[0,&quot;文字翻译&quot;]]">文字翻译</span><strong id="text-profile-summary"></strong></div>
-              <div><span data-i18n-parts="[[0,&quot;图像翻译&quot;]]">图像翻译</span><strong id="vision-profile-summary"></strong></div>
-            </div>
+            <p data-i18n-parts="[[0,&quot;选择服务商并填写 Key，即可设置文字翻译。&quot;]]" class="section-intro">选择服务商并填写 Key，即可设置文字翻译。</p>
+            <div class="connection-primary-heading"><h3 id="connection-primary-title" class="connection-primary-title">文字翻译</h3><span id="text-connection-state" class="text-connection-state" role="status">正在检查</span></div>
             <div class="profile-bar">
-              <label><span data-i18n-parts="[[0,&quot;正在编辑的配置&quot;]]">正在编辑的配置</span><select id="api-profile"></select></label>
+              <label><span data-i18n-parts="[[0,&quot;切换或管理接口&quot;]]">切换或管理接口</span><select id="api-profile"></select></label>
               <details id="profile-menu" class="profile-menu">
-                <summary data-i18n-aria-label="管理 API 配置" data-i18n-title="管理配置" aria-label="管理 API 配置" title="管理配置">···</summary>
+                <summary data-i18n-aria-label="管理 API 配置" data-i18n-title="管理配置" aria-label="管理 API 配置" title="管理配置" data-i18n-parts="[[0,&quot;管理接口&quot;]]">管理接口</summary>
                 <div class="profile-menu-actions">
                   <button data-i18n-parts="[[0,&quot;新增配置&quot;]]" id="add-profile" type="button">新增配置</button>
                   <button data-i18n-parts="[[0,&quot;清除当前 Key&quot;]]" id="clear-key" class="danger-text" type="button">清除当前 Key</button>
@@ -218,7 +226,7 @@
                 <div class="connection-step-body">
                   <label><span data-i18n-parts="[[0,&quot;服务商&quot;]]">服务商</span><select id="api-preset"></select></label>
                   <small data-i18n-parts="[[0,&quot;选择预设后会自动填写官方兼容接口地址。&quot;]]" id="api-provider-hint" class="connection-step-help">选择预设后会自动填写官方兼容接口地址。</small>
-                  <label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1"><small data-pi-help-for="#api-base-url" data-i18n-parts="[[0,&quot;调用&quot;],[2,&quot;和&quot;]]">调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label>
+                  <details id="api-address-details" class="api-address-details"><summary data-i18n-parts="[[0,&quot;接口地址&quot;]]">接口地址</summary><label><span>API Base URL</span><input id="api-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1"><small data-pi-help-for="#api-base-url" data-i18n-parts="[[0,&quot;调用&quot;],[2,&quot;和&quot;]]">调用 <code>/chat/completions</code> 和 <code>/models</code>。</small></label></details>
                 </div>
               </div>
               <div class="connection-step">
@@ -239,19 +247,20 @@
                   <div class="field-heading"><label data-i18n-parts="[[0,&quot;翻译模型&quot;]]" for="model">翻译模型</label><select data-i18n-aria-label="筛选模型系列" id="model-family" class="model-family-select" aria-label="筛选模型系列" hidden></select></div>
                   <input data-i18n-placeholder="连接后选择，或手动填写模型 ID" id="model" type="text" list="model-list" spellcheck="false" placeholder="连接后选择，或手动填写模型 ID">
                   <datalist id="model-list"></datalist>
-                  <small data-i18n-parts="[[0,&quot;可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；连接会读取并验证所选模型，也可手动填写 ID。&quot;]]" id="model-catalog-status">可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；连接会读取并验证所选模型，也可手动填写 ID。</small>
-                  <button data-i18n-parts="[[0,&quot;连接并保存&quot;]]" id="refresh-models" class="connect-model-button" type="button">连接并保存</button>
-                  <small data-i18n-parts="[[0,&quot;连接可能测试图片输入；支持时会启用图像翻译。&quot;]]">连接可能测试图片输入；支持时会启用图像翻译。</small>
+                  <small data-i18n-parts="[[0,&quot;输入服务商提供的模型 ID，或连接后选择。&quot;]]" id="model-catalog-status">输入服务商提供的模型 ID，或连接后选择。</small>
+                  <button data-i18n-parts="[[0,&quot;测试并保存&quot;]]" id="refresh-models" class="connect-model-button" type="button">测试并保存</button>
+                  <small data-i18n-parts="[[0,&quot;测试会发送示例内容，可能产生费用。&quot;]]">测试会发送示例内容，可能产生费用。</small>
                 </div>
               </div>
             </div>
+            <p id="connection-feedback" class="connection-feedback" role="alert" hidden></p>
             <section data-i18n-aria-label="连接能力" id="connection-summary" class="connection-summary" aria-label="连接能力" aria-live="polite" hidden>
               <div><span data-i18n-parts="[[0,&quot;文字翻译&quot;]]">文字翻译</span><strong data-i18n-parts="[[0,&quot;尚未检测&quot;]]" id="connection-text-status">尚未检测</strong></div>
               <div><span data-i18n-parts="[[0,&quot;兼容能力&quot;]]">兼容能力</span><strong data-i18n-parts="[[0,&quot;尚未检测&quot;]]" id="connection-format-status">尚未检测</strong></div>
               <div><span data-i18n-parts="[[0,&quot;图像翻译&quot;]]">图像翻译</span><strong data-i18n-parts="[[0,&quot;尚未检测&quot;]]" id="connection-vision-status">尚未检测</strong></div>
             </section>
             <details id="vision-setup-details" class="vision-setup-details">
-              <summary><span data-i18n-parts="[[0,&quot;图像翻译与扫描件&quot;]]" id="vision-setup-title">图像翻译与扫描件</span><small data-i18n-parts="[[0,&quot;尚未配置&quot;]]" id="vision-setup-overview">尚未配置</small></summary>
+              <summary><span data-i18n-parts="[[0,&quot;公式与图像增强&quot;]]" id="vision-setup-title">公式与图像增强</span><small data-i18n-parts="[[0,&quot;尚未配置&quot;]]" id="vision-setup-overview">尚未配置</small></summary>
               <div class="vision-setup-content">
               <div class="vision-setup-heading">
                 <span data-i18n-parts="[[0,&quot;可选；普通文字翻译无需配置&quot;]]" class="optional-label">可选；普通文字翻译无需配置</span>
@@ -260,15 +269,21 @@
               <div data-i18n-parts="[[0,&quot;尚未配置，不影响普通文字翻译。&quot;]]" id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
                   <p data-i18n-parts="[[0,&quot;普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。&quot;]]" id="vision-setup-guide" class="vision-setup-guide">普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
                   <div class="grid">
-                    <label><span data-i18n-parts="[[0,&quot;视觉 API 配置&quot;]]">视觉 API 配置</span><select id="vision-api-profile"><option data-i18n-parts="[[0,&quot;尚未配置&quot;]]" value="">尚未配置</option></select><small data-i18n-parts="[[0,&quot;可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。&quot;]]">可使用任何通过图片输入测试的接口；扫描页“识别本页”仅支持官方 Qwen。</small></label>
+                    <label><span data-i18n-parts="[[0,&quot;视觉 API 配置&quot;]]">视觉 API 配置</span><select id="vision-api-profile"><option data-i18n-parts="[[0,&quot;尚未配置&quot;]]" value="">尚未配置</option></select><small data-i18n-parts="[[0,&quot;可选择已有接口并测试图片输入；扫描页“识别本页”仅支持官方 Qwen。&quot;]]">可选择已有接口并测试图片输入；扫描页“识别本页”仅支持官方 Qwen。</small></label>
                     <label><span data-i18n-parts="[[0,&quot;视觉模型&quot;]]">视觉模型</span><input data-i18n-placeholder="例如 qwen3.7-plus" id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus"><small data-pi-help-for="#vision-model" data-i18n-parts="[[0,&quot;模型必须支持图片输入。&quot;]]">模型必须支持图片输入。</small></label>
                   </div>
                   <div class="vision-test-row">
                     <button data-i18n-parts="[[0,&quot;测试视觉能力&quot;]]" id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
-                    <span data-i18n-parts="[[0,&quot;发送一张内置的 130×58 高对比字符测试图，不含文档内容。&quot;]]" id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">发送一张内置的 130×58 高对比字符测试图，不含文档内容。</span>
+                    <span data-i18n-parts="[[0,&quot;测试发送一张内置图片，不含文档内容，可能产生费用。&quot;]]" id="vision-test-status" class="vision-test-status" role="status" aria-live="polite">测试发送一张内置图片，不含文档内容，可能产生费用。</span>
                   </div>
               </div>
             </details>
+            <details id="connection-more" class="connection-more"><summary data-i18n-parts='[[0,"更多设置"]]'>更多设置</summary>
+            <div class="connection-roles" aria-label="翻译接口用途" data-i18n-aria-label="翻译接口用途">
+              <span class="connection-roles-caption" data-i18n-parts="[[0,&quot;当前选择 · 修改后需保存&quot;]]">当前选择 · 修改后需保存</span>
+              <div><span data-i18n-parts="[[0,&quot;文字翻译&quot;]]">文字翻译</span><strong id="text-profile-summary"></strong></div>
+              <div><span data-i18n-parts="[[0,&quot;图像翻译&quot;]]">图像翻译</span><strong id="vision-profile-summary"></strong></div>
+            </div>
             <details id="connection-advanced" class="connection-advanced">
               <summary><span><strong data-i18n-parts="[[0,&quot;高级与诊断&quot;]]">高级与诊断</strong><small data-pi-help-for="summary" data-i18n-parts="[[0,&quot;自定义地址、仅验证与兼容性检查&quot;]]">自定义地址、仅验证与兼容性检查</small></span></summary>
               <div class="connection-advanced-content">
@@ -307,6 +322,7 @@
               <div class="disclosure-content"><p data-i18n-parts="[[0,&quot;按实际请求的接口和模型计算已报告 token；剩余文字仅提供粗略范围。不同币种分别显示，不自动换汇。未包含缓存优惠、阶梯价格、图片和 OCR 的未知用量，也不能覆盖接口未报告的失败请求费用；最终以服务商账单为准。&quot;]]" class="field-help">按实际请求的接口和模型计算已报告 token；剩余文字仅提供粗略范围。不同币种分别显示，不自动换汇。未包含缓存优惠、阶梯价格、图片和 OCR 的未知用量，也不能覆盖接口未报告的失败请求费用；最终以服务商账单为准。</p></div>
             </details>
             </div>
+          </details>
           </details>
           </section>
 

@@ -9,6 +9,7 @@ import {
   page,
   test,
   textRequests,
+  visionRequests,
   type TestChromeApi,
 } from './support/edge-extension-fixture';
 
@@ -48,7 +49,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await expect(options.locator('.connection-step')).toHaveCount(3);
   await expect(options.locator('.connection-step').nth(0)).toContainText('服务商');
   await expect(options.locator('.connection-step').nth(1)).toContainText('API Key');
-  await expect(options.locator('.connection-step').nth(2)).toContainText('连接并保存');
+  await expect(options.locator('.connection-step').nth(2)).toContainText('测试并保存');
   await expect(options.locator('#connection-advanced #test-connection')).toHaveCount(1);
   await expect(options.locator('#vision-setup-guide')).not.toBeVisible();
   await options.locator('#vision-setup-details > summary').click();
@@ -105,6 +106,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await support.locator('summary').click();
   await reopened.locator('#restart-onboarding').click();
   await expect(reopened.locator('#onboarding-dialog')).toBeVisible();
+  await reopened.locator('#onboarding-next').click();
   const onboardingPreset = reopened.locator('#onboarding-preset');
   await expect(onboardingPreset).toBeFocused();
   await expect(onboardingPreset.locator('option')).toHaveCount(8);
@@ -151,7 +153,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
     .toBeLessThanOrEqual(onboardingProviderLayout.pageClientWidth + 1);
   expect(onboardingProviderLayout.overflowingElements).toEqual([]);
   expect(onboardingProviderLayout.nextWidth)
-    .toBeGreaterThanOrEqual(onboardingProviderLayout.actionWidth - 1);
+    .toBeGreaterThanOrEqual(100);
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-light.png') });
     await reopened.emulateMedia({ colorScheme: 'dark' });
@@ -167,8 +169,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-dark.png') });
     await reopened.emulateMedia({ colorScheme: 'light' });
   }
-  await reopened.locator('#onboarding-next').click();
-  await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
+  await expect(onboardingPreset).toBeFocused();
   await expect(reopened.locator('#onboarding-back')).toBeVisible();
   await expect(reopened.locator('#onboarding-open-key-page')).toBeVisible();
   await expect(reopened.locator('#onboarding-open-key-page')).toHaveAttribute(
@@ -179,10 +180,9 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-key-360-light.png') });
   }
   await reopened.locator('#onboarding-back').click();
-  await expect(onboardingPreset).toBeFocused();
-  await onboardingPreset.selectOption('custom');
+  await expect(reopened.locator('[name="onboarding-purpose-choice"]').first()).toBeFocused();
   await reopened.locator('#onboarding-next').click();
-  await expect(reopened.locator('#onboarding-api-key')).toBeFocused();
+  await onboardingPreset.selectOption('custom');
   await expect(reopened.locator('#onboarding-base-url-field')).toBeVisible();
   await expect(reopened.locator('#onboarding-base-url')).toHaveValue(initialOnboardingBase);
   await expect(reopened.locator('#onboarding-model')).toHaveValue(initialOnboardingModel);
@@ -193,18 +193,18 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.locator('#onboarding-next').click();
   await expect(reopened.locator('#onboarding-model')).toBeFocused();
   await expect(reopened.locator('#onboarding-model')).toHaveValue('e2e-model');
-  await expect(reopened.locator('#onboarding-status')).toContainText('连接成功');
+  await expect(reopened.locator('#onboarding-status')).toContainText('已读取模型列表');
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-model-360-light.png') });
   }
-  await reopened.locator('#onboarding-next').click();
+  await reopened.locator('#onboarding-test').click();
   await expect(reopened.locator('#onboarding-success')).toBeVisible();
   await expect(reopened.locator('#onboarding-title')).toHaveText('Pi Translator 已就绪');
   await expect(reopened.locator('#onboarding-sample-source')).toHaveText(
     'Pi Translator makes multilingual reading easier.',
   );
   await expect(reopened.locator('#onboarding-sample-translation')).not.toBeEmpty();
-  await expect(reopened.locator('.onboarding-paths > div')).toHaveCount(3);
+  await expect(reopened.locator('#onboarding-open-pdf')).toBeVisible();
   await expect(reopened.locator('#onboarding-next')).toHaveText('完成');
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-success-360-light.png') });
@@ -214,7 +214,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.close();
 });
 
-test('automatically binds a visual-capable active API when settings are saved', async () => {
+test('does not probe or bind vision while saving unrelated settings', async () => {
   const options = await context.newPage();
   await options.goto(`chrome-extension://${extensionId}/options.html`);
   await options.evaluate(async () => {
@@ -235,21 +235,20 @@ test('automatically binds a visual-capable active API when settings are saved', 
   await expect(options.locator('#vision-api-profile')).toHaveValue('');
 
   await options.locator('[data-settings-target="translation"]').click();
+  const before = visionRequests.length;
   await options.locator('#target-language').selectOption('ja');
   await expect(options.locator('#save-button')).toBeEnabled();
   await options.locator('button[type="submit"]').click();
-  await expect(options.locator('#status')).toContainText(
-    '已自动启用图像区域翻译',
-  );
-  await expect(options.locator('#vision-api-profile')).toHaveValue('default');
-  await expect(options.locator('#vision-model')).toHaveValue('e2e-model');
+  await expect(options.locator('#status')).toContainText('设置已保存');
+  await expect(options.locator('#vision-api-profile')).toHaveValue('');
+  expect(visionRequests.length).toBe(before);
   await expect.poll(() => options.evaluate(async () => {
     const extensionChrome = (
       globalThis as typeof globalThis & { chrome: TestChromeApi }
     ).chrome;
     const stored = await extensionChrome.storage.local.get('extensionSettings');
     return stored.extensionSettings?.visionApiProfileId;
-  })).toBe('default');
+  })).toBe('');
   await options.close();
 });
 
@@ -309,6 +308,12 @@ test('keeps the text API active while a second profile is configured for PDF ima
   await expect(options.locator('#use-text-profile')).toBeVisible();
   await options.locator('#api-key').fill('e2e-review-key');
   await options.locator('#refresh-models').click();
+  await expect(options.locator('#status')).toContainText('已连接并保存');
+  await options.locator('#vision-setup-details > summary').click();
+  await options.locator('#vision-api-profile').selectOption(profileIds.vision);
+  await options.locator('#test-vision-capability').click();
+  await expect(options.locator('#vision-test-status')).toContainText('视觉能力可用');
+  await options.locator('#save-button').click();
   await expect(options.locator('#status')).toContainText('文字继续使用');
   await expect(options.locator('#profile-role-status')).toContainText('图像翻译');
   await expect(options.locator('#profile-role-status')).not.toContainText('文字翻译');

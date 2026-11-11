@@ -121,3 +121,13 @@ header strong { white-space:nowrap; }
 .popup-more-actions > summary::after { content:""; flex:none; width:6px; height:6px; margin-top:-3px; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
 .popup-more-actions[open] > summary { color:var(--pi-text); background:var(--pi-subtle); }
 .popup-more-actions[open] > summary::after { margin-top:3px; transform:rotate(225deg); }
+
+/* Keep the language selector readable without competing with the page action. */
+.translation-controls { padding:4px 0; border:0; border-radius:0; background:transparent; }
+.translation-controls label { min-height:36px; }
+.translation-controls select { border-radius:var(--pi-radius); }
+.selection-help { padding:6px 8px; font-size:12px; line-height:1.5; color:var(--pi-muted); }
+.selection-help > summary { cursor:pointer; color:var(--pi-text); }
+.selection-help p { margin:8px 0; }
+.selection-help button { padding:5px 8px; }
+.selection-help button[hidden] { display:none; }

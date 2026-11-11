@@ -124,9 +124,9 @@ test('makes API setup the only primary popup action without changing saved work'
 });
 
 test('offers a focused Qwen setup without replacing the text API', async () => {
-  await expect(options.getByRole('heading', { name: '翻译接口' })).toBeVisible();
+  await expect(options.getByRole('heading', { name: '翻译服务' })).toBeVisible();
   await expect(options.locator('#vision-setup-status')).toContainText('不影响普通文字翻译');
-  await expect(options.locator('#api-preset option[value="qwen"]')).toContainText('图像翻译推荐');
+  await expect(options.locator('#api-preset option[value="qwen"]')).not.toContainText('图像翻译推荐');
 
   await expect(options.locator('#setup-qwen')).toBeHidden();
   await options.locator('#vision-setup-details > summary').click();
@@ -364,6 +364,7 @@ test('keeps neutral dark surfaces and distinct primary actions on hover and keyb
     '.settings-nav-item[data-settings-target="translation"]',
     'hover',
   )).toBe('rgb(44, 44, 44)');
+  await options.locator('#connection-more > summary').click();
   await expect.poll(() => backgroundAfter('#connection-advanced > summary', 'hover'))
     .toBe('rgb(44, 44, 44)');
 

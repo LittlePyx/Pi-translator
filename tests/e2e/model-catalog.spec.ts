@@ -51,6 +51,7 @@ test('offers GPT, Claude and Gemini in first setup and clears the previous provi
     await options.locator('[data-settings-target="support"]').click();
     await options.locator('details.support-disclosure').filter({ has: options.locator('#restart-onboarding') }).locator('summary').click();
     await options.locator('#restart-onboarding').click();
+    await options.locator('#onboarding-next').click();
     for (const preset of ['openai', 'anthropic', 'gemini']) {
       await options.locator('#onboarding-preset').selectOption(preset);
       await expect(options.locator('#onboarding-api-key')).toHaveValue('');
@@ -58,7 +59,6 @@ test('offers GPT, Claude and Gemini in first setup and clears the previous provi
       await expect(options.locator('#onboarding-model-list option')).toHaveCount(0);
     }
     await options.locator('#onboarding-preset').selectOption('custom');
-    await options.locator('#onboarding-next').click();
     await options.locator('#onboarding-api-key').fill('e2e-only-key');
     await options.locator('#onboarding-base-url').fill('https://www.overleaf.com/pi-translator-e2e-api');
     const url = 'https://www.overleaf.com/pi-translator-e2e-api/models';

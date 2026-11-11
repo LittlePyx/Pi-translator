@@ -1,6 +1,22 @@
 import type { SelectionSnapshot } from './types';
+import { isLikelyTargetLanguage } from '../language/target-language';
 
 export type PassiveTranslationSurface = 'general' | 'overleaf' | 'pdf';
+
+/** A narrower, local-only decision for optional webpage affordances. */
+export function isPassiveSelectionInTargetLanguage(text: string, targetLanguage: string): boolean {
+  if (isLikelyTargetLanguage(text, targetLanguage)) return true;
+  if (targetLanguage !== 'zh-CN' && targetLanguage !== 'zh') return false;
+  const letters = text.match(/\p{L}/gu) ?? [];
+  const han = text.match(/\p{Script=Han}/gu) ?? [];
+  if (han.length < 2) return false;
+  // Two Han characters are usually a Chinese word in this context. Mixed
+  // selections need more evidence; keep Japanese kana and other scripts visible.
+  if (han.length === letters.length) return true;
+  if (han.length < 4 || letters.some(char => !/[\p{Script=Han}\p{Script=Latin}]/u.test(char))) return false;
+  const latinWords = text.match(/\p{Script=Latin}+/gu) ?? [];
+  return latinWords.length > 0 && latinWords.every(word => /^[A-Z]{1,5}$/u.test(word));
+}
 
 const PROGRAMMING_LINE = /^(?:(?:export\s+)?(?:async\s+)?function\s+[A-Za-z_$][\w$]*\s*\(|(?:const|let|var)\s+[A-Za-z_$][\w$]*(?:\s*:[^=]+)?\s*=|(?:(?:public|private|protected|static|abstract|final)\s+)+(?:(?:class|interface|enum)\s+[A-Za-z_$][\w$]*|[A-Za-z_$][\w$<>[\], ?]*\s+[A-Za-z_$][\w$]*\s*(?:[=(;{]))|(?:class|interface|enum|type|def)\s+[A-Za-z_$][\w$]*|(?:if|for|while|switch|catch)\s*\(|(?:return|throw|yield|await|new)\s+\S|(?:import|export)\s+(?:[\w*{},]+\s+from\s+|['"]|default\s+)|(?:package|namespace|using)\s+[\w.]+|(?:SELECT|INSERT|UPDATE|DELETE|CREATE|ALTER|DROP)\b)/iu;
 const COMMAND_LINE = /^(?:(?:[$>#]\s+)?(?:npm|pnpm|yarn|bun|git|docker|docker-compose|kubectl|pip|python|node|deno|cargo|rustc|go|java|javac|mvn|gradle|dotnet|powershell|pwsh|bash|zsh)\s+[-\w./])/iu;

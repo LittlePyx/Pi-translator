@@ -37,6 +37,7 @@ test('does not send a stored Key to an edited API endpoint during setup checks',
   await caller.goto(`chrome-extension://${extensionId}/options.html`);
   try {
     await expect(caller.locator('#model')).toHaveValue('e2e-model');
+    await caller.locator('#connection-more > summary').click();
     await caller.locator('#connection-advanced > summary').click();
     await caller.locator('#api-base-url').fill(base);
     await expect(caller.locator('#api-key-state')).toContainText('接口地址已更改');
@@ -67,9 +68,9 @@ async function openWizard() {
 test('explains the Key issuer and allows an Alibaba region or workspace address', async () => {
   const options = await openWizard();
   try {
-    await expect(options.locator('[data-onboarding-step="1"]')).toContainText('阿里云的 Key 调用 DeepSeek');
-    await options.locator('#onboarding-preset').selectOption('qwen');
     await options.locator('#onboarding-next').click();
+    await expect(options.locator('[data-onboarding-step="2"]')).toContainText('选择签发它的服务商');
+    await options.locator('#onboarding-preset').selectOption('qwen');
     await expect(options.locator('#onboarding-base-url-field')).toBeVisible();
     await expect(options.locator('#onboarding-key-hint')).toContainText('地域');
     await options.locator('#onboarding-base-url').fill('https://example.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1');
@@ -90,13 +91,13 @@ test('finishes text setup with one sample and no image probes while preserving e
   };
   context.on('request', count);
   try {
-    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-next').click();
+    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-api-key').fill('e2e-new-text-key');
     await options.locator('#onboarding-base-url').fill('https://www.overleaf.com/pi-translator-e2e-api');
     await options.locator('#onboarding-next').click();
     await expect(options.locator('#onboarding-model')).toHaveValue('e2e-model');
-    await options.locator('#onboarding-next').click();
+    await options.locator('#onboarding-test').click();
     await expect(options.locator('#onboarding-success')).toBeVisible();
     expect(calls).toEqual({ text: 1, image: 0 });
     const worker = context.serviceWorkers()[0]!;
@@ -113,14 +114,20 @@ test('keeps authentication failures on the credentials step instead of suggestin
   const models = 'https://www.overleaf.com/pi-translator-e2e-api/models';
   await context.route(models, route => route.fulfill({ status: 401, contentType: 'application/json', body: '{"error":{"message":"Invalid API key"}}' }));
   try {
-    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-next').click();
+    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-api-key').fill('e2e-invalid-key');
     await options.locator('#onboarding-base-url').fill('https://www.overleaf.com/pi-translator-e2e-api');
     await options.locator('#onboarding-next').click();
     await expect(options.locator('#onboarding-status')).toContainText('服务商');
+    await expect(options.locator('#onboarding-key-error')).toContainText('签发');
+    await expect(options.locator('#onboarding-api-key')).toHaveAttribute('aria-invalid','true');
     await expect(options.locator('[data-onboarding-step="2"]')).toBeVisible();
     await expect(options.locator('[data-onboarding-step="3"]')).toBeHidden();
+    await options.locator('#onboarding-api-key').fill('corrected-key-draft');
+    await expect(options.locator('#onboarding-key-error')).toBeHidden();
+    await expect(options.locator('#onboarding-status')).toHaveText('');
+    await expect(options.locator('#onboarding-api-key')).toHaveValue('corrected-key-draft');
   } finally { await context.unroute(models); await options.close(); }
 });
 
@@ -129,15 +136,15 @@ test('allows a manually entered model when discovery is unsupported and saves th
   const models = 'https://www.overleaf.com/pi-translator-e2e-api/models';
   await context.route(models, route => route.fulfill({ status: 404, body: 'Not found' }));
   try {
-    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-next').click();
+    await options.locator('#onboarding-preset').selectOption('custom');
     await options.locator('#onboarding-api-key').fill('e2e-manual-model-key');
     await options.locator('#onboarding-base-url').fill('https://www.overleaf.com/pi-translator-e2e-api');
     await options.locator('#onboarding-next').click();
     await expect(options.locator('[data-onboarding-step="3"]')).toBeVisible();
     await expect(options.locator('#onboarding-status')).toContainText('未能读取模型列表');
     await options.locator('#onboarding-model').fill('e2e-model');
-    await options.locator('#onboarding-next').click();
+    await options.locator('#onboarding-test').click();
     await expect(options.locator('#onboarding-success')).toBeVisible();
   } finally { await context.unroute(models); await options.close(); }
 });

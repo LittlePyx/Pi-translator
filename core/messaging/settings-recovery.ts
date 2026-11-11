@@ -108,6 +108,28 @@ async function writeTickets(tickets: TicketMap): Promise<void> {
   await browser.storage.session.set({ [STORAGE_KEY]: tickets });
 }
 
+/** Locate only a claimed, unexpired ticket for the exact same source task. */
+export function findSettingsRecoveryTicketsForSource(
+  source: Omit<SettingsRecoveryTicket, 'token' | 'createdAt' | 'expiresAt' | 'optionsTabId' | 'deliveryStartedAt'>,
+  now = Date.now(),
+): Promise<SettingsRecoveryTicket[]> {
+  return serialized(async () => {
+    const tickets = await readTickets(now);
+    return Object.values(tickets).filter(ticket =>
+      ticket.optionsTabId !== undefined &&
+      ticket.targetKind === source.targetKind &&
+      ticket.sourceTabId === source.sourceTabId &&
+      ticket.sourceFrameId === source.sourceFrameId &&
+      ticket.clientId === source.clientId &&
+      ticket.failedRequestId === source.failedRequestId &&
+      ticket.role === source.role && ticket.focus === source.focus &&
+      ticket.errorCode === source.errorCode &&
+      ticket.hadPartialOutput === source.hadPartialOutput &&
+      ticket.autoResume === source.autoResume,
+    );
+  });
+}
+
 export function createSettingsRecoveryTicket(
   ticket: Omit<SettingsRecoveryTicket, 'token' | 'createdAt' | 'expiresAt'>,
   now = Date.now(),

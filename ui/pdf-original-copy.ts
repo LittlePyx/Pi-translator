@@ -20,7 +20,7 @@ export function bindPdfOriginalCopy(options:{current:()=>{data:Uint8Array;name:s
     void(async()=>{
       const id=await pdfReadingStateId(`pdf-content:${doc.fingerprint}`),record=(await listOriginalPdfs()).find(item=>item.id===id);
       if(record){await removeOriginalPdf(record);showUndoNotice(t('已移除本机原文件副本'),async()=>{await saveOriginalPdf(doc.data,record.name);await refresh()})}
-      else {await saveOriginalPdf(doc.data,doc.name);options.notice(t('原 PDF 已保留在本机，下次可从最近阅读直接打开。'))}
+      else {await saveOriginalPdf(doc.data,doc.name);options.notice(t('原 PDF 已保留在本机，下次可从最近阅读直接打开。导出备份时需勾选“包含原 PDF”。'))}
       await refresh();
     })().catch(error=>options.notice(error instanceof Error?error.message:String(error))).finally(()=>{button.disabled=false});
   });
