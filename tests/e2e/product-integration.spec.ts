@@ -180,7 +180,9 @@ for(const rotation of [0,90])test(`reveals the saved area in the reader viewport
     if(rotation)await clickPdfReaderAction(reader,'rotate-page');
     await clickPdfReaderAction(reader,'pdf-open-annotations');await reader.locator('#pdf-annotations-dialog').getByRole('button',{name:'定位原文',exact:true}).click();
     const mark=reader.locator('[data-area-note-id="right-area"]');await expect(mark).toHaveCount(1);
-    const geometry=await mark.evaluate(node=>{const stage=node.closest('#pdf-viewer')!.parentElement!,rect=node.getBoundingClientRect(),bounds=stage.getBoundingClientRect();return{left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,stage:bounds.toJSON(),bodyScroll:document.body.scrollTop}});
+    let geometry:any=null;
+    await expect.poll(async()=>{geometry=await reader.evaluate(()=>{const node=document.querySelector('[data-area-note-id="right-area"]'),stage=node?.closest('#pdf-viewer')?.parentElement;if(!node||!stage)return null;const rect=node.getBoundingClientRect(),bounds=stage.getBoundingClientRect();return{left:rect.left,right:rect.right,top:rect.top,bottom:rect.bottom,stage:bounds.toJSON(),bodyScroll:document.body.scrollTop}});return geometry!==null}).toBe(true);
+    if(!geometry)throw new Error('Saved area is not attached to the reader');
     await writeFile(info.outputPath('area-location.json'),JSON.stringify(geometry,null,2));await reader.screenshot({path:info.outputPath(`area-location-${rotation}.png`)});
     expect(geometry.left).toBeGreaterThanOrEqual(geometry.stage.left-1);expect(geometry.right).toBeLessThanOrEqual(geometry.stage.right+1);expect(geometry.top).toBeGreaterThanOrEqual(geometry.stage.top);expect(geometry.top).toBeLessThan(geometry.stage.bottom);expect(geometry.bodyScroll).toBe(0);await expect(reader.locator('#page-number')).toHaveValue('2');
     expect((await snapshot()).piPdfAreaNotesV1).toEqual({[id]:{notes:[area],updatedAt:2}});expect(textRequests.length+visionRequests.length).toBe(calls);

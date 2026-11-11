@@ -79,6 +79,7 @@ test('keeps one native cross-page note through per-page location, rotation, rena
     await expect(reader.locator('#tex-selection-translator-root .selection-annotate')).toBeVisible();await reader.locator('#tex-selection-translator-root .selection-annotate').click();
     await expect(reader.locator('.pdf-annotation-editor .pdf-annotation-page')).toHaveText('第 1–2 页');await expect(reader.locator('.pdf-annotation-editor blockquote')).toContainText('Second page preserves research source');
     await reader.locator('.pdf-annotation-editor textarea').fill('Cross-page research note');await reader.locator('.pdf-annotation-editor button[type="submit"]').click();
+    await expect.poll(async()=>(Object.values(await read()) as any[]).flatMap(item=>item.annotations??[]).length).toBe(1);
     const saved=await read(),record=(Object.values(saved) as any[])[0].annotations[0];expect(record.anchor.sourceText.trim()).toBe('alpha beta independent reading notes');expect(record.continuations[0].sourceText.trim()).toBe('Second page preserves research source');
     for(const number of [1,2])await expect(reader.locator(`.pdf-page[data-page-number="${number}"] .pdf-reading-highlight-layer [data-annotation-id]`).first()).toBeAttached();
     await open(reader,'renamed-cross-page.pdf');expect(await read()).toEqual(saved);
