@@ -1,0 +1,2 @@
+# Preserve the byte-verified historical regression fixture on Windows checkouts.
+tests/fixtures/first-translation-regression.json text eol=lf
