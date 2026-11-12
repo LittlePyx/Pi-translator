@@ -1,164 +1,123 @@
 # Pi Translator（PI划词翻译器）
 
-用 Microsoft Edge 读外文网页、Overleaf 文稿和 PDF。遇到生词可以只译一句，读长文可以逐段对照；读论文时写下的笔记，之后还能带你回到原句。翻译使用你自己配置的 API。
+在 Microsoft Edge 里读外文。网页上的一句话可以划词翻译，整段可以中英对照。在 Overleaf 里可以边看源码边查句子，在 PDF 里可以对照译文读论文、标记原句，再从笔记回到出处。
 
-[安装 Edge 扩展](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf) · [科研阅读图解](#科研阅读图解) · [快速上手](#快速上手) · [功能介绍](#功能介绍) · [隐私与数据](#隐私与数据) · [反馈问题](https://github.com/LittlePyx/Pi-translator/issues)
+[安装 Edge 扩展](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf) · [首次设置](#首次设置) · [网页阅读](#网页阅读) · [Overleaf](#overleaf) · [科研阅读图解](#科研阅读图解) · [文档库与笔记](#文档库与笔记)
 
-## 看一次完整的阅读过程
+## 网页阅读
 
-**读网页时，把译文和数据放在一起看。** 这篇街道遮阴观测文章配有温度图和测点表。从扩展面板启动「翻译网页正文」，每段英文下方就会出现对应中文。读到东侧步道的温差时，可以直接用右边的两项读数核对：38 °C 减去 31 °C，正好是正文里的 7 °C。
+### 查一句
 
-![普通网页原位双语：左侧是测量方法和逐段中文译文，右侧是日照与遮阴测点的温度图表](docs/images/article-bilingual.png)
+MIT Missing Semester 的 Git 讲义画了一幅提交历史图。箭头指向父提交，第三个提交处分出了两条线。选中图下解释分支的那句话，点选区旁的翻译按钮，就能一边看中文，一边顺着图读。连续查词时，可以从卡片切到侧栏。[查看讲义中的提交历史图](https://missing.csail.mit.edu/2026/version-control/#modeling-history-relating-snapshots)
 
-**读 PDF 时，把理解记在原句上。** 在 Pi 阅读器中开启批注，选中 “Shade lowered surface temperatures at noon.”，点击「高亮 / 笔记」。这里记下“区分路面温度与气温”，再点「保存高亮」。笔记连同原句和页码保存在本机，做这一步无需调用翻译服务。
+![Git 提交分支图下方选中了讲解第三次提交的英文句子，Pi 卡片显示对应中文](docs/images/article-selection.png)
 
-<img src="docs/images/write-note.png" alt="第 1 页的高亮编辑框，同时显示选中的英文、中文个人笔记和保存高亮按钮" width="496">
+### 对照读一段
 
-**下次只记得自己的用词，也能找到出处。** 在文档库输入“路面温度”，打开匹配项即可看到个人笔记、英文原句和第 1 页的来源。点击详情里的「定位原 PDF」，这次直接回到了已打开的论文。
+在同一篇讲义的 *Snapshots* 一节，分别翻译目录树上下的两段英文。上面一段解释 blob 和 tree，下面一段说明 `bar.txt` 属于子树 `foo`。两段之间保留着原页上的目录树，可以顺着缩进核对。要通读整篇，从扩展面板点 **翻译网页正文**。[查看讲义中的目录树](https://missing.csail.mit.edu/2026/version-control/#snapshots)
 
-![用中文笔记中的“路面温度”检索，结果显示论文、页码、英文原句和定位原 PDF 入口](docs/images/find-note.png)
+![Snapshots 的两段英文下方各有对应中文，中间是原讲义的 Git 目录树](docs/images/article-bilingual.png)
 
-<details>
-<summary>查看定位后的原文</summary>
+## Overleaf
 
-![Pi PDF 返回观测短文第 1 页，并标出笔记对应的英文句子](docs/images/source-mark.png)
+Roshan Mammen Abraham 等人的论文 *Tau Neutrinos in the Next Decade: from GeV to EeV* 有公开的 Overleaf 只读项目。打开理论部分，左侧源码第 23 行的公式给出振荡振幅的估计值，约为 0.95。选中公式后那句关于三个实验的说明，就能看到中文。右侧编译稿第 15 页第一段是它的出处。[打开 Overleaf 项目](https://www.overleaf.com/read/khpgmxpdccwv) · [期刊论文](https://doi.org/10.1088/1361-6471/ac89d2)
 
-如果原件已经关闭，可使用在本机保留的原 PDF 副本，或按提示重新选择原文件。
-
-</details>
-
-以上界面均由实际扩展操作截取。示例文章和笔记为演示材料，图中的译文由模拟接口提供。
+![Overleaf 只读编辑器中，左侧源码包含振荡公式与选中句的中文卡片，右侧 PDF 显示对应的排版结果](docs/images/overleaf-manuscript.png)
 
 ## 科研阅读图解
 
-下面的科研阅读截图使用同一份真实论文 PDF。Thivin Anandh、Divij Ghose 和 Sashikumaar Ganesan 于 2024 年在 *Journal of Open Source Software* 发表了 *FastVPINNs*，介绍如何用神经网络求解偏微分方程。可以下载原文，在 Pi 阅读器里跟着操作。[论文与 DOI](https://doi.org/10.21105/joss.06764) · [期刊原版 PDF](https://joss.theoj.org/papers/10.21105/joss.06764.pdf)
+下面三步都用同一篇论文。Thivin Anandh、Divij Ghose 和 Sashikumaar Ganesan 的 *FastVPINNs* 介绍了如何用神经网络求解偏微分方程。[期刊原版 PDF](https://joss.theoj.org/papers/10.21105/joss.06764.pdf) · [论文与 DOI](https://doi.org/10.21105/joss.06764)
 
-### 全文翻译中对照正文
+### 在原页旁读正文译文
 
-打开 PDF，点工具栏的 **译全文**。Pi 会先在本机读取文字层。在「翻译范围」选「整篇文档」可以处理全部五页，也可以改选当前页或指定页码。想直接通读就点 **开始翻译**；想先核对译法就展开 **先试译一段**，选择段落，点 **试译本段**。
+从扩展面板点 **打开 PDF 阅读器**，选择论文。点 **译全文**，选择整篇、当前页或指定页码，再点 **开始翻译**。图中翻译了第 3 页。点右侧讲 hp-VPINNs 如何求解 PDE 的译段，左侧会标出对应英文，下面的模块图也可以一起看。
 
-下图在全文翻译面板中指定了**第 3 页**并完成处理。原文高亮段落讨论了如何用少量代码训练 hp-VPINNs 求解 PDE（偏微分方程）。点右侧这段中文，左侧就会定位到对应英文，下方的模块图也仍在原页，方便边读边查。想连续读中文时，可切换到「阅读」视图。
-
-![FastVPINNs 第 3 页正文对照：左侧标出谈论 PDE 的英文段落并显示模块图，右侧是对应中文和后续段落](docs/images/paper-body.png)
+![FastVPINNs 第 3 页，左侧是英文段落与模块图，右侧是对应中文](docs/images/paper-body.png)
 
 <details>
-<summary>查看开始翻译前的范围设置</summary>
+<summary>查看翻译范围与单段试译入口</summary>
 
-![Pi 已在本机读取五页 PDF，翻译范围为整篇文档，右下角可开始翻译](docs/images/paper-range.png)
+![全文翻译面板已读取五页 PDF，翻译范围为整篇文档](docs/images/paper-range.png)
+
+只想先看一个段落的译法，可以展开 **先试译一段**。
 
 </details>
 
-### 公式框选：把方程和边界条件一起读
+### 框选方程与边界条件
 
-回到第一页原文，点工具栏的**虚线方框**，拖选引言中的式（1）和式（2）。第一行给出泊松方程，第二行给出边界上的取值。像下图这样框住两行，并检查右侧的区域符号也在框内。拖动四角可调整范围，确认后点 **发送并翻译**。
+回到第 1 页，点工具栏的**虚线方框**，把式（1）的泊松方程和式（2）的边界条件一起框住。确认右侧的区域符号也在框内，再点 **发送并翻译**。这一步使用支持图像输入的模型。
 
-![原版 PDF 引言中的两行公式被选框包围，框下方显示发送并翻译按钮](docs/images/paper-formula.png)
+![原论文的两行方程和区域符号完整落在选框内，框下方显示发送按钮](docs/images/paper-formula.png)
 
 <details>
-<summary>展开查看公式识别结果</summary>
+<summary>查看这两行公式的识别结果</summary>
 
-<img src="docs/images/paper-equation-result.png" alt="图像识别卡片显示 FastVPINNs.pdf 第 1 页的泊松方程和边界条件" width="440">
+<img src="docs/images/paper-equation-result.png" alt="公式识别卡片显示第 1 页的泊松方程和边界条件" width="440">
 
-可点「查看识别原文」，回看负号、拉普拉斯算子的上标和第二行的边界符号 ∂Ω。需要图像识别时，请先配置支持图像输入的接口。
+展开「查看识别原文」可逐项核对负号、上标和边界符号 ∂Ω。
 
 </details>
 
-### 本文术语：为反复出现的词指定译法
+### 约定本文的术语
 
-论文标题和引言里都有 *partial differential equations*。若希望后续段落统一使用“偏微分方程”，打开全文翻译面板的 **··· → 检查术语 → 本文术语**。在「原文术语」填入英文，在「约定译法」填入中文，点 **保存词条**。表单下方会列出已确认的对应关系。
+想让 *partial differential equations* 在这篇论文里统一译为“偏微分方程”，打开 **译全文 → ··· → 检查术语 → 本文术语**，填入原词和译法，点 **保存词条**。后续翻译会优先使用本文约定。已有译段可以在「检查术语」中逐段核对。
 
-<img src="docs/images/paper-term.png" alt="本文术语列表中已保存 partial differential equations → 偏微分方程" width="561">
+<img src="docs/images/paper-term.png" alt="本文术语列表中已保存 partial differential equations 对应的约定译法“偏微分方程”" width="561">
 
-这个约定优先于通用词表，供本文后续翻译使用。已经读过的译段可以在「检查术语」中逐段核对，预览修改后再决定是否保存。
+<a id="功能介绍"></a>
 
-论文原页依 [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/) 许可展示。截图包含 Pi 的面板与选框，其中公式局部作了裁切。示例段落的中文译文与公式识别结果由离线模拟接口提供。
+## 文档库与笔记
 
-## 快速上手
+在 PDF 中选中原句，点 **高亮 / 笔记**，写下自己的理解。下次只记得中文也能找到这段话。例如，在文档库搜“路面温度”，就能找到给街道测温示例写的笔记。点 **定位原 PDF**，回到原句所在的第 1 页。
 
-### 1. 安装并连接翻译服务
+![文档库按中文笔记“路面温度”找到英文摘录、页码和定位原 PDF 的入口](docs/images/find-note.png)
 
-1. 在 [Microsoft Edge 扩展商店](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf)安装 Pi Translator，点击浏览器工具栏中的扩展图标。
-2. 在首次设置中按提示选择用途、翻译服务商并填写自己的 API Key；按浏览器提示授予所选接口所需的访问权限。可读取模型列表，也可手动填写模型 ID。
-3. 先完成**文字翻译**即可开始使用。公式、图片和截图翻译需要时，再配置可处理图像的模型；这些增强设置可跳过。
-4. 主动测试连接会发送示例请求，可能产生费用。普通保存设置不会自动测试模型。
+<details>
+<summary>查看写笔记和返回原句的界面</summary>
 
-扩展提供 DeepSeek、阿里云百炼 / Qwen、OpenAI、Anthropic、Google Gemini、OpenRouter 和本机 Ollama 等预设，也支持填写自定义兼容接口。预设和模型列表并不保证你的账号可使用所有模型，具体以服务商提供的能力和权限为准。
+<img src="docs/images/write-note.png" alt="在英文摘录旁记下“区分路面温度与气温”" width="496">
 
-### 2. 翻译网页
+![返回示例 PDF 后，原句在第 1 页被标出](docs/images/source-mark.png)
 
-在普通网页选中文字，点击出现的小翻译按钮；也可使用右键菜单或快捷键 `Alt+Shift+T`。首次在普通网页使用持续划词功能时，按提示决定是否授予网站访问权限。图标会根据选区和目标语言等条件决定是否显示，用户也可以暂停当前网站的自动划词。
+</details>
 
-**普通网页划词。** 阅读前面的观测文章时，选中讲解配对测量的一句，就能在选区旁查看“测量时刻和路面材料保持可比”的含义，同时参照右侧的测点表。
+资料可以按项目和标签筛选。再次打开文档时，阅读回顾会列出上次停留位置附近的标记和最近修改的笔记。需要整理多条笔记时，可以勾选要纳入的内容生成小结，再沿小结中的出处回读。
 
-![普通网页划词示例：选中的英文和中文卡片位于方法正文中，右侧保留温度观测图表](docs/images/article-selection.png)
+<details>
+<summary>查看文档库</summary>
 
-**Overleaf 文稿划词。** 在 `main.tex` 的测量方法段选中一句英文，卡片会解释作者如何为遮阴测点匹配日照测点。右侧编译稿展示同一份源码的摘要、温差方程和观测表格。
+![文档库中的演示资料、筛选和阅读入口](docs/images/library.png)
 
-![Overleaf 离线项目演示：左侧 LaTeX 源码中选中配对测量方法，右侧为同一份源码编译出的 PDF](docs/images/overleaf-manuscript.png)
+</details>
 
-网页是含示例读数的离线文章，Overleaf 场景使用本地搭建的演示编辑器与实际编译的 PDF。两张图中的划词卡片均由 Pi Translator 显示，译文来自模拟接口。
+<a id="快速上手"></a>
 
-想连续阅读时，可以使用页面侧栏或 Edge 浏览器侧栏；想阅读双语全文时，从扩展面板主动启动网页正文翻译。浏览器内部页面、扩展商店及其他禁止扩展访问的页面不支持网页划词。
+## 首次设置
 
-### 3. 在 Pi 阅读器中打开 PDF
+1. 安装扩展，点 Edge 工具栏中的 Pi 图标，选择用途和目标语言。[Edge 扩展商店](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf)
+2. 选择文字服务商，填写自己的 API Key 和模型。可选 DeepSeek、Qwen、OpenAI、Anthropic、Gemini、OpenRouter、本机 Ollama 或自定义兼容接口。保存后即可开始划词。需要验证配置时，点 **测试连接** 会发送一次示例请求。
+3. 第一次在普通网页使用持续划词，按提示授权网站访问。也可以使用右键菜单或 `Alt+Shift+T` 翻译选区。若某个网站上没有按钮，可在扩展面板检查该站点是否已授权、是否暂停了划词。
 
-从扩展面板选择 **打开 PDF 阅读器**，然后选择本地文件；也可以从支持的在线 PDF 或 Edge 原生 PDF 侧栏进入。浏览器读取本地文件时，可能需要在扩展详情中允许访问文件 URL；也可以在 Pi 阅读器中手动选择文件。
+文字翻译配置好就能读网页和有文字层的 PDF。需要框选公式、图片或网页截图时，再到设置中配置图像模型。扫描页的 OCR 有单独的配置入口。
 
-有文字层的 PDF 可以直接划词。整篇对照、图片公式和文档专用词条的操作见[科研阅读图解](#科研阅读图解)。
+<details>
+<summary>研究领域和术语方案</summary>
 
-## 功能介绍
+在 **翻译偏好** 填写研究领域，Pi 会在本机推荐已有的术语方案，由你确认应用。也可以选择让翻译参考研究领域，之后相关请求会将领域名称发给所选服务商。某篇文稿有自己的约定时，优先采用本文术语。
 
-### 划词、双语与侧栏
+![翻译偏好中的用途、研究领域和术语设置](docs/images/preferences.png)
 
-- 在网页、Overleaf 和 Pi PDF 中划选文字，查看原文与译文；支持逐句对照、复制和手动修正。
-- 页面侧栏适合连续划词；浏览器侧栏可在 Edge 原生 PDF 等场景使用，并提供进入 Pi 阅读器的入口。
-- 网页正文翻译在原文附近展示译文；可按需开始、暂停、继续或调整显示方式。
-- 网页或 PDF 的区域框选适合图像、图表和复杂公式；发送前需要确认选定区域，并配置兼容的视觉模型。
+</details>
 
-### 阅读、笔记与资料库
+## 隐私与备份
 
-![文档库中的演示资料与阅读入口](docs/images/library.png)
+笔记、术语和阅读位置保存在本机。原 PDF 可以在文档库中选择保留副本，导出备份时再选择是否包含原件。导入前可以预览恢复范围。
 
-在 Pi PDF 中搜索、标记、记笔记并返回出处；已保存的网页和 PDF 内容可在文档库中搜索、筛选和继续阅读。可用项目、标签组织资料，也可在阅读回顾中查看已有标记和最近修改的笔记。
-
-本篇笔记小结会先展示可选范围，只有主动生成时才使用当前配置的文字接口。小结中的出处入口帮助你回到记录位置；生成内容仍需结合原文核对。
-
-原 PDF 默认不会因为阅读而复制到资料库。你可以选择在本机保留原文件副本；导出备份时，也可以选择是否包含这些副本。备份与恢复的范围和限制以界面预览及[隐私政策](PRIVACY.md)为准。
-
-### 用途、研究领域与术语
-
-![翻译偏好页面，可按需展开用途、研究领域和术语设置](docs/images/preferences.png)
-
-在 **翻译偏好** 中选择用途、语言和翻译方式；科研用户还可以填写研究领域。研究领域可在本机辅助推荐已有术语方案，只有确认后才会应用；也可选择让后续翻译参考该领域。启用该选项时，领域名称会随相关翻译请求发送给所选服务商。
-
-术语方案适合维护某个领域常用的译法；**本文确认术语**用于当前文档并优先于通用约定。你可以导入、编辑和确认词条，人工修正与旧译文不会因选择方案而自动重写。
-
-### 公式、图像与扫描件
-
-文字翻译与图像增强可以使用不同配置。网页截图翻译、PDF 区域翻译及部分公式识别需要支持图像输入的模型；扫描页识别还有独立的 OCR 配置要求。设置页面会区分“已填写”和“已测试”，避免把模型列表当作能力验证。
-
-公式、表格和复杂版面可能出现识别或翻译误差；请对照原文检查。已知 PDF 问题、验证范围与未解决事项记录在 [PDF 翻译问题台账](docs/pdf-translation-issues.md)。
-
-## 隐私与数据
-
-- 已保存的资料、笔记、阅读位置和术语主要保存在浏览器本机，可通过资料库管理和备份。
-- 用户触发翻译、生成笔记小结或确认图像识别时，相应文本、选中的笔记或图像区域会发送至所配置的服务商；具体范围取决于所用功能。
-- API Key 用于访问你配置的服务；请不要将真实 Key 提交到仓库、写入问题反馈或放在截图中。
-- 原 PDF 副本是否保留、是否随备份导出由你选择。完整权限、数据保存范围和备份限制见 [隐私政策](PRIVACY.md)。
-
-## 常见问题
-
-**划词后没有出现按钮？** 检查是否已授权当前网站、是否暂停了该网站的自动划词，以及选区是否需要翻译。浏览器内部页面、扩展商店等受限页面无法注入扩展；也可尝试右键菜单或快捷键。
-
-**已有文字 API，还要配置图像模型吗？** 普通文字翻译不需要。只有使用图片、截图、部分公式增强等功能时才需要兼容的视觉模型；扫描页 OCR 另有要求。
-
-**设置完成后会自动翻译吗？** 普通保存设置不会自动测试模型。遇到中断任务时，按页面提示返回并确认相应操作；测试连接或主动翻译可能产生服务商费用。
-
-**翻译和笔记可以备份吗？** 可以在文档库中预览、导出和导入支持的资料。API Key 不包含在安全配置导出中；原 PDF 副本是否进入资料库备份需在导出时主动选择。恢复前请阅读界面预览。
+划词和段落翻译会将所选文本发给你配置的服务商。框选翻译发送确认后的图像区域，笔记小结发送勾选的笔记。费用由所选服务商决定。[隐私政策与权限说明](PRIVACY.md)
 
 ## 从源码运行
 
-需要 Node.js 24 和 npm，版本要求见 [package.json](package.json)：
+使用 Node.js 24 和 npm 构建 Edge 扩展。
 
 ```bash
 git clone https://github.com/LittlePyx/Pi-translator.git
@@ -167,17 +126,24 @@ npm ci
 npm run build:edge
 ```
 
-在 Edge 打开 `edge://extensions`，开启开发人员模式，选择 **加载解压缩的扩展**，然后选择项目目录下的 `.output/edge-mv3`。更新源码并重新构建后，在扩展管理页重新加载扩展，再刷新已有网页。商店版和本地加载版是不同的安装途径；仓库代码可能包含尚未进入商店版本的改进。
-
-## 开发与反馈
+在 `edge://extensions` 开启开发人员模式，点 **加载解压缩的扩展**，选择 `.output/edge-mv3`。更新源码并重新构建后，在同一张扩展卡片上点重新加载，再刷新已打开的网页。
 
 ```bash
-npm run typecheck          # 类型检查
-npm test                   # 单元测试
-npm run test:e2e           # 构建并运行浏览器测试
-npm run check:secrets      # 检查常见密钥格式
+npm run typecheck
+npm test
+npm run test:e2e       # 需要本机 Microsoft Edge
+npm run check:secrets
 ```
 
-浏览器测试需要本机 Microsoft Edge；测试说明见[验证报告](docs/verification-report.md)。更新记录见 [CHANGELOG](CHANGELOG.md)。遇到问题时，欢迎在 [Issues](https://github.com/LittlePyx/Pi-translator/issues) 描述操作步骤、预期和实际结果；请勿提交 API Key、私人文档或敏感截图。
+反馈时请附上复现步骤、预期结果和实际表现，并隐去密钥和私人资料。[提交问题](https://github.com/LittlePyx/Pi-translator/issues) · [验证报告](docs/verification-report.md) · [PDF 翻译问题台账](docs/pdf-translation-issues.md) · [更新记录](CHANGELOG.md)
+
+<details>
+<summary>截图与素材来源</summary>
+
+- Git 讲义截自 MIT Missing Semester 的 *Version Control and Git*，截图中的中文节选沿用讲义许可。[原页](https://missing.csail.mit.edu/2026/version-control/#snapshots) · [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/)
+- Overleaf 截图来自 Abraham 等人的公开论文项目。科研阅读截图来自 Anandh、Ghose 和 Ganesan 的 *FastVPINNs*，公式图截取了第 1 页局部。[中微子论文](https://doi.org/10.1088/1361-6471/ac89d2) · [FastVPINNs](https://doi.org/10.21105/joss.06764) · [CC BY 许可](https://creativecommons.org/licenses/by/4.0/)
+- 配图使用实际扩展界面。中文译文和公式识别结果由离线演示接口提供，街道测温笔记使用示例资料。
+
+</details>
 
 由 P&I Lab 开发。
