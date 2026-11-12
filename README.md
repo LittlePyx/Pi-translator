@@ -1,14 +1,22 @@
 # Pi Translator（PI划词翻译器）
 
-适用于 Microsoft Edge 的翻译扩展。支持网页划词与原位双语、Overleaf 源码划词、PDF 全文对照和批注。翻译使用你配置的 API。
+用自己的翻译 API，在 Microsoft Edge 里读双语网页、Overleaf 文稿和 PDF。
 
-[安装 Edge 扩展](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf) · [首次设置](#首次设置) · [网页阅读](#网页阅读) · [Overleaf](#overleaf) · [科研阅读图解](#科研阅读图解) · [文档库与笔记](#文档库与笔记)
+<a id="快速上手"></a>
+
+## 首次设置
+
+1. **安装扩展。** 从 [Edge 扩展商店安装 Pi Translator](https://microsoftedge.microsoft.com/addons/detail/edfkcddhenkhdkedhnmcebmmfacabcjf)。安装后会打开首次设置。
+2. **配置文字翻译。** 选择你的服务商（如 DeepSeek 或 Qwen），按提示填写 API Key，选择或输入模型名称，点 **保存并开始**。
+3. **翻译第一句。** 在设置完成页点 **启用网页划词按钮**，按 Edge 提示授权。打开 Git 讲义，选中一句英文，点选区旁的 Pi 按钮查看译文。[试读 Git 讲义](https://missing.csail.mit.edu/2026/version-control/#modeling-history-relating-snapshots)
+
+[网页阅读](#网页阅读) · [Overleaf](#overleaf) · [PDF 阅读](#科研阅读图解) · [文档库与笔记](#文档库与笔记)
 
 ## 网页阅读
 
 ### 划词翻译
 
-选中文字，点选区旁的翻译按钮。连续查词时，可以从译文卡片切到侧栏。
+连续查词时，可以从译文卡片切到侧栏。也可用右键菜单或 `Alt+Shift+T` 翻译选区。
 
 ![Git 讲义中选中的英文句子和旁边的中文译文卡片](docs/images/article-selection.png)
 
@@ -41,7 +49,7 @@
 
 ### 公式框选
 
-点工具栏的**虚线方框**，框住公式和相关条件，点 **发送并翻译**。公式识别需要支持图像输入的模型。
+点工具栏的**虚线方框**，框住公式和相关条件，点 **发送并翻译**。框选翻译需要支持图像输入的模型，扫描页另有 OCR 设置。
 
 ![选框覆盖泊松方程、边界条件和区域符号](docs/images/paper-formula.png)
 
@@ -59,6 +67,15 @@
 打开 **译全文 → ··· → 检查术语 → 本文术语**，填入原词和约定译法，点 **保存词条**。后续翻译优先使用本文术语，已有译段可在「检查术语」中核对。
 
 <img src="docs/images/paper-term.png" alt="已保存的本文术语 partial differential equations 及其约定译法“偏微分方程”" width="561">
+
+<details>
+<summary>研究领域和术语方案</summary>
+
+在 **翻译偏好** 填写研究领域，可获得本机已有术语方案的推荐，确认后应用。启用「后续翻译参考此领域」后，领域名称会随相关翻译请求发送给服务商。
+
+![翻译偏好中的用途、研究领域和术语设置](docs/images/preferences.png)
+
+</details>
 
 <a id="功能介绍"></a>
 
@@ -83,25 +100,6 @@
 <summary>文档库界面</summary>
 
 ![文档库中的筛选和继续阅读入口](docs/images/library.png)
-
-</details>
-
-<a id="快速上手"></a>
-
-## 首次设置
-
-1. 安装后点 Edge 工具栏的 Pi 图标，选择用途和目标语言。
-2. 选择文字服务商，填写模型和所需的 API Key，保存。支持 DeepSeek、Qwen、OpenAI 等服务商，也支持本机 Ollama 和自定义兼容接口。点 **测试连接** 会发送一次示例请求。
-3. 首次在普通网页划词时，按提示授权网站访问。若按钮未出现，可在扩展面板检查当前网站的授权和划词开关，也可用右键菜单或 `Alt+Shift+T` 翻译选区。
-
-框选公式、图片或网页截图时再配置图像模型。扫描页使用单独的 OCR 设置。
-
-<details>
-<summary>研究领域和术语方案</summary>
-
-在 **翻译偏好** 填写研究领域，可获得本机已有术语方案的推荐，确认后应用。启用「后续翻译参考此领域」后，领域名称会随相关翻译请求发送给服务商。
-
-![翻译偏好中的用途、研究领域和术语设置](docs/images/preferences.png)
 
 </details>
 
