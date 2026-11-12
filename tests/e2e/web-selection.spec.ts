@@ -1638,29 +1638,20 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
     await moreSummary.click();
     const menu = overlay.locator('.menu');
     await expect(menu).toBeVisible();
-    const menuLayout = await menu.evaluate((element) => {
-      const surface = element.closest<HTMLElement>('.surface');
-      const bounds = element.getBoundingClientRect();
-      const surfaceBounds = surface?.getBoundingClientRect();
-      const buttons = [...element.querySelectorAll<HTMLElement>('button')];
-      return {
-        bounds: bounds.toJSON(),
-        surfaceBounds: surfaceBounds?.toJSON(),
-        clientHeight: element.clientHeight,
-        scrollHeight: element.scrollHeight,
-        buttonHeights: buttons.map((button) => button.getBoundingClientRect().height),
-      };
-    });
+    // Native details becomes visible before its toggle handler positions the menu.
+    await expect(async () => {
+      const layout = await menu.evaluate((element) => ({
+        bounds: element.getBoundingClientRect().toJSON(),
+        surface: element.closest('.surface')!.getBoundingClientRect().toJSON(),
+      }));
+      expect(layout.bounds.left).toBeGreaterThanOrEqual(layout.surface.left);
+      expect(layout.bounds.right).toBeLessThanOrEqual(layout.surface.right);
+      expect(layout.bounds.top).toBeGreaterThanOrEqual(8);
+      expect(layout.bounds.bottom).toBeLessThanOrEqual(692);
+    }).toPass({ timeout: 8_000 });
     if (process.env.PI_VISUAL_QA) {
       await page.screenshot({ path: testInfo.outputPath('translation-more-menu-360-light.png') });
     }
-    expect(menuLayout.surfaceBounds).toBeDefined();
-    if (menuLayout.surfaceBounds) {
-      expect(menuLayout.bounds.left).toBeGreaterThanOrEqual(menuLayout.surfaceBounds.left);
-      expect(menuLayout.bounds.right).toBeLessThanOrEqual(menuLayout.surfaceBounds.right);
-    }
-    expect(menuLayout.bounds.top).toBeGreaterThanOrEqual(8);
-    expect(menuLayout.bounds.bottom).toBeLessThanOrEqual(692);
     expect(await menu.evaluate(element=>getComputedStyle(element).overflowY)).toBe('auto');
     const lastMenuAction=menu.getByRole('button').last();await lastMenuAction.scrollIntoViewIfNeeded();
     // Scrolling can reposition the menu. Compare the action and its current
@@ -1673,7 +1664,9 @@ test('keeps narrow model adjustment drafts visible and recoverable', async ({}, 
       return action.top >= current.top - 1 && action.bottom <= current.bottom + 1 &&
         current.top >= 8 && current.bottom <= innerHeight - 8 + 1;
     })).toBe(true);
-    expect(menuLayout.buttonHeights.every((height) => height >= 32)).toBe(true);
+    const buttonHeights = await menu.locator('button').evaluateAll(buttons =>
+      buttons.map(button => button.getBoundingClientRect().height));
+    expect(Math.min(...buttonHeights)).toBeGreaterThanOrEqual(32);
 
     await overlay.getByRole('button', { name: '让模型调整…' }).click();
     await expect(overlay.getByText('模型调整会发送原文和当前译稿')).toBeVisible();
