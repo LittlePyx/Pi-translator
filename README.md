@@ -10,6 +10,8 @@
 2. **配置文字翻译。** 选择你的服务商（如 DeepSeek 或 Qwen），按提示填写 API Key，选择或输入模型名称，点 **保存并开始**。
 3. **翻译第一句。** 在设置完成页点 **启用网页划词按钮**，按 Edge 提示授权。打开 Git 讲义，选中一句英文，点选区旁的 Pi 按钮查看译文。[试读 Git 讲义](https://missing.csail.mit.edu/2026/version-control/#modeling-history-relating-snapshots)
 
+![首次设置第 2、3 步：左侧选择 DeepSeek 官方并填写 API Key，右侧在模型名称中选择 deepseek-v4-flash 后点保存并开始](docs/images/first-setup.png)
+
 [网页阅读](#网页阅读) · [Overleaf](#overleaf) · [PDF 阅读](#科研阅读图解) · [文档库与笔记](#文档库与笔记)
 
 ## 网页阅读
