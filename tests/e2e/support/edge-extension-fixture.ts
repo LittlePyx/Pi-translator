@@ -528,7 +528,7 @@ export function createLinkedPdf(): Buffer {
   return Buffer.from(body);
 }
 
-export function createRasterPdf(): Buffer {
+export function createRasterPdf(fixtureId?: string): Buffer {
   const width = 64;
   const height = 64;
   const pixels = Buffer.alloc(width * height * 3);
@@ -558,7 +558,7 @@ export function createRasterPdf(): Buffer {
       Buffer.from('\nendstream'),
     ]),
   ];
-  const chunks = [Buffer.from('%PDF-1.4\n')];
+  const chunks = [Buffer.from(fixtureId ? `%PDF-1.4\n% ${fixtureId}\n` : '%PDF-1.4\n')];
   const offsets = [0];
   let length = chunks[0]!.length;
   objects.forEach((object, index) => {

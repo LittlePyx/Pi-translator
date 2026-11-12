@@ -20,13 +20,19 @@ import {
 } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
+
+function scannedPdfForThisTest(): Buffer {
+  // Reading state is keyed by PDF content, even when the file has a different name.
+  return createRasterPdf(test.info().testId);
+}
+
 test('translates a confirmed PDF image region without storing the screenshot', async ({}, testInfo) => {
   const pdfPage = await context.newPage();
   await pdfPage.goto(`chrome-extension://${extensionId}/pdf.html`);
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'scanned-region.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -439,7 +445,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'scanned-ocr.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-has-text', 'false');
@@ -495,7 +501,7 @@ test('creates a selectable temporary OCR layer for a confirmed scanned PDF page'
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'new-scanned.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const replacementPage = pdfPage.locator('.pdf-page').first();
   await expect(replacementPage).toHaveAttribute('data-rendered', 'ready');
@@ -832,7 +838,7 @@ test('shows a compact PDF region queue and lets waiting or active tasks be cance
     await pdfPage.locator('#file-input').setInputFiles({
       name: 'queued-regions.pdf',
       mimeType: 'application/pdf',
-      buffer: createRasterPdf(),
+      buffer: scannedPdfForThisTest(),
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -1618,7 +1624,7 @@ test('keeps narrow PDF translation states readable and touch-safe', async ({}, t
     await pdfPage.locator('#file-input').setInputFiles({
       name: 'narrow-translation-states.pdf',
       mimeType: 'application/pdf',
-      buffer: createRasterPdf(),
+      buffer: scannedPdfForThisTest(),
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -1991,11 +1997,11 @@ test('keeps narrow OCR review and source editing readable', async ({}, testInfo)
     await pdfPage.locator('#file-input').setInputFiles({
       name: 'narrow-ocr-review.pdf',
       mimeType: 'application/pdf',
-      buffer: createRasterPdf(),
+      buffer: scannedPdfForThisTest(),
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await clickPdfReaderAction(pdfPage,'fit-width');
+    await fitPdfBeforeRegionCapture(pdfPage);
     await pdfPage.locator('#region-translate').click();
     const pageBounds = await firstPage.boundingBox();
     expect(pageBounds).not.toBeNull();
@@ -2103,11 +2109,11 @@ test('keeps narrow pending OCR reviews actionable and reveals their regions', as
     await pdfPage.locator('#file-input').setInputFiles({
       name: 'narrow-pending-review.pdf',
       mimeType: 'application/pdf',
-      buffer: createRasterPdf(),
+      buffer: scannedPdfForThisTest(),
     });
     const firstPage = pdfPage.locator('.pdf-page').first();
     await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
-    await clickPdfReaderAction(pdfPage,'fit-width');
+    await fitPdfBeforeRegionCapture(pdfPage);
     await pdfPage.locator('#region-translate').click();
     const pageBounds = await firstPage.boundingBox();
     expect(pageBounds).not.toBeNull();
@@ -2192,7 +2198,7 @@ test('clears an unsent PDF image selection on Escape, zoom, and document replace
   await fileInput.setInputFiles({
     name: 'selection-lifecycle.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   const regionButton = pdfPage.locator('#region-translate');
@@ -2233,7 +2239,7 @@ test('clears an unsent PDF image selection on Escape, zoom, and document replace
   await fileInput.setInputFiles({
     name: 'replacement.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   await expect(pdfPage.locator('#document-name')).toHaveText('replacement.pdf');
   await expect(regionButton).toHaveAttribute('aria-pressed', 'false');
@@ -2249,7 +2255,7 @@ test('creates and adjusts a PDF image region with the keyboard and touch-safe mo
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'keyboard-region.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -2347,7 +2353,7 @@ test('scopes ergonomic PDF region shortcuts to the reading surface', async () =>
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'region-shortcuts.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   const regionButton = pdfPage.locator('#region-translate');
@@ -2396,7 +2402,7 @@ test('drops a delayed image capture after the user opens another PDF', async () 
   await fileInput.setInputFiles({
     name: 'old-capture.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
@@ -2439,7 +2445,7 @@ test('rejects a vision provider that echoes the captured PDF image', async () =>
   await pdfPage.locator('#file-input').setInputFiles({
     name: 'private-scan.pdf',
     mimeType: 'application/pdf',
-    buffer: createRasterPdf(),
+    buffer: scannedPdfForThisTest(),
   });
   const firstPage = pdfPage.locator('.pdf-page').first();
   await expect(firstPage).toHaveAttribute('data-rendered', 'ready');
