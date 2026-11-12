@@ -78,17 +78,43 @@ test('recaps two marks near the saved page plus a recent note instead of the new
 test('keeps the original resume page while another saved position and note change arrive behind an unsaved draft',async()=>preserve(async()=>{
  const page=await context.newPage();try{
   await seedContext();await openContext(page);await expect(page.locator('#page-number')).toHaveValue('3');
-  // Finish initial loading, then observe a real scroll checkpoint before the
-  // other window saves. A seeded page number alone does not flush the reader's
-  // pending debounced save and can race the simulated external write.
   await expect(page.locator('#pdf-original-copy')).toHaveJSProperty('hidden',false);
-  const checkpoint=(await local()).piPdfReadingStatesV1[recapId].updatedAt;
-  await page.locator('#document-stage').evaluate(node=>{node.scrollTop+=1});
-  await expect.poll(async()=>(await local()).piPdfReadingStatesV1[recapId]?.updatedAt).toBeGreaterThan(checkpoint);
   await clickPdfReaderAction(page,'pdf-open-annotations');await page.locator('.pdf-annotation-edit').first().click();
   const draft=page.locator('.pdf-annotation-editor textarea');await draft.fill('不应进入回顾的未保存草稿');
   await expect.poll(async()=>(await local()).piPdfReadingStatesV1[recapId]?.pageNumber).toBe(3);
-  await worker().evaluate(async id=>{const s=(globalThis as any).chrome.storage.local,stored=await s.get(['piPdfReadingStatesV1','piPdfReadingAnnotationsV1']);stored.piPdfReadingStatesV1[id].pageNumber=1;stored.piPdfReadingStatesV1[id].updatedAt=Math.max(Date.now(),stored.piPdfReadingStatesV1[id].updatedAt+1);const note=stored.piPdfReadingAnnotationsV1[id].annotations.find((item:any)=>item.id==='context-5');note.note='另一窗口刚保存的新笔记';note.updatedAt=2000;await s.set(stored)},recapId);
+  // Hold the old window's scroll checkpoint until the other window has saved.
+  const now = Date.now();
+  await page.clock.install({time:now});
+  await page.clock.pauseAt(now + 1000);
+  const scrollTime = await page.evaluate(() => {
+    const scope = globalThis as any;
+    const runtime = scope.chrome.runtime;
+    const send = runtime.sendMessage.bind(runtime);
+    scope.pendingScrollSave = new Promise<void>((resolve, reject) => {
+      runtime.sendMessage = (message:any, ...args:any[]) => {
+        const response = send(message, ...args);
+        if (message.type === 'SAVE_PDF_READING_STATE') {
+          runtime.sendMessage = send;
+          response.then(resolve, reject);
+        }
+        return response;
+      };
+    });
+    document.querySelector('#document-stage')!.dispatchEvent(new Event('scroll'));
+    return Date.now();
+  });
+  await worker().evaluate(async ({id,updatedAt}) => {
+    const storage = (globalThis as any).chrome.storage.local;
+    const stored = await storage.get(['piPdfReadingStatesV1','piPdfReadingAnnotationsV1']);
+    Object.assign(stored.piPdfReadingStatesV1[id], {pageNumber:1,updatedAt});
+    const note = stored.piPdfReadingAnnotationsV1[id].annotations.find((item:any) => item.id === 'context-5');
+    note.note = '另一窗口刚保存的新笔记';
+    note.updatedAt = 2000;
+    await storage.set(stored);
+  }, {id:recapId,updatedAt:scrollTime + 1});
+  await page.clock.runFor(500);
+  await page.evaluate(() => (globalThis as any).pendingScrollSave);
+  await page.clock.resume();
   const changed=await local();await expect(draft).toHaveValue('不应进入回顾的未保存草稿');await expect(page.locator('.pi-reading-hint:visible')).toHaveCount(0);
   const raw=await page.evaluate(async id=>await(globalThis as any).chrome.runtime.sendMessage({type:'READING_HINT',payload:{target:{kind:'pdf',documentId:id},action:'snapshot'}}),recapId);expect(raw.data.pageNumber).toBe(1);
   await page.locator('.pdf-annotation-editor').getByRole('button',{name:'取消',exact:true}).click();

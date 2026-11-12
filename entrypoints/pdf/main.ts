@@ -600,6 +600,7 @@ let wheelZoomAnchor: PageAnchor | undefined;
 let textSelectionSnapFrame: number | undefined;
 let continuousSidebarActive = false;
 let readingStateSaveTimer: ReturnType<typeof setTimeout> | undefined;
+let lastReadingActivityAt: number | undefined;
 let currentReadingIdentity: string | undefined;
 let restoringReadingState = false;
 let fileDragDepth = 0;
@@ -5571,6 +5572,7 @@ function beginDocumentOpen(
   pdfHistoryRestoreRequest=undefined;
   activeParagraphEdit=undefined;lastParagraphCorrection=undefined;
   void persistReadingState();
+  lastReadingActivityAt = undefined;
   cachedReadingContext=undefined;delete document.documentElement.dataset.libraryReading;
   searchScope.disabled=false;
   documentTranslationViewCompare.hidden=false;documentTranslationClose.textContent=t('返回原页');
@@ -5737,7 +5739,7 @@ function currentPdfReadingState(): PdfReadingState | undefined {
     ...(fitPageActive ? {fitPage:true as const} : {}),
     ...(viewRotation ? {rotation:viewRotation as 90|180|270} : {}),
     sidebarExpanded: pdfSidebarLayout.expanded,
-    updatedAt: Date.now(),
+    updatedAt: lastReadingActivityAt ?? Date.now(),
     ...(translation ? {translation} : {}),
   };
 }
@@ -5801,6 +5803,8 @@ async function persistReadingState(opened=false): Promise<void> {
 
 function scheduleReadingStateSave(): void {
   if (!(currentReadingIdentity || currentPdfContentFingerprint) || restoringReadingState) return;
+  // Compare reading activity across windows, including when a pending save is flushed on close.
+  lastReadingActivityAt = Date.now();
   if (readingStateSaveTimer) clearTimeout(readingStateSaveTimer);
   readingStateSaveTimer = setTimeout(() => {
     readingStateSaveTimer = undefined;
