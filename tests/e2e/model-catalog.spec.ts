@@ -13,7 +13,8 @@ test('filters provider-returned model families without changing the saved model 
     await options.goto(`chrome-extension://${extensionId}/options.html`);
     await expect(options.locator('#model')).toHaveValue('e2e-model');
     await options.locator('#refresh-models').click();
-    await expect(options.locator('#model-catalog-status')).toContainText('12 个文字候选');
+    await expect(options.locator('#model-list option')).toHaveCount(12);
+    await expect(options.locator('#model-catalog-status')).toBeHidden();
     await expect(options.locator('#status')).toContainText('保存');
     const before = await options.evaluate(async () => (globalThis as any).chrome.storage.local.get(null));
     await expect(options.locator('#save-button')).toBeDisabled();
