@@ -163,8 +163,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
       color: getComputedStyle(select).color,
     }))).toEqual({
       appearance: 'none',
-      background: 'rgb(23, 31, 44)',
-      color: 'rgb(237, 242, 248)',
+      background: 'rgb(34, 34, 34)',
+      color: 'rgb(237, 237, 237)',
     });
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-provider-360-dark.png') });
     await reopened.emulateMedia({ colorScheme: 'light' });
@@ -193,7 +193,8 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.locator('#onboarding-next').click();
   await expect(reopened.locator('#onboarding-model')).toBeFocused();
   await expect(reopened.locator('#onboarding-model')).toHaveValue('e2e-model');
-  await expect(reopened.locator('#onboarding-status')).toContainText('已读取模型列表');
+  await expect(reopened.locator('#onboarding-model-list option')).toHaveCount(2);
+  await expect(reopened.locator('#onboarding-status')).toBeEmpty();
   if (process.env.PI_VISUAL_QA) {
     await reopened.screenshot({ path: testInfo.outputPath('onboarding-model-360-light.png') });
   }

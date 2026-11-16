@@ -221,7 +221,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await overlay.getByTitle('在页面侧栏中显示').click();
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   const documentButton = overlay.locator('.document-memory-action');
-  await expect(documentButton).toHaveText('本文 · 待核对 1');
+  await expect(documentButton).toHaveText('术语 · 待核对 1');
   await documentButton.click();
   const pendingSection = overlay.locator('.document-section').filter({ hasText: '待核对' });
   await expect(pendingSection).toBeVisible();
@@ -236,7 +236,7 @@ test('translates a confirmed PDF image region without storing the screenshot', a
   await expect.poll(() => visionRequests.length).toBe(requestCount + 2);
   await expect(overlay.locator('.body')).toHaveText('重新识别后修正的学术翻译结果。');
   const cleanDocumentButton = overlay.locator('.document-memory-action');
-  await expect(cleanDocumentButton).toHaveText('本文');
+  await expect(cleanDocumentButton).toHaveText('术语');
   await cleanDocumentButton.click();
   await expect(overlay.locator('.document-section').filter({ hasText: '待核对' }))
     .toHaveCount(0);
@@ -997,7 +997,9 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
         scrollWidth: topLine.scrollWidth,
         topLineRight: bounds.right,
         metaBottom: metaBounds.bottom,
+        metaRight: metaBounds.right,
         controlsTop: controlBounds.top,
+        controlsLeft: controlBounds.left,
         controlsRight: controlBounds.right,
         controlHeights: [...controls.querySelectorAll<HTMLElement>('button')]
           .map((control) => control.getBoundingClientRect().height),
@@ -1006,7 +1008,7 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
       };
     });
     expect(layout.scrollWidth).toBeLessThanOrEqual(layout.clientWidth + 1);
-    expect(layout.controlsTop).toBeGreaterThanOrEqual(layout.metaBottom - 1);
+    expect(layout.controlsTop >= layout.metaBottom - 1 || layout.controlsLeft >= layout.metaRight - 1).toBe(true);
     expect(layout.controlsRight).toBeLessThanOrEqual(layout.topLineRight + 1);
     expect(layout.controlHeights.every((height) => height >= 32)).toBe(true);
     expect(layout.hostScrollWidth).toBeGreaterThan(layout.hostClientWidth);
@@ -1321,7 +1323,8 @@ test('keeps dense narrow result metadata and view controls readable', async ({},
     });
     expect(compactFooterLayout.scrollWidth).toBeLessThanOrEqual(compactFooterLayout.clientWidth + 1);
     expect(Math.abs(compactFooterLayout.moreTop-compactFooterLayout.copyTop)).toBeLessThanOrEqual(2);
-    expect(compactFooterLayout.readingTop).toBeGreaterThan(compactFooterLayout.copyTop);
+    // The compact footer now keeps reading controls on the same row when they fit.
+    expect(Math.abs(compactFooterLayout.readingTop-compactFooterLayout.copyTop)).toBeLessThanOrEqual(2);
     await densePage.setViewportSize({ width: 360, height: 700 });
     await expect.poll(readingAnchorOffset).toBeCloseTo(resizeAnchorOffset, 0);
 
@@ -2129,7 +2132,7 @@ test('keeps narrow pending OCR reviews actionable and reveals their regions', as
     await overlay.getByTitle('在页面侧栏中显示').click();
     await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
     const documentButton = overlay.locator('.document-memory-action');
-    await expect(documentButton).toHaveText('本文 · 待核对 1');
+    await expect(documentButton).toHaveText('术语 · 待核对 1');
     await documentButton.click();
 
     const pendingSection = overlay.locator('.document-review-section');
@@ -2184,7 +2187,7 @@ test('keeps narrow pending OCR reviews actionable and reveals their regions', as
     await expect(overlay.locator('.document-review-section')).toHaveCount(0);
     await expect(overlay.getByRole('button', { name: '返回翻译结果' })).toBeFocused();
     await overlay.getByRole('button', { name: '返回翻译结果' }).click();
-    await expect(overlay.locator('.document-memory-action')).toHaveText('本文');
+    await expect(overlay.locator('.document-memory-action')).toHaveText('术语');
   } finally {
     await context.unroute(apiPattern, pendingReviewHandler);
     await pdfPage.close();

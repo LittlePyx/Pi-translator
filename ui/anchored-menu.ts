@@ -1,6 +1,8 @@
 import {keyEventDialog} from './dialog-navigation';
+import {bindMenuNavigation} from './menu-navigation';
 /** Keep disclosure menus reachable in short windows, including after scrolling. */
 export function bindAnchoredMenus(menuSelector: string, panelSelector: string): void {
+  bindMenuNavigation(document,menuSelector);
   function place(menu: HTMLDetailsElement): void {
     if (!menu.open) return;
     const anchor = menu.querySelector<HTMLElement>(':scope > summary');

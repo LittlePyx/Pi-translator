@@ -17,16 +17,21 @@ export function showUndoNotice(message:string,undo:()=>Promise<void>):void{
 
 /** Native hover titles remain; keyboard focus gets the same visible, described hint. */
 export function bindActionHints(root:Document|ShadowRoot=document):void{
-  let hint:HTMLElement|undefined,target:HTMLElement|undefined,priorDescription:string|null=null;
-  const hide=()=>{hint?.remove();hint=undefined;if(target){if(priorDescription===null)target.removeAttribute('aria-describedby');else target.setAttribute('aria-describedby',priorDescription)}target=undefined};
+  let hint:HTMLElement|undefined,target:HTMLElement|undefined;
+  const hide=()=>{
+    if(target&&hint){const descriptions=(target.getAttribute('aria-describedby')??'').split(/\s+/).filter(id=>id&&id!==hint!.id);if(descriptions.length)target.setAttribute('aria-describedby',descriptions.join(' '));else target.removeAttribute('aria-describedby')}
+    hint?.remove();hint=undefined;target=undefined;window.removeEventListener('resize',hide);
+  };
   const show=(event:Event)=>{
     hide();const item=event.composedPath().find(node=>node instanceof HTMLElement&&node.matches('button[title],summary[title],a[title]')) as HTMLElement|undefined;
     if(!item||item.getRootNode()!==root||!item.matches(':focus-visible')||!item.title.trim())return;
-    target=item;priorDescription=item.getAttribute('aria-describedby');hint=document.createElement('div');hint.id=`pi-keyboard-hint-${++hintSerial}`;hint.setAttribute('role','tooltip');hint.textContent=item.title;
-    hint.style.cssText='position:fixed;z-index:2147483647;max-width:min(280px,calc(100vw - 24px));box-sizing:border-box;padding:7px 10px;border-radius:6px;background:#263247;color:#fff;font:12px/1.5 system-ui;pointer-events:none;box-shadow:0 3px 12px #0003;overflow-wrap:anywhere';
-    (root instanceof Document?(item.closest('dialog[open]')??root.body):root).append(hint);item.setAttribute('aria-describedby',[priorDescription,hint.id].filter(Boolean).join(' '));
+    target=item;hint=document.createElement('div');hint.id=`pi-keyboard-hint-${++hintSerial}`;hint.className='pi-keyboard-hint';hint.setAttribute('role','tooltip');hint.textContent=item.title;
+    hint.style.cssText='position:fixed;z-index:2147483647;max-width:min(280px,calc(100vw - 24px));box-sizing:border-box;padding:7px 10px;border:1px solid var(--pi-line,#ddd);border-radius:var(--pi-radius,6px);background:var(--pi-surface,#fff);color:var(--pi-text,#222);font:12px/1.5 var(--pi-font,system-ui);pointer-events:none;box-shadow:var(--pi-shadow,0 3px 12px #0002);overflow-wrap:anywhere';
+    (root instanceof Document?(item.closest('dialog[open]')??root.body):root).append(hint);item.setAttribute('aria-describedby',[item.getAttribute('aria-describedby'),hint.id].filter(Boolean).join(' '));
     const rect=item.getBoundingClientRect(),box=hint.getBoundingClientRect();hint.style.left=`${Math.max(12,Math.min(rect.left,innerWidth-box.width-12))}px`;hint.style.top=`${Math.max(8,rect.bottom+8+box.height<innerHeight?rect.bottom+8:rect.top-box.height-8)}px`;
+    window.addEventListener('resize',hide);
   };
   root.addEventListener('focusin',show);root.addEventListener('focusout',hide);root.addEventListener('pointerdown',hide);root.addEventListener('keydown',event=>{if((event as KeyboardEvent).key==='Escape')hide()});
+  root.addEventListener('scroll',hide,true);
 }
 let hintSerial=0;

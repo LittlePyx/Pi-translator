@@ -1,3 +1,4 @@
+import {bindTheme} from '../../ui/theme';
 import {searchWithConfirmedTerms} from '../../core/translation/search-assistance';
 import {PDF_AREA_NOTES_KEY} from '../../core/pdf/area-note-repository';
 import {appendSearchAssistance} from '../../ui/search-assistance';
@@ -100,6 +101,7 @@ import {
 async function startUi(): Promise<void> {
   await initializeUiLanguage();
   localizeUiDocument();
+  bindTheme(document);
   bindActionHints();
   bindCompactHelp();
   bindActionGuide(document,['.settings-nav'],[
@@ -113,6 +115,7 @@ async function startUi(): Promise<void> {
     {label:t('搜索'),selector:'#retained-library-search'},
     {label:t('保存'),selector:'#save-button'},
   ]);
+for(const trigger of document.querySelectorAll<HTMLElement>('.settings-nav > .pi-action-guide-trigger'))trigger.title=t('操作帮助');
   const excerptLibrary=bindWebExcerptLibrary();
 
 
@@ -275,6 +278,7 @@ let libraryEntries:RetainedLibraryEntry[]=[];
 let librarySources:LibrarySourceResult[]=[];
 let libraryRecent:RecentPdfReading[]=[];
 let librarySourceReadError=false;
+let libraryReadState:'loading'|'ready'|'error'='loading';
 const libraryNameDrafts=new Map<string,string>();
 let currentProfileId='default';
 let activeTextProfileId='default';
@@ -409,6 +413,7 @@ for(const select of [apiPreset,onboardingPreset]){
 extensionVersion.textContent=browser.runtime.getManifest().version;
 
 function setStatus(message:string,error=false,pending=false):void{
+  status.classList.remove('visually-hidden');
   status.textContent=localizeErrorMessage(message);status.classList.toggle('error',error);
   const progress=!error&&(pending||/^(?:正在|已读取\s*\d+\s*个模型，正在)/u.test(message));
   connectionFeedback.hidden=!(document.body.dataset.section==='connection'&&(error||progress));
@@ -427,8 +432,9 @@ function setOnboardingStatus(message:string,error=false):void{
   modelError.hidden=!modelProblem;modelError.textContent=modelProblem?t('请填写服务商支持的文字模型。'):'';
   if(keyProblem)onboardingApiKey.setAttribute('aria-invalid','true');else onboardingApiKey.removeAttribute('aria-invalid');
   if(modelProblem)onboardingModel.setAttribute('aria-invalid','true');else onboardingModel.removeAttribute('aria-invalid');
+  if(error&&onboardingDialog.open)(keyProblem?keyError:modelProblem?modelError:onboardingStatus).scrollIntoView({block:'nearest'});
 }
-function setSupportStatus(message:string,error=false):void{supportStatus.textContent=message;supportStatus.classList.toggle('error',error)}
+function setSupportStatus(message:string,error=false):void{supportStatus.textContent=message;supportStatus.classList.toggle('error',error);if(message&&!supportStatus.closest<HTMLElement>('[data-settings-section]')?.hidden)supportStatus.scrollIntoView({block:'nearest'})}
 function setSettingsRecoveryStatus(message:string,state:'idle'|'progress'|'success'|'error'='idle'):void{
   settingsRecoveryStatus.textContent=message;
   settingsRecoveryBanner.classList.toggle('in-progress',state==='progress');
@@ -601,6 +607,7 @@ async function refreshRetainedStorageSummary():Promise<boolean>{
     libraryEntries=entries;
     librarySources=sources.items;
     libraryRecent=recent.items;
+    libraryReadState=sources.error||recent.error?'error':'ready';
     renderRetainedLibrary();
     if(sources.error||recent.error)setRetainedStorageActionStatus(sources.error||recent.error,true);
     else if(librarySourceReadError)setRetainedStorageActionStatus('');
@@ -618,6 +625,9 @@ async function refreshRetainedStorageSummary():Promise<boolean>{
     return !(sources.error||recent.error);
   }catch{
     if(revision!==retainedStorageRevision)return false;
+    libraryReadState='error';
+    librarySourceReadError=true;
+    if(!libraryEntries.length&&!librarySources.length&&!libraryRecent.length)renderRetainedLibrary();
     retainedStorageDocuments.textContent='—';
     retainedStorageCharacters.textContent='—';
     retainedStorageBytes.textContent='—';
@@ -646,6 +656,9 @@ let librarySearchOrigin:{query:string;kind:string;afterQuery:string;afterKind:st
 function renderRetainedLibrary():void{
   const query=retainedLibrarySearch.value.trim().toLocaleLowerCase();
   const filter=retainedLibraryFilter.value;
+  const searching=Boolean(query||filter!=='all'||organization.active());
+  const emptyLibrary=libraryReadState==='ready'&&!libraryEntries.length&&!librarySources.length&&!libraryRecent.length&&!searching&&!organization.hasCollections();
+  retainedLibrarySearch.closest<HTMLElement>('.library-toolbar')!.hidden=emptyLibrary;
   const languages:Record<string,string>={'zh-CN':t('简体中文'),en:'English',ja:t('日本語'),de:'Deutsch',fr:'Français'};
   const recentById=new Map(libraryRecent.map(item=>[item.id,item]));
   const projectParentsByReading=new Map<string,string[]>();for(const entry of libraryEntries)if(entry.kind==='pdf'&&entry.readingId)projectParentsByReading.set(entry.readingId,[...(projectParentsByReading.get(entry.readingId)??[]),entry.id]);
@@ -666,7 +679,7 @@ function renderRetainedLibrary():void{
   const sources=[...found.matches.flatMap(({item})=>item.kind==='source'?[item.source]:[]),...directTerms].sort((a,b)=>b.updatedAt-a.updatedAt||a.id.localeCompare(b.id));
   const matchedQueries=new Map(found.matches.map(({item,query})=>[item.id,query.toLocaleLowerCase()]));
   for(const item of directTerms)matchedQueries.set(item.id,query);
-  organization.update(Boolean(rows.length+sources.length));
+  organization.update(Boolean(rows.length+sources.length),emptyLibrary);
   const count=element<HTMLElement>('retained-library-count');
   count.textContent=String(rows.length+sources.length);
   count.title=count.ariaLabel=msg`${rows.length+sources.length} 项结果`;
@@ -680,11 +693,16 @@ function renderRetainedLibrary():void{
   if(librarySearchOrigin)appendSearchAssistance(retainedLibrary,{query:'',terms:[],onQuery:()=>undefined,restore});
   if(!rows.length&&!sources.length){
     const empty=document.createElement('div');empty.className='library-empty';
-    const searching=Boolean(query||filter!=='all'||organization.active());
-    const message=document.createElement('p');message.textContent=searching?t('没有匹配的资料。可以调整关键词或筛选条件。'):libraryRecent.some(item=>item.hidden)?t('最近列表暂无记录；笔记仍可通过搜索或摘录管理查看。'):t('打开 PDF 后可在这里继续阅读；保存的译文和阅读笔记也会出现在这里。');
-    const action=document.createElement('button');action.type='button';action.textContent=searching?(filter==='all'&&!organization.active()?t('清除搜索'):t('清除筛选')):t('打开 PDF');
-    action.addEventListener('click',()=>{if(searching){organization.clear();renderRetainedLibrary();retainedLibrarySearch.focus()}else{void browser.tabs.create({url:browser.runtime.getURL('/pdf.html')})}});
-    empty.append(message,action);appendSearchAssistance(empty,{query,terms:librarySources.flatMap(item=>item.kind==='term'?[item.term]:[]),onQuery:value=>changeSearch(value),...(filter!=='all'?{broaden:{label:t('在全部资料类型中搜索'),run:()=>changeSearch(retainedLibrarySearch.value,'all')}}:{})});retainedLibrary.append(empty);libraryDetails.update(()=>document.createElement('div'));return;
+    const message=document.createElement('p');message.textContent=libraryReadState==='loading'?t('正在读取资料…'):libraryReadState==='error'?t('暂时无法读取资料，请重试。'):searching?t('没有匹配的资料。可以调整关键词或筛选条件。'):libraryRecent.some(item=>item.hidden)?t('最近列表暂无记录；笔记仍可通过搜索或摘录管理查看。'):t('打开 PDF 后可在这里继续阅读。');
+    const actions=document.createElement('div');actions.className='library-empty-actions';
+    const action=document.createElement('button');action.type='button';action.hidden=libraryReadState==='loading';action.textContent=libraryReadState==='error'?t('重试'):searching?(filter==='all'&&!organization.active()?t('清除搜索'):t('清除筛选')):t('打开 PDF');
+    if(!searching&&libraryReadState==='ready')action.className='primary';
+    action.addEventListener('click',()=>{if(libraryReadState==='error'){void refreshRetainedStorageSummary()}else if(searching){organization.clear();renderRetainedLibrary();(retainedLibrarySearch.closest<HTMLElement>('.library-toolbar')!.hidden?retainedLibrary.querySelector<HTMLButtonElement>('.library-empty button'):retainedLibrarySearch)?.focus()}else{void browser.tabs.create({url:browser.runtime.getURL('/pdf.html')})}});
+    actions.append(action);
+    if(!searching&&libraryReadState==='ready'){
+      const restore=document.createElement('button');restore.id='library-empty-import';restore.type='button';restore.textContent=t('导入备份');restore.addEventListener('click',()=>element<HTMLButtonElement>('import-library-backup').click());actions.append(restore);
+    }
+    empty.append(message,actions);appendSearchAssistance(empty,{query,terms:librarySources.flatMap(item=>item.kind==='term'?[item.term]:[]),onQuery:value=>changeSearch(value),...(filter!=='all'?{broaden:{label:t('在全部资料类型中搜索'),run:()=>changeSearch(retainedLibrarySearch.value,'all')}}:{})});retainedLibrary.append(empty);libraryDetails.update(()=>document.createElement('div'));return;
   }
   for(const item of rows){
     if(item.kind==='recent'){appendRecentReadingEntry(retainedLibrary,item.recent,{drafts:libraryNameDrafts,changed:async()=>{await refreshRetainedStorageSummary()},notice:setRetainedStorageActionStatus,focusAfterRemoval:()=>retainedLibrarySearch.focus()});continue}
@@ -752,10 +770,19 @@ function renderRetainedLibrary():void{
 }
 retainedLibrarySearch.addEventListener('input',renderRetainedLibrary);
 retainedLibraryFilter.addEventListener('change',renderRetainedLibrary);
-const settingsMenuSelector='.library-menu, #library-storage-tools, #profile-menu';
-document.addEventListener('click',event=>{document.querySelectorAll<HTMLDetailsElement>(settingsMenuSelector).forEach(menu=>{if(!(event.target instanceof Node)||!menu.contains(event.target)||(menu.id==='profile-menu'&&event.target instanceof Element&&event.target.closest('button')))menu.open=false})});
-bindAnchoredMenus(settingsMenuSelector, ':scope > .library-actions, :scope > .disclosure-content, :scope > .profile-menu-actions');
-bindLibraryBackup({status:setRetainedStorageActionStatus,refresh:refreshRetainedStorageSummary,focus:()=>retainedLibrarySearch.focus()});
+const settingsMenuSelector='.library-menu, #library-storage-tools, #profile-menu, #common-tasks, .glossary-profile-menu';
+document.addEventListener('click',event=>{document.querySelectorAll<HTMLDetailsElement>(settingsMenuSelector).forEach(menu=>{
+  const profileAction=menu.id==='profile-menu'&&event.target instanceof Element&&Boolean(event.target.closest('button'))&&menu.contains(event.target);
+  if(!(event.target instanceof Node)||!menu.contains(event.target)||profileAction){
+    menu.open=false;
+    if(profileAction&&menu.contains(document.activeElement))menu.querySelector<HTMLElement>(':scope > summary')?.focus({preventScroll:true});
+  }
+})});
+bindAnchoredMenus(settingsMenuSelector, ':scope > .library-actions, :scope > .disclosure-content, :scope > .profile-menu-actions, :scope > .common-task-actions');
+bindLibraryBackup({status:setRetainedStorageActionStatus,refresh:refreshRetainedStorageSummary,focus:()=>{
+  const emptyImport=document.getElementById('library-empty-import');
+  if(emptyImport?.checkVisibility())emptyImport.focus({preventScroll:true});else retainedLibrarySearch.focus();
+}});
 
 function renderModelPrices():void{
   modelPriceList.replaceChildren();
@@ -851,9 +878,7 @@ function renderModelCatalog(onboarding=false):void{
   select.hidden=families.size<2;
   const shown=translationModelChoices(models,select.value);
   list.replaceChildren(...shown.map(model=>{const option=document.createElement('option');option.value=model;return option}));
-  status.textContent=models.length
-    ?msg`接口返回 ${all.length} 个文字候选，当前显示 ${shown.length} 个。可筛选系列或输入 ID；能否调用以翻译验证为准。`
-    :t('输入服务商提供的模型 ID，或连接后选择。');
+  status.textContent=models.length ? '' : t('输入服务商提供的模型 ID，或连接后选择。');
 }
 function setModelCatalog(models:string[],onboarding=false):void{
   if(onboarding)onboardingAvailableModels=[...models];else availableTextModels=[...models];
@@ -872,7 +897,7 @@ function applyOnboardingPreset():void{
   if(!preset){
     onboardingBaseUrl.value='';
     onboardingModel.value='';
-    onboardingKeyHint.textContent=t('自定义接口需要填写 Base URL；随后会尝试读取当前 Key 可用的模型。');
+    onboardingKeyHint.textContent=t('填写签发 Key 的服务商提供的接口地址。');
     return;
   }
   onboardingBaseUrl.value=preset.apiBaseUrl;
@@ -894,6 +919,7 @@ function showOnboardingStep(step:number,focusStep=false):void{
   for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){
     const index=Number(dot.dataset.onboardingDot);
     dot.classList.toggle('active',index===onboardingStep);
+    if(index===onboardingStep)dot.setAttribute('aria-current','step');else dot.removeAttribute('aria-current');
     dot.classList.toggle('complete',index<onboardingStep);
   }
   onboardingBack.hidden=onboardingStep===1;
@@ -921,6 +947,7 @@ function showOnboardingSuccess(sampleSource?:string,sampleTranslation?:string):v
   onboardingWebAccess.hidden=!onboardingWebOffered||loadedSettingsBaseline?.generalPageMode!=='on-demand';
   for(const dot of document.querySelectorAll<HTMLElement>('[data-onboarding-dot]')){
     dot.classList.remove('active');
+    dot.removeAttribute('aria-current');
     dot.classList.add('complete');
   }
   onboardingSkip.hidden=true;
@@ -991,8 +1018,8 @@ function onboardingPurposePatch(latest:ExtensionSettings,submission:string):Part
 for(const check of onboardingPurposeChecks)check.addEventListener('change',()=>{onboardingPurposeDirty=true;resetWizardSkipConfirmation();onboardingResearch.hidden=!onboardingPurposeChecks.find(item=>item.value==='research')?.checked});
 onboardingResearchField.addEventListener('input',()=>{onboardingPurposeDirty=true;resetWizardSkipConfirmation()});
 onboardingFieldTranslation.addEventListener('change',()=>{onboardingPurposeDirty=true;resetWizardSkipConfirmation()});
-onboardingLater.addEventListener('click',()=>{element<HTMLElement>('onboarding-later-panel').hidden=false});
-element<HTMLButtonElement>('onboarding-later-cancel').addEventListener('click',()=>{element<HTMLElement>('onboarding-later-panel').hidden=true});
+onboardingLater.addEventListener('click',()=>{element<HTMLElement>('onboarding-later-panel').hidden=false;element<HTMLButtonElement>('onboarding-later-cancel').focus()});
+element<HTMLButtonElement>('onboarding-later-cancel').addEventListener('click',()=>{element<HTMLElement>('onboarding-later-panel').hidden=true;onboardingLater.focus({preventScroll:true})});
 element<HTMLButtonElement>('onboarding-later-confirm').addEventListener('click',()=>{
   try{
     const progress:WizardProgress={version:1,time:Date.now(),provider:onboardingPreset.value,purposes:onboardingPurposeChecks.filter(check=>check.checked).map(check=>check.value),field:onboardingResearchField.value.slice(0,80),fieldEnabled:onboardingFieldTranslation.checked,baseline:JSON.stringify(onboardingPurposeBaseline??null)};
@@ -1138,6 +1165,7 @@ function renderVisionProfileSelect():void {
 }
 
 async function refreshVisionSetupStatus():Promise<void>{
+  visionSetupStatus.hidden=false;
   const profile=profiles.find(item=>item.id===visionProfileId);
   const pendingProfile=profiles.find(item=>item.id===visionSetupIntentProfileId);
   if(!profile){
@@ -1150,7 +1178,7 @@ async function refreshVisionSetupStatus():Promise<void>{
         ? msg`正在配置“${pendingProfile.name}”；Key 已填写，连接成功后会自动用于图像翻译，文字翻译配置不会改变。`
         : msg`正在配置“${pendingProfile.name}”；填写 Key 并连接成功后会自动用于图像翻译，文字翻译配置不会改变。`;
     }else{
-      visionSetupStatus.textContent=t('尚未配置，不影响普通文字翻译。需要扫描件功能时再补充 Qwen Key 即可。');
+      visionSetupStatus.textContent=t('可选，不影响普通文字翻译。');
     }
     return;
   }
@@ -1159,8 +1187,8 @@ async function refreshVisionSetupStatus():Promise<void>{
   if(profileId!==visionProfileId)return;
   const model=visionModel.value.trim()||profile.model;
   element<HTMLElement>('vision-setup-overview').textContent=keyConfigured&&model?t('已填写'):t('待补充');
-  const scope=isOfficialQwenProfile(profile)?t('图片输入需测试；“识别本页”另需 OCR 支持'):t('图片输入需测试；“识别本页”仍需官方 Qwen');
-  visionSetupStatus.textContent=msg`已填写：${profile.name} · ${model||t('待选择模型')} · ${keyConfigured?t('Key 已配置'):t('Key 尚未配置')} · ${scope}`;
+  visionSetupStatus.textContent=!keyConfigured?t('请为所选接口填写 Key。'):!model?t('请选择支持图片输入的模型。'):'';
+  visionSetupStatus.hidden=!visionSetupStatus.textContent;
   setupQwenButton.textContent=isOfficialQwenProfile(profile)?t('管理 Qwen'):t('配置 Qwen');
 }
 
@@ -1196,6 +1224,7 @@ async function refreshKeyState():Promise<void>{
   navKeyStatus.textContent=activeConfigured?t('● Key 已配置'):t('○ 尚未配置 Key');
   navKeyStatus.classList.toggle('configured',activeConfigured);
   const activeProfile=loadedSettingsBaseline?.apiProfiles.find(profile=>profile.id===activeTextProfileId);
+  element<HTMLElement>('setup-readiness').dataset.state=activeConfigured&&activeProfile?.model?.trim()?'configured':'incomplete';
   element<HTMLElement>('setup-readiness').textContent=t(!activeConfigured?'文字翻译需要配置 Key。':!activeProfile?.model?.trim()?'文字翻译需要选择模型。':'文字翻译已配置；可测试连接。');
   element<HTMLButtonElement>('setup-readiness-action').textContent=t(!activeConfigured||!activeProfile?.model?.trim()?'继续配置':'查看连接');
   await refreshVisionSetupStatus();
@@ -1285,7 +1314,7 @@ const commonTasks=element<HTMLDetailsElement>('common-tasks');
 try{commonTasks.open=sessionStorage.getItem('pi-settings-tasks-open')==='1'}catch{/* Settings remain usable without session storage. */}
 commonTasks.addEventListener('toggle',()=>{try{sessionStorage.setItem('pi-settings-tasks-open',commonTasks.open?'1':'0')}catch{/* Optional display preference only. */}});
 for(const button of document.querySelectorAll<HTMLButtonElement>('[data-settings-task]'))button.addEventListener('click',()=>{
-  const target=button.dataset.settingsTask??'connection';showSettingsSection(target);
+  commonTasks.open=false;const target=button.dataset.settingsTask??'connection';showSettingsSection(target);
   const field=target==='translation'?targetLanguage:target==='pages'?generalPageMode:apiPreset;
   queueMicrotask(()=>field.focus());
 });
@@ -1360,7 +1389,7 @@ function markFormDirty(event:Event):void{
   const target=event.target;
   if(target===academicGlossary||target===element<HTMLSelectElement>('glossary-profile'))purposePreferences.refreshSchemes();
   if(target instanceof Element){for(const [key,control] of Object.entries(purposeControls))if(target===control)purposePreferences.manual(key as PurposeSettingKey);if(target.id==='glossary-profile')purposePreferences.manual('activeGlossaryProfileId')}
-  if(target instanceof Element&&target.closest('.model-family-select, #ui-language, #import-settings-file'))return;
+  if(target instanceof Element&&target.closest('.model-family-select, #ui-language, #import-settings-file, [data-theme-choice], [data-palette-choice]'))return;
   if(target instanceof Element&&target.closest('#settings-storage'))return;
   if(target instanceof Element&&!target.closest('#settings-connection'))nonConnectionDirty=true;
   setDirty();
@@ -1416,7 +1445,7 @@ element<HTMLButtonElement>('onboarding-enhancement-setup').addEventListener('cli
 });
 onboardingOpenKeyPageButton.addEventListener('click',()=>openProviderKeyPage(onboardingOpenKeyPageButton));
 openProviderKeyPageButton.addEventListener('click',()=>openProviderKeyPage(openProviderKeyPageButton));
-onboardingSkip.addEventListener('click',()=>{if(wizardHasInput()&&onboardingSkip.dataset.confirm!=='true'){wizardRevision++;onboardingSkip.dataset.confirm='true';onboardingSkip.textContent=t('放弃接口输入并进入设置');setOnboardingStatus(t('接口输入尚未保存；可返回继续，或再次点击放弃。'),true);return}void(async()=>{const purposeSubmission=onboardingPurposeToken(),revision=wizardRevision;await mutateSettings((settings)=>{if(wizardRevision!==revision)throw new Error('输入或步骤已变化，请核对后继续。');return {nextSettings:{...settings,...onboardingPurposePatch(settings,purposeSubmission),onboardingCompleted:true},value:undefined}});if(wizardRevision!==revision||onboardingPurposeToken()!==purposeSubmission){setOnboardingStatus(t('已保存提交时的设置，后续输入仍保留。'));return}wizardRevision++;wizardInputDirty=false;wizardDrafts.clear();wizardTouchedProviders.clear();onboardingApiKey.value='';wizardKeyOrigin=undefined;onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus(t('已进入完整设置，保存后即可开始翻译。'))})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:t('无法关闭首次设置，请重新加载页面。'),true))});
+onboardingSkip.addEventListener('click',()=>{if(wizardHasInput()&&onboardingSkip.dataset.confirm!=='true'){wizardRevision++;onboardingSkip.dataset.confirm='true';onboardingSkip.textContent=t('放弃接口输入并进入设置');setOnboardingStatus(t('接口输入尚未保存；可返回继续，或再次点击放弃。'),true);return}void(async()=>{const purposeSubmission=onboardingPurposeToken(),revision=wizardRevision;await mutateSettings((settings)=>{if(wizardRevision!==revision)throw new Error('输入或步骤已变化，请核对后继续。');return {nextSettings:{...settings,...onboardingPurposePatch(settings,purposeSubmission),onboardingCompleted:true},value:undefined}});if(wizardRevision!==revision||onboardingPurposeToken()!==purposeSubmission){setOnboardingStatus(t('已保存提交时的设置，后续输入仍保留。'));return}wizardRevision++;wizardInputDirty=false;wizardDrafts.clear();wizardTouchedProviders.clear();onboardingApiKey.value='';wizardKeyOrigin=undefined;onboardingDialog.close();await load();if(requestedFocusDeferred)await applyRequestedSettingsFocus();setStatus(t('已进入完整设置，保存后即可开始翻译。'));status.classList.add('visually-hidden')})().catch((error:unknown)=>setOnboardingStatus(error instanceof Error?error.message:t('无法关闭首次设置，请重新加载页面。'),true))});
 onboardingDialog.addEventListener('cancel',event=>{if(!onboardingComplete&&(onboardingPurposeDirty||wizardHasInput())){event.preventDefault();setOnboardingStatus(t('输入尚未保存，可继续填写、保存进度或进入完整设置。'),true);return}setTimeout(()=>{if(requestedFocusDeferred)void applyRequestedSettingsFocus()},0)});
 onboardingTest.addEventListener('click',()=>{void(async()=>{
   onboardingTest.disabled=true;onboardingNext.disabled=true;
@@ -1425,7 +1454,7 @@ onboardingTest.addEventListener('click',()=>{void(async()=>{
   if(error instanceof StaleWizardInputError){if(onboardingDialog.open)setOnboardingStatus(t('输入或步骤已变化，请核对后继续。'),true);return}
   setOnboardingStatus(error instanceof Error?error.message:t('首次设置失败。'),true);
 }).finally(()=>{onboardingTest.disabled=false;onboardingNext.disabled=false})});
-onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;onboardingTest.disabled=true;if(onboardingComplete){onboardingDialog.close();if(requestedFocusDeferred)await applyRequestedSettingsFocus();return}if(onboardingStep===1){showOnboardingStep(2,true);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');assertKeyOrigin(apiKey,wizardKeyOrigin,base);if(onboardingStep===2){const revision=wizardRevision;assertWizardCurrent(revision,2);const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});assertWizardCurrent(revision,2);if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus(t('正在验证 Key 并读取可用模型…'));const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;assertWizardCurrent(revision,2);let message:string;let error=false;if(response.ok){setModelCatalog(response.data.models,true);const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?msg`已读取模型列表，推荐文字模型 ${onboardingModel.value}；保存前可选择测试翻译。`:t('接口未返回模型列表，请手动填写模型 ID。')}else{setModelCatalog([],true);const detail=apiSetupError(response.error.code,response.error.message,base);if(!['API_ENDPOINT_INVALID','INVALID_RESPONSE','NETWORK_ERROR','REQUEST_TIMEOUT'].includes(response.error.code))throw new Error(detail);message=msg`未能读取模型列表。请核对接口地址；若服务商不提供模型列表，可手动填写模型 ID 后保存或测试。${detail}`;error=true}showOnboardingStep(3,true);setOnboardingStatus(message,error);return}await finishOnboarding(Boolean(activeSettingsRecovery))})().catch((error:unknown)=>{if(error instanceof StaleWizardInputError){if(onboardingDialog.open)setOnboardingStatus(t('输入或步骤已变化，请核对后继续。'),true);return}setOnboardingStatus(error instanceof Error?error.message:t('首次设置失败。'),true)}).finally(()=>{onboardingNext.disabled=false;onboardingTest.disabled=false})});
+onboardingNext.addEventListener('click',()=>{void(async()=>{onboardingNext.disabled=true;onboardingTest.disabled=true;if(onboardingComplete){onboardingDialog.close();if(requestedFocusDeferred)await applyRequestedSettingsFocus();return}if(onboardingStep===1){showOnboardingStep(2,true);return}const base=normalizeApiBaseUrl(onboardingBaseUrl.value);const apiKey=onboardingApiKey.value.trim();if(!apiKey)throw new Error('请填写 API Key。');assertKeyOrigin(apiKey,wizardKeyOrigin,base);if(onboardingStep===2){const revision=wizardRevision;assertWizardCurrent(revision,2);const granted=await browser.permissions.request({origins:[apiOriginPattern(base)]});assertWizardCurrent(revision,2);if(!granted)throw new Error('需要 API 域名访问权限才能继续。');setOnboardingStatus(t('正在验证 Key 并读取可用模型…'));const response=await browser.runtime.sendMessage({type:'LIST_API_MODELS',payload:{apiKey,apiBaseUrl:base}} satisfies RuntimeMessage) as ModelListResponse;assertWizardCurrent(revision,2);let message:string;let error=false;if(response.ok){setModelCatalog(response.data.models,true);const suggested=recommendedTextModel(response.data.models,onboardingModel.value);if(suggested)onboardingModel.value=suggested;message=response.data.models.length?'':t('接口未返回模型列表，请手动填写模型 ID。')}else{setModelCatalog([],true);const detail=apiSetupError(response.error.code,response.error.message,base);if(!['API_ENDPOINT_INVALID','INVALID_RESPONSE','NETWORK_ERROR','REQUEST_TIMEOUT'].includes(response.error.code))throw new Error(detail);message=msg`未能读取模型列表。请核对接口地址；若服务商不提供模型列表，可手动填写模型 ID 后保存或测试。${detail}`;error=true}showOnboardingStep(3,true);setOnboardingStatus(message,error);return}await finishOnboarding(Boolean(activeSettingsRecovery))})().catch((error:unknown)=>{if(error instanceof StaleWizardInputError){if(onboardingDialog.open)setOnboardingStatus(t('输入或步骤已变化，请核对后继续。'),true);return}setOnboardingStatus(error instanceof Error?error.message:t('首次设置失败。'),true)}).finally(()=>{onboardingNext.disabled=false;onboardingTest.disabled=false})});
 
 apiBaseUrl.addEventListener('beforeinput',()=>{if(connectionProvider!=='custom')rememberConnectionDraft()});
 apiBaseUrl.addEventListener('input',()=>{setModelCatalog([]);apiPreset.value='custom';connectionProvider='custom';refreshKeyOriginNotice(false);connectionSummary.hidden=true;refreshProviderHint();void refreshKeyState();void refreshApiPermissionState()});generalPageMode.addEventListener('change',refreshPageModeFields);

@@ -1,3 +1,4 @@
+import {bindTheme} from '../../ui/theme';
 import { t, msg, uiHtml } from '../i18n/ui-language';
 import type {
   BilingualPageSessionResponse,
@@ -1089,9 +1090,11 @@ export function createBilingualPageTranslator(
   let disposed = false;
   let singleParagraphMode=false;
   let controlHost: HTMLElement | undefined;
+  let controlThemeCleanup: (() => void) | undefined;
   let controlCollapsed = false;
   let controlCollapseUserSet = false;
   let launcherHost: HTMLElement | undefined;
+  let launcherThemeCleanup: (() => void) | undefined;
   let launcherRefreshTimer: number | undefined;
   let launcherNavigationTimer: number | undefined;
   let launcherPlacementTimer: number | undefined;
@@ -1488,6 +1491,8 @@ export function createBilingualPageTranslator(
   const destroyControl = (): void => {
     window.removeEventListener('resize', placeControl);
     window.visualViewport?.removeEventListener('resize', placeControl);
+    controlThemeCleanup?.();
+    controlThemeCleanup = undefined;
     controlHost?.remove();
     controlHost = undefined;
   };
@@ -1510,6 +1515,8 @@ export function createBilingualPageTranslator(
     window.removeEventListener('scroll', handleLauncherScroll, true);
     window.removeEventListener('resize', handleLauncherViewportChange);
     window.visualViewport?.removeEventListener('resize', handleLauncherViewportChange);
+    launcherThemeCleanup?.();
+    launcherThemeCleanup = undefined;
     launcherHost?.remove();
     launcherHost = undefined;
   };
@@ -1747,6 +1754,7 @@ export function createBilingualPageTranslator(
           destroyLauncher();
         }));
       document.documentElement.append(launcherHost);
+      launcherThemeCleanup = bindTheme(shadow, true);
       window.addEventListener('scroll', handleLauncherScroll, true);
       window.addEventListener('resize', handleLauncherViewportChange);
       window.visualViewport?.addEventListener('resize', handleLauncherViewportChange);
@@ -2649,6 +2657,7 @@ export function createBilingualPageTranslator(
           void control(`display-${select.value}` as BilingualPageAction);
         });
       document.documentElement.append(controlHost);
+      controlThemeCleanup = bindTheme(shadow, true);
       window.addEventListener('resize', placeControl);
       window.visualViewport?.addEventListener('resize', placeControl);
     }

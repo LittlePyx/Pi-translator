@@ -44,7 +44,7 @@ export function summarizeDocumentReviews(
 }
 
 export function documentReviewButtonLabel(summary: DocumentReviewSummary): string {
-  return summary.totalCount ? msg`本文 · 待核对 ${summary.totalCount}` : t('本文');
+  return summary.totalCount ? msg`术语 · 待核对 ${summary.totalCount}` : t('术语');
 }
 
 export function documentReviewDescription(summary: DocumentReviewSummary): string {

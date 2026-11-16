@@ -1,5 +1,6 @@
 {
   "offline": [
+    "tests/e2e/theme-preferences.spec.ts",
     "tests/e2e/api-clarity.spec.ts",
     "tests/e2e/api-interruption.spec.ts",
     "tests/e2e/enhancement-recovery.spec.ts",

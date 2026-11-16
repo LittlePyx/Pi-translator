@@ -80,7 +80,7 @@ test('carries the currently displayed translation when switching back to the pag
     await panel.setViewportSize({width:360,height:760});
     await panel.screenshot({path:info.outputPath('browser-sidebar-light.png')});
     await panel.emulateMedia({colorScheme:'dark'});
-    await expect.poll(() => panel.locator('#web-sidebar-switch').evaluate(el => getComputedStyle(el).color)).toBe('rgb(237, 237, 237)');
+    await expect.poll(() => panel.locator('#web-sidebar-switch').evaluate(el => getComputedStyle(el).color)).toBe('rgb(177, 177, 177)');
     await panel.screenshot({path:info.outputPath('browser-sidebar-dark.png')});
     const calls = textRequests.length;
     await panel.locator('#web-sidebar-switch').click();
@@ -664,6 +664,21 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     expect(navigationLayout.controlHeights.every((height) => height >= 32)).toBe(true);
 
     await expect(counter).toHaveAttribute('title', '查看和搜索翻译历史（Alt+/）');
+    const switchSidebar=overlay.getByRole('button',{name:'改用浏览器侧栏',exact:true});
+    await expect(switchSidebar).toHaveAttribute('data-pi-icon','browser-sidebar');
+    await expect(switchSidebar).toHaveCSS('width','32px');
+    await expect(switchSidebar).toHaveCSS('border-top-width','0px');
+    await expect(switchSidebar).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
+    await expect(overlay.locator('.document-memory-action')).toHaveText('术语');
+    await expect(overlay.locator('.document-memory-action')).toHaveAccessibleName(/本文术语/);
+    await overlay.locator('.surface > .header').screenshot({path:testInfo.outputPath('sidebar-header-compact.png')});
+    await overlay.locator('.surface').screenshot({path:testInfo.outputPath('sidebar-footer-single-row.png')});
+    const initialFooterLayout=await overlay.locator('.result-footer').evaluate(footer=>{
+      const copy=footer.querySelector<HTMLElement>('.copy-action')!;
+      const navigation=footer.querySelector<HTMLElement>('.result-navigation')!;
+      return {copy:copy.getBoundingClientRect().toJSON(),navigation:navigation.getBoundingClientRect().toJSON()};
+    });
+    expect(Math.abs(initialFooterLayout.copy.top-initialFooterLayout.navigation.top)).toBeLessThanOrEqual(4);
     await counter.click();
     const historySearch = overlay.getByRole('searchbox', { name: '搜索翻译历史' });
     const historySummary = overlay.locator('.history-summary');
@@ -845,6 +860,7 @@ test('keeps narrow sidebar history navigation bounded and recoverable', async ({
     expect(footerLayout.scrollWidth).toBeLessThanOrEqual(footerLayout.clientWidth + 1);
     expect(footerLayout.controlHeights.every((height) => height >= 32)).toBe(true);
     expect(Math.max(...footerLayout.controlTops)-Math.min(...footerLayout.controlTops)).toBeLessThanOrEqual(2);
+    await overlay.locator('.surface').screenshot({path:testInfo.outputPath('sidebar-footer-with-undo.png')});
     await historyPage.keyboard.press('Shift+Tab');
     await expect(more).toBeFocused();
     await historyPage.keyboard.press('Shift+Tab');
@@ -951,7 +967,7 @@ test('keeps document terminology behind a compact sidebar drawer', async () => {
   }
   await expect(overlay).toHaveAttribute('data-pi-view', 'sidebar');
   await expect(overlay.locator('.body')).toContainText('自适应感知策略');
-  await expect(overlay.getByTitle('查看本文术语和最近翻译')).toHaveText('本文');
+  await expect(overlay.getByTitle('查看本文术语和最近翻译')).toHaveText('术语');
   await overlay.getByTitle('查看本文术语和最近翻译').click();
   await expect(overlay.locator('.document-meta')).toContainText('仅保存在本机');
   await expect(overlay.locator('.document-section').filter({ hasText: '待确认术语' }))
@@ -1173,7 +1189,7 @@ test('keeps missing configured terminology as a quiet local review', async ({}, 
     }
 
     const documentButton = overlay.locator('.document-memory-action');
-    await expect(documentButton).toHaveText('本文 · 待核对 1');
+    await expect(documentButton).toHaveText('术语 · 待核对 1');
     await expect(documentButton).toHaveAttribute('title', '有 1 个术语待核对');
     await documentButton.click();
     const documentReview = overlay.locator('.document-term-review-section');

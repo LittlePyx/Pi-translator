@@ -58,13 +58,13 @@ describe('document review summary', () => {
     expect(summary.imageTranslations.map((entry) => entry.requestId)).toEqual(['request-1']);
     expect(summary.terminologyTranslations).toHaveLength(1);
     expect(summary).toMatchObject({ imageCount: 1, terminologyCount: 2, totalCount: 3 });
-    expect(documentReviewButtonLabel(summary)).toBe('本文 · 待核对 3');
+    expect(documentReviewButtonLabel(summary)).toBe('术语 · 待核对 3');
     expect(documentReviewDescription(summary)).toBe('待核对：图像识别 1 条，术语 2 个');
   });
 
   it('uses a quiet default and concise single-category descriptions', () => {
     const empty = summarizeDocumentReviews();
-    expect(documentReviewButtonLabel(empty)).toBe('本文');
+    expect(documentReviewButtonLabel(empty)).toBe('术语');
     expect(documentReviewDescription(empty)).toBe('查看本文术语和最近翻译');
 
     const terminology = summarizeDocumentReviews(memory([{

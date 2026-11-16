@@ -32,7 +32,8 @@ export function bindPdfExcerptSource(options:{
       }catch(error){if(options.canAutoOpen?.()??true)options.notice(error instanceof Error?error.message:String(error))}
       if(options.current()||!(options.canAutoOpen?.()??true))return;
       options.empty.querySelector('h1')!.textContent=t('选择原 PDF 定位资料');
-      options.empty.querySelector('p')!.textContent=t('核验文件后返回原文位置；不会重新翻译或修改笔记。');
+      const context=options.empty.querySelector<HTMLElement>('#pdf-open-context')!;
+      context.textContent=t('核验文件后返回原文位置；不会重新翻译或修改笔记。');context.hidden=false;
       const preview=document.createElement('div');preview.className='pdf-excerpt-source-preview';
       const title=document.createElement('strong'),quote=document.createElement('blockquote');title.textContent=item.content.sourceTitle;quote.textContent=item.content.originalText;
       preview.append(title,quote);

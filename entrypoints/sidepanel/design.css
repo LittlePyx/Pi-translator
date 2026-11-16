@@ -196,3 +196,28 @@ body:has(#session:not([hidden])) .source-section { margin-top:10px; }
 .header-actions .surface-switch { border-color:transparent; background:transparent; color:var(--pi-text); }
 .header-actions .surface-switch:hover { color:var(--pi-text); background:var(--pi-subtle); }
 .header-actions .surface-switch:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
+
+html:root { color: var(--pi-text); background: var(--pi-surface); }
+/* Match the in-page tools without competing with the translation. */
+html { --app-header-height:56px; }
+.app-header { min-height:var(--app-header-height); padding-block:10px; border-bottom:0; }
+.brand { gap:8px; min-width:0; }
+.brand img { width:22px; height:20px; }
+.brand strong { font-size:13px; font-weight:550; white-space:nowrap; }
+.header-actions { gap:4px; }
+.header-actions .surface-switch { color:var(--pi-muted); border:0; }
+.header-actions .surface-switch:hover { color:var(--pi-text); }
+.continuous-translation-toggle, .continuous-translation-toggle.paused { color:var(--pi-muted); background:transparent; font-weight:450; }
+.continuous-translation-dot { background:var(--pi-primary); box-shadow:none; }
+.continuous-translation-toggle.paused .continuous-translation-dot { background:var(--pi-muted); box-shadow:none; }
+.continuous-translation-toggle:hover:not(:disabled), .continuous-translation-toggle.paused:hover:not(:disabled) { color:var(--pi-text); background:var(--pi-subtle); }
+.continuous-translation-toggle:focus-visible, #translation-state:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
+.reading-navigation, .reading-navigation button { color:var(--pi-muted); }
+.reading-navigation button:hover:not(:disabled), .web-history-navigation button:hover:not(:disabled) { color:var(--pi-text); background:var(--pi-subtle); }
+.reading-navigation button:disabled, .web-history-navigation button:disabled { color:var(--pi-muted); opacity:.35; }
+.session-actions .copy-action[data-state="pending"], .session-actions .copy-action[data-state="success"] { color:var(--pi-primary); border-color:var(--pi-line); background:var(--pi-subtle); }
+.session-actions .copy-action[data-state="error"] { color:var(--pi-danger); border-color:var(--pi-line); background:var(--pi-surface); }
+.bilingual-page-copy-feedback { color:var(--pi-primary); }
+.bilingual-page-copy-feedback[data-tone="error"] { color:var(--pi-danger); }
+.continuous-translation-toggle:focus-visible, .continuous-translation-toggle.paused:focus-visible { color:var(--pi-text); background:var(--pi-subtle); }
+.reading-navigation button:focus-visible, .web-history-navigation button:focus-visible, .source-toggle:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }

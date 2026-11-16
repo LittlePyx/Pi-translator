@@ -78,22 +78,33 @@ button, input, select, textarea { font-family: inherit; }
 [data-pi-icon][hidden] { display: none !important; }
 [data-pi-icon]::before { content: ""; display: block; flex: 0 0 auto; box-sizing: border-box; }
 /* Draw with borders/gradients so restrictive page img-src policies cannot hide the icons. */
-[data-pi-icon="copy"]::before { width: 12px; height: 12px; margin: 3px 0 0 3px; border: 1.5px solid currentColor; border-radius: 1px; }
-[data-pi-icon="copy"]::after { content: ""; position: absolute; top: 6px; left: 6px; box-sizing: border-box; width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 1px; clip-path: polygon(0 0,100% 0,100% 35%,35% 35%,35% 100%,0 100%); }
+[data-pi-icon="copy"]::before { width: 12px; height: 12px; margin: 4px 0 0 4px; border: 1.5px solid currentColor; border-radius: 1px; }
+[data-pi-icon="copy"]::after { content: ""; position: absolute; top: calc(50% - 8px); left: calc(50% - 8px); box-sizing: border-box; width: 12px; height: 12px; border: 1.5px solid currentColor; border-radius: 1px; clip-path: polygon(0 0,100% 0,100% 35%,35% 35%,35% 100%,0 100%); }
 [data-pi-icon="more"]::before { width: 18px; height: 18px; background: radial-gradient(circle,currentColor 1.6px,transparent 1.8px) left center / 4px 4px no-repeat,radial-gradient(circle,currentColor 1.6px,transparent 1.8px) center / 4px 4px no-repeat,radial-gradient(circle,currentColor 1.6px,transparent 1.8px) right center / 4px 4px no-repeat; }
 [data-pi-icon="glyph"]::before { display: none; }
-[data-pi-icon="glyph"] > svg { flex: none; width: 18px; height: 18px; }
+[data-pi-icon="glyph"] > svg { display: block; flex: none; width: 18px; height: 18px; }
 [data-pi-icon="region"]::before { width: 18px; height: 16px; border: 1.5px dashed currentColor; border-radius: 2px; }
 [data-pi-icon="chevron"]::before { width: 8px; height: 8px; margin-top: -4px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
 [data-pi-icon="chevron"][aria-expanded="true"]::before { margin-top: 4px; transform: rotate(225deg); }
 [data-pi-icon="reading"]::before { width: 16px; height: 18px; border: 1.5px solid currentColor; border-radius: 2px; background: repeating-linear-gradient(currentColor 0 1px,transparent 1px 4px) center / 8px 9px no-repeat; }
-[data-pi-icon="compare"]::before { width: 20px; height: 16px; border: 1.5px solid currentColor; border-radius: 2px; background: linear-gradient(currentColor,currentColor) center / 1px 100% no-repeat; }
+[data-pi-icon="compare"]::before { width: 18px; height: 16px; border: 1.5px solid currentColor; border-radius: 2px; background: linear-gradient(currentColor,currentColor) center / 1px 100% no-repeat; }
 [data-pi-icon="library"]::before { width: 18px; height: 18px; border-bottom: 1.5px solid currentColor; background: repeating-linear-gradient(90deg,currentColor 0 2px,transparent 2px 6px) left bottom 3px / 16px 13px no-repeat; }
 [data-pi-icon="back"]::before { content: "↩"; font: 22px/1 var(--pi-font); }
-[data-pi-icon="clear"]::before { content: "×"; font: 22px/1 var(--pi-font); }
+[data-pi-icon="clear"]::before { width: 16px; height: 16px; background: linear-gradient(45deg,transparent calc(50% - .75px),currentColor calc(50% - .75px),currentColor calc(50% + .75px),transparent calc(50% + .75px)) center / 12px 12px no-repeat,linear-gradient(-45deg,transparent calc(50% - .75px),currentColor calc(50% - .75px),currentColor calc(50% + .75px),transparent calc(50% + .75px)) center / 12px 12px no-repeat; }
+/* Navigation uses the same stroke and optical center regardless of the UI font. */
+[data-pi-icon="previous"]::before, [data-pi-icon="next"]::before { width: 8px; height: 8px; border-top: 1.5px solid currentColor; border-right: 1.5px solid currentColor; transform: rotate(45deg); margin-left: -3px; }
+[data-pi-icon="previous"]::before { transform: rotate(-135deg); margin-left: 3px; }
+[data-pi-icon="arrow-left"]::before, [data-pi-icon="arrow-up"]::before, [data-pi-icon="arrow-down"]::before { width: 16px; height: 16px; background: linear-gradient(currentColor,currentColor) center / 14px 1.5px no-repeat; }
+[data-pi-icon="arrow-left"]::after, [data-pi-icon="arrow-up"]::after, [data-pi-icon="arrow-down"]::after { content: ""; position: absolute; box-sizing: border-box; left: calc(50% - 6px); top: calc(50% - 4px); width: 8px; height: 8px; border-left: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(45deg); }
+[data-pi-icon="arrow-up"]::before, [data-pi-icon="arrow-down"]::before { background-size: 1.5px 14px; }
+[data-pi-icon="arrow-up"]::after { left: calc(50% - 4px); top: calc(50% - 6px); transform: rotate(135deg); }
+[data-pi-icon="arrow-down"]::after { left: calc(50% - 4px); top: calc(50% - 2px); transform: rotate(-45deg); }
 [data-pi-icon="copy"][data-state="success"]::before { width: 7px; height: 13px; margin: -3px 0 0; border: 0; border-right: 2px solid currentColor; border-bottom: 2px solid currentColor; border-radius: 0; transform: rotate(45deg); }
 [data-pi-icon="copy"][data-state="error"]::before { content: "!"; width: 18px; height: 18px; margin: 0; border: 0; font: 600 18px/18px var(--pi-font); }
 [data-pi-icon="copy"][data-state="success"]::after, [data-pi-icon="copy"][data-state="error"]::after { display: none; }
+.copy-state-label { flex:0 0 auto; color:var(--pi-muted); font:12px/1.5 var(--pi-font); white-space:nowrap; pointer-events:none; }
+.copy-state-label:empty, .result-footer:has(> .result-navigation) > .copy-state-label, .result-footer:has(.result-reading-nav:not([hidden])) > .copy-state-label, .session-actions:has(.reading-navigation:not([hidden])) > .copy-state-label { display:none; }
+:is(.result-footer,.session-actions):has(.copy-action[data-state="error"]) > .copy-state-label { color:var(--pi-danger); }
 button { transition: background-color .14s ease, border-color .14s ease, color .14s ease; }
 :where(button, input, select, textarea, summary):focus-visible {
   outline: 2px solid var(--pi-focus);
@@ -165,5 +176,7 @@ dialog.pi-task-dialog[open].pi-task-layout, dialog.pi-task-dialog[open] > .pi-ta
 .pi-task-dialog .pi-task-body :is(label,details,fieldset) { min-width:0; overflow-wrap:anywhere; }
 .pi-task-dialog .pi-task-footer button { white-space:normal; overflow-wrap:anywhere; }
 .pi-task-dialog .pi-task-body textarea { resize:vertical; }
+.pi-task-dialog :is(button,input,select,textarea,summary):focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; box-shadow:none; }
+.pi-task-dialog .pi-task-body :is(input,select,textarea):focus { border-color:var(--pi-focus); }
 .pi-action-guide-list > button { gap:12px; }
 .pi-action-guide-list > button:focus-visible { outline-offset:-2px; }

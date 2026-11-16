@@ -8,10 +8,10 @@ export function bindGlossaryTransfer(textarea:HTMLTextAreaElement,targetLanguage
   const input=document.createElement('input');input.type='file';input.accept='.csv,.tsv,.txt';input.hidden=true;
   const load=document.createElement('button'),save=document.createElement('button');load.type=save.type='button';load.textContent=t('导入词表…');save.textContent=t('导出词表');tools.append(load,save,input);textarea.closest('label')!.after(tools);
   const feedback=document.createElement('p');feedback.id='glossary-transfer-status';feedback.className='glossary-transfer-status';feedback.role='status';feedback.hidden=true;tools.after(feedback);let importedDraft:string|undefined;
-  const notice=(message:string)=>{feedback.textContent=message;feedback.hidden=!message};
+  const notice=(message:string,isError=false)=>{feedback.textContent=message;feedback.hidden=!message;feedback.classList.toggle('error',isError);feedback.role=isError?'alert':'status'};
   textarea.addEventListener('input',()=>{if(importedDraft!==undefined){importedDraft=textarea.value;notice(t('术语草稿已更改，保存更改后生效。'))}else notice('')});
   load.addEventListener('click',()=>input.click());
-  const error=(value:unknown)=>alert(localizeErrorMessage(value instanceof Error?value.message:String(value)));
+  const error=(value:unknown)=>notice(localizeErrorMessage(value instanceof Error?value.message:String(value)),true);
   save.addEventListener('click',()=>{const parsed=parseGlossaryText(textarea.value);if(parsed.errors.length){error(parsed.errors[0]);return}const url=URL.createObjectURL(new Blob([writeGlossaryFile(parsed.entries)],{type:'text/tab-separated-values;charset=utf-8'})),a=document.createElement('a');a.href=url;a.download='pi-glossary.tsv';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000)});
   input.addEventListener('input',event=>event.stopPropagation());
   input.addEventListener('change',event=>{event.stopPropagation();const file=input.files?.[0];input.value='';if(!file)return;

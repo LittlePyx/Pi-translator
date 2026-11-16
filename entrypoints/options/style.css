@@ -1507,6 +1507,9 @@ button:hover { background: #f1f3f6; }
 .connection-step-body { display: grid; gap: 8px; min-width: 0; }
 .connection-step-body > label { margin: 0; }
 .connection-step-help { display: block; margin-top: -2px; }
+#onboarding-model-catalog-status:empty,
+#model-catalog-status:empty,
+#onboarding-status:empty { display: none; }
 .connection-step .permission-state { margin-top: 2px; }
 .connection-step .compact-check { margin-top: 1px; }
 .connection-step .subtle-danger { margin-top: 25px; }

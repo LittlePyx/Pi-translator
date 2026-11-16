@@ -1,5 +1,15 @@
 import { expect, type Page } from '@playwright/test';
 
+export async function manageGlossaryScheme(page:Page,action:'add'|'rename'|'delete',name?:string):Promise<void>{
+  await page.locator('.glossary-profile-menu > summary').click();
+  await page.locator(`#glossary-profile-${action}`).click();
+  const dialog=page.locator('.glossary-profile-dialog');
+  await expect(dialog).toBeVisible();
+  if(name!==undefined)await dialog.locator('input').fill(name);
+  await dialog.locator('button[type="submit"]').click();
+  await expect(dialog).toHaveCount(0);
+}
+
 export async function openSettingsSection(page: Page, section: string): Promise<void> {
   if(section==='cost'){
     await openSettingsSection(page,'connection');

@@ -1,3 +1,4 @@
+import {normalizePalette} from '../ui/palettes';
 import {openReadingSource} from '../core/background/reading-source-navigation';
 import { currentUiLanguage, initializeUiLanguage, t, UI_LANGUAGE_STORAGE_KEY } from '../core/i18n/ui-language';
 import { protectLatex, restoreLatex, restoreLatexPreview } from '../core/latex/protector';
@@ -1773,6 +1774,9 @@ async function broadcastDocumentMemory(documentIds:string[]):Promise<void>{
 
 async function broadcastPublicSettings(): Promise<void> {
   await initializeUiLanguage();
+  const {piThemePreference,piPalettePreference} = await browser.storage.local.get(['piThemePreference','piPalettePreference']);
+  const palettePreference = normalizePalette(piPalettePreference);
+  const themePreference = piThemePreference === 'light' || piThemePreference === 'dark' ? piThemePreference : 'auto' as const;
   const [settings, pausedSiteHosts, preferences] = await Promise.all([
     getSettings(),
     getPausedSiteHosts(),
@@ -1785,7 +1789,7 @@ async function broadcastPublicSettings(): Promise<void> {
       .map((tab) =>
         browser.tabs.sendMessage(tab.id, {
           type: 'PUBLIC_SETTINGS_UPDATED',
-          payload: toPublicSettings(settings, pausedSiteHosts, preferences, tab.url),
+          payload: {...toPublicSettings(settings, pausedSiteHosts, preferences, tab.url),themePreference,palettePreference},
         } satisfies RuntimeMessage),
       ),
   );
@@ -4240,6 +4244,7 @@ export default defineBackground(() => {
   });
 
   browser.storage.onChanged.addListener((changes, areaName) => {
+    if (areaName === 'local' && (changes.piThemePreference || changes.piPalettePreference)) void broadcastPublicSettings();
     if(areaName==='local'&&changes.documentTranslationMemoryV1){
       const change=changes.documentTranslationMemoryV1,before=(change.oldValue??{}) as Record<string,unknown>,after=(change.newValue??{}) as Record<string,unknown>;
       const changed=[...new Set([...Object.keys(before),...Object.keys(after)])].filter(id=>/^doc-[a-z0-9]{1,8}$/u.test(id)&&JSON.stringify(before[id])!==JSON.stringify(after[id])).slice(0,80);
@@ -4685,12 +4690,15 @@ export default defineBackground(() => {
     ...createUtilityMessageHandlers({
       getPublicSettings: async (pageUrl) => {
         await initializeUiLanguage();
+        const {piThemePreference,piPalettePreference} = await browser.storage.local.get(['piThemePreference','piPalettePreference']);
+  const palettePreference = normalizePalette(piPalettePreference);
+  const themePreference = piThemePreference === 'light' || piThemePreference === 'dark' ? piThemePreference : 'auto' as const;
         const [settings, pausedSiteHosts, preferences] = await Promise.all([
           getSettings(),
           getPausedSiteHosts(),
           getSiteReadingPreferences(),
         ]);
-        return toPublicSettings(settings, pausedSiteHosts, preferences, pageUrl);
+        return {...toPublicSettings(settings, pausedSiteHosts, preferences, pageUrl),themePreference,palettePreference};
       },
       recordLocalPerformance: recordLocalPerformanceSample,
       getLocalDiagnosticReport: localDiagnosticReport,

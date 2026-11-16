@@ -131,3 +131,30 @@ header strong { white-space:nowrap; }
 .selection-help p { margin:8px 0; }
 .selection-help button { padding:5px 8px; }
 .selection-help button[hidden] { display:none; }
+.theme-choice { display:flex; align-items:center; justify-content:space-between; gap:12px; color:var(--pi-muted); font-size:12px; }
+.theme-choice select { width:auto; min-width:100px; color:var(--pi-text); background:var(--pi-surface); }
+
+html:root { color: var(--pi-text); background: var(--pi-surface); }
+.more-body :is(input,select):focus { border-color:var(--pi-focus); box-shadow:none; }
+.more-body :is(input,select):focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
+/* Tools and site controls stay in view; assistance and connection details expand on demand. */
+.more-tools { display:grid; gap:2px; }
+.more-tools:not(:has(> button:not([hidden]))) { display:none; }
+.more-tools > button { min-height:36px; padding:7px 8px; border:0; color:var(--pi-text); background:transparent; text-align:left; font-size:13px; }
+.more-tools > button:hover:not(:disabled) { background:var(--pi-subtle); }
+.more-body > .site-control { margin-top:6px; padding-top:10px; border-top:1px solid var(--pi-line); }
+.popup-help-details { border:0; }
+.popup-help-details > summary, .service-details > summary { display:flex; align-items:center; gap:8px; min-height:36px; padding:6px 8px; border-radius:var(--pi-radius); color:var(--pi-text); list-style:none; cursor:pointer; font-size:12px; line-height:1.5; }
+.popup-help-details > summary::-webkit-details-marker, .service-details > summary::-webkit-details-marker { display:none; }
+.popup-help-details > summary:hover, .service-details > summary:hover { background:var(--pi-subtle); }
+.popup-help-details > summary::after, .service-details > summary::after { content:''; flex:none; width:6px; height:6px; margin:-3px 2px 0 auto; border-right:1.5px solid currentColor; border-bottom:1.5px solid currentColor; transform:rotate(45deg); }
+.popup-help-details[open] > summary::after, .service-details[open] > summary::after { margin-top:3px; transform:rotate(225deg); }
+.service-details > summary { flex-wrap:nowrap; }
+.service-details > summary .service-title { flex:1; min-width:0; margin:0; color:var(--pi-text); font-size:12px; text-align:left; }
+.service-details > summary #popup-service-state { flex:0 1 auto; min-width:0; max-width:44%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; color:var(--pi-muted); font-size:11px; }
+.service-details > summary::after { margin-left:2px; }
+.popup-help-content { display:grid; gap:6px; padding:8px; }
+.popup-help-content .selection-help { padding:0; }
+.popup-help-content > .pi-action-guide-trigger { width:100%; min-height:34px; padding:6px 0; color:var(--pi-muted); font-size:12px; }
+.popup-help-content .page-context { font-size:12px; line-height:1.6; }
+.popup-help-content .feature-guide-toggle { justify-self:start; margin:0; padding:5px 0; font-size:12px; }

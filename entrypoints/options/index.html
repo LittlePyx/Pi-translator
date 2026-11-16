@@ -40,12 +40,13 @@
           </div>
         </header>
         <div data-i18n-aria-label="设置进度" class="onboarding-progress" aria-label="设置进度">
-          <span data-onboarding-dot="1">1</span>
+          <span data-onboarding-dot="1" data-i18n-parts='[[0,"用途"]]'>用途</span>
           <i></i>
-          <span data-onboarding-dot="2">2</span>
+          <span data-onboarding-dot="2" data-i18n-parts='[[0,"接口"]]'>接口</span>
           <i></i>
-          <span data-onboarding-dot="3">3</span>
+          <span data-onboarding-dot="3" data-i18n-parts='[[0,"模型"]]'>模型</span>
         </div>
+        <div class="onboarding-body">
         <section class="onboarding-step" data-onboarding-step="1">
           <h3 data-i18n-parts='[[0,"你想怎样使用？"]]'>你想怎样使用？</h3>
           <p data-i18n-parts='[[0,"可多选，也可跳过；之后随时可以调整。"]]'>可多选，也可跳过；之后随时可以调整。</p>
@@ -72,25 +73,23 @@
         </section>
         <section class="onboarding-step" data-onboarding-step="2" hidden>
           <h3 data-i18n-parts='[[0,"连接翻译服务"]]'>连接翻译服务</h3>
-          <p data-i18n-parts='[[0,"已有 Key？选择签发它的服务商并填入。还没有？选择服务商后可前往官方页面获取；费用由服务商收取。"]]'>已有 Key？选择签发它的服务商并填入。还没有？选择服务商后可前往官方页面获取；费用由服务商收取。</p>
           <label><span data-i18n-parts="[[0,&quot;服务商&quot;]]">服务商</span><select id="onboarding-preset"></select></label>
           <label>
             <span>API Key</span>
-            <input data-i18n-placeholder="只保存在浏览器扩展存储中" id="onboarding-api-key" type="password" autocomplete="off" aria-describedby="onboarding-key-error" placeholder="只保存在浏览器扩展存储中">
+            <input data-i18n-placeholder="只保存在浏览器扩展存储中" id="onboarding-api-key" type="password" autocomplete="off" aria-describedby="onboarding-key-error onboarding-key-hint" placeholder="只保存在浏览器扩展存储中">
           </label>
           <p id="onboarding-key-error" class="inline-setup-error" role="alert" hidden></p>
           <button id="onboarding-confirm-key-origin" class="text-button" type="button" hidden data-i18n-parts='[[0,"确认此 Key 用于当前地址"]]'>确认此 Key 用于当前地址</button>
           <button data-i18n-parts="[[0,&quot;前往官方页面获取 API Key ↗&quot;]]" id="onboarding-open-key-page" class="provider-key-link text-button" type="button" hidden>前往官方页面获取 API Key ↗</button>
           <label id="onboarding-base-url-field" hidden>
             <span>API Base URL</span>
-            <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" placeholder="https://example.com/v1">
-            <small data-i18n-parts="[[0,&quot;地址须与 Key 的服务商、地域一致。阿里云默认北京；其他地域或业务空间请粘贴平台提供的兼容地址。&quot;]]">地址须与 Key 的服务商、地域一致。阿里云默认北京；其他地域或业务空间请粘贴平台提供的兼容地址。</small>
-          </label>
-          <label class="check-row compact-check">
-            <input id="onboarding-persist-key" type="checkbox">
-            <span data-i18n-parts="[[0,&quot;在本机持久保存 Key；不勾选则仅保留到本次浏览器会话结束&quot;]]">在本机持久保存 Key；不勾选则仅保留到本次浏览器会话结束</span>
+            <input id="onboarding-base-url" type="text" inputmode="url" spellcheck="false" aria-describedby="onboarding-key-hint" placeholder="https://example.com/v1">
           </label>
           <small id="onboarding-key-hint"></small>
+          <label class="check-row compact-check">
+            <input id="onboarding-persist-key" type="checkbox">
+            <span data-i18n-parts='[[0,"关闭浏览器后仍保留 Key"]]'>关闭浏览器后仍保留 Key</span>
+          </label>
         </section>
         <section class="onboarding-step" data-onboarding-step="3" hidden>
           <h3 data-i18n-parts="[[0,&quot;确认模型&quot;]]">确认模型</h3>
@@ -102,7 +101,7 @@
           <p id="onboarding-model-error" class="inline-setup-error" role="alert" hidden></p>
           <datalist id="onboarding-model-list"></datalist>
           <small data-i18n-parts="[[0,&quot;可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；模型由所选服务商提供。&quot;]]" id="onboarding-model-catalog-status">可接入 GPT、Claude、Gemini、Qwen、DeepSeek 等；模型由所选服务商提供。</small>
-          <p data-i18n-parts='[[0,"测试会发送示例文字并可能产生费用；图像翻译可稍后配置。"]]' class="onboarding-vision-note">测试会发送示例文字并可能产生费用；图像翻译可稍后配置。</p>
+          <p data-i18n-parts='[[0,"测试会发送示例内容，可能产生费用。"]]' class="onboarding-vision-note">测试会发送示例内容，可能产生费用。</p>
           <button id="onboarding-test" type="button" data-i18n-parts='[[0,"测试翻译并保存"]]'>测试翻译并保存</button>
         </section>
         <section id="onboarding-success" class="onboarding-step onboarding-success" hidden>
@@ -134,12 +133,16 @@
           <button id="onboarding-later-confirm" type="button" data-i18n-parts='[[0,"保存进度并退出"]]'>保存进度并退出</button>
           <button id="onboarding-later-cancel" type="button" data-i18n-parts='[[0,"继续填写"]]'>继续填写</button>
         </div>
+        </div>
         <footer class="onboarding-actions">
+          <div class="onboarding-secondary-actions">
           <button data-i18n-parts='[[0,"进入完整设置"]]' id="onboarding-skip" class="text-button" type="button">进入完整设置</button>
           <button id="onboarding-later" class="text-button" type="button" data-i18n-parts='[[0,"稍后继续"]]'>稍后继续</button>
-          <span></span>
+          </div>
+          <div class="onboarding-step-actions">
           <button data-i18n-parts="[[0,&quot;上一步&quot;]]" id="onboarding-back" type="button" hidden>上一步</button>
           <button data-i18n-parts="[[0,&quot;下一步&quot;]]" id="onboarding-next" class="primary" type="button">下一步</button>
+          </div>
         </footer>
       </div>
     </dialog>
@@ -151,6 +154,7 @@
             <h1>Pi Translator</h1>
           </div>
           <span class="team-credit"><span>Developed by</span><img src="/brand/team_logo.png" alt="P&I Lab"></span>
+          <details class="common-tasks" id="common-tasks"><summary data-pi-icon="more" aria-label="常用操作" data-i18n-aria-label="常用操作" title="常用操作" data-i18n-title="常用操作" data-i18n-parts='[[0,"常用操作"]]'>常用操作</summary><div class="common-task-actions"><button type="button" data-settings-task="connection" data-i18n-parts='[[0,"更换翻译服务"]]'>更换翻译服务</button><button type="button" data-settings-task="translation" data-i18n-parts='[[0,"调整目标语言"]]'>调整目标语言</button><button type="button" data-settings-task="pages" data-i18n-parts='[[0,"设置网页划词"]]'>设置网页划词</button></div></details>
         </div>
         <div class="save-dock">
           <div class="save-feedback"><strong data-i18n-parts="[[0,&quot;所有设置已保存&quot;]]" id="save-state">所有设置已保存</strong><p id="status" class="status" role="status" aria-live="polite"></p></div>
@@ -161,7 +165,7 @@
         </div>
         <div class="settings-quickbar">
           <div class="setup-overview"><span id="setup-readiness" role="status" aria-live="polite" data-i18n-parts='[[0,"正在检查文字翻译配置…"]]'>正在检查文字翻译配置…</span><button id="setup-readiness-action" class="text-button" type="button" data-i18n-parts='[[0,"查看连接"]]'>查看连接</button><button id="resume-paused-setup" class="text-button" type="button" hidden data-i18n-parts='[[0,"继续首次设置"]]'>继续首次设置</button></div>
-          <details class="common-tasks" id="common-tasks"><summary data-i18n-parts='[[0,"常用操作"]]'>常用操作</summary><div><button type="button" data-settings-task="connection" data-i18n-parts='[[0,"更换翻译服务"]]'>更换翻译服务</button><button type="button" data-settings-task="translation" data-i18n-parts='[[0,"调整目标语言"]]'>调整目标语言</button><button type="button" data-settings-task="pages" data-i18n-parts='[[0,"设置网页划词"]]'>设置网页划词</button></div></details>
+
         </div>
       </header>
 
@@ -202,7 +206,6 @@
             <div class="section-heading">
               <div><span data-i18n-parts="[[0,&quot;连接&quot;]]" class="section-kicker">连接</span><h2 data-i18n-parts="[[0,&quot;翻译服务&quot;]]">翻译服务</h2></div>
             </div>
-            <p data-i18n-parts="[[0,&quot;选择服务商并填写 Key，即可设置文字翻译。&quot;]]" class="section-intro">选择服务商并填写 Key，即可设置文字翻译。</p>
             <div class="connection-primary-heading"><h3 id="connection-primary-title" class="connection-primary-title">文字翻译</h3><span id="text-connection-state" class="text-connection-state" role="status">正在检查</span></div>
             <div class="profile-bar">
               <label><span data-i18n-parts="[[0,&quot;切换或管理接口&quot;]]">切换或管理接口</span><select id="api-profile"></select></label>
@@ -237,7 +240,7 @@
                   </div>
                   <button id="confirm-key-origin" class="text-button" type="button" hidden data-i18n-parts='[[0,"确认此 Key 用于当前地址"]]'>确认此 Key 用于当前地址</button>
                   <button data-i18n-parts="[[0,&quot;还没有 Key？前往官方页面获取 ↗&quot;]]" id="open-provider-key-page" class="provider-key-link text-button" type="button" hidden>还没有 Key？前往官方页面获取 ↗</button>
-                  <label class="check-row compact-check"><input id="persist-key" type="checkbox"><span data-i18n-parts="[[0,&quot;在本机持久保存；不勾选则仅保留到浏览器会话结束&quot;]]">在本机持久保存；不勾选则仅保留到浏览器会话结束</span></label>
+                  <label class="check-row compact-check"><input id="persist-key" type="checkbox"><span data-i18n-parts='[[0,"关闭浏览器后仍保留 Key"]]'>关闭浏览器后仍保留 Key</span></label>
                   <div id="api-permission-state" class="permission-state" aria-live="polite"></div>
                 </div>
               </div>
@@ -263,14 +266,13 @@
               <summary><span data-i18n-parts="[[0,&quot;公式与图像增强&quot;]]" id="vision-setup-title">公式与图像增强</span><small data-i18n-parts="[[0,&quot;尚未配置&quot;]]" id="vision-setup-overview">尚未配置</small></summary>
               <div class="vision-setup-content">
               <div class="vision-setup-heading">
-                <span data-i18n-parts="[[0,&quot;可选；普通文字翻译无需配置&quot;]]" class="optional-label">可选；普通文字翻译无需配置</span>
+                <p data-i18n-parts='[[0,"用于截图与复杂公式；扫描页识别需官方 Qwen OCR。"]]' id="vision-setup-guide" class="vision-setup-guide">用于截图与复杂公式；扫描页识别需官方 Qwen OCR。</p>
                 <button data-i18n-parts="[[0,&quot;配置 Qwen&quot;]]" id="setup-qwen" class="text-button vision-setup-button" type="button">配置 Qwen</button>
               </div>
               <div data-i18n-parts="[[0,&quot;尚未配置，不影响普通文字翻译。&quot;]]" id="vision-setup-status" class="vision-setup-status" role="status" aria-live="polite">尚未配置，不影响普通文字翻译。</div>
-                  <p data-i18n-parts="[[0,&quot;普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。&quot;]]" id="vision-setup-guide" class="vision-setup-guide">普通网页划词、Overleaf 划词和文字型 PDF 不需要视觉模型；网页框选、扫描件或模糊公式需要，“识别本页”需要官方 Qwen / 阿里云百炼。</p>
                   <div class="grid">
-                    <label><span data-i18n-parts="[[0,&quot;视觉 API 配置&quot;]]">视觉 API 配置</span><select id="vision-api-profile"><option data-i18n-parts="[[0,&quot;尚未配置&quot;]]" value="">尚未配置</option></select><small data-i18n-parts="[[0,&quot;可选择已有接口并测试图片输入；扫描页“识别本页”仅支持官方 Qwen。&quot;]]">可选择已有接口并测试图片输入；扫描页“识别本页”仅支持官方 Qwen。</small></label>
-                    <label><span data-i18n-parts="[[0,&quot;视觉模型&quot;]]">视觉模型</span><input data-i18n-placeholder="例如 qwen3.7-plus" id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus"><small data-pi-help-for="#vision-model" data-i18n-parts="[[0,&quot;模型必须支持图片输入。&quot;]]">模型必须支持图片输入。</small></label>
+                    <label><span data-i18n-parts='[[0,"增强接口"]]'>增强接口</span><select id="vision-api-profile"><option data-i18n-parts="[[0,&quot;尚未配置&quot;]]" value="">尚未配置</option></select></label>
+                    <label><span data-i18n-parts='[[0,"图像模型"]]'>图像模型</span><input data-i18n-placeholder="例如 qwen3.7-plus" id="vision-model" type="text" spellcheck="false" placeholder="例如 qwen3.7-plus"><small data-pi-help-for="#vision-model" data-i18n-parts="[[0,&quot;模型必须支持图片输入。&quot;]]">模型必须支持图片输入。</small></label>
                   </div>
                   <div class="vision-test-row">
                     <button data-i18n-parts="[[0,&quot;测试视觉能力&quot;]]" id="test-vision-capability" class="text-button" type="button">测试视觉能力</button>
@@ -333,7 +335,7 @@
               <label><span data-i18n-parts="[[0,&quot;源语言&quot;]]">源语言</span><select id="source-language"><option data-i18n-parts="[[0,&quot;自动识别&quot;]]" value="auto">自动识别</option><option value="en">English</option><option data-i18n-parts="[[0,&quot;简体中文&quot;]]" value="zh-CN">简体中文</option><option data-i18n-parts="[[0,&quot;日本語&quot;]]" value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
               <label><span data-i18n-parts="[[0,&quot;目标语言&quot;]]">目标语言</span><select id="target-language"><option data-i18n-parts="[[0,&quot;简体中文&quot;]]" value="zh-CN">简体中文</option><option value="en">English</option><option data-i18n-parts="[[0,&quot;日本語&quot;]]" value="ja">日本語</option><option value="de">Deutsch</option><option value="fr">Français</option></select></label>
             </div>
-            <label><span data-i18n-parts='[[0,"界面语言"]]'>界面语言</span><select id="ui-language"><option value="auto" data-i18n-parts='[[0,"跟随浏览器"]]'>跟随浏览器</option><option value="zh-CN">简体中文</option><option value="en">English</option></select><small data-pi-help-for="#ui-language" data-i18n-parts='[[0,"界面语言独立于翻译目标语言。更改后重新打开的页面生效。"]]'>界面语言独立于翻译目标语言。更改后重新打开的页面生效。</small></label>
+
             <details class="disclosure-panel">
               <summary><span><strong data-i18n-parts="[[0,&quot;翻译方式&quot;]]">翻译方式</strong><small data-pi-help-for="summary" data-i18n-parts="[[0,&quot;风格与内容模式&quot;]]">风格与内容模式</small></span></summary>
               <div class="disclosure-content"><div class="grid">
@@ -354,6 +356,29 @@ large language model = 大语言模型
 knowledge distillation = 知识蒸馏"></textarea><small data-i18n-parts="[[0,&quot;最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。&quot;]]">最多 100 条。术语仅保存在本机，翻译时会作为一致性约束发送到你配置的 API。</small></label>
               </div>
             </details>
+            <section id="settings-appearance" class="preference-appearance" aria-labelledby="settings-appearance-title">
+              <h3 id="settings-appearance-title" data-i18n-parts='[[0,"界面外观"]]'>界面外观</h3>
+            <label class="theme-choice"><span data-i18n-parts='[[0,"显示模式"]]'>显示模式</span><select data-theme-choice aria-label="显示模式" data-i18n-aria-label="显示模式"><option value="auto" data-i18n-parts='[[0,"自动"]]'>自动</option><option value="light" data-i18n-parts='[[0,"浅色"]]'>浅色</option><option value="dark" data-i18n-parts='[[0,"深色"]]'>深色</option></select></label>
+            <details id="appearance-palettes" class="disclosure-panel appearance-palettes">
+              <summary><strong data-i18n-parts='[[0,"配色方案"]]'>配色方案</strong><span data-palette-summary></span></summary>
+              <div class="disclosure-content">
+            <fieldset class="palette-options">
+              <legend data-i18n-parts='[[0,"配色方案"]]'>配色方案</legend>
+              <div class="palette-grid">
+                <button type="button" class="palette-option" data-palette-choice="neutral" aria-pressed="true"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"极简灰"]]'>极简灰</span></button>
+                <button type="button" class="palette-option" data-palette-choice="blue" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"清蓝"]]'>清蓝</span></button>
+                <button type="button" class="palette-option" data-palette-choice="graphite" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"石墨"]]'>石墨</span></button>
+                <button type="button" class="palette-option" data-palette-choice="paper" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"暖纸"]]'>暖纸</span></button>
+                <button type="button" class="palette-option" data-palette-choice="sage" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"松绿"]]'>松绿</span></button>
+                <button type="button" class="palette-option" data-palette-choice="teal" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"海盐"]]'>海盐</span></button>
+                <button type="button" class="palette-option" data-palette-choice="violet" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"雾紫"]]'>雾紫</span></button>
+                <button type="button" class="palette-option" data-palette-choice="rose" aria-pressed="false"><span class="palette-sample" aria-hidden="true"><i></i><b></b></span><span data-i18n-parts='[[0,"玫瑰"]]'>玫瑰</span></button>
+              </div>
+            </fieldset>
+              </div>
+            </details>
+            <label class="appearance-language"><span data-i18n-parts='[[0,"界面语言"]]'>界面语言</span><select id="ui-language"><option value="auto" data-i18n-parts='[[0,"跟随浏览器"]]'>跟随浏览器</option><option value="zh-CN">简体中文</option><option value="en">English</option></select><small data-pi-help-for="#ui-language" data-i18n-parts='[[0,"界面语言独立于翻译目标语言。更改后重新打开的页面生效。"]]'>界面语言独立于翻译目标语言。更改后重新打开的页面生效。</small></label>
+            </section>
           </section>
 
           <section id="settings-results" class="card settings-section" role="tabpanel" data-settings-section="results" hidden>
@@ -438,7 +463,6 @@ wikipedia.org"></textarea><small data-i18n-parts="[[0,&quot;保存时浏览器�
             </details>
 </div>
             </div>
-            <p data-i18n-parts="[[0,&quot;最近阅读、已保存译文和笔记集中在这里；搜索资料并返回来源。&quot;]]" class="section-intro">最近阅读、已保存译文和笔记集中在这里；搜索资料并返回来源。</p>
 
             <div id="library-recovery-hint" class="library-recovery-hint" role="status" hidden>
               <span data-i18n-parts="[[0,&quot;上次恢复可能未完成。重新选择原备份，核验后继续。&quot;]]">上次恢复可能未完成。重新选择原备份，核验后继续。</span>
@@ -467,21 +491,31 @@ wikipedia.org"></textarea><small data-i18n-parts="[[0,&quot;保存时浏览器�
 
 
           <section id="settings-support" class="card settings-section" role="tabpanel" data-settings-section="support" hidden>
-            <div class="section-heading"><div><span data-i18n-parts="[[0,&quot;维护&quot;]]" class="section-kicker">维护</span><h2 data-i18n-parts="[[0,&quot;支持与配置迁移&quot;]]">支持与配置迁移</h2></div></div>
+            <div class="section-heading"><div><span data-i18n-parts="[[0,&quot;维护&quot;]]" class="section-kicker">维护</span><h2 data-i18n-parts='[[0,"更多设置"]]'>更多设置</h2></div></div>
+            <p id="support-status" class="status" role="status" aria-live="polite"></p>
             <details class="support-disclosure">
-              <summary><span><strong data-i18n-parts="[[0,&quot;配置迁移与故障排查&quot;]]">配置迁移与故障排查</strong><small data-pi-help-for="summary" data-i18n-parts="[[0,&quot;导入、导出、诊断报告与首次向导&quot;]]">导入、导出、诊断报告与首次向导</small></span></summary>
+              <summary><strong data-i18n-parts='[[0,"配置迁移"]]'>配置迁移</strong></summary>
               <div class="support-content">
-                <div class="support-task"><div><h3 data-i18n-parts="[[0,&quot;配置迁移&quot;]]">配置迁移</h3><p data-i18n-parts="[[0,&quot;配置含已记住的网站域名、阅读偏好和界面语言，不含 API Key。导入会清除现有 Key，需重新填写；同一网站保留本机选择。旧版配置保留当前网站偏好和界面语言。&quot;]]">配置含已记住的网站域名、阅读偏好和界面语言，不含 API Key。导入会清除现有 Key，需重新填写；同一网站保留本机选择。旧版配置保留当前网站偏好和界面语言。</p></div><div class="support-task-actions">
+                <p data-i18n-parts='[[0,"导出阅读与接口设置，不含 Key；导入会清除现有 Key，同一网站保留本机偏好。"]]'>导出阅读与接口设置，不含 Key；导入会清除现有 Key，同一网站保留本机偏好。</p>
+                <div class="support-task-actions">
                   <button data-i18n-parts="[[0,&quot;导出配置&quot;]]" id="export-settings" type="button">导出配置</button>
                   <button data-i18n-parts="[[0,&quot;导入配置&quot;]]" id="import-settings" type="button">导入配置</button>
                   <input id="import-settings-file" type="file" accept="application/json,.json" hidden>
-                </div></div>
-                <div class="support-task"><div><h3 data-i18n-parts="[[0,&quot;故障排查&quot;]]">故障排查</h3><p data-i18n-parts="[[0,&quot;报告仅含错误类型与耗时，不含 Key、接口地址或翻译内容。&quot;]]">报告仅含错误类型与耗时，不含 Key、接口地址或翻译内容。</p></div><div class="support-task-actions">
-                  <button data-i18n-parts="[[0,&quot;复制诊断报告&quot;]]" id="copy-diagnostic-report" type="button">复制诊断报告</button>
-                </div></div>
-                <div class="support-task"><div><h3 data-i18n-parts="[[0,&quot;首次设置&quot;]]">首次设置</h3><p data-i18n-parts="[[0,&quot;重新检查连接，完成一次示例翻译。&quot;]]">重新检查连接，完成一次示例翻译。</p></div><div class="support-task-actions"><button data-i18n-parts="[[0,&quot;重新运行向导&quot;]]" id="restart-onboarding" type="button">重新运行向导</button></div></div>
-                <p id="support-status" class="status" role="status" aria-live="polite"></p>
+                </div>
               </div>
+            </details>
+            <details class="support-disclosure">
+              <summary><strong data-i18n-parts='[[0,"故障排查"]]'>故障排查</strong></summary>
+              <div class="support-content">
+                <p data-i18n-parts="[[0,&quot;报告仅含错误类型与耗时，不含 Key、接口地址或翻译内容。&quot;]]">报告仅含错误类型与耗时，不含 Key、接口地址或翻译内容。</p>
+                <div class="support-task-actions">
+                  <button data-i18n-parts="[[0,&quot;复制诊断报告&quot;]]" id="copy-diagnostic-report" type="button">复制诊断报告</button>
+                </div>
+              </div>
+            </details>
+            <details class="support-disclosure">
+              <summary><strong data-i18n-parts='[[0,"首次设置"]]'>首次设置</strong></summary>
+              <div class="support-content"><div class="support-task-actions"><button data-i18n-parts="[[0,&quot;重新运行向导&quot;]]" id="restart-onboarding" type="button">重新运行向导</button></div></div>
             </details>
             <details class="support-disclosure"><summary><span><strong data-i18n-parts="[[0,&quot;关于与数据说明&quot;]]">关于与数据说明</strong></span></summary><div class="support-content">
             <div class="privacy-summary"><strong data-i18n-parts="[[0,&quot;本地优先&quot;]]">本地优先</strong><p data-i18n-parts="[[0,&quot;无广告、分析或遥测；翻译请求直接发送到你选择的 API。&quot;]]">无广告、分析或遥测；翻译请求直接发送到你选择的 API。</p></div>

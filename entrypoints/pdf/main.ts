@@ -1,3 +1,4 @@
+import {bindTheme} from '../../ui/theme';
 import {readingRecapPage} from '../../core/content/reading-hints';
 import {searchWithConfirmedTerms} from '../../core/translation/search-assistance';
 import {hasReadingDraft,pdfReadingTarget,readingSelectionText,selectedReadingQuery,type ReadingSummaryReturn} from '../../core/content/reading-navigation';
@@ -270,6 +271,7 @@ function renderTranslationContents(...args: Parameters<typeof renderTranslationC
 async function startUi(): Promise<void> {
   await initializeUiLanguage();
   localizeUiDocument();
+  bindTheme(document);
   bindActionHints();
   bindCompactHelp();
   bindActionGuide(document,['.pdf-reader-menu-content','#pdf-document-translation-copy-menu > div'],[
@@ -9630,7 +9632,8 @@ bindPdfResearchReferences(documentTranslationPages,element<HTMLButtonElement>('p
 });
 if(libraryRestoreId){
   emptyState.querySelector('h1')!.textContent=t('选择原 PDF 恢复阅读');
-  emptyState.querySelector('p')!.textContent=t('在本机核验文件后恢复保留译文，不发送新的翻译请求。');
+  const context=element<HTMLElement>('pdf-open-context');
+  context.textContent=t('在本机核验文件后恢复保留译文，不发送新的翻译请求。');context.hidden=false;
 }
 const initialSource = parsePdfSourceUrl(
   new URLSearchParams(location.search).get('url') ?? undefined,

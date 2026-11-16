@@ -1,5 +1,5 @@
 import type { Request } from '@playwright/test';
-import { context, expect, extensionId, installEdgeExtensionHooks, test } from './support/edge-extension-fixture';
+import { context, expect, extensionId, installEdgeExtensionHooks, test, textRequests, visionRequests } from './support/edge-extension-fixture';
 
 installEdgeExtensionHooks();
 
@@ -67,16 +67,23 @@ async function openWizard() {
 
 test('explains the Key issuer and allows an Alibaba region or workspace address', async () => {
   const options = await openWizard();
+  const calls=textRequests.length+visionRequests.length;
   try {
     await options.locator('#onboarding-next').click();
-    await expect(options.locator('[data-onboarding-step="2"]')).toContainText('选择签发它的服务商');
+    await expect(options.locator('#onboarding-preset')).toHaveAccessibleName('服务商');
+    await options.locator('#onboarding-preset').selectOption('deepseek');
+    await expect(options.locator('#onboarding-key-hint')).toContainText('DeepSeek 官方平台签发的 Key');
     await options.locator('#onboarding-preset').selectOption('qwen');
     await expect(options.locator('#onboarding-base-url-field')).toBeVisible();
     await expect(options.locator('#onboarding-key-hint')).toContainText('地域');
+    await expect(options.locator('#onboarding-open-key-page')).toHaveAttribute('data-key-url',/bailian\.console\.aliyun\.com/);
+    await options.locator('#onboarding-api-key').fill('issuer-region-draft');
     await options.locator('#onboarding-base-url').fill('https://example.ap-southeast-1.maas.aliyuncs.com/compatible-mode/v1');
     await expect(options.locator('#onboarding-base-url')).toHaveValue(/ap-southeast-1/);
+    await expect(options.locator('#onboarding-api-key')).toHaveValue('issuer-region-draft');
     await options.setViewportSize({ width: 360, height: 640 });
     expect(await options.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+    expect(textRequests.length+visionRequests.length).toBe(calls);
   } finally { await options.close(); }
 });
 

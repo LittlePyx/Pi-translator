@@ -964,7 +964,7 @@ test('opens the full settings page from the translation card menu', async () => 
   await overlay.locator('details.more > summary').click();
 
   const settingsPagePromise = context.waitForEvent('page');
-  await overlay.getByRole('button', { name: '完整设置' }).click();
+  await overlay.getByRole('button', { name: '设置', exact: true }).click();
   const settingsPage = await settingsPagePromise;
   await settingsPage.waitForURL((url) => (
     url.protocol === 'chrome-extension:' && url.pathname === '/options.html'

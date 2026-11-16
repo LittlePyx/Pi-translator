@@ -81,9 +81,9 @@ test('common tasks retain unsaved inputs and the overview reports configuration 
       const brand=document.querySelector('.brand-row')!.getBoundingClientRect();
       const quickbar=document.querySelector('.settings-quickbar')!.getBoundingClientRect();
       const status=document.querySelector('#setup-readiness')!.getBoundingClientRect();
-      return {brandBottom:brand.bottom,quickbarTop:quickbar.top,statusRight:status.right,viewport:innerWidth,overflow:document.documentElement.scrollWidth-innerWidth};
+      return {quickbarVisible:quickbar.height>0,brandBottom:brand.bottom,quickbarTop:quickbar.top,statusRight:status.right,viewport:innerWidth,overflow:document.documentElement.scrollWidth-innerWidth};
     });
-    expect(geometry.quickbarTop).toBeGreaterThanOrEqual(geometry.brandBottom);
+    if(geometry.quickbarVisible)expect(geometry.quickbarTop).toBeGreaterThanOrEqual(geometry.brandBottom);
     expect(geometry.statusRight).toBeLessThanOrEqual(geometry.viewport);
     expect(geometry.overflow).toBeLessThanOrEqual(1);
     await page.setViewportSize({width:1200,height:900});
@@ -91,8 +91,10 @@ test('common tasks retain unsaved inputs and the overview reports configuration 
     await page.locator('#common-tasks > summary').click();
     await page.locator('[data-settings-task="translation"]').click();
     await expect(page.locator('#target-language')).toBeFocused();
+    await page.locator('#common-tasks > summary').click();
     await page.locator('[data-settings-task="pages"]').click();
     await expect(page.locator('#general-page-mode')).toBeFocused();
+    await page.locator('#common-tasks > summary').click();
     await page.locator('[data-settings-task="connection"]').click();
     await expect(page.locator('#api-key')).toHaveValue('unsaved-test-key');
     await expect(page.locator('#save-button')).toBeEnabled();

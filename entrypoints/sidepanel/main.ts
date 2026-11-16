@@ -1,3 +1,5 @@
+import {setCopyStateLabel} from '../../ui/copy-feedback';
+import {bindTheme} from '../../ui/theme';
 import { t, msg, initializeUiLanguage, localizeUiDocument } from '../../core/i18n/ui-language';
 import {openPassageExplanation,resultPassageInput} from '../../ui/passage-explanation';
 import {bindActionHints} from '../../ui/action-feedback';
@@ -95,6 +97,7 @@ import {
 async function startUi(): Promise<void> {
   await initializeUiLanguage();
   localizeUiDocument();
+  bindTheme(document);
   bindActionHints();
   bindActionGuide(document,['.panel-menu'],[
     {label:t('复制译文'),selector:'#copy'},
@@ -188,7 +191,7 @@ const retry = element<HTMLButtonElement>('retry');
 const copy = element<HTMLButtonElement>('copy');
 const copyFeedback = element<HTMLElement>('copy-feedback');
 const correct = element<HTMLButtonElement>('correct');
-const explainPassageButton=document.createElement('button');explainPassageButton.type='button';explainPassageButton.textContent=t('解释本段');explainPassageButton.hidden=true;correct.after(explainPassageButton);
+const explainPassageButton=document.createElement('button');explainPassageButton.type='button';explainPassageButton.textContent=t('解释本段');explainPassageButton.hidden=true;element<HTMLElement>('panel-assistance-actions').append(explainPassageButton);
 const correctionUndo = element<HTMLElement>('correction-undo');
 const correctionUndoMessage = element<HTMLElement>('correction-undo-message');
 const undoCorrection = element<HTMLButtonElement>('undo-correction');
@@ -1373,6 +1376,8 @@ function clearCopyFeedback(): void {
   if (copyResetTimer !== undefined) window.clearTimeout(copyResetTimer);
   copyResetTimer = undefined;
   copy.removeAttribute('data-state');
+  setCopyStateLabel(copy,'');
+  copy.removeAttribute('aria-busy');
   copyFeedback.textContent = '';
 }
 
@@ -1381,6 +1386,7 @@ function showCopySuccess(session: PdfSidePanelSession): void {
   clearCopyFeedback();
   setStatus('');
   copy.dataset.state = 'success';
+  setCopyStateLabel(copy,t('已复制'));
   setCopyLabel(t('已复制'));
   window.requestAnimationFrame(() => {
     if (currentSession === session && copy.dataset.state === 'success') {
@@ -1391,6 +1397,7 @@ function showCopySuccess(session: PdfSidePanelSession): void {
     copyResetTimer = undefined;
     if (currentSession !== session || copy.dataset.state !== 'success') return;
     copy.removeAttribute('data-state');
+    setCopyStateLabel(copy,'');
     setCopyLabel(copyActionLabel(session));
     copyFeedback.textContent = '';
   }, 1_800);
@@ -2919,16 +2926,37 @@ copy.addEventListener('click', () => {
   const session = currentSession;
   const text = session?.result?.translatedText ??
     (session?.status === 'error' ? session.partialText : undefined);
-  if (!session || !text) return;
+  if (!session || !text || copy.disabled) return;
+  const restoreFocus = document.activeElement === copy;
+  clearCopyFeedback();
+  setCopyLabel(copyActionLabel(session));
+  copy.disabled = true;
+  copy.dataset.state = 'pending';
+  setCopyStateLabel(copy,t('正在复制'));
+  copy.setAttribute('aria-busy','true');
   void navigator.clipboard.writeText(
     normalizeLatexForClipboard(presentationText(session, text)),
   )
-    .then(() => showCopySuccess(session))
+    .then(() => {
+      if (currentSession !== session) return;
+      copy.disabled = false;
+      if (restoreFocus && document.activeElement === document.body) copy.focus({preventScroll:true});
+      showCopySuccess(session);
+    })
     .catch(() => {
       if (currentSession !== session) return;
       clearCopyFeedback();
-      setCopyLabel(copyActionLabel(session));
-      setStatus(t('复制失败'), 4_000);
+      copy.disabled = false;
+      if (restoreFocus && document.activeElement === document.body) copy.focus({preventScroll:true});
+      copy.dataset.state = 'error';
+      setCopyStateLabel(copy,t('复制失败'));
+      setCopyLabel(t('复制失败'));
+      copyFeedback.textContent = t('复制失败，请检查剪贴板权限');
+      copyResetTimer = window.setTimeout(() => {
+        if (currentSession !== session) return;
+        clearCopyFeedback();
+        setCopyLabel(copyActionLabel(session));
+      }, 3_200);
     });
 });
 

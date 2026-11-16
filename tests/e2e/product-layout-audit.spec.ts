@@ -108,7 +108,7 @@ test('audits all settings pages and management menus at desktop, narrow and shor
       }
       const row=target.locator('.library-entry').first();await row.locator('.library-menu > summary').click();await inspect(target,`${size.width}-${size.height}-document-menu`,evidence,row.locator('.library-actions'));await target.keyboard.press('Escape');
     }
-    await openSettingsSection(target,'support');await target.locator('.support-disclosure > summary').first().click();await target.locator('#restart-onboarding').click();await inspect(target,'onboarding-short',evidence);await target.screenshot({path:info.outputPath('onboarding-short.png')});await target.locator('#onboarding-skip').click();
+    await openSettingsSection(target,'support');await target.locator('.support-disclosure').filter({has:target.locator('#restart-onboarding')}).locator(':scope > summary').click();await target.locator('#restart-onboarding').click();await inspect(target,'onboarding-short',evidence);await target.screenshot({path:info.outputPath('onboarding-short.png')});await target.locator('#onboarding-skip').click();
   }finally{await save(info,evidence);await target.close()}
 });
 

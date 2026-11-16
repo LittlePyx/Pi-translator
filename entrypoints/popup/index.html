@@ -15,10 +15,11 @@
         <span>
           <strong>Pi Translator</strong>
         </span>
-        <button data-i18n-aria-label="打开完整设置" data-i18n-title="设置" id="open-settings" class="settings-icon" type="button" aria-label="打开完整设置" title="设置">
+        <button data-i18n-aria-label="打开完整设置" data-i18n-title="设置" id="open-settings" data-pi-icon="glyph" class="settings-icon" type="button" aria-label="打开完整设置" title="设置">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9.5 3-.7 2.4-2.2 1.3-2.4-.6-2.5 4.3L3.5 12l-.1 2.6-1.7 1.6 2.5 4.3 2.4-.6 2.2 1.3.7 2.4h5l.7-2.4 2.2-1.3 2.4.6 2.5-4.3-1.8-1.6.1-2.6 1.7-1.6-2.5-4.3-2.4.6-2.2-1.3L14.5 3z" transform="translate(0 -2) scale(1 .95)" /><circle cx="12" cy="12" r="3.2" /></svg>
         </button>
       </header>
+      <label class="theme-choice"><span data-i18n-parts='[[0,"显示模式"]]'>显示模式</span><select data-theme-choice aria-label="显示模式" data-i18n-aria-label="显示模式"><option value="auto" data-i18n-parts='[[0,"自动"]]'>自动</option><option value="light" data-i18n-parts='[[0,"浅色"]]'>浅色</option><option value="dark" data-i18n-parts='[[0,"深色"]]'>深色</option></select></label>
       <div class="translation-controls">
       <label>
         <span data-i18n-parts="[[0,&quot;译为&quot;]]">译为</span>
@@ -55,9 +56,11 @@
       <div class="popup-footer">
       <button data-i18n-parts="[[0,&quot;文档库&quot;]]" id="open-library" class="library-link" type="button" aria-label="文档库" data-i18n-aria-label="文档库" title="文档库" data-i18n-title="文档库">文档库</button>
       <details id="popup-more-actions" class="popup-more-actions"><summary data-i18n-aria-label="更多" data-i18n-title="更多" aria-label="更多" title="更多" data-i18n-parts="[[0,&quot;更多&quot;]]">更多</summary><div id="popup-more-body" class="more-body">
-        <details id="selection-help" class="selection-help"><summary data-i18n-parts='[[0,"划词按钮没有出现？"]]'>划词按钮没有出现？</summary><p id="selection-help-status" role="status"></p><button id="selection-help-action" type="button" hidden></button></details>
+
+        <section id="popup-secondary-actions" class="more-tools">
         <button data-i18n-title="适合网页图像、图表、渲染公式和复杂混排" data-i18n-parts="[[0,&quot;框选当前网页&quot;]]" id="open-web-region" class="region-action" type="button" title="适合网页图像、图表、渲染公式和复杂混排">框选当前网页</button>
         <button data-i18n-parts="[[0,&quot;打开 PDF 阅读器&quot;]]" id="open-pdf" class="secondary-action" type="button">打开 PDF 阅读器</button>
+        </section>
       <section id="site-control" class="site-control" hidden>
         <strong data-i18n-parts="[[0,&quot;正在读取…&quot;]]" id="site-name">正在读取…</strong>
         <label class="switch-row">
@@ -72,9 +75,8 @@
         <p id="site-preference-help"></p>
         <button id="reset-site" class="site-reset" type="button" hidden data-i18n-parts="[[0,&quot;恢复全局&quot;]]">恢复全局</button>
       </section>
-        <button data-i18n-parts="[[0,&quot;使用方法&quot;]]" id="feature-guide-toggle" class="feature-guide-toggle" type="button" aria-controls="feature-guide" aria-expanded="false" hidden>使用方法</button>
       <details id="popup-service-details" class="service-details">
-        <summary data-i18n-parts="[[0,&quot;接口与快捷键&quot;]]">接口与快捷键 <span data-i18n-parts="[[0,&quot;检查中&quot;]]" id="popup-service-state">检查中</span></summary>
+        <summary><span class="service-title" data-i18n-parts="[[0,&quot;接口与快捷键&quot;]]">接口与快捷键</span><span data-i18n-parts="[[0,&quot;检查中&quot;]]" id="popup-service-state">检查中</span></summary>
         <label id="api-profile-field" hidden>
           <span data-i18n-parts="[[0,&quot;翻译接口&quot;]]">翻译接口</span>
           <select id="api-profile"></select>
@@ -99,7 +101,10 @@
           <div id="readiness-issues" class="readiness-issues" hidden></div>
         </section>
       </details>
+      <details id="popup-help-details" class="popup-help-details"><summary data-i18n-parts='[[0,"帮助"]]'>帮助</summary><div id="popup-help-content" class="popup-help-content">
+        <details id="selection-help" class="selection-help"><summary data-i18n-parts='[[0,"划词按钮没有出现？"]]'>划词按钮没有出现？</summary><p id="selection-help-status" role="status"></p><button id="selection-help-action" type="button" hidden></button></details>
       <p data-i18n-parts="[[0,&quot;正在识别当前页面…&quot;]]" id="page-context" class="page-context" aria-live="polite">正在识别当前页面…</p>
+              <button data-i18n-parts="[[0,&quot;使用方法&quot;]]" id="feature-guide-toggle" class="feature-guide-toggle" type="button" aria-controls="feature-guide" aria-expanded="false" hidden>使用方法</button>
       <section id="feature-guide" class="feature-guide" aria-labelledby="feature-guide-title" hidden>
         <div class="feature-guide-heading">
           <div>
@@ -112,6 +117,7 @@
         <ol id="feature-guide-steps" class="feature-guide-steps"></ol>
         <p id="feature-guide-progress" class="feature-guide-progress" aria-live="polite"></p>
       </section>
+      </div></details>
       </div></details>
       </div>
     </main>

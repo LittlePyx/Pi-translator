@@ -95,6 +95,8 @@ export interface SettingsRecoveryReadyPayload {
 }
 
 export interface PublicSettings {
+  themePreference?: 'auto' | 'light' | 'dark';
+  palettePreference?: 'neutral' | 'blue' | 'graphite' | 'paper' | 'sage' | 'teal' | 'violet' | 'rose';
   /** Display only; independent of translation configuration and saved content. */
   uiLanguage?: 'zh-CN' | 'en';
   modelPrices?: import('../translation/cost-estimate').ModelTokenPrice[];

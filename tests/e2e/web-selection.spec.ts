@@ -154,32 +154,58 @@ test('shows a compact contextual lookup for a short selection', async ({}, info)
   await clearBrowserSelection();
 });
 
-test('keeps an echoed lookup visible with a review notice and no automatic retry', async () => {
+for(const hasMeaning of [true,false])test('keeps an echoed lookup visible with a review notice and no automatic retry '+hasMeaning, async ({},info) => {
   let requests = 0;
+  const selection=hasMeaning?'jet stream':'TCP';
   const replay = async (route: Route) => {
     requests += 1;
     await route.fulfill({contentType: 'application/json', body: JSON.stringify({
-      choices: [{message: {content: JSON.stringify({translation: 'jet stream', detectedLanguage: 'en', warnings: [],
-        lookup: {partOfSpeech: 'noun', senses: [{meaning: '大气中的高速气流带'}]},
+      choices: [{message: {content: JSON.stringify({translation: selection, detectedLanguage: 'en', warnings: [],
+        lookup: {partOfSpeech: 'noun', senses: hasMeaning?[{meaning: '大气中的高速气流带'}]:[]},
       })}}],
     })});
   };
   await context.route('https://www.overleaf.com/pi-translator-e2e-api/**', replay);
   try {
-    await page.locator('#lookup-source').evaluate(element => { element.textContent = 'jet stream'; });
+    await page.locator('#lookup-source').evaluate((element,text) => { element.textContent = text; },selection);
     await selectElementText('#lookup-source');
     const overlay = page.locator('#tex-selection-translator-root');
     await overlay.locator('.trigger').click();
-    await expect(overlay.locator('.lexical-meaning')).toHaveText('jet stream');
-    await expect(overlay.locator('.lexical-sense')).toContainText('大气中的高速气流带');
-    await expect(overlay.locator('.lexical-details')).toHaveAttribute('open', '');
-    await expect(overlay.locator('.lexical-sense')).toBeVisible();
-    await expect(overlay.locator('.warning')).toHaveText('主释义保留了原文，请结合下方释义核对。');
+    await expect(overlay.locator('.lexical-meaning')).toHaveText(selection);
+    if(hasMeaning){
+      await expect(overlay.locator('.lexical-primary')).toBeHidden();
+      await expect(overlay.locator('.lexical-sense')).toContainText('大气中的高速气流带');
+      await expect(overlay.locator('.lexical-details')).toHaveAttribute('open','');
+      await expect(overlay.locator('.lookup-notice')).toHaveText('主释义保留原文，可参考补充释义。');
+      await expect(overlay.locator('.lookup-notice')).toHaveCSS('background-color','rgba(0, 0, 0, 0)');
+    }else{
+      await expect(overlay.locator('.lexical-meaning')).toBeVisible();
+      await expect(overlay.locator('.warning')).toHaveText('未返回可用释义，请核对原文。');
+      await expect(overlay.locator('.lookup-notice')).toHaveCount(0);
+    }
+    await page.setViewportSize({width:360,height:700});
+    for(const colorScheme of ['light','dark'] as const){
+      await page.emulateMedia({colorScheme});
+      await page.evaluate(theme=>document.documentElement.setAttribute('data-theme',theme),colorScheme);
+      await expect(overlay).toHaveAttribute('data-pi-theme',colorScheme);
+      const navigation=overlay.locator('.result-footer > .result-navigation');
+      if(await navigation.count()){
+        const action=await overlay.locator('.copy-action').boundingBox();
+        const nav=await navigation.boundingBox();
+        expect(Math.abs(action!.y-nav!.y)).toBeLessThanOrEqual(4);
+      }
+      await expect(overlay.getByRole('button',{name:'复制原文',exact:true})).toBeVisible();
+      await overlay.locator('.surface').screenshot({path:info.outputPath('lookup-'+hasMeaning+'-'+colorScheme+'.png')});
+      expect(await overlay.locator('.surface').evaluate(el=>el.scrollWidth-el.clientWidth)).toBeLessThanOrEqual(1);
+    }
     await overlay.getByRole('button', {name: '查看译文', exact: true}).click();
-    await expect(overlay.locator('.body')).toHaveText('jet stream');
+    await expect(overlay.locator('.body')).toHaveText(selection);
     await expect(overlay.locator('.warning')).toBeVisible();
     expect(requests).toBe(1);
   } finally {
+    await page.evaluate(()=>document.documentElement.removeAttribute('data-theme'));
+    await page.emulateMedia({colorScheme:'light'});
+    await page.setViewportSize({width:1280,height:720});
     await context.unroute('https://www.overleaf.com/pi-translator-e2e-api/**', replay);
     await closeVisibleTranslationSurfaceForCleanup();
     await clearBrowserSelection();
@@ -2441,6 +2467,7 @@ test('opens contextual guidance on demand and keeps dismissal local', async () =
     const guide = popup.locator('#feature-guide');
     await expect(guide).toBeHidden();
     await popup.locator('#popup-more-actions > summary').click();
+    if(await popup.locator('#popup-help-details').getAttribute('open')===null)await popup.locator('#popup-help-details > summary').click();
     await popup.locator('#feature-guide-toggle').click();
     await expect(guide).toBeVisible();
     await expect(popup.locator('#feature-guide-eyebrow')).toHaveText('当前页面 · Overleaf');
@@ -2472,6 +2499,7 @@ test('opens contextual guidance on demand and keeps dismissal local', async () =
     await popup.reload();
     await expect(guide).toBeHidden();
     await popup.locator('#popup-more-actions > summary').click();
+    if(await popup.locator('#popup-help-details').getAttribute('open')===null)await popup.locator('#popup-help-details > summary').click();
     await popup.locator('#feature-guide-toggle').click();
     await expect(guide).toBeVisible();
   } finally {

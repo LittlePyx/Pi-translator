@@ -120,19 +120,6 @@ button:hover:not(:disabled) { border-color: var(--control-border-hover); color: 
 .onboarding-web-access p, .onboarding-web-access small { margin:0; color:var(--pi-muted); font-size:12px; line-height:1.5; }
 .onboarding-web-access button { justify-self:start; min-height:34px; padding:6px 10px; }
 .onboarding-web-access small:empty { display:none; }
-#onboarding-dialog:has([data-onboarding-step="1"]:not([hidden]) #onboarding-web-access:not([hidden])) { overflow:hidden; }
-#onboarding-dialog:has([data-onboarding-step="1"]:not([hidden]) #onboarding-web-access:not([hidden])) .onboarding-shell { display:flex; flex-direction:column; max-height:calc(100dvh - 28px); overflow:hidden; }
-#onboarding-dialog:has([data-onboarding-step="1"]:not([hidden]) #onboarding-web-access:not([hidden])) [data-onboarding-step="1"] { flex:1 1 auto; min-height:0; overflow-y:auto; }
-#onboarding-dialog:has([data-onboarding-step="1"]:not([hidden]) #onboarding-web-access:not([hidden])) :is(.onboarding-header,.onboarding-progress,.onboarding-actions) { flex-shrink:0; }
-@media(max-height:700px) {
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-shell { padding:16px; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-header h2 { font-size:17px; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-header img { width:28px; height:26px; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-progress { margin:10px 0; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) [data-onboarding-step="1"] > p { margin-bottom:10px; line-height:1.45; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-web-access { margin-top:10px; padding:9px; }
-  #onboarding-dialog:has(#onboarding-web-access:not([hidden])) .onboarding-actions { margin-top:10px; padding-top:8px; }
-}
 @media(max-width:460px){.connection-roles{grid-template-columns:1fr;gap:8px}.connection-roles div{grid-template-columns:70px minmax(0,1fr)}}
 .connection-flow { display: grid; gap: 24px; margin-top: 28px; border: 0; }
 .connection-step { display: block; padding: 0; border: 0; }
@@ -638,3 +625,131 @@ body[data-section="connection"] #status.connection-mirrored { display:none; }
 .connection-more > summary:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
 .connection-more > .connection-roles { margin-top:4px; }
 .connection-more > :is(.connection-advanced,.settings-cost) { margin-top:0; }
+.theme-choice { display:flex; align-items:center; gap:12px; margin-block:12px; color:var(--pi-muted); }
+.theme-choice select { width:auto; min-width:140px; color:var(--pi-text); background:var(--pi-surface); }
+
+html:root { color: var(--pi-text); background: var(--pi-canvas); }
+.palette-options { margin:12px 0 20px; padding:0; border:0; min-width:0; }
+.palette-options legend { padding:0; margin-bottom:10px; color:var(--pi-muted); font-size:12px; }
+.palette-grid { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; }
+.palette-option { position:relative; display:grid; min-width:0; padding:10px; gap:8px; border:1px solid var(--pi-line); border-radius:var(--pi-radius); color:var(--pi-muted); background:var(--pi-surface); font:inherit; text-align:left; cursor:pointer; transition:background-color .14s ease,border-color .14s ease; }
+.palette-option:hover { background:var(--pi-subtle); }
+.palette-option[aria-pressed="true"] { border-color:var(--pi-primary); color:var(--pi-text); background:var(--pi-subtle); }
+.palette-option[aria-pressed="true"]::after { content:""; position:absolute; right:13px; bottom:15px; width:5px; height:9px; border-right:1.5px solid var(--pi-primary); border-bottom:1.5px solid var(--pi-primary); transform:rotate(45deg); }
+.palette-option > span:last-child { padding-right:18px; font-size:12px; line-height:1.5; }
+.palette-sample { display:block; position:relative; height:68px; border:1px solid var(--sample-line); border-radius:5px; overflow:hidden; background:var(--sample-canvas); }
+.palette-sample::before { content:""; position:absolute; inset:7px 7px 7px 20px; border:1px solid var(--sample-line); border-radius:4px; background:var(--sample-surface); }
+.palette-sample::after { content:""; position:absolute; left:7px; top:14px; width:6px; height:6px; border-radius:50%; background:var(--sample-primary); }
+.palette-sample i { position:absolute; left:28px; top:17px; width:38%; height:3px; border-radius:1px; background:var(--sample-text); box-shadow:0 9px var(--sample-muted),0 17px var(--sample-line); }
+.palette-sample b { position:absolute; right:14px; bottom:14px; width:24%; height:8px; border-radius:3px; background:var(--sample-primary); }
+@media(max-width:560px) { .palette-grid { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+/* Appearance stays available without taking over translation preferences. */
+#appearance-palettes { margin:0 0 8px; border-top:0; }
+#appearance-palettes > summary { min-height:42px; padding:9px 0; }
+#appearance-palettes > summary > [data-palette-summary] { margin-left:auto; color:var(--pi-muted); font-size:12px; }
+#appearance-palettes > summary::after { margin-left:0; }
+#appearance-palettes > .disclosure-content { margin:0; padding:4px 0 12px; border:0; }
+#appearance-palettes .palette-options { margin:0; }
+#appearance-palettes legend { position:absolute; width:1px; height:1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; }
+
+/* The same field focus, status and menu treatment as the translation surfaces. */
+:is(.settings-section,.onboarding-dialog) :is(input:not([type="checkbox"]):not([type="radio"]),select,textarea):focus { border-color:var(--pi-focus); box-shadow:none; }
+:is(.settings-section,.onboarding-dialog) :is(input,select,textarea):focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
+.profile-menu-actions .danger-text { color:var(--pi-danger); }
+.profile-menu-actions button { min-height:34px; border-radius:var(--pi-radius); }
+.profile-menu-actions button:hover { background:var(--pi-subtle); }
+.onboarding-header > div > span { display:none; }
+.onboarding-header h2 { margin:0; font-size:20px; line-height:1.4; }
+.onboarding-progress { grid-template-columns:auto minmax(0,1fr) auto minmax(0,1fr) auto; min-width:0; gap:8px; margin:18px 0; }
+.onboarding-progress span { width:auto; min-width:44px; height:28px; padding:4px 7px; font-size:12px; line-height:20px; }
+.onboarding-progress span.active { color:var(--pi-primary); box-shadow:inset 0 -2px var(--pi-primary); }
+#onboarding-status { margin:12px 0 0; padding:0; border:0; border-radius:0; color:var(--pi-muted); background:transparent; box-shadow:none; font-size:12px; line-height:1.6; overflow-wrap:anywhere; }
+#onboarding-status.error { color:var(--pi-danger); }
+.pi-task-dialog .status:not(:empty) { padding:0; border:0; color:var(--pi-muted); background:transparent; box-shadow:none; }
+.pi-task-dialog .status.error { color:var(--pi-danger); }
+.onboarding-dialog select { color:var(--pi-text); background-color:var(--pi-surface); }
+.onboarding-dialog select:hover { background-color:var(--pi-subtle); }
+.onboarding-dialog select:focus { background-color:var(--pi-surface); }
+.provider-key-link { color:var(--pi-primary); font-weight:450; }
+.onboarding-progress span.complete { color:var(--pi-muted); box-shadow:none; }
+#onboarding-dialog :is(.onboarding-vision-note,#onboarding-key-hint) { color:var(--pi-muted); font-size:12px; line-height:1.6; }
+/* Keep the header focused on the current task and unsaved work. */
+.hero.hero-compact { gap:6px 12px; margin-bottom:18px; padding-block:8px; }
+.hero-compact .brand-row { min-width:0; flex-wrap:nowrap; gap:8px; }
+.hero-compact .common-tasks { flex:none; margin-left:auto; }
+.common-tasks { position:relative; }
+.common-tasks > .common-task-actions { display:grid; position:absolute; z-index:60; right:0; top:100%; width:220px; max-width:calc(100vw - 16px); gap:2px; margin:0; padding:6px; border:1px solid var(--pi-line); border-radius:var(--pi-radius-panel); background:var(--pi-surface); box-shadow:var(--pi-shadow); }
+.common-task-actions button { width:100%; min-height:36px; padding:8px 10px; border:0; border-radius:var(--pi-radius); color:var(--pi-text); background:transparent; text-align:left; font-size:13px; }
+.common-task-actions button:hover { background:var(--pi-subtle); }
+#setup-readiness[data-state="configured"], .setup-overview:has(#setup-readiness[data-state="configured"]) #setup-readiness-action { display:none; }
+.hero-compact .settings-quickbar:has(#setup-readiness[data-state="configured"]):not(:has(#resume-paused-setup:not([hidden]))) { display:none; }
+@media(max-width:860px) {
+  .settings-workspace { gap:16px; }
+  .settings-nav { display:grid; grid-template-columns:minmax(0,1fr) 36px; align-items:center; gap:8px; }
+  .settings-nav > .pi-action-guide-trigger { width:36px; min-height:38px; justify-content:center; gap:0; margin:0; padding:0; font-size:0; }
+  .settings-nav > .pi-action-guide-trigger::before { margin:0; }
+  .settings-mobile-nav select { min-height:38px; font-size:13px; }
+}
+/* The navigation announcement stays available to assistive technology without a second saved-state row. */
+.save-dock:has(#status.visually-hidden) #save-button:disabled { display:none; }
+.save-dock:has(#status.visually-hidden) .save-feedback { min-height:0; }
+.common-tasks > summary[data-pi-icon="more"]::after { display:none; }
+/* Optional enhancement and scheme management follow the same compact controls. */
+.vision-setup-heading { align-items:center; gap:12px; margin-bottom:14px; }
+.vision-setup-heading .vision-setup-guide { flex:1; margin:0; }
+.vision-setup-content .grid { align-items:start; }
+.vision-setup-content .grid > label { align-content:start; margin:0; }
+.vision-setup-content .grid :is(input,select) { box-sizing:border-box; height:42px; min-height:42px; }
+.vision-setup-status[hidden] { display:none; }
+.vision-setup-status:not([hidden]) { margin:0 0 14px; }
+.glossary-profile-controls { grid-template-columns:minmax(0,1fr) auto; align-items:end; gap:8px 12px; }
+.glossary-profile-controls > :is(p,[role="status"]) { grid-column:1 / -1; }
+.glossary-profile-menu { position:relative; }
+.glossary-profile-menu > summary { display:flex; align-items:center; min-height:42px; padding:8px; color:var(--pi-muted); font-size:12px; cursor:pointer; list-style:none; border-radius:var(--pi-radius); }
+.glossary-profile-menu > summary::-webkit-details-marker { display:none; }
+.glossary-profile-menu > summary:hover { color:var(--pi-text); background:var(--pi-subtle); }
+.glossary-profile-menu > summary:focus-visible { outline:2px solid var(--pi-focus); outline-offset:2px; }
+.glossary-profile-dialog .pi-task-body p { margin:0; color:var(--pi-muted); }
+.glossary-profile-dialog .pi-task-body .pi-task-summary { margin-bottom:12px; color:var(--pi-text); font-weight:550; overflow-wrap:anywhere; }
+.glossary-profile-dialog .pi-task-body label { display:grid; margin:0; }
+.glossary-profile-dialog button.danger { color:var(--pi-danger); border-color:var(--pi-danger); background:var(--pi-surface); }
+.glossary-transfer-status.error { color:var(--pi-danger); }
+@media(max-width:460px) { .vision-setup-heading { flex-wrap:wrap; }.vision-setup-heading .vision-setup-guide { flex-basis:180px; } }
+/* Translation choices stay together; appearance is a separate, quiet group. */
+.preference-appearance { margin-top:24px; padding-top:22px; border-top:1px solid var(--pi-line); }
+.preference-appearance > h3 { margin:0 0 14px; color:var(--pi-text); font-size:13px; font-weight:550; }
+.preference-appearance > :is(.theme-choice,.appearance-language) { display:flex; align-items:center; justify-content:space-between; gap:12px; margin:0; min-height:44px; color:var(--pi-muted); font-size:13px; }
+.preference-appearance > :is(.theme-choice,.appearance-language) > span { min-width:0; }
+.preference-appearance > :is(.theme-choice,.appearance-language) select { flex:none; width:140px; min-width:0; max-width:58%; margin:0; color:var(--pi-text); background:var(--pi-surface); }
+.preference-appearance #appearance-palettes { margin:2px 0; }
+#settings-translation > .disclosure-panel[open] > summary { background:transparent; }
+#settings-translation > .disclosure-panel[open] > .disclosure-content { margin-left:0; padding-left:8px; border-left:0; }
+.library-toolbar[hidden] { display:none; }
+#retained-document-library:has(> .library-empty) { grid-column:1 / -1; }
+.library-empty-actions { display:flex; flex-wrap:wrap; justify-content:center; gap:8px; margin-top:20px; }
+.library-empty-actions button { min-height:36px; margin:0; }
+.library-empty-actions button[hidden] { display:none; }
+
+/* Low-frequency support tasks reveal only their own controls and explanation. */
+#support-status:empty { display:none; }
+#settings-support > .support-disclosure { margin-top:12px; }
+#settings-support > .support-disclosure[open] > .support-content { margin-left:0; padding-left:8px; border-left:0; }
+#settings-support > .support-disclosure .support-content > p { margin:0 0 14px; color:var(--pi-muted); }
+/* One scroll area keeps first setup navigation available at every step. */
+#onboarding-dialog { overflow:hidden; max-height:calc(100dvh - 28px); }
+#onboarding-dialog .onboarding-shell { box-sizing:border-box; display:flex; flex-direction:column; max-height:calc(100dvh - 30px); overflow:hidden; }
+#onboarding-dialog :is(.onboarding-header,.onboarding-progress,.onboarding-actions) { flex:none; }
+.onboarding-body { min-height:0; overflow-y:auto; overscroll-behavior:contain; scrollbar-gutter:stable; padding:4px; }
+#onboarding-dialog .onboarding-actions { display:flex; flex-wrap:wrap; justify-content:space-between; gap:10px 16px; margin-top:14px; padding-top:14px; }
+.onboarding-secondary-actions { display:flex; flex:1 1 180px; min-width:0; flex-wrap:wrap; align-items:center; gap:4px 12px; }
+.onboarding-secondary-actions:not(:has(> button:not([hidden]))) { display:none; }
+.onboarding-step-actions { display:flex; flex:none; min-width:0; max-width:100%; align-items:center; gap:8px; margin-left:auto; }
+#onboarding-dialog .onboarding-actions button { max-width:100%; white-space:normal; overflow-wrap:anywhere; }
+#onboarding-dialog .onboarding-secondary-actions button { min-height:32px; padding:4px 0; color:var(--pi-muted); font-size:12px; }
+@media(max-width:460px) { .onboarding-secondary-actions { flex-basis:100%; }.onboarding-step-actions { justify-content:flex-end; } }
+@media(max-height:700px) {
+ #onboarding-dialog .onboarding-shell { padding:16px; }
+ #onboarding-dialog .onboarding-header h2 { font-size:17px; }
+ #onboarding-dialog .onboarding-progress { margin:12px 0; }
+ #onboarding-dialog .onboarding-actions { margin-top:10px; padding-top:10px; }
+}

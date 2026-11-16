@@ -158,6 +158,8 @@ html, body { color: var(--pi-text); background: var(--pi-hover); }
 @media(max-width:640px){.pdf-document-translation[data-view-mode="reading"] .pdf-paper-title{font-size:24px}.pdf-paper-publication>summary{gap:8px}}
 .empty-state { color: var(--pi-muted); }
 .empty-state h1 { color: var(--pi-text); font-size: 25px; font-weight: 550; letter-spacing: -.5px; }
+#pdf-open-context { max-width:430px; line-height:1.7; }
+#pdf-open-context[hidden] { display:none; }
 .empty-state .primary { color: var(--pi-primary-text); border-color: var(--pi-primary); background: var(--pi-primary); border-radius: var(--pi-radius); }
 @media(max-width:640px) {
   .pdf-document-translation > header { grid-template-columns: minmax(0,1fr) auto auto; }
@@ -430,3 +432,5 @@ body:has(#pdf-document-translation[data-view-mode="reading"]:not([hidden])) > .t
 .notice[data-tone="success"] { color:var(--pi-success); border-color:var(--pi-line); border-left-color:var(--pi-success); background:var(--pi-surface); }
 .notice[data-tone="warning"] { color:var(--pi-warning); border-color:var(--pi-line); border-left-color:var(--pi-warning); background:var(--pi-surface); }
 .notice[data-tone="error"] { color:var(--pi-danger); border-color:var(--pi-line); border-left-color:var(--pi-danger); background:var(--pi-surface); }
+
+html:root { color: var(--pi-text); background: var(--pi-canvas); }

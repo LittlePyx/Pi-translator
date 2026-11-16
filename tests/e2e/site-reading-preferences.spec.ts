@@ -35,7 +35,8 @@ test('explains a paused selection button and resumes it without translation', as
   const panel = await popup();
   await panel.locator('#pause-site').check();
   await expect(panel.locator('#status')).toContainText('已暂停');
-  await panel.locator('#selection-help > summary').click();
+  await panel.locator('#popup-help-details > summary').click();
+    await panel.locator('#selection-help > summary').click();
   await expect(panel.locator('#selection-help-status')).toContainText('已暂停');
   await panel.locator('#selection-help-action').click();
   await expect(panel.locator('#pause-site')).not.toBeChecked();
@@ -57,6 +58,7 @@ test('explains on-demand selection on ordinary webpages without requesting acces
     await page.bringToFront();
     await panel.reload();
     await panel.locator('#popup-more-actions > summary').click();
+    await panel.locator('#popup-help-details > summary').click();
     await panel.locator('#selection-help > summary').click();
     await expect(panel.locator('#selection-help-status')).toContainText('按需模式');
     await expect(panel.locator('#selection-help-action')).toHaveText('打开网页设置');

@@ -1,3 +1,4 @@
+import {bindTheme} from '../../ui/theme';
 import { t, msg, initializeUiLanguage, localizeUiDocument } from '../../core/i18n/ui-language';
 import {bindActionHints} from '../../ui/action-feedback';
 import {bindActionGuide} from '../../ui/action-guide';
@@ -71,8 +72,9 @@ import {
 async function startUi(): Promise<void> {
   await initializeUiLanguage();
   localizeUiDocument();
+  bindTheme(document);
   bindActionHints();
-  bindActionGuide(document,['#popup-more-body'],[
+  bindActionGuide(document,['#popup-help-content'],[
     {label:t('打开 PDF 阅读器'),selector:'#open-pdf'},
     {label:t('框选当前网页'),selector:'#open-web-region'},
     {label:t('文档库'),selector:'#open-library'},
@@ -125,7 +127,9 @@ const readinessIssues = element<HTMLElement>('readiness-issues');
 const serviceDetails = element<HTMLDetailsElement>('popup-service-details');
 const serviceState = element<HTMLElement>('popup-service-state');
 const moreActions = element<HTMLDetailsElement>('popup-more-actions');
-const moreBody = element<HTMLElement>('popup-more-body');
+const secondaryActions = element<HTMLElement>('popup-secondary-actions');
+const helpDetails = element<HTMLDetailsElement>('popup-help-details');
+const helpContent = element<HTMLElement>('popup-help-content');
 const selectionHelp = element<HTMLDetailsElement>('selection-help');
 const selectionHelpStatus = element<HTMLParagraphElement>('selection-help-status');
 const selectionHelpAction = element<HTMLButtonElement>('selection-help-action');
@@ -407,14 +411,15 @@ function renderPopupReadiness(
   readinessPanel.hidden = result.issues.length === 0 && !result.contextNote;
   const needsSetup = blocking.length>0;
   serviceDetails.dataset.blocking = String(needsSetup);
-  serviceState.textContent = needsSetup ? t('需要配置') : result.contextNote ? t('页面受限') : msg`文字${textApi.value}${shortcut==='missing'?t(' · 快捷键未设'):shortcut==='unknown'?t(' · 快捷键待检查'):''}`;
+  serviceState.textContent = needsSetup ? t('需要配置') : result.contextNote ? t('页面受限') : textApi.value;
+  serviceState.title = msg`文字${textApi.value}${shortcut==='missing'?t(' · 快捷键未设'):shortcut==='unknown'?t(' · 快捷键待检查'):''}`;
   serviceState.dataset.tone = needsSetup ? 'issue' : 'ready';
   // Missing shortcuts do not block translation. Only reveal blocking setup automatically.
   if (needsSetup) {
     serviceDetails.open = true;
     quickActions.before(serviceDetails);
   } else {
-    moreBody.append(serviceDetails);
+    helpDetails.before(serviceDetails);
     if (result.contextNote) serviceDetails.open = true;
   }
   updateQuickActions();
@@ -802,6 +807,8 @@ function updateQuickActions(): void {
     pageContext.textContent = t('打开 PDF 阅读器，或在普通网页中使用划词翻译。');
     pageContext.removeAttribute('data-tone');
   }
+  if(pageContext.dataset.tone==='restricted')quickActions.before(pageContext);
+  else helpContent.prepend(pageContext);
   quickActions.dataset.primary = pdfIsCurrent
     ? 'pdf'
     : pageTranslationAvailable
@@ -812,14 +819,14 @@ function updateQuickActions(): void {
   if(apiSetupAction){
     for(const action of [translatePage,openSidebar,openPdf]){
       action.classList.remove('primary-action','secondary-action');
-      moreBody.append(action);
+      secondaryActions.append(action);
     }
     quickActions.prepend(apiSetupAction);
     quickActions.dataset.primary='setup';
   }else{
     quickActions.prepend(primaryAction);
     if(sidebarAvailable&&primaryAction!==openSidebar)quickActions.append(openSidebar);
-    if(!pdfIsPrimary)moreBody.prepend(openPdf);
+    if(!pdfIsPrimary)secondaryActions.prepend(openPdf);
   }
   quickActions.removeAttribute('aria-busy');
   renderFeatureGuide();
@@ -1023,8 +1030,8 @@ function renderSitePreference(): void {
   rememberSite.checked = rememberedSite;
   resetSite.hidden = !rememberedSite;
   sitePreferenceHelp.textContent = rememberedSite
-    ? t('已记住：顶部语言与暂停状态仅用于此网站。页面内临时切换不保存。')
-    : t('未记住：语言使用全局设置，暂停仅在当前浏览器会话生效。');
+    ? t('语言和暂停状态已为此网站保存，页面内切换仅临时生效。')
+    : t('使用全局语言；暂停持续至浏览器会话结束。');
 }
 
 async function changeSiteRemembered(remember: boolean): Promise<void> {
@@ -1090,12 +1097,19 @@ pauseSite.addEventListener('change', () => {
 });
 
 featureGuideToggle.addEventListener('click', () => {
+  helpDetails.open = true;
   featureGuideRevealOverride = true;
   renderFeatureGuide();
   featureGuideTitle.focus({ preventScroll: true });
 });
 moreActions.addEventListener('toggle', () => {
   if (!moreActions.open && featureGuideRevealOverride) {
+    featureGuideRevealOverride = false;
+    renderFeatureGuide();
+  }
+});
+helpDetails.addEventListener('toggle', () => {
+  if (!helpDetails.open && featureGuideRevealOverride) {
     featureGuideRevealOverride = false;
     renderFeatureGuide();
   }
