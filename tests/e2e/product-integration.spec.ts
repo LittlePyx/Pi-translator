@@ -566,7 +566,7 @@ test('blocks settings import while an unconfirmed purpose or settings draft exis
     await openPurpose(options);await choosePurposes(options,['research']);await options.locator('#purpose-research-field').fill('未确认的研究领域');
     const before=await snapshot();await options.locator('[data-settings-target="support"]').click();await options.locator('.support-disclosure').filter({has:options.locator('#import-settings')}).locator('summary').click();
     await options.locator('#import-settings').click();await expect(options.locator('#support-status')).toContainText('请先保存或撤销当前设置草稿');
-    await options.locator('#restart-onboarding').click();await expect(options.locator('#onboarding-dialog')).not.toBeVisible();await expect(options.locator('#status')).toContainText('请先保存或撤销当前更改');await expect(options.locator('#purpose-research-field')).toHaveValue('未确认的研究领域');
+    await options.locator('.support-disclosure').filter({has:options.locator('#restart-onboarding')}).locator(':scope > summary').click();await options.locator('#restart-onboarding').click();await expect(options.locator('#onboarding-dialog')).not.toBeVisible();await expect(options.locator('#status')).toContainText('请先保存或撤销当前更改');await expect(options.locator('#purpose-research-field')).toHaveValue('未确认的研究领域');
     await options.locator('[data-settings-target="support"]').click();
     await options.locator('#import-settings-file').setInputFiles({name:'draft.json',mimeType:'application/json',buffer:Buffer.from('{}')});
     await expect(options.locator('#support-status')).toContainText('请先保存或撤销当前设置草稿');expect(await snapshot()).toEqual(before);

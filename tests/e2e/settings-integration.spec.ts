@@ -100,7 +100,7 @@ test('keeps advanced options collapsed until requested', async ({}, testInfo) =>
   await reopened.goto(`chrome-extension://${extensionId}/options.html`);
   await expect(reopened.locator('#onboarding-dialog')).not.toBeVisible();
   await openSettingsSection(reopened,'support');
-  const support = reopened.locator('details.support-disclosure').filter({has:reopened.locator('#copy-diagnostic-report')});
+  const support = reopened.locator('details.support-disclosure').filter({has:reopened.locator('#restart-onboarding')});
   await expect(reopened.locator('details.support-disclosure').filter({has:reopened.locator('#extension-version')})).not.toHaveAttribute('open','');
   await expect(support).not.toHaveAttribute('open', '');
   await support.locator('summary').click();
